@@ -2,7 +2,7 @@
   "name": "opencad-skp",
   "version": "0.1.0",
   "private": true,
-  "description": "OpenCAD SketchUp 해석기: SketchUp 2021~2026(.skp) 모형을 브라우저에서 읽어 3D 장면으로 만듦",
+  "description": "OpenCAD SketchUp 뷰어: SketchUp 2021~2026(.skp) 모형을 브라우저에서 읽어 3D로 보는 앱과 해석기",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -13,17 +13,21 @@
     "src"
   ],
   "scripts": {
+    "dev": "vite --port 4403",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 4403",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
     "earcut": "^3.2.4",
-    "opencad-viewer3d": "github:GyuTae-Kim/opencad-viewer3d#v0.1.0"
+    "opencad-viewer3d": "github:GyuTae-Kim/opencad-viewer3d#v0.3.0"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
     "typescript": "^7.0.2",
+    "vite": "^7.3.7",
     "vitest": "^3.2.7"
   }
 }

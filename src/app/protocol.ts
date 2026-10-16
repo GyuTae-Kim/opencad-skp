@@ -1,0 +1,84 @@
+/**
+ * 해석 워커(src/worker/parse.worker.ts)와 화면 사이의 메시지 꼴과 직렬화 도움(순수 함수, DOM 없음).
+ *
+ * 파일 바이트는 화면 → 워커로 이전(transfer)하고, 결과 장면의 형식 배열은 워커 → 화면으로 이전한다(복사 없이).
+ * 한 메시지 안에서 같은 버퍼를 여러 곳이 가리킬 수 있으므로 이전 목록은 버퍼마다 한 번만 넣는다.
+ */
+import type { Scene3d } from 'opencad-viewer3d/types';
+
+export interface ParseRequest {
+  id: number;
+  type: 'open';
+  /** 파일 이름(장면 이름) */
+  name: string;
+  /** 파일 바이트(이전된다) */
+  bytes: ArrayBuffer;
+}
+
+export type ParseResponse =
+  | { id: number; type: 'progress'; fraction: number; stage: string }
+  | { id: number; type: 'done'; result: ParseResult }
+  | { id: number; type: 'error'; message: string };
+
+export interface ParseResult {
+  scene: Scene3d;
+  /** 해석 시간(ms) */
+  ms: number;
+}
+
+/**
+ * 값 안의 모든 ArrayBuffer(형식 배열의 버퍼 포함)를 한 번씩 모은다 — postMessage 이전 목록.
+ * 일반 객체·배열·Map·Set을 따라 들어가고, 같은 객체는 한 번만 본다. SharedArrayBuffer는 넣지 않는다.
+ */
+export function collectTransfers(value: unknown): ArrayBuffer[] {
+  const out = new Set<ArrayBuffer>();
+  const seen = new Set<object>();
+  const stack: unknown[] = [value];
+  while (stack.length) {
+    const v = stack.pop();
+    if (v === null || typeof v !== 'object') continue;
+    if (seen.has(v)) continue;
+    seen.add(v);
+    if (v instanceof ArrayBuffer) {
+      if (v.byteLength > 0) out.add(v);
+      continue;
+    }
+    if (ArrayBuffer.isView(v)) {
+      const b = v.buffer;
+      if (b instanceof ArrayBuffer && b.byteLength > 0) out.add(b);
+      continue;
+    }
+    if (Array.isArray(v)) {
+      for (const x of v) if (x !== null && typeof x === 'object') stack.push(x);
+      continue;
+    }
+    if (v instanceof Map) {
+      for (const [k, x] of v) {
+        stack.push(k);
+        stack.push(x);
+      }
+      continue;
+    }
+    if (v instanceof Set) {
+      for (const x of v) stack.push(x);
+      continue;
+    }
+    for (const x of Object.values(v)) if (x !== null && typeof x === 'object') stack.push(x);
+  }
+  return [...out];
+}
+
+/** 장면에 그릴 것이 있는지(그물·선분·점) */
+export function sceneHasGeometry(s: Scene3d): boolean {
+  return (
+    s.meshes.some((m) => m.positions.length >= 9) ||
+    s.lines.some((l) => l.positions.length >= 6) ||
+    (s.points ?? []).some((p) => p.positions.length >= 3)
+  );
+}
+
+/** 오류 값 → 사람이 읽는 글 */
+export function errorText(e: unknown): string {
+  if (e instanceof Error) return e.message || e.name;
+  return String(e);
+}

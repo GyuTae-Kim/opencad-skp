@@ -5,7 +5,7 @@ SketchUp SDK·Ruby API·다른 SKP 읽기 프로그램·플러그인의 코드�
 목적은 상호 운용(뷰어에서 열기)을 위한 형식 분석뿐이다.
 
 - 해석기: `src/` (`skpToScene(bytes, { name })` → `Scene3d`)
-- 시험: `tests/` — 표본 파일은 넣지 않고, 아래 구조를 손으로 옮긴 작은 바이트로 시험한다(`tests/build.ts`).
+- 시험: `tests/` — 표본 파일은 넣지 않고, 아래 구조를 손으로 옮긴 작은 바이트로 시험한다(`tests/build.ts`, 쓰기 도구 본체는 앱의 예제 모형과 함께 쓰는 `src/app/skpwrite.ts`).
 - 표본 확인 스크립트·표본은 작업 중 `.runtime/skp/`에만 두었고 끝난 뒤 지웠다.
 
 ## 결론 요약
