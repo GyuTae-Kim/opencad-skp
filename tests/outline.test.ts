@@ -117,7 +117,8 @@ describe('outline(윗단계 그룹·컴포넌트 나누기)', () => {
   it('태그·재질 통계(펼친 뒤 면·모서리 수)', () => {
     const s = skpToScene(skpFile(outlineModel(), { materials: MATS }));
     const tags = s.meta!.tagStats as SkpTagStat[];
-    expect(tags).toEqual([
+    // 해석기가 더 적는 칸(보임·색·폴더 …)은 따로 시험한다
+    expect(tags.map(({ name, default: d, faces, edges }) => ({ name, default: d, faces, edges }))).toEqual([
       { name: 'Layer0', default: true, faces: 3, edges: 11 },
       { name: 'Walls', default: false, faces: 1, edges: 4 },
       { name: '빈 태그', default: false, faces: 0, edges: 0 },
@@ -139,7 +140,7 @@ describe('outline(윗단계 그룹·컴포넌트 나누기)', () => {
     expect(parts.meshes.length).toBe(buildSceneParts(model, new Map()).meshes.length);
   });
 
-  it('인스턴스 종류(그룹 138c · 컴포넌트 138d)를 읽는다', () => {
+  it('인스턴스 종류(그룹 138d/1d4c · 컴포넌트 138c)를 읽는다', () => {
     const model = readModelDat(outlineModel());
     expect(model.root.instances.map((i) => i.kind)).toEqual(['group', 'component', 'component', 'component', 'component']);
   });

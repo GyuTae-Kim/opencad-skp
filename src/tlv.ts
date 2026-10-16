@@ -2,7 +2,7 @@
  * SketchUp 2021 이후 model.dat의 꼬리표-길이-값(TLV) 읽기.
  * 바이트에서 확인한 꼴: [u16 꼬리표][u32 길이][길이만큼 내용], 모두 리틀 엔디언. 내용은 자식 TLV들이거나 값이다.
  * 어느 꼬리표가 묶음인지는 자료에 적혀 있지 않아 해석기가 아는 경로로만 내려간다(모르는 꼬리표는 길이로 건너뛴다).
- * 값 꼴(관찰): 식별 번호는 길이 1~n바이트의 부호 없는 리틀 엔디언 정수, 좌표·평면·변환은 f64 배열, 이름은 UTF-8.
+ * 값 꼴: 식별 번호(영구 번호)는 길이 1~8바이트의 부호 없는 리틀 엔디언 정수, 좌표·평면·변환은 f64 배열, 이름은 UTF-8.
  */
 
 /** 내용 범위 [start, end)와 꼬리표 */
@@ -108,16 +108,45 @@ export class TlvReader {
     return cur;
   }
 
-  /** 길이만큼의 부호 없는 리틀 엔디언 정수(최대 6바이트까지 정확) */
+  /**
+   * 길이만큼의 부호 없는 리틀 엔디언 정수(번호·참조, 1~8바이트).
+   * 8바이트를 넘거나 값이 2^53 이상이면(JS 수로 정확히 나타낼 수 없다) undefined = 찾지 못함.
+   */
   uint(n: TlvNode | undefined): number | undefined {
-    if (!n || n.end <= n.start) return undefined;
+    if (!n || n.end <= n.start || n.end - n.start > 8) return undefined;
+    return this.uintAt(n.start, n.end - n.start);
+  }
+
+  /** [p, p+size) 부호 없는 리틀 엔디언 정수(2^53 이상이면 undefined) */
+  private uintAt(p: number, size: number): number | undefined {
     let v = 0;
     let mul = 1;
-    for (let p = n.start; p < n.end && p < n.start + 7; p++) {
-      v += this.b[p]! * mul;
+    for (let i = 0; i < size; i++) {
+      v += this.b[p + i]! * mul;
       mul *= 256;
     }
-    return v;
+    return v <= Number.MAX_SAFE_INTEGER ? v : undefined;
+  }
+
+  /**
+   * 묶은 번호 목록([u8 크기 n][n바이트 번호]의 반복). 크기가 8을 넘거나 범위를 넘으면 거기서 멈추고 ok = false.
+   * 2^53 이상인 번호는 빼고 unsafe로 센다.
+   */
+  packedIds(n: TlvNode | undefined): { ids: number[]; ok: boolean; unsafe: number } {
+    const ids: number[] = [];
+    let unsafe = 0;
+    if (!n) return { ids, ok: true, unsafe };
+    let p = n.start;
+    while (p < n.end) {
+      const size = this.b[p]!;
+      p++;
+      if (size > 8 || p + size > n.end) return { ids, ok: false, unsafe };
+      const v = this.uintAt(p, size);
+      if (v === undefined) unsafe++;
+      else ids.push(v);
+      p += size;
+    }
+    return { ids, ok: true, unsafe };
   }
 
   u8(n: TlvNode | undefined): number | undefined {
@@ -126,6 +155,40 @@ export class TlvReader {
 
   i32(n: TlvNode | undefined): number | undefined {
     return n && n.end - n.start >= 4 ? this.dv.getInt32(n.start, true) : undefined;
+  }
+
+  /** 꼭 4바이트인 i32(크기가 다르면 undefined) */
+  i32Exact(n: TlvNode | undefined): number | undefined {
+    return n && n.end - n.start === 4 ? this.dv.getInt32(n.start, true) : undefined;
+  }
+
+  /** 꼭 8바이트인 f64(크기가 다르면 undefined) */
+  f64Exact(n: TlvNode | undefined): number | undefined {
+    return n && n.end - n.start === 8 ? this.dv.getFloat64(n.start, true) : undefined;
+  }
+
+  /** 꼭 8×count바이트인 f64 배열(크기가 다르면 undefined) */
+  f64n(n: TlvNode | undefined, count: number): number[] | undefined {
+    if (!n || n.end - n.start !== 8 * count) return undefined;
+    const out = new Array<number>(count);
+    for (let i = 0; i < count; i++) out[i] = this.dv.getFloat64(n.start + 8 * i, true);
+    return out;
+  }
+
+  /** 꼭 24바이트인 f64×3 */
+  vec3(n: TlvNode | undefined): [number, number, number] | undefined {
+    if (!n || n.end - n.start !== 24) return undefined;
+    return [this.dv.getFloat64(n.start, true), this.dv.getFloat64(n.start + 8, true), this.dv.getFloat64(n.start + 16, true)];
+  }
+
+  /** u8 깃발: 첫 바이트가 0이 아니면 참(빈 내용은 거짓). 꼬리표가 없으면 undefined */
+  flag(n: TlvNode | undefined): boolean | undefined {
+    return n ? n.end > n.start && this.b[n.start] !== 0 : undefined;
+  }
+
+  /** 내용 바이트 사본(큰 model.dat 버퍼를 붙잡지 않게 복사한다) */
+  bytes(n: TlvNode): Uint8Array {
+    return this.b.slice(n.start, n.end);
   }
 
   f64(n: TlvNode, i: number): number {

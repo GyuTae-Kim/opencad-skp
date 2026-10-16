@@ -166,7 +166,7 @@ describe('model.dat → 중간 모형', () => {
       [7, 6, 5, 4],
     ]);
     expect(def.entities.faces[0]!.back).toBe(12);
-    // 파일 차례: 그룹(138c) 다음 컴포넌트(138d)
+    // 쓰기 도구의 파일 차례: 그룹(138d/1d4c) 다음 컴포넌트(138c)
     expect(m.root.instances.map((i) => i.definition)).toEqual([50, 999, 50, 50]);
     expect(m.counts.faces).toBe(2);
   });

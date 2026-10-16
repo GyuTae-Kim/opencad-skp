@@ -3,8 +3,24 @@
  * 해석기가 scene.meta에 적은 것(판·단위·통계·tagStats·materialStats·outline·tree·extraItems)을 안전하게 읽어 화면용 꼴로 바꾼다.
  * meta가 비었거나 옛 꼴이어도 장면(그물 이름·묶음)에서 최소한의 목록을 만든다.
  */
-import type { IndexRange, MeasureResult, Pick3d, Scene3d } from 'opencad-viewer3d';
+import type { IndexRange, Pick3d, Scene3d } from 'opencad-viewer3d';
 import type { SkpImages } from '../images';
+import type {
+  SkpAnnotationItems,
+  SkpAttrDictsMeta,
+  SkpCameraMeta,
+  SkpDimensionMeta,
+  SkpPageMeta,
+  SkpSectionPlaneMeta,
+  SkpStyleMeta,
+  SkpTagFolderMeta,
+  SkpTextMeta,
+  SkpTreeInfo,
+} from '../meta';
+import { nodeEntity, type EntityInput } from './entity';
+import type { MeasureToolResult } from './measure';
+import { readActivePage, readPages, readSectionPlane } from './pages';
+import { formatAngle, formatLength, readUnits, type UnitsDisplay } from './units';
 import type { ParseResult } from './protocol';
 import {
   deepestNodeAt,
@@ -25,7 +41,10 @@ import {
   type TreeView,
 } from './tree';
 
-export type PanelTab = 'tags' | 'outline' | 'info';
+export type PanelTab = 'tags' | 'outline' | 'entity' | 'info';
+
+/** 주석 묶음 종류(meta.annotationItems의 칸) */
+export type AnnotationKind = keyof SkpAnnotationItems;
 
 export interface SkpInfo {
   /** "26.1.194" */
@@ -52,6 +71,14 @@ export interface TagRow {
   edges: number | null;
   /** 장면에 이 태그의 그물·모서리가 있는지(없으면 켜고 끌 것이 없다) */
   hasGeometry: boolean;
+  /** 파일에서 태그 자신이 보이는지(폴더 보임과는 따로, 모르면 true) */
+  visible: boolean;
+  /** 태그 색(0~1 RGBA, 모르면 null) */
+  color: [number, number, number, number] | null;
+  /** 든 태그 폴더(SkpDoc.tagFolders 차례, 없으면 -1) */
+  folder: number;
+  /** 선 종류 이름(실선·모르면 null) */
+  lineStyle: string | null;
 }
 
 export interface MaterialRow {
@@ -61,6 +88,8 @@ export interface MaterialRow {
   color: [number, number, number, number];
   textured: boolean;
   faces: number | null;
+  /** 이 재질 면의 넓이 합(장면 단위², 모르면 null) */
+  area: number | null;
   meshIds: string[];
 }
 
@@ -69,11 +98,13 @@ export interface OutlineRow {
   /** meta.tree의 노드(바로 놓인 형상·옛 장면은 null) */
   node: number | null;
   name: string;
-  kind: 'group' | 'component' | 'loose';
+  kind: 'group' | 'component' | 'image' | 'loose';
   definition: string | null;
   tag: string;
   faces: number;
   edges: number;
+  /** 보통 면 넓이 합(장면 단위², 모르면 null) */
+  area: number | null;
   ids: string[];
 }
 
@@ -100,7 +131,8 @@ export interface DocImages {
   materials: Map<string, { name: string; url: string }>;
   /** 컴포넌트 미리보기(파일 이름 = 정의 이름으로 보임) */
   components: Map<string, string>;
-  scenes: { name: string; url: string }[];
+  /** 장면 미리보기(path = ZIP 경로, 장면의 thumbnail과 잇는다) */
+  scenes: { name: string; url: string; path: string }[];
   skipped: number;
   /** 문서를 닫을 때 풀 주소들 */
   urls: string[];
@@ -135,7 +167,10 @@ export interface SkpDoc {
   damaged: boolean;
   limited: boolean;
   // ── 보기 상태 ──
+  /** 사용자(또는 파일·장면)가 숨긴 태그 — 실제 숨김은 tagHidden(폴더 숨김까지) */
   hiddenTags: Set<string>;
+  /** 숨긴 태그 폴더(tagFolders 차례) */
+  hiddenFolders: Set<number>;
   /** 숨긴 outline 차례 */
   hiddenOutline: Set<number>;
   /** 숨긴 나무 노드 */
@@ -150,12 +185,58 @@ export interface SkpDoc {
   showHidden: boolean;
   selection: Selection | null;
   pick: Pick3d | null;
-  measure: MeasureResult | null;
+  /** 줄자·각도기 결과 */
+  measure: MeasureToolResult | null;
   panelTab: PanelTab;
+  // ── 형식이 더 알려 준 것(meta, 없으면 빈 값) ──
+  /** 모형 표시 단위 */
+  units: UnitsDisplay;
+  /** 저장 당시 카메라 */
+  camera: SkpCameraMeta | null;
+  pages: SkpPageMeta[];
+  /** 파일의 활성 장면 차례 */
+  activePage: number | null;
+  /** 모형 스타일 */
+  style: SkpStyleMeta | null;
+  tagFolders: SkpTagFolderMeta[];
+  modelName: string | null;
+  modelDescription: string | null;
+  texts: SkpTextMeta[];
+  dimensions: SkpDimensionMeta[];
+  /** 읽을 수 있는 단면(index = meta.sectionPlanes 차례) */
+  sectionPlanes: (SkpSectionPlaneMeta & { index: number })[];
+  /** meta.sectionPlanes 원본(장면의 단면 차례가 가리킨다) */
+  sectionPlanesRaw: readonly unknown[];
+  annotationItems: SkpAnnotationItems | null;
+  /** 주석 항목 id → 종류(켜고 끄기용) */
+  annotationKind: Map<string, AnnotationKind>;
+  attributes: SkpAttrDictsMeta[];
+  modelAttrs: number | null;
+  treeInfo: SkpTreeInfo | null;
+  // ── 보기 상태(더한 것) ──
+  /** 마지막으로 고른 장면(사용자가 장면 탭을 누른 것, 처음엔 null) */
+  page: number | null;
+  showTexts: boolean;
+  showDimensions: boolean;
+  showGuides: boolean;
+  showSectionPlanes: boolean;
+  /** 적용한 파일 단면(meta.sectionPlanes 차례, 없으면 null) */
+  fileSection: number | null;
 }
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+/** 0~1 RGB(A) 배열 → RGBA(꼴이 아니면 null) */
+function rgba(v: unknown): [number, number, number, number] | null {
+  if (!Array.isArray(v) || v.length < 3) return null;
+  const c = v.slice(0, 4).map((x) => num(x));
+  if (c.some((x) => x === null)) return null;
+  return [c[0]!, c[1]!, c[2]!, c[3] ?? 1];
+}
+/** 객체 배열만 거른다(worker가 넘긴 meta를 믿지 않는다) */
+function objects<T>(v: unknown): T[] {
+  return Array.isArray(v) ? (v.filter((x) => x && typeof x === 'object') as T[]) : [];
+}
 
 function meta(scene: Scene3d): Record<string, unknown> {
   return scene.meta && typeof scene.meta === 'object' ? scene.meta : {};
@@ -250,9 +331,20 @@ export function tagRows(scene: Scene3d): TagRow[] {
       const name = str(o.name);
       if (name === null || seen.has(name)) continue;
       seen.add(name);
-      rows.push({ name, default: o.default === true, faces: num(o.faces), edges: num(o.edges), hasGeometry: groups.has(name) });
+      rows.push({
+        name,
+        default: o.default === true,
+        faces: num(o.faces),
+        edges: num(o.edges),
+        hasGeometry: groups.has(name),
+        visible: o.visible !== false,
+        color: rgba(o.color),
+        folder: num(o.folder) ?? -1,
+        lineStyle: str(o.lineStyle),
+      });
     }
-  for (const g of groups) if (!seen.has(g)) rows.push({ name: g, default: false, faces: null, edges: null, hasGeometry: true });
+  for (const g of groups)
+    if (!seen.has(g)) rows.push({ name: g, default: false, faces: null, edges: null, hasGeometry: true, visible: true, color: null, folder: -1, lineStyle: null });
   return rows;
 }
 
@@ -270,14 +362,14 @@ export function materialRows(scene: Scene3d): MaterialRow[] {
       const c = Array.isArray(o.color) ? o.color : [];
       const color: [number, number, number, number] = [num(c[0]) ?? 0.8, num(c[1]) ?? 0.8, num(c[2]) ?? 0.8, num(c[3]) ?? 1];
       const meshIds = Array.isArray(o.meshIds) ? o.meshIds.filter((id): id is string => typeof id === 'string' && ids.has(id)) : [];
-      rows.push({ name, folder: str(o.folder), color, textured: o.textured === true, faces: num(o.faces), meshIds });
+      rows.push({ name, folder: str(o.folder), color, textured: o.textured === true, faces: num(o.faces), area: num(o.area), meshIds });
     }
   } else {
     const map = new Map<string, MaterialRow>();
     for (const m of scene.meshes) {
       const name = (m.name ?? '').split(' · ')[0] || '기본 재질';
       let r = map.get(name);
-      if (!r) map.set(name, (r = { name, folder: null, color: [m.color[0], m.color[1], m.color[2], m.color[3]], textured: false, faces: null, meshIds: [] }));
+      if (!r) map.set(name, (r = { name, folder: null, color: [m.color[0], m.color[1], m.color[2], m.color[3]], textured: false, faces: null, area: null, meshIds: [] }));
       r.meshIds.push(m.id);
     }
     rows.push(...map.values());
@@ -294,7 +386,7 @@ export function outlineRows(scene: Scene3d): OutlineRow[] {
   for (const x of list) {
     if (!x || typeof x !== 'object') continue;
     const o = x as Record<string, unknown>;
-    const kind = o.kind === 'group' || o.kind === 'component' || o.kind === 'loose' ? o.kind : 'component';
+    const kind = o.kind === 'group' || o.kind === 'component' || o.kind === 'image' || o.kind === 'loose' ? o.kind : 'component';
     const ids = Array.isArray(o.ids) ? o.ids.filter((id): id is string => typeof id === 'string' && known.has(id)) : [];
     rows.push({
       index: rows.length,
@@ -305,6 +397,7 @@ export function outlineRows(scene: Scene3d): OutlineRow[] {
       tag: str(o.tag) ?? '',
       faces: num(o.faces) ?? 0,
       edges: num(o.edges) ?? 0,
+      area: num(o.area),
       ids,
     });
   }
@@ -324,7 +417,7 @@ export function definitionCounts(rows: readonly OutlineRow[]): { name: string; k
   return [...map.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'ko'));
 }
 
-export const KIND_LABEL: Record<OutlineRow['kind'], string> = { group: '그룹', component: '컴포넌트', loose: '형상' };
+export const KIND_LABEL: Record<OutlineRow['kind'], string> = { group: '그룹', component: '컴포넌트', image: '그림', loose: '형상' };
 
 let serial = 0;
 
@@ -359,7 +452,7 @@ export function docImages(images: SkpImages | undefined, make: UrlMaker): DocIma
   if (images.model) out.model = { name: images.model.name, url: url(images.model.bytes, images.model.mime) };
   for (const m of images.materials ?? []) if (!out.materials.has(m.folder)) out.materials.set(m.folder, { name: m.name, url: url(m.bytes, m.mime) });
   for (const c of images.components ?? []) if (!out.components.has(c.name)) out.components.set(c.name, url(c.bytes, c.mime));
-  for (const sc of images.scenes ?? []) out.scenes.push({ name: sc.name, url: url(sc.bytes, sc.mime) });
+  for (const sc of images.scenes ?? []) out.scenes.push({ name: sc.name, url: url(sc.bytes, sc.mime), path: sc.path });
   return out;
 }
 
@@ -393,7 +486,7 @@ export function createDoc(name: string, size: number, res: ParseResult, opts: { 
   const tree = readTree(scene);
   const nodeOutline = new Map<number, number>();
   if (tree) for (const r of outline) if (r.node !== null && r.node >= 0 && r.node < tree.count) nodeOutline.set(r.node, r.index);
-  return {
+  const doc: SkpDoc = {
     id: ++serial,
     name,
     size,
@@ -413,6 +506,7 @@ export function createDoc(name: string, size: number, res: ParseResult, opts: { 
     damaged: meta(scene).damaged === true,
     limited: meta(scene).limited === true,
     hiddenTags: new Set(),
+    hiddenFolders: new Set(),
     hiddenOutline: new Set(),
     hiddenNodes: new Set(),
     expanded: new Set(),
@@ -424,6 +518,110 @@ export function createDoc(name: string, size: number, res: ParseResult, opts: { 
     pick: null,
     measure: null,
     panelTab: 'tags',
+    ...readMetaExtras(scene),
+  };
+  // 파일에서 숨긴 태그·폴더는 처음부터 숨긴다(SketchUp에서 연 것과 같게)
+  for (const t of doc.tags) if (!t.visible) doc.hiddenTags.add(t.name);
+  doc.tagFolders.forEach((f, i) => {
+    if (f.visible === false) doc.hiddenFolders.add(i);
+  });
+  return doc;
+}
+
+/** 태그 폴더가 (자신이나 조상이) 숨었는지 */
+export function folderHidden(d: Pick<SkpDoc, 'tagFolders' | 'hiddenFolders'>, folder: number): boolean {
+  for (let f = folder, k = 0; f >= 0 && f < d.tagFolders.length && k < 64; f = d.tagFolders[f]!.parent ?? -1, k++) if (d.hiddenFolders.has(f)) return true;
+  return false;
+}
+
+/** 태그가 실제로 숨었는지(태그 자신 또는 든 폴더) */
+export function tagHidden(d: Pick<SkpDoc, 'tags' | 'tagFolders' | 'hiddenFolders' | 'hiddenTags'>, name: string): boolean {
+  if (d.hiddenTags.has(name)) return true;
+  const t = d.tags.find((x) => x.name === name);
+  return !!t && t.folder >= 0 && folderHidden(d, t.folder);
+}
+
+/** 폴더(와 그 아래 폴더)에 든 태그 이름 */
+export function folderTags(d: Pick<SkpDoc, 'tags' | 'tagFolders'>, folder: number): string[] {
+  const inside = (f: number): boolean => {
+    for (let x = f, k = 0; x >= 0 && x < d.tagFolders.length && k < 64; x = d.tagFolders[x]!.parent ?? -1, k++) if (x === folder) return true;
+    return false;
+  };
+  return d.tags.filter((t) => t.folder >= 0 && inside(t.folder)).map((t) => t.name);
+}
+
+/** meta의 더한 칸(장면·스타일·주석·나무 정보) → 문서 칸. 꼴이 다르면 빈 값 */
+export function readMetaExtras(scene: Scene3d): Pick<
+  SkpDoc,
+  | 'units'
+  | 'camera'
+  | 'pages'
+  | 'activePage'
+  | 'style'
+  | 'tagFolders'
+  | 'modelName'
+  | 'modelDescription'
+  | 'texts'
+  | 'dimensions'
+  | 'sectionPlanes'
+  | 'sectionPlanesRaw'
+  | 'annotationItems'
+  | 'annotationKind'
+  | 'attributes'
+  | 'modelAttrs'
+  | 'treeInfo'
+  | 'page'
+  | 'showTexts'
+  | 'showDimensions'
+  | 'showGuides'
+  | 'showSectionPlanes'
+  | 'fileSection'
+> {
+  const m = meta(scene);
+  // 차례는 파일 그대로(activePage·장면의 단면 차례가 이 차례를 가리킨다)
+  const pages = readPages(m);
+  const rawPlanes: readonly unknown[] = Array.isArray(m.sectionPlanes) ? m.sectionPlanes : [];
+  const sectionPlanes: SkpDoc['sectionPlanes'] = [];
+  rawPlanes.forEach((p, index) => {
+    const sp = readSectionPlane(p);
+    if (sp) sectionPlanes.push({ ...sp, index });
+  });
+  const style = m.style && typeof m.style === 'object' ? (m.style as SkpStyleMeta) : null;
+  const items = m.annotationItems && typeof m.annotationItems === 'object' ? (m.annotationItems as Partial<SkpAnnotationItems>) : null;
+  const ids = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+  const cam = m.camera && typeof m.camera === 'object' ? (m.camera as SkpCameraMeta) : null;
+  const annotationItems: SkpAnnotationItems | null = items
+    ? { dimensions: ids(items.dimensions), leaders: ids(items.leaders), guides: ids(items.guides), sectionPlanes: ids(items.sectionPlanes) }
+    : null;
+  const annotationKind = new Map<string, AnnotationKind>();
+  if (annotationItems) for (const k of Object.keys(annotationItems) as AnnotationKind[]) for (const id of annotationItems[k]) annotationKind.set(id, k);
+  const tree = readTree(scene);
+  const info = m.treeInfo && typeof m.treeInfo === 'object' ? (m.treeInfo as SkpTreeInfo) : null;
+  const infoOk = !!info && !!tree && info.attrs instanceof Int32Array && info.attrs.length === tree.count && info.size instanceof Float32Array && info.size.length === tree.count * 3;
+  return {
+    units: readUnits(m.units, str(m.lengthUnit)),
+    camera: cam && Array.isArray(cam.eye) && Array.isArray(cam.target) ? cam : null,
+    pages,
+    activePage: readActivePage(m, pages.length),
+    style,
+    tagFolders: objects<SkpTagFolderMeta>(m.tagFolders),
+    modelName: str(m.modelName),
+    modelDescription: str(m.modelDescription),
+    texts: objects<SkpTextMeta>(m.texts),
+    dimensions: objects<SkpDimensionMeta>(m.dimensions),
+    sectionPlanes,
+    sectionPlanesRaw: rawPlanes,
+    annotationItems,
+    annotationKind,
+    attributes: objects<SkpAttrDictsMeta>(m.attributes),
+    modelAttrs: num(m.modelAttrs),
+    treeInfo: infoOk ? info : null,
+    page: null,
+    showTexts: style?.texts !== false,
+    showDimensions: style?.dimensions !== false,
+    showGuides: style?.guides !== false,
+    showSectionPlanes: style?.sectionPlanes !== false,
+    fileSection: null,
   };
 }
 
@@ -431,7 +629,7 @@ export function createDoc(name: string, size: number, res: ParseResult, opts: { 
 export function panelTabs(d: SkpDoc): [PanelTab, string][] {
   const tabs: [PanelTab, string][] = [['tags', '태그·재질']];
   if (d.outline.length || d.outlineSkipped || d.tree) tabs.push(['outline', '구성']);
-  tabs.push(['info', '정보']);
+  tabs.push(['entity', '선택'], ['info', '정보']);
   return tabs;
 }
 
@@ -531,11 +729,23 @@ export function hiddenNodeRanges(d: SkpDoc): Map<number, IndexRange[]> {
   return mergeNodeRanges(t, d.scene, nodes);
 }
 
-/** 항목(차례)이 지금 보여야 하는지: 부드러운·숨긴 형상 켜짐, 숨긴 윗단계 항목·나무 노드(태그는 뷰어가 따로 가린다) */
+/** 주석 종류가 지금 켜져 있는지 */
+export function annotationShown(d: Pick<SkpDoc, 'showTexts' | 'showDimensions' | 'showGuides' | 'showSectionPlanes'>, kind: AnnotationKind): boolean {
+  return kind === 'dimensions' ? d.showDimensions : kind === 'leaders' ? d.showTexts : kind === 'guides' ? d.showGuides : d.showSectionPlanes;
+}
+
+/** 항목(차례)이 지금 보여야 하는지: 부드러운·숨긴 형상 켜짐, 주석 켜짐, 숨긴 윗단계 항목·나무 노드(태그는 뷰어가 따로 가린다) */
 export function itemVisible(d: SkpDoc, item: number): boolean {
   const s = d.scene;
   const id = item < s.meshes.length ? s.meshes[item]?.id : s.lines[item - s.meshes.length]?.id;
   if (id === undefined) return false;
+  const ak = d.annotationKind.get(id);
+  if (ak) {
+    if (!annotationShown(d, ak)) return false;
+    // 주석 선분은 나무 노드로 나뉘어 있지 않다: 모형에 바로 놓인 형상을 숨기면(분리해서 보기 등) 함께 숨긴다
+    const loose = d.outline.findIndex((r) => r.kind === 'loose');
+    if (loose >= 0 && d.hiddenOutline.has(loose)) return false;
+  }
   if (d.extras) {
     if (d.extras.soft.has(id) && !d.showSoft) return false;
     if (d.extras.hidden.has(id) && !d.showHidden) return false;
@@ -578,7 +788,7 @@ export function selectionText(d: SkpDoc, sel: Selection | null, pick: Pick3d | n
     const i = sel.index;
     const name = nodeName(t, i);
     const def = nodeDefinition(t, i);
-    const parts = [`${t.kind[i] === 0 ? '그룹' : '컴포넌트'} ${name}${def && def !== name ? ` (${def})` : ''}`];
+    const parts = [`${treeKindLabel(t.kind[i]!)} ${name}${def && def !== name ? ` (${def})` : ''}`];
     if (t.parent[i]! >= 0) parts.push(`위치 ${nodePathText(d, t.parent[i]!)}`);
     const tag = nodeTag(t, i);
     if (tag) parts.push(`태그 ${tag}`);
@@ -617,4 +827,92 @@ export function isBigScene(d: { scene: Scene3d }): boolean {
   for (const m of s.meshes) prims += (m.indices ? m.indices.length : m.positions.length / 3) / 3;
   for (const l of s.lines) prims += l.positions.length / 6;
   return prims >= INCREMENTAL_PRIMS;
+}
+
+/** 나무 노드 kind 숫자 → 이름(해석기 SkpTree: 0 그룹, 1 컴포넌트, 2 그림) */
+export function treeKindLabel(kind: number): string {
+  return kind === 0 ? '그룹' : kind === 2 ? '그림' : '컴포넌트';
+}
+
+/**
+ * 라벨용: 노드(-1 = 모형 바로 아래)가 보기에서 숨었는지 — 노드·조상이 숨었거나, 노드·조상 인스턴스의 태그가 숨었으면 참.
+ * 모형 바로 아래 글은 바로 놓인 형상(loose)을 숨겼을 때 함께 숨긴다.
+ */
+export function nodeHiddenForLabels(d: SkpDoc, node: number): boolean {
+  const t = d.tree;
+  if (node < 0 || !t || node >= t.count) {
+    const loose = d.outline.findIndex((r) => r.kind === 'loose');
+    return loose >= 0 && d.hiddenOutline.has(loose);
+  }
+  if (hiddenByNodes(t, d.hiddenNodes, node)) return true;
+  const o = d.nodeOutline.get(nodePath(t, node)[0]!);
+  if (o !== undefined && d.hiddenOutline.has(o)) return true;
+  for (let n = node, k = 0; n >= 0 && k < 64; n = t.parent[n]!, k++) {
+    const tag = t.tagNames[t.tag[n]!];
+    if (tag && tagHidden(d, tag)) return true;
+  }
+  return false;
+}
+
+/** 정의 이름 → 나무에 놓인 수(펼친 배치 기준) */
+function definitionPlacements(d: SkpDoc): Map<string, number> {
+  const out = new Map<string, number>();
+  const t = d.tree;
+  if (!t) return out;
+  for (let i = 0; i < t.count; i++) {
+    const name = nodeDefinition(t, i);
+    if (name) out.set(name, (out.get(name) ?? 0) + 1);
+  }
+  return out;
+}
+
+/** 지금 고른 것(없으면 모형) → 엔티티 정보 입력 */
+export function selectionEntity(d: SkpDoc): EntityInput {
+  const sel = d.selection;
+  const node = selectedNode(d, sel);
+  if (node !== null && node >= 0 && d.tree) {
+    const e = nodeEntity(d.tree, node, d.treeInfo, d.attributes, {
+      instances: definitionPlacements(d),
+      hidden: d.hiddenNodes.has(node) || (d.tree.flags[node]! & 1) !== 0,
+    });
+    if (e) {
+      if (d.tree.kind[node] === 2) e.kind = 'image';
+      const mat = d.pick && d.pick.kind === 'mesh' ? d.meshMaterial.get(d.pick.id) : undefined;
+      if (mat) e.material = mat;
+      return e;
+    }
+  }
+  if (sel?.kind === 'outline') {
+    const r = d.outline[sel.index];
+    if (r) return { kind: r.kind, name: r.name, definition: r.definition, tag: r.kind === 'loose' ? null : r.tag, faces: r.faces, edges: r.edges, area: r.area, hidden: d.hiddenOutline.has(sel.index) };
+  }
+  if (sel?.kind === 'material') {
+    const m = d.materials.find((x) => x.name === sel.name);
+    if (m)
+      return {
+        kind: 'material',
+        name: m.name,
+        faces: m.faces,
+        area: m.area,
+        extra: [
+          { label: '색', value: `RGB ${m.color.slice(0, 3).map((c) => Math.round(c * 255)).join(', ')}` },
+          ...(m.color[3] < 0.999 ? [{ label: '불투명도', value: `${Math.round(m.color[3] * 100)} %` }] : []),
+          ...(m.textured ? [{ label: '무늬', value: '그림 재질(3D는 평균색)' }] : []),
+        ],
+      };
+  }
+  const attrs = d.modelAttrs !== null ? (d.attributes[d.modelAttrs] ?? null) : null;
+  return { kind: 'model', name: d.modelName ?? d.name, description: d.modelDescription, faces: d.info.faces, edges: d.info.edges, attrs };
+}
+
+/** 측정 결과 한 줄(모형 단위) */
+export function measureText(m: MeasureToolResult, units: UnitsDisplay, mmPerUnit: number): string {
+  return m.kind === 'tape' ? `거리 ${formatLength(m.distance * mmPerUnit, units)}` : `각도 ${formatAngle(m.angle, units)}`;
+}
+
+/** 줄자 결과의 축 성분(모형 단위, 각도기는 null) */
+export function measureAxes(m: MeasureToolResult, units: UnitsDisplay, mmPerUnit: number): string | null {
+  if (m.kind !== 'tape') return null;
+  const f = (v: number): string => formatLength(v * mmPerUnit, units);
+  return `dx ${f(m.dx)} · dy ${f(m.dy)} · dz ${f(m.dz)}`;
 }
