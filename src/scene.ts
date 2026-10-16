@@ -2,6 +2,7 @@
  * SKP 중간 모형 → Scene3d. 그룹·컴포넌트 인스턴스를 변환을 곱해 펼치고(세계 좌표),
  * 면(바깥 고리 + 구멍)은 평면 법선의 가장 큰 축을 버린 2D 투영으로 earcut 삼각화한다.
  * 그물은 (태그, 재질)마다 하나로 모으고, 모서리는 태그마다 LineSet3d 하나로 모은다.
+ * outline 선택을 켜면 모형 바로 아래 그룹·컴포넌트(와 모형에 바로 놓인 형상)마다 따로 모아, 화면이 하나씩 고르고 강조할 수 있게 한다.
  *
  * 재질 물려받기(SketchUp 화면과 같게 잡은 규칙): 면 앞 재질 → 감싼 인스턴스 재질(안쪽부터) → 면 뒤 재질 → 기본색.
  * 태그 물려받기: 요소 태그가 없거나 기본 태그면 감싼 인스턴스의 태그를 따른다.
@@ -9,7 +10,7 @@
 
 import earcut from 'earcut';
 import type { Box3, LineSet3d, Mesh3d, Rgba } from 'opencad-viewer3d/types';
-import { FLAG_HIDDEN, FLAG_SOFT_SMOOTH, type SkpEntities, type SkpModel } from './model';
+import { FLAG_HIDDEN, FLAG_SOFT_SMOOTH, type SkpEntities, type SkpInstance, type SkpModel } from './model';
 import type { SkpMaterialInfo } from './materials';
 
 export const DEFAULT_FACE_COLOR: Rgba = [0.82, 0.82, 0.8, 1];
@@ -20,6 +21,8 @@ export const MAX_OUTPUT_VERTICES = 12_000_000;
 export const MAX_OUTPUT_SEGMENTS = 3_000_000;
 /** 인스턴스 겹 깊이 한도(자기 자신을 품는 깨진 파일 보호) */
 const MAX_DEPTH = 64;
+/** outline으로 따로 나눌 윗단계 인스턴스 수 기본 한도(그리기 호출 수 보호) */
+export const MAX_OUTLINE_ENTRIES = 1000;
 
 /** 재질 열쇠: ≥0 면 앞 재질, -1 물려받기(없으면 기본색), ≤-2 물려받기(없으면 뒤 재질 -(k+2)) */
 type MatKey = number;
@@ -30,6 +33,8 @@ interface Batch {
   layer: number;
   pos: Float64Array;
   idx: Uint32Array;
+  /** 삼각화한 면 수 */
+  faces: number;
 }
 
 interface LineBatch {
@@ -112,19 +117,21 @@ export function triangulateFace(
 
 function prepare(ents: SkpEntities, defaultLayer: number | undefined, counter: { failed: number }): Prepared {
   const layerKey = (l: number | undefined): number => (l === undefined || l === defaultLayer ? -1 : l);
-  const groups = new Map<string, { mat: MatKey; layer: number; pos: number[]; idx: number[] }>();
+  const groups = new Map<string, { mat: MatKey; layer: number; pos: number[]; idx: number[]; faces: number }>();
   for (const f of ents.faces) {
     if (f.flags & FLAG_HIDDEN) continue;
     const mat: MatKey = f.front !== undefined ? f.front : f.back !== undefined ? -(f.back + 2) : -1;
     const layer = layerKey(f.layer);
     const key = `${mat}|${layer}`;
     let g = groups.get(key);
-    if (!g) groups.set(key, (g = { mat, layer, pos: [], idx: [] }));
-    if (!triangulateFace(ents.points, f.loops, f.normal, g.pos, g.idx)) counter.failed++;
+    if (!g) groups.set(key, (g = { mat, layer, pos: [], idx: [], faces: 0 }));
+    if (triangulateFace(ents.points, f.loops, f.normal, g.pos, g.idx)) g.faces++;
+    else counter.failed++;
   }
   const batches: Batch[] = [];
   for (const g of groups.values())
-    if (g.idx.length) batches.push({ mat: g.mat, layer: g.layer, pos: Float64Array.from(g.pos), idx: Uint32Array.from(g.idx) });
+    if (g.idx.length)
+      batches.push({ mat: g.mat, layer: g.layer, pos: Float64Array.from(g.pos), idx: Uint32Array.from(g.idx), faces: g.faces });
 
   const lineGroups = new Map<number, number[]>();
   const p = ents.points;
@@ -152,19 +159,70 @@ export function mul4(a: Float64Array, b: Float64Array): Float64Array {
   return o;
 }
 
+/** 태그마다 펼친 뒤 그린 면·모서리 수(화면 태그 목록용) */
+export interface SkpTagStat {
+  name: string;
+  /** 기본 태그(Layer0·Untagged) */
+  default: boolean;
+  faces: number;
+  edges: number;
+}
+
+/** 재질마다 펼친 뒤 그린 면 수와 그 재질의 그물 id(화면 재질 목록용) */
+export interface SkpMaterialStat {
+  /** 표시 이름(material.xml의 원래 이름), 재질이 없으면 '기본 재질' */
+  name: string;
+  color: [number, number, number, number];
+  /** 무늬(텍스처) 재질이면 true — 색은 무늬 평균색 */
+  textured: boolean;
+  faces: number;
+  meshIds: string[];
+}
+
+/** 모형 바로 아래 그룹·컴포넌트 하나(outline 선택일 때) */
+export interface SkpOutlineEntry {
+  /** 인스턴스 이름, 없으면 정의 이름 */
+  name: string;
+  /** loose = 그룹·컴포넌트 밖, 모형에 바로 놓인 면·모서리 */
+  kind: 'group' | 'component' | 'loose';
+  /** 컴포넌트 정의 이름 */
+  definition?: string;
+  /** 인스턴스의 태그 이름 */
+  tag: string;
+  faces: number;
+  edges: number;
+  /** 이 항목만 담은 그물·모서리 묶음 id */
+  ids: string[];
+}
+
+export interface BuildOptions {
+  /** 모형 바로 아래 그룹·컴포넌트마다 그물·모서리를 따로 나눈다(기본 false — 나누지 않으면 그리기 호출이 적다) */
+  outline?: boolean;
+  /** 나눌 윗단계 인스턴스 수 한도(넘으면 나누지 않고 outlineSkipped에 수를 적는다) */
+  maxOutline?: number;
+}
+
 export interface SceneParts {
   meshes: Mesh3d[];
   lines: LineSet3d[];
   bounds?: Box3;
   warnings: string[];
   stats: { triangles: number; segments: number; placements: number };
+  /** 태그별 통계(모형의 태그 차례, 그릴 것이 없는 태그도 넣는다) */
+  tags: SkpTagStat[];
+  /** 재질별 통계(그린 면이 있는 재질만, 처음 나온 차례) */
+  materials: SkpMaterialStat[];
+  /** outline 선택일 때 윗단계 항목(첫 항목은 loose — 그릴 것이 있을 때만) */
+  outline?: SkpOutlineEntry[];
+  /** outline을 원했지만 윗단계 인스턴스가 한도보다 많아 나누지 않았으면 그 수 */
+  outlineSkipped?: number;
 }
 
 /**
  * 중간 모형을 펼친다. scale은 인치 → 장면 단위 배율.
  * materials는 재질 이름 → 정보(material.xml에서 읽은 색).
  */
-export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMaterialInfo>, scale = 1): SceneParts {
+export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMaterialInfo>, scale = 1, opts: BuildOptions = {}): SceneParts {
   const warnings: string[] = [];
   const counter = { failed: 0 };
   const cache = new Map<SkpEntities, Prepared>();
@@ -184,13 +242,38 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     model.layers.get(id) ?? (model.defaultLayer !== undefined ? model.layers.get(model.defaultLayer) : undefined) ?? 'Layer0';
 
   interface Bucket {
+    slot: number;
     layer: number;
     mat: number | undefined;
     pos: F32;
     idx: U32;
+    faces: number;
+  }
+  interface LineBucket {
+    slot: number;
+    layer: number;
+    pos: F32;
   }
   const buckets = new Map<string, Bucket>();
-  const lineBuckets = new Map<number, F32>();
+  const lineBuckets = new Map<string, LineBucket>();
+
+  // outline: 모형 바로 아래 그릴 인스턴스마다 칸 번호(1부터). 0은 모형에 바로 놓인 형상(나누지 않으면 모두 0)
+  const slotOf = new Map<SkpInstance, number>();
+  const slotInst: SkpInstance[] = [];
+  let outlineSkipped = 0;
+  if (opts.outline) {
+    const top = model.root.instances.filter((inst) => {
+      if (inst.flags & FLAG_HIDDEN) return false;
+      const def = model.definitions.get(inst.definition);
+      return !!def && def.entities !== model.root;
+    });
+    if (top.length > (opts.maxOutline ?? MAX_OUTLINE_ENTRIES)) outlineSkipped = top.length;
+    else
+      for (const inst of top) {
+        slotInst.push(inst);
+        slotOf.set(inst, slotInst.length);
+      }
+  }
   const min: [number, number, number] = [Infinity, Infinity, Infinity];
   const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
   let outVerts = 0;
@@ -241,6 +324,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     inhLayer: number | undefined,
     depth: number,
     stack: Set<SkpEntities>,
+    slot: number,
   ): void => {
     if (truncated) return;
     placements++;
@@ -254,13 +338,14 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       }
       const mat = b.mat >= 0 ? b.mat : (inhMat ?? (b.mat <= -2 ? -(b.mat + 2) : undefined));
       const layer = b.layer >= 0 ? b.layer : layerHere;
-      const key = `${layer}|${mat ?? 'd'}`;
+      const key = `${slot}|${layer}|${mat ?? 'd'}`;
       let bk = buckets.get(key);
-      if (!bk) buckets.set(key, (bk = { layer, mat, pos: new F32(), idx: new U32() }));
+      if (!bk) buckets.set(key, (bk = { slot, layer, mat, pos: new F32(), idx: new U32(), faces: 0 }));
       const base = bk.pos.n / 3;
       put(bk.pos, b.pos, m);
       bk.idx.reserve(b.idx.length);
       for (let i = 0; i < b.idx.length; i++) bk.idx.a[bk.idx.n++] = base + b.idx[i]!;
+      bk.faces += b.faces;
       outVerts += nv;
     }
     for (const l of p.lines) {
@@ -271,9 +356,10 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       }
       outSegs += ns;
       const layer = l.layer >= 0 ? l.layer : layerHere;
-      let lb = lineBuckets.get(layer);
-      if (!lb) lineBuckets.set(layer, (lb = new F32()));
-      put(lb, l.pos, m);
+      const key = `${slot}|${layer}`;
+      let lb = lineBuckets.get(key);
+      if (!lb) lineBuckets.set(key, (lb = { slot, layer, pos: new F32() }));
+      put(lb.pos, l.pos, m);
     }
     if (depth >= MAX_DEPTH) {
       if (ents.instances.length) cycles++;
@@ -292,18 +378,35 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
         continue;
       }
       const layer = inst.layer !== undefined && inst.layer !== model.defaultLayer ? inst.layer : inhLayer;
-      emit(def.entities, mul4(m, inst.matrix), inst.material ?? inhMat, layer, depth + 1, stack);
+      emit(def.entities, mul4(m, inst.matrix), inst.material ?? inhMat, layer, depth + 1, stack, depth === 0 ? (slotOf.get(inst) ?? slot) : slot);
       if (truncated) break;
     }
     stack.delete(ents);
   };
 
   const rootM = new Float64Array([scale, 0, 0, 0, 0, scale, 0, 0, 0, 0, scale, 0, 0, 0, 0, 1]);
-  emit(model.root, rootM, undefined, undefined, 0, new Set());
+  emit(model.root, rootM, undefined, undefined, 0, new Set(), 0);
+
+  // 통계: 태그는 모형 차례로 미리 넣는다(그릴 것이 없는 태그도 목록에 보이게)
+  const defaultTagName = (model.defaultLayer !== undefined ? model.layers.get(model.defaultLayer) : undefined) ?? 'Layer0';
+  const tagStats = new Map<string, SkpTagStat>();
+  const tagStat = (name: string): SkpTagStat => {
+    let t = tagStats.get(name);
+    if (!t) tagStats.set(name, (t = { name, default: name === defaultTagName, faces: 0, edges: 0 }));
+    return t;
+  };
+  for (const name of model.layers.values()) tagStat(name);
+  const matStats = new Map<string, SkpMaterialStat>();
+  const slotStats = new Map<number, { faces: number; edges: number; ids: string[] }>();
+  const slotStat = (slot: number): { faces: number; edges: number; ids: string[] } => {
+    let s = slotStats.get(slot);
+    if (!s) slotStats.set(slot, (s = { faces: 0, edges: 0, ids: [] }));
+    return s;
+  };
 
   const meshes: Mesh3d[] = [];
   let triangles = 0;
-  const sorted = [...buckets.values()].sort((a, b) => a.layer - b.layer || (a.mat ?? -1) - (b.mat ?? -1));
+  const sorted = [...buckets.values()].sort((a, b) => a.slot - b.slot || a.layer - b.layer || (a.mat ?? -1) - (b.mat ?? -1));
   for (const bk of sorted) {
     const stored = bk.mat !== undefined ? model.materials.get(bk.mat) : undefined;
     // 표시 이름은 material.xml의 원래 이름(model.dat에는 '<Black>'이 '_Black_'처럼 바뀌어 있다)
@@ -322,14 +425,31 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     };
     triangles += mesh.indices!.length / 3;
     meshes.push(mesh);
+    tagStat(tag).faces += bk.faces;
+    let ms = matStats.get(matName);
+    if (!ms) {
+      const textured = stored !== undefined && !!materials.get(stored)?.textured;
+      matStats.set(matName, (ms = { name: matName, color: [color[0], color[1], color[2], color[3]], textured, faces: 0, meshIds: [] }));
+    }
+    ms.faces += bk.faces;
+    ms.meshIds.push(mesh.id);
+    const ss = slotStat(bk.slot);
+    ss.faces += bk.faces;
+    ss.ids.push(mesh.id);
   }
   const lines: LineSet3d[] = [];
   let segments = 0;
-  for (const [layer, lb] of [...lineBuckets].sort((a, b) => a[0] - b[0])) {
-    const tag = layerName(layer);
-    const positions = lb.done();
-    segments += positions.length / 6;
-    lines.push({ id: `skp-edges-${lines.length}`, name: `모서리 · ${tag}`, positions, color: EDGE_COLOR, group: tag });
+  for (const lb of [...lineBuckets.values()].sort((a, b) => a.slot - b.slot || a.layer - b.layer)) {
+    const tag = layerName(lb.layer);
+    const positions = lb.pos.done();
+    const n = positions.length / 6;
+    segments += n;
+    const id = `skp-edges-${lines.length}`;
+    lines.push({ id, name: `모서리 · ${tag}`, positions, color: EDGE_COLOR, group: tag });
+    tagStat(tag).edges += n;
+    const ss = slotStat(lb.slot);
+    ss.edges += n;
+    ss.ids.push(id);
   }
 
   if (counter.failed) warnings.push(`삼각형으로 나누지 못한 면 ${counter.failed}개를 건너뛰었습니다(면적이 0인 면 등)`);
@@ -340,7 +460,28 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   if (linesTruncated)
     warnings.push(`모서리가 너무 많아(선분 ${MAX_OUTPUT_SEGMENTS.toLocaleString('en-US')}개 한도) 일부 모서리는 그리지 않았습니다`);
 
-  const parts: SceneParts = { meshes, lines, warnings, stats: { triangles, segments, placements } };
+  const parts: SceneParts = {
+    meshes,
+    lines,
+    warnings,
+    stats: { triangles, segments, placements },
+    tags: [...tagStats.values()],
+    materials: [...matStats.values()],
+  };
   if (min[0] <= max[0]) parts.bounds = { min, max };
+  if (opts.outline && !outlineSkipped) {
+    const outline: SkpOutlineEntry[] = [];
+    const loose = slotStats.get(0);
+    if (loose) outline.push({ name: '모형에 바로 놓인 형상', kind: 'loose', tag: defaultTagName, faces: loose.faces, edges: loose.edges, ids: loose.ids });
+    slotInst.forEach((inst, i) => {
+      const st = slotStats.get(i + 1);
+      if (!st) return;
+      const def = model.definitions.get(inst.definition)!;
+      const tag = inst.layer !== undefined && inst.layer !== model.defaultLayer ? layerName(inst.layer) : defaultTagName;
+      outline.push({ name: inst.name || def.name, kind: inst.kind ?? 'component', definition: def.name, tag, faces: st.faces, edges: st.edges, ids: st.ids });
+    });
+    parts.outline = outline;
+  }
+  if (outlineSkipped) parts.outlineSkipped = outlineSkipped;
   return parts;
 }

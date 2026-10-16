@@ -15,6 +15,7 @@ import { readZipDirectory, readZipItem } from './zip';
 
 export { readSkpHeader, type SkpHeader } from './header';
 export { readModelDat, type SkpModel } from './model';
+export type { SkpMaterialStat, SkpOutlineEntry, SkpTagStat } from './scene';
 
 /** 확인한 가장 낮은 판(이보다 낮으면 형식이 다르다) */
 export const SKP_MIN_SUPPORTED_MAJOR = 21;
@@ -24,6 +25,13 @@ export const SKP_MAX_CHECKED_MAJOR = 26;
 export interface SkpOptions {
   /** 장면 이름(보통 파일 이름) */
   name?: string;
+  /**
+   * 모형 바로 아래 그룹·컴포넌트마다 그물·모서리를 따로 나누고 meta.outline에 목록을 적는다(화면에서 하나씩 고르기용).
+   * 기본 false(나누지 않으면 그리기 호출이 적다). 윗단계 인스턴스가 너무 많으면 나누지 않고 meta.outlineSkipped에 수를 적는다.
+   */
+  outline?: boolean;
+  /** 진행 알림(0~1, 단계 글). 해석은 동기라 단계가 바뀔 때만 부른다 */
+  onProgress?: (fraction: number, stage: string) => void;
 }
 
 /** UnitsOptions/LengthUnit → 장면 단위와 인치에서의 배율 */
@@ -49,6 +57,14 @@ function emptyScene(name: string, warnings: string[], meta: Record<string, unkno
 /** SKP 바이트 → 장면. 읽지 못하는 판·깨진 파일은 경고와 함께 빈(또는 일부) 장면 */
 export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
   const name = opts.name ?? 'SketchUp 모형';
+  const progress = (f: number, stage: string): void => {
+    try {
+      opts.onProgress?.(f, stage);
+    } catch {
+      /* 알림 쪽 오류는 해석을 멈추지 않는다 */
+    }
+  };
+  progress(0.02, '파일 머리 읽는 중');
   const header = readSkpHeader(bytes);
   if (!header) return emptyScene(name, ['SketchUp 파일이 아닙니다(머리 표지 "SketchUp Model"이 없습니다)'], { format: 'SketchUp' });
   const meta: Record<string, unknown> = { format: 'SketchUp', version: header.version, container: header.container };
@@ -65,11 +81,13 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
   let model: SkpModel;
   const materials = new Map<string, SkpMaterialInfo>();
   try {
+    progress(0.05, '꾸러미(ZIP) 목록 읽는 중');
     const dir = readZipDirectory(bytes);
     if (!dir) return emptyScene(name, ['SketchUp 꾸러미(ZIP)를 찾지 못했습니다'], meta);
     const modelItem = dir.find((d) => d.name === 'model.dat');
     if (!modelItem) return emptyScene(name, ['꾸러미에 model.dat가 없습니다'], meta);
     const text = new TextDecoder('utf-8');
+    progress(0.1, '재질 읽는 중');
     for (const item of dir) {
       const m = /^materials\/(.+)\/material\.xml$/.exec(item.name);
       if (!m) continue;
@@ -83,7 +101,10 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
         warnings.push(`재질 파일을 읽지 못했습니다: ${item.name}`);
       }
     }
-    model = readModelDat(readZipItem(bytes, modelItem));
+    progress(0.2, 'model.dat 푸는 중');
+    const dat = readZipItem(bytes, modelItem);
+    progress(0.4, '모형 요소 읽는 중');
+    model = readModelDat(dat);
   } catch (e) {
     return emptyScene(name, [`SketchUp 파일을 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`], meta);
   }
@@ -92,7 +113,8 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
   const u = unitsFor(model.lengthUnit);
   let parts: ReturnType<typeof buildSceneParts>;
   try {
-    parts = buildSceneParts(model, materials, u.scale);
+    progress(0.65, '면 삼각화·인스턴스 펼치는 중');
+    parts = buildSceneParts(model, materials, u.scale, { outline: !!opts.outline });
   } catch (e) {
     return emptyScene(name, [...warnings, `장면을 만들지 못했습니다: ${e instanceof Error ? e.message : String(e)}`], meta);
   }
@@ -107,7 +129,11 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
     tags: [...model.layers.values()],
     triangles: parts.stats.triangles,
     segments: parts.stats.segments,
+    tagStats: parts.tags,
+    materialStats: parts.materials,
   });
+  if (parts.outline) meta.outline = parts.outline;
+  if (parts.outlineSkipped) meta.outlineSkipped = parts.outlineSkipped;
   const scene: Scene3d = { name, units: u.units, meshes: parts.meshes, lines: parts.lines, warnings, meta };
   if (parts.bounds) scene.bounds = parts.bounds;
   return scene;

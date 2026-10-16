@@ -115,6 +115,8 @@ export interface SkpInstance {
   layer?: number;
   flags: number;
   name?: string;
+  /** 어느 목록에서 왔는지(138c 그룹 · 138d 컴포넌트) — 화면 목록용 */
+  kind?: 'group' | 'component';
 }
 
 export interface SkpEntities {
@@ -296,7 +298,7 @@ function readEntities(ctx: Ctx, n: TlvNode): SkpEntities {
 
   // 그룹·컴포넌트 인스턴스
   const instances: SkpInstance[] = [];
-  const readInstance = (node: TlvNode): void => {
+  const readInstance = (node: TlvNode, kind: SkpInstance['kind']): void => {
     const b = baseOf(r, node);
     const def = r.uint(r.first(node, TAG.INSTANCE_DEF));
     const xf = r.f64s(r.first(node, TAG.INSTANCE_XFORM));
@@ -310,14 +312,16 @@ function readEntities(ctx: Ctx, n: TlvNode): SkpEntities {
     if (b.layer !== undefined) inst.layer = b.layer;
     const name = r.str(r.first(node, TAG.INSTANCE_NAME));
     if (name) inst.name = name;
+    if (kind) inst.kind = kind;
     instances.push(inst);
   };
   for (const list of instN) {
+    const kind = list.tag === TAG.GROUPS ? 'group' : 'component';
     r.each(list.start, list.end, (tag, start, end) => {
-      if (tag === TAG.INSTANCE) readInstance({ tag, start, end });
+      if (tag === TAG.INSTANCE) readInstance({ tag, start, end }, kind);
       else if (tag === TAG.COMPONENT) {
         const inner = r.first({ tag, start, end }, TAG.INSTANCE);
-        if (inner) readInstance(inner);
+        if (inner) readInstance(inner, kind);
       }
     });
   }
