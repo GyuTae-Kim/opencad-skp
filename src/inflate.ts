@@ -72,11 +72,30 @@ function fixedTables(): [Huffman, Huffman] {
   return [fixedLit, fixedDist];
 }
 
+/** 입력이 끝난 뒤에도 더 읽으려 할 때(잘린 스트림) 던지는 오류 */
+class TruncatedInput extends Error {}
+
 /**
  * 원시 DEFLATE 스트림을 푼다. expected(ZIP 중앙 목록의 원래 크기)를 알면 그만큼 미리 잡는다.
- * 깨진 스트림이면 Error를 던진다.
+ * 깨진 스트림이면 Error를 던진다(잘린 스트림도 — 입력 끝을 몇 바이트 넘겨 읽으면 바로 멈춘다).
  */
-export function inflateRaw(src: Uint8Array, expected = 0): Uint8Array {
+export function inflateRaw(src: Uint8Array, expected = 0, onProgress?: (fraction: number) => void): Uint8Array {
+  return inflateCore(src, expected, false, onProgress).data;
+}
+
+/**
+ * 잘렸거나 중간이 깨진 스트림에서 앞부분만이라도 푼다(잘린 파일 살리기용).
+ * complete가 false면 data는 입력 끝(또는 깨진 곳) 앞까지 확실히 푼 부분이다.
+ */
+export function inflateRawPartial(src: Uint8Array, expected = 0, onProgress?: (fraction: number) => void): { data: Uint8Array; complete: boolean } {
+  return inflateCore(src, expected, true, onProgress);
+}
+
+/** 진행 알림 간격(입력 바이트) */
+const PROGRESS_STEP = 1 << 21;
+
+function inflateCore(src: Uint8Array, expected: number, partial: boolean, onProgress?: (fraction: number) => void): { data: Uint8Array; complete: boolean } {
+  let nextTick = PROGRESS_STEP;
   // DEFLATE는 1바이트로 많아야 258바이트(약 1032배)까지 늘어난다 → 그보다 큰 원래 크기는 깨진 값으로 보고 늘려 가며 푼다
   const plausible = src.length * 1032 + 1024;
   let out = new Uint8Array(expected > 0 && expected <= plausible ? expected : Math.min(plausible, Math.max(1024, src.length * 4)));
@@ -93,10 +112,30 @@ export function inflateRaw(src: Uint8Array, expected = 0): Uint8Array {
     n.set(out.subarray(0, op));
     out = n;
   };
-  /** 비트를 n개(≤24) 채운다. 입력 끝을 넘으면 0을 채우고, 실제로 넘겨 읽었는지는 끝에서 본다 */
+  /** 입력 끝에 처음 닿았을 때의 출력 위치(그 뒤 출력은 0으로 채운 비트에서 나왔을 수 있다) */
+  let opAtEnd = -1;
+  /**
+   * 비트를 n개(≤24) 채운다. 입력 끝을 넘으면 0을 채운다(마지막 부호를 읽을 때 미리 채우는 몫).
+   * 0으로 채운 비트를 4바이트 넘게 읽으면 잘린 스트림이다 — 동적 허프만에서 0 비트가 글자 부호면
+   * 끝없이 같은 글자를 내므로 여기서 멈춘다.
+   */
   const fill = (n: number): void => {
     while (bitCnt < n) {
-      const byte = ip < src.length ? src[ip]! : 0;
+      let byte = 0;
+      if (ip < src.length) {
+        byte = src[ip]!;
+        if (ip >= nextTick && onProgress) {
+          nextTick += PROGRESS_STEP;
+          try {
+            onProgress(ip / src.length);
+          } catch {
+            /* 알림 쪽 오류는 무시 */
+          }
+        }
+      } else {
+        if (opAtEnd < 0) opAtEnd = op;
+        if (ip >= src.length + 4) throw new TruncatedInput('DEFLATE: 입력이 잘렸습니다');
+      }
       ip++;
       bitBuf |= byte << bitCnt;
       bitCnt += 8;
@@ -120,81 +159,99 @@ export function inflateRaw(src: Uint8Array, expected = 0): Uint8Array {
     return e >>> 4;
   };
 
-  let last = 0;
-  while (!last) {
-    last = bits(1);
-    const type = bits(2);
-    if (type === 0) {
-      // 저장 블록: 바이트 경계로 맞추고 LEN·NLEN(미리 채워 둔 온전한 바이트는 입력으로 되돌린다)
-      ip -= bitCnt >> 3;
-      bitBuf = 0;
-      bitCnt = 0;
-      if (ip + 4 > src.length) throw new Error('DEFLATE: 저장 블록 머리가 잘렸습니다');
-      const len = src[ip]! | (src[ip + 1]! << 8);
-      const nlen = src[ip + 2]! | (src[ip + 3]! << 8);
-      ip += 4;
-      if ((len ^ 0xffff) !== nlen) throw new Error('DEFLATE: 저장 블록 길이 검사 실패');
-      if (ip + len > src.length) throw new Error('DEFLATE: 저장 블록이 잘렸습니다');
-      ensure(len);
-      out.set(src.subarray(ip, ip + len), op);
-      op += len;
-      ip += len;
-      continue;
-    }
-    let lit: Huffman;
-    let dist: Huffman;
-    if (type === 1) {
-      [lit, dist] = fixedTables();
-    } else if (type === 2) {
-      const hlit = bits(5) + 257;
-      const hdist = bits(5) + 1;
-      const hclen = bits(4) + 4;
-      const cl = new Uint8Array(19);
-      for (let i = 0; i < hclen; i++) cl[CL_ORDER[i]!] = bits(3);
-      const clh = buildHuffman(cl, 19);
-      const lens = new Uint8Array(hlit + hdist);
-      let i = 0;
-      while (i < hlit + hdist) {
-        const sym = decode(clh);
-        if (sym < 16) lens[i++] = sym;
+  try {
+    let last = 0;
+    while (!last) {
+      last = bits(1);
+      const type = bits(2);
+      if (type === 0) {
+        // 저장 블록: 바이트 경계로 맞추고 LEN·NLEN(미리 채워 둔 온전한 바이트는 입력으로 되돌린다)
+        ip -= bitCnt >> 3;
+        bitBuf = 0;
+        bitCnt = 0;
+        if (ip + 4 > src.length) throw new Error('DEFLATE: 저장 블록 머리가 잘렸습니다');
+        const len = src[ip]! | (src[ip + 1]! << 8);
+        const nlen = src[ip + 2]! | (src[ip + 3]! << 8);
+        ip += 4;
+        if ((len ^ 0xffff) !== nlen) throw new Error('DEFLATE: 저장 블록 길이 검사 실패');
+        if (ip + len > src.length) {
+          if (partial && ip < src.length) {
+            // 잘린 저장 블록: 남은 바이트는 그대로 쓸 수 있다
+            const k = src.length - ip;
+            ensure(k);
+            out.set(src.subarray(ip), op);
+            op += k;
+            ip = src.length;
+            opAtEnd = op;
+          }
+          throw new TruncatedInput('DEFLATE: 저장 블록이 잘렸습니다');
+        }
+        ensure(len);
+        out.set(src.subarray(ip, ip + len), op);
+        op += len;
+        ip += len;
+        continue;
+      }
+      let lit: Huffman;
+      let dist: Huffman;
+      if (type === 1) {
+        [lit, dist] = fixedTables();
+      } else if (type === 2) {
+        const hlit = bits(5) + 257;
+        const hdist = bits(5) + 1;
+        const hclen = bits(4) + 4;
+        const cl = new Uint8Array(19);
+        for (let i = 0; i < hclen; i++) cl[CL_ORDER[i]!] = bits(3);
+        const clh = buildHuffman(cl, 19);
+        const lens = new Uint8Array(hlit + hdist);
+        let i = 0;
+        while (i < hlit + hdist) {
+          const sym = decode(clh);
+          if (sym < 16) lens[i++] = sym;
+          else {
+            let rep: number;
+            let val = 0;
+            if (sym === 16) {
+              if (i === 0) throw new Error('DEFLATE: 앞 길이 없이 반복');
+              val = lens[i - 1]!;
+              rep = 3 + bits(2);
+            } else if (sym === 17) rep = 3 + bits(3);
+            else rep = 11 + bits(7);
+            if (i + rep > hlit + hdist) throw new Error('DEFLATE: 부호 길이 반복이 넘칩니다');
+            lens.fill(val, i, i + rep);
+            i += rep;
+          }
+        }
+        lit = buildHuffman(lens.subarray(0, hlit), hlit);
+        dist = buildHuffman(lens.subarray(hlit), hdist);
+      } else throw new Error('DEFLATE: 알 수 없는 블록 종류 3');
+
+      for (;;) {
+        const sym = decode(lit);
+        if (sym < 256) {
+          ensure(1);
+          out[op++] = sym;
+        } else if (sym === 256) break;
         else {
-          let rep: number;
-          let val = 0;
-          if (sym === 16) {
-            if (i === 0) throw new Error('DEFLATE: 앞 길이 없이 반복');
-            val = lens[i - 1]!;
-            rep = 3 + bits(2);
-          } else if (sym === 17) rep = 3 + bits(3);
-          else rep = 11 + bits(7);
-          if (i + rep > hlit + hdist) throw new Error('DEFLATE: 부호 길이 반복이 넘칩니다');
-          lens.fill(val, i, i + rep);
-          i += rep;
+          const li = sym - 257;
+          if (li >= 29) throw new Error('DEFLATE: 잘못된 길이 부호');
+          const len = LEN_BASE[li]! + bits(LEN_EXTRA[li]!);
+          const di = decode(dist);
+          if (di >= 30) throw new Error('DEFLATE: 잘못된 거리 부호');
+          const d = DIST_BASE[di]! + bits(DIST_EXTRA[di]!);
+          if (d > op) throw new Error('DEFLATE: 거리가 출력 앞을 넘습니다');
+          ensure(len);
+          let from = op - d;
+          for (let k = 0; k < len; k++) out[op++] = out[from++]!;
         }
       }
-      lit = buildHuffman(lens.subarray(0, hlit), hlit);
-      dist = buildHuffman(lens.subarray(hlit), hdist);
-    } else throw new Error('DEFLATE: 알 수 없는 블록 종류 3');
-
-    for (;;) {
-      const sym = decode(lit);
-      if (sym < 256) {
-        ensure(1);
-        out[op++] = sym;
-      } else if (sym === 256) break;
-      else {
-        const li = sym - 257;
-        if (li >= 29) throw new Error('DEFLATE: 잘못된 길이 부호');
-        const len = LEN_BASE[li]! + bits(LEN_EXTRA[li]!);
-        const di = decode(dist);
-        if (di >= 30) throw new Error('DEFLATE: 잘못된 거리 부호');
-        const d = DIST_BASE[di]! + bits(DIST_EXTRA[di]!);
-        if (d > op) throw new Error('DEFLATE: 거리가 출력 앞을 넘습니다');
-        ensure(len);
-        let from = op - d;
-        for (let k = 0; k < len; k++) out[op++] = out[from++]!;
-      }
+      if (ip > src.length + 4) throw new Error('DEFLATE: 입력이 잘렸습니다');
     }
-    if (ip > src.length + 4) throw new Error('DEFLATE: 입력이 잘렸습니다');
+  } catch (e) {
+    if (!partial) throw e;
+    // 입력 끝을 넘어 읽기 시작한 곳까지만 믿는다(그 뒤는 0 비트에서 나온 출력일 수 있다)
+    const keep = opAtEnd >= 0 ? Math.min(op, opAtEnd) : op;
+    return { data: out.slice(0, keep), complete: false };
   }
-  return op === out.length ? out : out.slice(0, op);
+  return { data: op === out.length ? out : out.slice(0, op), complete: true };
 }

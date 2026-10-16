@@ -2,6 +2,9 @@
  * 예제 SketchUp 파일: 저장소에 표본 파일을 두지 않으려고(저작권) 브라우저에서 직접 만든다.
  * 집(벽·바닥·문·유리창) + 박공지붕 + 탁자·의자 4개(같은 컴포넌트를 돌려 놓기) + 나무 3그루(크기를 바꿔 놓기)를
  * 태그 넷(벽·지붕·가구·조경)과 재질 색으로 만든다. 길이는 mm로 짓고, SketchUp처럼 인치로 바꿔 적는다(단위 설정 mm).
+ * 겹친 단계 확인용으로 의자 안에 다리 컴포넌트 넷, 나무 안에 줄기·수관 그룹을 두고, 숨긴 그룹(옛 담장) 하나를 둔다.
+ * 꾸러미에는 조사 기록에서 본 자리에 작은 그림을 넣는다: 모형 미리보기, 무늬 재질(잔디·기와·마루)의 무늬 그림,
+ * 컴포넌트 미리보기(의자·탁자·나무), 장면 미리보기 둘. 그림은 의존성 없이 PNG로 직접 만든다.
  *
  * model.dat는 브라우저의 CompressionStream('deflate-raw')로 압축한다(없으면 저장 방식) — 실제 파일처럼 해석기의 풀기 경로를 탄다.
  */
@@ -13,9 +16,11 @@ import {
   instance,
   materialXml,
   modelDat,
+  pngRgb,
   skpFile,
   vertex as vertexBytes,
   type Compressor,
+  type ZipEntry,
 } from './skpwrite';
 
 export const SAMPLE_NAME = 'OpenCAD 예제 집.skp';
@@ -53,6 +58,10 @@ const MATERIALS: [number, string, [number, number, number], number?][] = [
   [11, '돌', [158, 156, 150]],
 ];
 const MAT = Object.fromEntries(MATERIALS.map(([id, name]) => [name, id])) as Record<string, number>;
+/** 무늬(텍스처) 재질로 적는 재질 — 꾸러미에 무늬 그림을 넣고 material.xml에 hasTexture="1" */
+const TEXTURED = new Set(['잔디', '기와', '마루']);
+/** 숨김 깃발(07d3 비트 0) */
+const FLAG_HIDDEN_INST = 0x07;
 
 const sub = (a: V3, b: V3): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const add = (a: V3, b: V3): V3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
@@ -195,11 +204,11 @@ class Ents {
     );
   }
 
-  group(def: number, m13: number[], o: { name?: string; layer?: number; material?: number } = {}): void {
+  group(def: number, m13: number[], o: { name?: string; layer?: number; material?: number; flags?: number } = {}): void {
     this.groups.push(instance(this.ids.next(), def, m13, o));
   }
 
-  component(def: number, m13: number[], o: { name?: string; layer?: number; material?: number } = {}): void {
+  component(def: number, m13: number[], o: { name?: string; layer?: number; material?: number; flags?: number } = {}): void {
     this.comps.push(instance(this.ids.next(), def, m13, o));
   }
 
@@ -353,18 +362,25 @@ function roof(ids: Ids): Def {
   return { id: ids.next(), name: '박공지붕', ents: e };
 }
 
-/** 의자: 원점이 가운데, 등받이는 +y 쪽(앉은 사람은 -y를 본다). 재질은 인스턴스에서 물려받는다 */
-function chair(ids: Ids): Def {
+/** 의자 다리: 40 × 40 × 430 mm, 원점이 한 구석(재질은 의자 인스턴스에서 물려받는다) */
+function chairLeg(ids: Ids): Def {
+  const e = new Ents(ids);
+  e.box([0, 0, 0], [40, 40, 430], { skip: ['top'] });
+  return { id: ids.next(), name: '의자 다리', ents: e };
+}
+
+/** 의자: 원점이 가운데, 등받이는 +y 쪽(앉은 사람은 -y를 본다). 다리는 안쪽 컴포넌트 넷. 재질은 인스턴스에서 물려받는다 */
+function chair(ids: Ids, leg: Def): Def {
   const e = new Ents(ids);
   const s = 225;
   e.box([-s, -s, 430], [s, s, 470]);
-  for (const [x, y] of [
-    [-s, -s],
-    [s - 40, -s],
-    [-s, s - 40],
-    [s - 40, s - 40],
-  ] as const)
-    e.box([x, y, 0], [x + 40, y + 40, 430], { skip: ['top'] });
+  const legs: [string, number, number][] = [
+    ['앞 왼쪽 다리', -s, -s],
+    ['앞 오른쪽 다리', s - 40, -s],
+    ['뒤 왼쪽 다리', -s, s - 40],
+    ['뒤 오른쪽 다리', s - 40, s - 40],
+  ];
+  for (const [name, x, y] of legs) e.component(leg.id, placement(x, y, 0), { name });
   e.box([-s, s - 40, 470], [s, s, 920], { skip: ['bottom'] });
   return { id: ids.next(), name: '의자', ents: e };
 }
@@ -382,15 +398,17 @@ function table(ids: Ids): Def {
   return { id: ids.next(), name: '탁자', ents: e };
 }
 
-/** 나무: 육각 줄기 + 여덟 모 수관(곡면처럼 모서리를 부드럽게) */
-function tree(ids: Ids): Def {
-  const e = new Ents(ids);
+/** 나무: 육각 줄기 그룹 + 여덟 모 수관 그룹(곡면처럼 모서리를 부드럽게). 정의 셋(줄기·수관 그룹 정의와 나무)을 돌려준다 */
+function tree(ids: Ids): [Def, Def, Def] {
+  const trunk = new Ents(ids);
+  const crown = new Ents(ids);
   const ring = (r: number, z: number, k = 8, phase = 0): V3[] =>
     Array.from({ length: k }, (_, i) => {
       const a = phase + (i / k) * Math.PI * 2;
       return [Math.round(r * Math.cos(a)), Math.round(r * Math.sin(a)), z] as V3;
     });
-  e.prism(ring(120, 0, 6), [0, 0, 1300], { material: MAT['줄기']!, skip: ['top'], softSides: true });
+  trunk.prism(ring(120, 0, 6), [0, 0, 1300], { material: MAT['줄기']!, skip: ['top'], softSides: true });
+  const e = crown;
   const leaf = { material: MAT['잎']! };
   const rings = [ring(700, 1700, 8, Math.PI / 8), ring(950, 2450, 8, Math.PI / 8), ring(620, 3150, 8, Math.PI / 8)];
   const bottom: V3 = [0, 0, 1250];
@@ -416,14 +434,32 @@ function tree(ids: Ids): Def {
     for (let r = 0; r < rings.length; r++) e.soften(rings[r]![i]!, rings[r]![j]!);
     for (let r = 0; r < rings.length - 1; r++) e.soften(rings[r]![i]!, rings[r + 1]![i]!);
   }
-  return { id: ids.next(), name: '나무', ents: e };
+  const trunkDef: Def = { id: ids.next(), name: '그룹#1', ents: trunk };
+  const crownDef: Def = { id: ids.next(), name: '그룹#2', ents: crown };
+  const whole = new Ents(ids);
+  whole.group(trunkDef.id, placement(0, 0, 0), { name: '줄기' });
+  whole.group(crownDef.id, placement(0, 0, 0), { name: '수관' });
+  return [trunkDef, crownDef, { id: ids.next(), name: '나무', ents: whole }];
+}
+
+/** 숨긴 옛 담장(숨긴 형상 보기 확인용): 낮은 돌담 */
+function oldFence(ids: Ids): Def {
+  const e = new Ents(ids);
+  e.box([-3000, 6800, 0], [10500, 7000, 600], { material: MAT['돌']!, skip: ['bottom'] });
+  return { id: ids.next(), name: '옛 담장', ents: e };
 }
 
 /** 예제 model.dat 바이트 */
 export function sampleModelDat(): Uint8Array {
   const ids = new Ids();
-  const defs = [house(ids), roof(ids), table(ids), chair(ids), tree(ids)];
-  const [houseDef, roofDef, tableDef, chairDef, treeDef] = defs as [Def, Def, Def, Def, Def];
+  const legDef = chairLeg(ids);
+  const [trunkDef, crownDef, treeDef] = tree(ids);
+  const houseDef = house(ids);
+  const roofDef = roof(ids);
+  const tableDef = table(ids);
+  const chairDef = chair(ids, legDef);
+  const fenceDef = oldFence(ids);
+  const defs = [houseDef, roofDef, tableDef, chairDef, treeDef, legDef, trunkDef, crownDef, fenceDef];
 
   const root = new Ents(ids);
   // 잔디 마당(집 자리는 구멍) + 문 앞 돌길
@@ -463,6 +499,8 @@ export function sampleModelDat(): Uint8Array {
   root.component(treeDef.id, placement(-1700, -1600, 0, 0, 1), { layer: TAG.landscape });
   root.component(treeDef.id, placement(8600, 900, 0, 20, 1.25), { layer: TAG.landscape });
   root.component(treeDef.id, placement(8000, 5400, 0, 40, 0.85), { layer: TAG.landscape });
+  // 숨긴 그룹(기본으로는 그리지 않는다)
+  root.group(fenceDef.id, placement(0, 0, 0), { name: '옛 담장', layer: TAG.landscape, flags: FLAG_HIDDEN_INST });
 
   return modelDat({
     materials: MATERIALS.map(([id, name]) => [id, name]),
@@ -474,10 +512,142 @@ export function sampleModelDat(): Uint8Array {
   });
 }
 
+/** 정해진 차례로 도는 간단한 잡음(0~1) — 그림이 늘 같게 */
+function noise(x: number, y: number, seed: number): number {
+  let h = (x * 374761393 + y * 668265263 + seed * 2147483647) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0;
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
+}
+
+type Rgb = readonly [number, number, number];
+const mix = (a: Rgb, b: Rgb, t: number): Rgb => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+const shade = (c: Rgb, k: number): Rgb => [Math.min(255, c[0] * k), Math.min(255, c[1] * k), Math.min(255, c[2] * k)];
+
+/** 무늬 그림 16 × 16(잔디 점무늬 · 기와 줄 · 마루 널) */
+function textureImage(name: string, rgb: Rgb): Uint8Array {
+  return pngRgb(16, 16, (x, y) => {
+    if (name === '기와') return shade(rgb, y % 4 === 3 ? 0.7 : (x + (y >> 2) * 4) % 8 === 0 ? 0.8 : 1.05);
+    if (name === '마루') return shade(rgb, (y % 5 === 4 ? 0.75 : 1) * (0.92 + 0.16 * noise(x >> 2, y, 3)));
+    return shade(rgb, 0.8 + 0.4 * noise(x, y, 1));
+  });
+}
+
+/** 그림 위 도형 그리기 도움(그림판 꼴) */
+class Canvas {
+  readonly px: Rgb[];
+  constructor(
+    readonly w: number,
+    readonly h: number,
+    bg: (x: number, y: number) => Rgb,
+  ) {
+    this.px = Array.from({ length: w * h }, (_, i) => bg(i % w, Math.floor(i / w)));
+  }
+  rect(x0: number, y0: number, x1: number, y1: number, c: Rgb): this {
+    for (let y = Math.max(0, y0); y < Math.min(this.h, y1); y++) for (let x = Math.max(0, x0); x < Math.min(this.w, x1); x++) this.px[y * this.w + x] = c;
+    return this;
+  }
+  disc(cx: number, cy: number, r: number, c: Rgb): this {
+    for (let y = Math.floor(cy - r); y <= cy + r; y++)
+      for (let x = Math.floor(cx - r); x <= cx + r; x++) if ((x - cx) ** 2 + (y - cy) ** 2 <= r * r && x >= 0 && y >= 0 && x < this.w && y < this.h) this.px[y * this.w + x] = c;
+    return this;
+  }
+  /** 위가 뾰족한 삼각형(밑변 y1, 꼭짓점 (cx, y0)) */
+  gable(cx: number, y0: number, half: number, y1: number, c: Rgb): this {
+    for (let y = y0; y < y1; y++) {
+      const t = (y - y0) / Math.max(1, y1 - y0);
+      this.rect(Math.round(cx - half * t), y, Math.round(cx + half * t) + 1, y + 1, c);
+    }
+    return this;
+  }
+  png(): Uint8Array {
+    return pngRgb(this.w, this.h, (x, y) => this.px[y * this.w + x]!);
+  }
+}
+
+const SKY: Rgb = [176, 206, 236];
+const GRASS: Rgb = [118, 164, 84];
+const WALL: Rgb = [236, 231, 220];
+const ROOF: Rgb = [158, 72, 56];
+const WOOD: Rgb = [176, 126, 76];
+const LEAF: Rgb = [72, 142, 74];
+const TRUNK: Rgb = [104, 74, 48];
+const GLASS: Rgb = [150, 200, 232];
+
+/** 앞에서 본 집(모형 미리보기·장면 미리보기) */
+function houseView(w: number, h: number): Canvas {
+  const g = Math.round(h * 0.68);
+  const c = new Canvas(w, h, (_, y) => (y < g ? mix(SKY, [232, 240, 250], y / g) : shade(GRASS, 0.9 + 0.2 * noise(_, y, 5))));
+  const x0 = Math.round(w * 0.3);
+  const x1 = Math.round(w * 0.7);
+  const top = Math.round(h * 0.38);
+  c.rect(x0, top, x1, g, WALL);
+  c.gable(Math.round((x0 + x1) / 2), Math.round(h * 0.16), Math.round((x1 - x0) * 0.62), top, ROOF);
+  const dw = Math.max(2, Math.round((x1 - x0) * 0.16));
+  c.rect(Math.round((x0 + x1) / 2 - dw / 2), Math.round(g - (g - top) * 0.62), Math.round((x0 + x1) / 2 + dw / 2), g, [122, 82, 52]);
+  const ww = Math.max(2, Math.round((x1 - x0) * 0.18));
+  const wy = Math.round(top + (g - top) * 0.25);
+  const wh = Math.max(2, Math.round((g - top) * 0.3));
+  c.rect(x0 + Math.round(ww * 0.6), wy, x0 + Math.round(ww * 1.6), wy + wh, GLASS);
+  c.rect(x1 - Math.round(ww * 1.6), wy, x1 - Math.round(ww * 0.6), wy + wh, GLASS);
+  for (const [tx, s] of [
+    [0.12, 1],
+    [0.86, 1.2],
+  ] as const) {
+    const cx = Math.round(w * tx);
+    c.rect(cx - 1, Math.round(g - h * 0.12 * s), cx + 2, g, TRUNK);
+    c.disc(cx, Math.round(g - h * 0.2 * s), h * 0.1 * s, LEAF);
+  }
+  return c;
+}
+
+/** 위에서 본 식탁 한 벌(장면 미리보기) */
+function diningView(w: number, h: number): Canvas {
+  const c = new Canvas(w, h, (x, y) => shade([196, 156, 106], (y % 6 === 5 ? 0.82 : 1) * (0.94 + 0.12 * noise(x >> 3, y, 7))));
+  const cx = w / 2;
+  const cy = h / 2;
+  c.rect(Math.round(cx - w * 0.22), Math.round(cy - h * 0.2), Math.round(cx + w * 0.22), Math.round(cy + h * 0.2), WOOD);
+  const s = Math.round(Math.min(w, h) * 0.12);
+  for (const [dx, dy, col] of [
+    [0, -0.36, WOOD],
+    [0, 0.36, WOOD],
+    [-0.36, 0, [64, 104, 172] as Rgb],
+    [0.36, 0, [64, 104, 172] as Rgb],
+  ] as const) {
+    const x = Math.round(cx + dx * w);
+    const y = Math.round(cy + dy * h);
+    c.rect(x - s, y - s, x + s, y + s, shade(col, 0.85));
+  }
+  return c;
+}
+
+/** 컴포넌트 미리보기 32 × 32 */
+function componentThumb(name: string): Uint8Array {
+  const c = new Canvas(32, 32, () => [244, 245, 247]);
+  if (name === '의자') c.rect(9, 4, 23, 8, WOOD).rect(9, 15, 23, 18, WOOD).rect(9, 4, 12, 28, shade(WOOD, 0.85)).rect(20, 18, 23, 28, shade(WOOD, 0.85));
+  else if (name === '탁자') c.rect(3, 10, 29, 14, WOOD).rect(5, 14, 8, 28, shade(WOOD, 0.85)).rect(24, 14, 27, 28, shade(WOOD, 0.85));
+  else c.rect(14, 18, 18, 30, TRUNK).disc(16, 12, 10, LEAF);
+  return c.png();
+}
+
+/** 꾸러미에 넣는 그림 항목(조사 기록에서 본 자리) */
+function sampleImages(): ZipEntry[] {
+  const out: ZipEntry[] = [{ name: 'meta/model_thumbnail.png', data: houseView(96, 64).png() }];
+  for (const [, name, rgb] of MATERIALS) if (TEXTURED.has(name)) out.push({ name: `materials/${name}/${name}.png`, data: textureImage(name, rgb) });
+  for (const name of ['의자', '탁자', '나무']) out.push({ name: `thumbnails/${name}.png`, data: componentThumb(name) });
+  out.push({ name: 'scene_thumbnails/앞마당.png', data: houseView(80, 50).png() }, { name: 'scene_thumbnails/식탁.png', data: diningView(80, 50).png() });
+  // 직접 만든 PNG는 압축하지 않은 zlib 흐름이라, 압축 함수가 있으면 꾸러미에서 DEFLATE로 줄인다
+  for (const e of out) e.deflate = true;
+  return out;
+}
+
 function sampleFile(model: Uint8Array, compress?: Compressor): Uint8Array {
   const opts: Parameters<typeof skpFile>[1] = {
     version: SAMPLE_VERSION,
-    materials: MATERIALS.map(([, name, rgb, alpha]) => [name, alpha !== undefined ? materialXml(name, rgb, alpha, 1) : materialXml(name, rgb)]),
+    materials: MATERIALS.map(([, name, rgb, alpha]) => [
+      name,
+      alpha !== undefined ? materialXml(name, rgb, alpha, 1) : materialXml(name, rgb, 1, 0, TEXTURED.has(name)),
+    ]),
+    extra: sampleImages(),
   };
   if (compress) opts.compress = compress;
   return skpFile(model, opts);

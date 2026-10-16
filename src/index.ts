@@ -11,11 +11,13 @@ import { readSkpHeader } from './header';
 import { parseMaterialXml, type SkpMaterialInfo } from './materials';
 import { readModelDat, type SkpModel } from './model';
 import { buildSceneParts } from './scene';
-import { readZipDirectory, readZipItem } from './zip';
+import { findSkpZipItems, readZipItem, readZipItemPartial } from './zip';
 
 export { readSkpHeader, type SkpHeader } from './header';
 export { readModelDat, type SkpModel } from './model';
-export type { SkpMaterialStat, SkpOutlineEntry, SkpTagStat } from './scene';
+export { readSkpImages, type SkpImage, type SkpImages, type SkpImageOptions } from './images';
+export type { SkpExtraItems, SkpMaterialStat, SkpOutlineEntry, SkpTagStat, SkpTree } from './scene';
+export { TREE_HIDDEN, TREE_MORE } from './scene';
 
 /** 확인한 가장 낮은 판(이보다 낮으면 형식이 다르다) */
 export const SKP_MIN_SUPPORTED_MAJOR = 21;
@@ -30,7 +32,12 @@ export interface SkpOptions {
    * 기본 false(나누지 않으면 그리기 호출이 적다). 윗단계 인스턴스가 너무 많으면 나누지 않고 meta.outlineSkipped에 수를 적는다.
    */
   outline?: boolean;
-  /** 진행 알림(0~1, 단계 글). 해석은 동기라 단계가 바뀔 때만 부른다 */
+  /**
+   * 부드러운·매끈한 모서리와 숨긴 형상(숨긴 면·모서리·인스턴스)을 따로 묶어 장면에 더 넣는다(화면에서 켜고 끄기용).
+   * 항목 id는 meta.extraItems에 적는다. 기본 false(예전처럼 그리지 않는다). 장면 범위(bounds)에는 넣지 않는다.
+   */
+  extras?: boolean;
+  /** 진행 알림(0~1, 단계 글). 해석은 동기라 단계 안에서도 몇천 항목마다 부른다 */
   onProgress?: (fraction: number, stage: string) => void;
 }
 
@@ -80,12 +87,23 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
     warnings.push(`표본으로 확인하지 않은 SketchUp 버전 ${header.version}입니다. 2021~2026 형식으로 읽어 봅니다.`);
   let model: SkpModel;
   const materials = new Map<string, SkpMaterialInfo>();
+  let damaged = false;
   try {
     progress(0.05, '꾸러미(ZIP) 목록 읽는 중');
-    const dir = readZipDirectory(bytes);
-    if (!dir) return emptyScene(name, ['SketchUp 꾸러미(ZIP)를 찾지 못했습니다'], meta);
+    const found = findSkpZipItems(bytes, header.bodyOffset);
+    const dir = found.items;
+    if (!dir) return emptyScene(name, [found.error ? `SketchUp 꾸러미(ZIP)가 깨졌습니다: ${found.error}` : 'SketchUp 꾸러미(ZIP)를 찾지 못했습니다'], meta);
     const modelItem = dir.find((d) => d.name === 'model.dat');
-    if (!modelItem) return emptyScene(name, ['꾸러미에 model.dat가 없습니다'], meta);
+    if (!modelItem)
+      return emptyScene(
+        name,
+        [found.salvaged || found.truncated ? '파일이 잘렸거나 깨져 model.dat를 찾지 못했습니다(파일을 끝까지 받았는지 확인해 주세요)' : '꾸러미에 model.dat가 없습니다'],
+        meta,
+      );
+    if (found.salvaged) {
+      damaged = true;
+      warnings.push('파일 끝의 꾸러미(ZIP) 목록이 없거나 깨져, 앞에서부터 항목을 찾아 읽었습니다 — 파일이 잘렸을 수 있습니다');
+    }
     const text = new TextDecoder('utf-8');
     progress(0.1, '재질 읽는 중');
     for (const item of dir) {
@@ -102,11 +120,31 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
       }
     }
     progress(0.2, 'model.dat 푸는 중');
-    const dat = readZipItem(bytes, modelItem);
+    const unpacking = (f: number): void => progress(0.2 + 0.19 * f, 'model.dat 푸는 중');
+    let dat: Uint8Array;
+    if (found.salvaged || modelItem.truncated) {
+      const part = readZipItemPartial(bytes, modelItem, unpacking);
+      dat = part.data;
+      if (!part.complete) {
+        damaged = true;
+        warnings.push('model.dat가 잘렸거나 압축이 깨져 앞부분만 읽었습니다 — 일부 형상이 빠졌을 수 있습니다');
+      }
+    } else {
+      try {
+        dat = readZipItem(bytes, modelItem, unpacking);
+      } catch (e) {
+        // 압축이 중간에 깨졌으면 앞부분이라도
+        const part = readZipItemPartial(bytes, modelItem);
+        if (part.data.length < 6) throw e;
+        dat = part.data;
+        damaged = true;
+        warnings.push(`model.dat를 끝까지 풀지 못해 앞부분만 읽었습니다(${e instanceof Error ? e.message : String(e)})`);
+      }
+    }
     progress(0.4, '모형 요소 읽는 중');
-    model = readModelDat(dat);
+    model = readModelDat(dat, (f) => progress(0.4 + 0.24 * f, '모형 요소 읽는 중'));
   } catch (e) {
-    return emptyScene(name, [`SketchUp 파일을 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`], meta);
+    return emptyScene(name, [...warnings, `SketchUp 파일을 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`], meta);
   }
   warnings.push(...model.warnings);
 
@@ -114,7 +152,11 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
   let parts: ReturnType<typeof buildSceneParts>;
   try {
     progress(0.65, '면 삼각화·인스턴스 펼치는 중');
-    parts = buildSceneParts(model, materials, u.scale, { outline: !!opts.outline });
+    parts = buildSceneParts(model, materials, u.scale, {
+      outline: !!opts.outline,
+      extras: !!opts.extras,
+      onProgress: (f) => progress(0.65 + 0.3 * f, '면 삼각화·인스턴스 펼치는 중'),
+    });
   } catch (e) {
     return emptyScene(name, [...warnings, `장면을 만들지 못했습니다: ${e instanceof Error ? e.message : String(e)}`], meta);
   }
@@ -134,6 +176,11 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
   });
   if (parts.outline) meta.outline = parts.outline;
   if (parts.outlineSkipped) meta.outlineSkipped = parts.outlineSkipped;
+  if (parts.tree) meta.tree = parts.tree;
+  if (parts.extras) meta.extraItems = parts.extras;
+  // 화면이 알림을 띄울지 가리는 표시: 깨지거나 잘린 곳(damaged), 출력 한도(limited)
+  if (damaged || model.damaged) meta.damaged = true;
+  if (parts.limited) meta.limited = true;
   const scene: Scene3d = { name, units: u.units, meshes: parts.meshes, lines: parts.lines, warnings, meta };
   if (parts.bounds) scene.bounds = parts.bounds;
   return scene;

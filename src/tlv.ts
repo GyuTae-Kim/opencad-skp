@@ -37,6 +37,47 @@ export class TlvReader {
     }
   }
 
+  /**
+   * 깨진 곳을 견디며 돈다: 머리가 잘렸거나 길이가 범위를 넘는 자식을 만나면 거기서 멈추고 false(그 앞 자식은 모두 넘겼다).
+   * clip이면 길이가 넘친 그 자식을 범위 끝까지 잘라 clipped = true로 한 번 넘긴다 — 잘린 파일에서 묶음(목록)의 앞부분을 살리는 용도.
+   * 값(좌표·이름) 꼬리표는 잘린 것을 쓰면 안 되므로, 받는 쪽이 묶음 꼬리표일 때만 clipped를 쓴다.
+   */
+  eachSafe(start: number, end: number, fn: (tag: number, s: number, e: number, clipped: boolean) => void, clip = false): boolean {
+    let p = start;
+    while (p < end) {
+      if (p + 6 > end) return false;
+      const tag = this.dv.getUint16(p, true);
+      const len = this.dv.getUint32(p + 2, true);
+      const s = p + 6;
+      const e = s + len;
+      if (e > end) {
+        if (clip && s < end) fn(tag, s, end, true);
+        return false;
+      }
+      fn(tag, s, e, false);
+      p = e;
+    }
+    return true;
+  }
+
+  /** 첫 자식 중 꼬리표가 같은 것을 깨진 곳 앞까지만 찾는다(clip이면 길이가 넘친 그 자식도 잘라서 돌려준다) */
+  firstSafe(n: TlvNode, tag: number, clip = false): TlvNode | undefined {
+    let found: TlvNode | undefined;
+    let p = n.start;
+    while (p + 6 <= n.end) {
+      const t = this.dv.getUint16(p, true);
+      const len = this.dv.getUint32(p + 2, true);
+      const e = p + 6 + len;
+      if (e > n.end) {
+        if (clip && t === tag) found = { tag: t, start: p + 6, end: n.end };
+        break;
+      }
+      if (t === tag) return { tag: t, start: p + 6, end: e };
+      p = e;
+    }
+    return found;
+  }
+
   children(n: TlvNode): TlvNode[] {
     const out: TlvNode[] = [];
     this.each(n.start, n.end, (tag, start, end) => out.push({ tag, start, end }));

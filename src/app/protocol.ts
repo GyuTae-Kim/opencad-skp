@@ -5,6 +5,7 @@
  * 한 메시지 안에서 같은 버퍼를 여러 곳이 가리킬 수 있으므로 이전 목록은 버퍼마다 한 번만 넣는다.
  */
 import type { Scene3d } from 'opencad-viewer3d/types';
+import type { SkpImages } from '../images';
 
 export interface ParseRequest {
   id: number;
@@ -24,6 +25,8 @@ export interface ParseResult {
   scene: Scene3d;
   /** 해석 시간(ms) */
   ms: number;
+  /** 꾸러미 안 그림(워커가 꺼낸 바이트 — 화면이 Blob 주소로 바꾼다) */
+  images?: SkpImages;
 }
 
 /**

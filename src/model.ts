@@ -144,13 +144,25 @@ export interface SkpModel {
   lengthUnit?: number;
   counts: { vertices: number; edges: number; faces: number; instances: number };
   warnings: string[];
+  /** 잘렸거나 꼬리표 길이가 깨진 곳을 만나 일부만 읽었는지 */
+  damaged?: boolean;
 }
 
 interface Ctx {
   r: TlvReader;
   warn: Map<string, number>;
   counts: SkpModel['counts'];
+  /** 진행 알림(읽은 바이트 위치 기준 0~1) */
+  tick: (pos: number) => void;
+  /** 깨지거나 잘린 곳을 만났는지 */
+  damaged: boolean;
 }
+
+/** 목록 틀(꼬리표 길이)이 깨진 정의 — 정의를 통째로 건너뛰게 한다 */
+class BrokenList extends Error {}
+
+/** 목록 안 항목을 이만큼 읽을 때마다 진행을 알린다 */
+const TICK_EVERY = 4096;
 
 function note(ctx: Ctx, msg: string): void {
   ctx.warn.set(msg, (ctx.warn.get(msg) ?? 0) + 1);
@@ -202,98 +214,124 @@ export function matrixFrom13(m: ArrayLike<number>): Float64Array {
   return c;
 }
 
-function readEntities(ctx: Ctx, n: TlvNode): SkpEntities {
+/**
+ * 요소 묶음(1388) 읽기.
+ * tolerant: 목록 틀(길이)이 깨지면 그 앞까지만 읽고 경고한다(모형 요소, 파일 끝에서 잘린 정의).
+ * 아니면 목록 틀이 깨진 정의는 BrokenList로 통째로 건너뛴다(쓰레기를 그리지 않게). 항목 하나의 속이 깨진 것은 그 항목만 건너뛴다.
+ */
+function readEntities(ctx: Ctx, n: TlvNode, tolerant: boolean): SkpEntities {
   const r = ctx.r;
-  const parts = r.children(n);
+  const parts: TlvNode[] = [];
+  const whole = r.eachSafe(n.start, n.end, (tag, start, end, clipped) => {
+    // 잘린 묶음은 목록 꼬리표일 때만 쓴다(값 꼬리표는 잘린 내용을 쓰면 안 된다)
+    if (clipped && tag !== TAG.VERTICES && tag !== TAG.EDGES && tag !== TAG.FACES && tag !== TAG.GROUPS && tag !== TAG.COMPONENTS) return;
+    parts.push({ tag, start, end });
+  }, tolerant);
+  const broken = (what: string): void => {
+    if (!tolerant) throw new BrokenList(what);
+    ctx.damaged = true;
+    note(ctx, `${what}이 깨져 뒷부분을 읽지 못했습니다`);
+  };
+  if (!whole) broken('요소 묶음');
   const vertsN = parts.find((c) => c.tag === TAG.VERTICES);
   const edgesN = parts.find((c) => c.tag === TAG.EDGES);
   const facesN = parts.find((c) => c.tag === TAG.FACES);
   const instN = parts.filter((c) => c.tag === TAG.GROUPS || c.tag === TAG.COMPONENTS);
+  /** 목록 돌기: 항목 속이 깨지면 그 항목만 건너뛰고, 목록 틀이 깨지면 broken */
+  const list = (node: TlvNode | undefined, what: string, itemWhat: string, fn: (tag: number, start: number, end: number) => void): void => {
+    if (!node) return;
+    let k = 0;
+    const ok = r.eachSafe(node.start, node.end, (tag, start, end, clipped) => {
+      if (clipped) return;
+      if (++k % TICK_EVERY === 0) ctx.tick(start);
+      try {
+        fn(tag, start, end);
+      } catch {
+        ctx.damaged = true;
+        note(ctx, `깨진 ${itemWhat}을 건너뛰었습니다`);
+      }
+    });
+    if (!ok) broken(what);
+  };
 
   // 정점
   const vIndex = new Map<number, number>();
   const pts: number[] = [];
-  if (vertsN) {
-    r.each(vertsN.start, vertsN.end, (tag, start, end) => {
-      if (tag !== TAG.VERTEX) return;
-      const node = { tag, start, end };
-      const id = idOf(r, node);
-      const p = r.first(node, TAG.POINT);
-      if (id === undefined || !p || p.end - p.start < 24) {
-        note(ctx, '좌표가 없는 정점을 건너뛰었습니다');
-        return;
-      }
-      vIndex.set(id, pts.length / 3);
-      pts.push(r.f64(p, 0), r.f64(p, 1), r.f64(p, 2));
-    });
-  }
+  list(vertsN, '정점 목록', '정점', (tag, start, end) => {
+    if (tag !== TAG.VERTEX) return;
+    const node = { tag, start, end };
+    const id = idOf(r, node);
+    const p = r.first(node, TAG.POINT);
+    if (id === undefined || !p || p.end - p.start < 24) {
+      note(ctx, '좌표가 없는 정점을 건너뛰었습니다');
+      return;
+    }
+    vIndex.set(id, pts.length / 3);
+    pts.push(r.f64(p, 0), r.f64(p, 1), r.f64(p, 2));
+  });
   ctx.counts.vertices += pts.length / 3;
 
   // 모서리
   const eIndex = new Map<number, [number, number]>();
   const edges: SkpEdge[] = [];
-  if (edgesN) {
-    r.each(edgesN.start, edgesN.end, (tag, start, end) => {
-      if (tag !== TAG.EDGE) return;
-      const node = { tag, start, end };
-      const b = baseOf(r, node);
-      const a = vIndex.get(r.uint(r.first(node, TAG.EDGE_START)) ?? -1);
-      const z = vIndex.get(r.uint(r.first(node, TAG.EDGE_END)) ?? -1);
-      if (a === undefined || z === undefined) {
-        note(ctx, '정점을 찾지 못한 모서리를 건너뛰었습니다');
-        return;
-      }
-      if (b.id !== undefined) eIndex.set(b.id, [a, z]);
-      const e: SkpEdge = { a, b: z, flags: b.flags };
-      if (b.layer !== undefined) e.layer = b.layer;
-      edges.push(e);
-    });
-  }
+  list(edgesN, '모서리 목록', '모서리', (tag, start, end) => {
+    if (tag !== TAG.EDGE) return;
+    const node = { tag, start, end };
+    const b = baseOf(r, node);
+    const a = vIndex.get(r.uint(r.first(node, TAG.EDGE_START)) ?? -1);
+    const z = vIndex.get(r.uint(r.first(node, TAG.EDGE_END)) ?? -1);
+    if (a === undefined || z === undefined) {
+      note(ctx, '정점을 찾지 못한 모서리를 건너뛰었습니다');
+      return;
+    }
+    if (b.id !== undefined) eIndex.set(b.id, [a, z]);
+    const e: SkpEdge = { a, b: z, flags: b.flags };
+    if (b.layer !== undefined) e.layer = b.layer;
+    edges.push(e);
+  });
   ctx.counts.edges += edges.length;
 
   // 면
   const faces: SkpFace[] = [];
-  if (facesN) {
-    r.each(facesN.start, facesN.end, (tag, start, end) => {
-      if (tag !== TAG.FACE) return;
-      const node = { tag, start, end };
-      const b = baseOf(r, node);
-      const plane = r.f64s(r.first(node, TAG.FACE_PLANE));
-      const loopsN = r.first(node, TAG.FACE_LOOPS);
-      if (!plane || plane.length < 3 || !loopsN) {
-        note(ctx, '평면·고리가 없는 면을 건너뛰었습니다');
-        return;
-      }
-      const loops: number[][] = [];
-      const missing = { n: 0 };
-      r.each(loopsN.start, loopsN.end, (lt, ls, le) => {
-        if (lt !== TAG.LOOP) return;
-        const uses = r.first({ tag: lt, start: ls, end: le }, TAG.LOOP_USES);
-        if (!uses) return;
-        const loop: number[] = [];
-        r.each(uses.start, uses.end, (ut, us, ue) => {
-          if (ut !== TAG.EDGE_USE) return;
-          const u = { tag: ut, start: us, end: ue };
-          const e = eIndex.get(r.uint(r.first(u, TAG.USE_EDGE)) ?? -1);
-          if (!e) {
-            missing.n++;
-            return;
-          }
-          // 뒤집힘이면 모서리 끝 정점에서 시작한다(모든 표본에서 고리가 이어지는 것으로 확인)
-          loop.push(r.u8(r.first(u, TAG.USE_REVERSED)) ? e[1] : e[0]);
-        });
-        if (loop.length >= 3) loops.push(loop);
+  list(facesN, '면 목록', '면', (tag, start, end) => {
+    if (tag !== TAG.FACE) return;
+    const node = { tag, start, end };
+    const b = baseOf(r, node);
+    const plane = r.f64s(r.first(node, TAG.FACE_PLANE));
+    const loopsN = r.first(node, TAG.FACE_LOOPS);
+    if (!plane || plane.length < 3 || !loopsN) {
+      note(ctx, '평면·고리가 없는 면을 건너뛰었습니다');
+      return;
+    }
+    const loops: number[][] = [];
+    const missing = { n: 0 };
+    r.each(loopsN.start, loopsN.end, (lt, ls, le) => {
+      if (lt !== TAG.LOOP) return;
+      const uses = r.first({ tag: lt, start: ls, end: le }, TAG.LOOP_USES);
+      if (!uses) return;
+      const loop: number[] = [];
+      r.each(uses.start, uses.end, (ut, us, ue) => {
+        if (ut !== TAG.EDGE_USE) return;
+        const u = { tag: ut, start: us, end: ue };
+        const e = eIndex.get(r.uint(r.first(u, TAG.USE_EDGE)) ?? -1);
+        if (!e) {
+          missing.n++;
+          return;
+        }
+        // 뒤집힘이면 모서리 끝 정점에서 시작한다(모든 표본에서 고리가 이어지는 것으로 확인)
+        loop.push(r.u8(r.first(u, TAG.USE_REVERSED)) ? e[1] : e[0]);
       });
-      if (missing.n > 0) note(ctx, '모서리를 찾지 못한 면 고리가 있습니다');
-      if (loops.length === 0) return;
-      const f: SkpFace = { loops, normal: [plane[0]!, plane[1]!, plane[2]!], flags: b.flags };
-      if (b.material !== undefined) f.front = b.material;
-      const back = r.uint(r.first(node, TAG.FACE_BACK));
-      if (back !== undefined) f.back = back;
-      if (b.layer !== undefined) f.layer = b.layer;
-      faces.push(f);
+      if (loop.length >= 3) loops.push(loop);
     });
-  }
+    if (missing.n > 0) note(ctx, '모서리를 찾지 못한 면 고리가 있습니다');
+    if (loops.length === 0) return;
+    const f: SkpFace = { loops, normal: [plane[0]!, plane[1]!, plane[2]!], flags: b.flags };
+    if (b.material !== undefined) f.front = b.material;
+    const back = r.uint(r.first(node, TAG.FACE_BACK));
+    if (back !== undefined) f.back = back;
+    if (b.layer !== undefined) f.layer = b.layer;
+    faces.push(f);
+  });
   ctx.counts.faces += faces.length;
 
   // 그룹·컴포넌트 인스턴스
@@ -315,9 +353,9 @@ function readEntities(ctx: Ctx, n: TlvNode): SkpEntities {
     if (kind) inst.kind = kind;
     instances.push(inst);
   };
-  for (const list of instN) {
-    const kind = list.tag === TAG.GROUPS ? 'group' : 'component';
-    r.each(list.start, list.end, (tag, start, end) => {
+  for (const listN of instN) {
+    const kind = listN.tag === TAG.GROUPS ? 'group' : 'component';
+    list(listN, '인스턴스 목록', '인스턴스', (tag, start, end) => {
       if (tag === TAG.INSTANCE) readInstance({ tag, start, end }, kind);
       else if (tag === TAG.COMPONENT) {
         const inner = r.first({ tag, start, end }, TAG.INSTANCE);
@@ -352,83 +390,151 @@ function readLengthUnit(r: TlvReader, options: TlvNode): number | undefined {
   return unit;
 }
 
-/** model.dat 바이트 → 중간 모형. 뿌리가 맞지 않으면 Error */
-export function readModelDat(bytes: Uint8Array): SkpModel {
+/**
+ * model.dat 바이트 → 중간 모형. 뿌리가 맞지 않으면 Error.
+ * 잘렸거나 꼬리표 길이가 깨진 곳이 있으면 그 앞까지 읽고 경고한다(모형이 damaged).
+ * onProgress는 읽은 바이트 위치로 진행(0~1)을 알린다.
+ */
+export function readModelDat(bytes: Uint8Array, onProgress?: (fraction: number) => void): SkpModel {
   const r = new TlvReader(bytes);
   if (bytes.length < 6 || r.dv.getUint16(0, true) !== TAG.ROOT) throw new Error('model.dat 뿌리 꼬리표가 다릅니다');
   const rootLen = r.dv.getUint32(2, true);
   const root: TlvNode = { tag: TAG.ROOT, start: 6, end: Math.min(bytes.length, 6 + rootLen) };
-  const ctx: Ctx = { r, warn: new Map(), counts: { vertices: 0, edges: 0, faces: 0, instances: 0 } };
-  if (6 + rootLen > bytes.length) note(ctx, 'model.dat가 잘렸습니다');
+  let last = 0;
+  const tick = (pos: number): void => {
+    const f = pos / Math.max(1, bytes.length);
+    if (!onProgress || f <= last) return;
+    last = f;
+    try {
+      onProgress(f);
+    } catch {
+      /* 알림 쪽 오류는 무시 */
+    }
+  };
+  const ctx: Ctx = { r, warn: new Map(), counts: { vertices: 0, edges: 0, faces: 0, instances: 0 }, tick, damaged: false };
+  if (6 + rootLen > bytes.length) {
+    ctx.damaged = true;
+    note(ctx, 'model.dat가 잘렸습니다(파일 끝까지 받지 못했을 수 있습니다) — 읽을 수 있는 앞부분만 씁니다');
+  }
 
-  const sections = new Map<number, TlvNode>();
-  r.each(root.start, root.end, (tag, start, end) => {
-    if (!sections.has(tag)) sections.set(tag, { tag, start, end });
-  });
+  // 뿌리의 절(section)들: 깨진 곳 앞까지. 정의·모형 요소 묶음은 잘렸어도 앞부분을 살린다
+  const sections = new Map<number, TlvNode & { clipped: boolean }>();
+  const rootOk = r.eachSafe(
+    root.start,
+    root.end,
+    (tag, start, end, clipped) => {
+      if (clipped && tag !== TAG.DEFINITIONS && tag !== TAG.MODEL_ENTITIES) return;
+      if (!sections.has(tag)) sections.set(tag, { tag, start, end, clipped });
+    },
+    true,
+  );
+  if (!rootOk && 6 + rootLen <= bytes.length) {
+    ctx.damaged = true;
+    note(ctx, 'model.dat 안의 꼬리표 길이가 깨져 뒷부분을 읽지 못했습니다');
+  }
+
+  /** 절 안을 경로대로 내려가기(깨진 것은 undefined) */
+  const at = (sec: TlvNode | undefined, ...tags: number[]): TlvNode | undefined => {
+    let cur = sec;
+    for (const t of tags) {
+      if (!cur) return undefined;
+      cur = r.firstSafe(cur, t, true);
+    }
+    return cur;
+  };
 
   const materials = new Map<number, string>();
-  const matItems = sections.get(TAG.MATERIALS) && r.path(sections.get(TAG.MATERIALS)!, TAG.MAT_LIST, TAG.MAT_ITEMS);
+  const matItems = at(sections.get(TAG.MATERIALS), TAG.MAT_LIST, TAG.MAT_ITEMS);
   if (matItems)
-    r.each(matItems.start, matItems.end, (tag, start, end) => {
-      if (tag !== TAG.MAT) return;
+    r.eachSafe(matItems.start, matItems.end, (tag, start, end, clipped) => {
+      if (tag !== TAG.MAT || clipped) return;
       const n = { tag, start, end };
-      const id = r.uint(r.path(n, TAG.ID_BOX, TAG.ID));
-      if (id !== undefined) materials.set(id, r.str(r.first(n, TAG.MAT_NAME)) ?? `재질 ${id}`);
+      try {
+        const id = r.uint(r.path(n, TAG.ID_BOX, TAG.ID));
+        if (id !== undefined) materials.set(id, r.str(r.first(n, TAG.MAT_NAME)) ?? `재질 ${id}`);
+      } catch {
+        note(ctx, '깨진 재질 항목을 건너뛰었습니다');
+      }
     });
 
   const layers = new Map<number, string>();
   let defaultLayer: number | undefined;
-  const layerList = sections.get(TAG.LAYERS) && r.first(sections.get(TAG.LAYERS)!, TAG.LAYER_LIST);
+  const layerList = at(sections.get(TAG.LAYERS), TAG.LAYER_LIST);
   if (layerList) {
-    const items = r.first(layerList, TAG.LAYER_ITEMS);
+    const items = r.firstSafe(layerList, TAG.LAYER_ITEMS, true);
     if (items)
-      r.each(items.start, items.end, (tag, start, end) => {
-        if (tag !== TAG.LAYER_ITEM) return;
+      r.eachSafe(items.start, items.end, (tag, start, end, clipped) => {
+        if (tag !== TAG.LAYER_ITEM || clipped) return;
         const n = { tag, start, end };
-        const id = r.uint(r.path(n, TAG.ID_BOX, TAG.ID));
-        if (id !== undefined) layers.set(id, r.str(r.first(n, TAG.LAYER_NAME)) ?? `태그 ${id}`);
+        try {
+          const id = r.uint(r.path(n, TAG.ID_BOX, TAG.ID));
+          if (id !== undefined) layers.set(id, r.str(r.first(n, TAG.LAYER_NAME)) ?? `태그 ${id}`);
+        } catch {
+          note(ctx, '깨진 태그 항목을 건너뛰었습니다');
+        }
       });
-    defaultLayer = r.uint(r.first(layerList, TAG.LAYER_DEFAULT));
+    defaultLayer = r.uint(r.firstSafe(layerList, TAG.LAYER_DEFAULT));
   }
 
   const definitions = new Map<number, SkpDefinition>();
-  const defItems = sections.get(TAG.DEFINITIONS) && r.path(sections.get(TAG.DEFINITIONS)!, TAG.DEF_LIST, TAG.DEF_ITEMS);
+  const defItems = at(sections.get(TAG.DEFINITIONS), TAG.DEF_LIST, TAG.DEF_ITEMS);
   if (defItems)
-    r.each(defItems.start, defItems.end, (tag, start, end) => {
-      if (tag !== TAG.DEFINITION) return;
-      const n = { tag, start, end };
-      // 정의 하나가 깨져도 나머지는 읽는다
-      try {
-        const ents = r.first(n, TAG.ENTITIES);
-        if (!ents) return;
-        const id = idOf(r, ents);
-        if (id === undefined) {
-          note(ctx, '번호가 없는 정의를 건너뛰었습니다');
-          return;
+    r.eachSafe(
+      defItems.start,
+      defItems.end,
+      (tag, start, end, clipped) => {
+        if (tag !== TAG.DEFINITION) return;
+        const n = { tag, start, end };
+        ctx.tick(start);
+        // 정의 하나가 깨져도 나머지는 읽는다. 파일 끝에서 잘린 정의는 앞부분만 살린다
+        try {
+          const ents = r.firstSafe(n, TAG.ENTITIES, clipped);
+          if (!ents) return;
+          const id = idOf(r, ents);
+          if (id === undefined) {
+            note(ctx, '번호가 없는 정의를 건너뛰었습니다');
+            return;
+          }
+          let name: string | undefined;
+          try {
+            name = r.str(r.firstSafe(n, TAG.DEF_NAME));
+          } catch {
+            /* 이름 없이 */
+          }
+          definitions.set(id, { id, name: name ?? `정의 ${id}`, entities: readEntities(ctx, ents, clipped) });
+          if (clipped) ctx.damaged = true;
+        } catch {
+          ctx.damaged = true;
+          note(ctx, '깨진 컴포넌트 정의를 건너뛰었습니다');
         }
-        definitions.set(id, { id, name: r.str(r.first(n, TAG.DEF_NAME)) ?? `정의 ${id}`, entities: readEntities(ctx, ents) });
-      } catch {
-        note(ctx, '깨진 컴포넌트 정의를 건너뛰었습니다');
-      }
-    });
+      },
+      true,
+    );
 
   const empty = (): SkpEntities => ({ points: new Float64Array(0), faces: [], edges: [], instances: [] });
-  const modelEnts = sections.get(TAG.MODEL_ENTITIES) && r.first(sections.get(TAG.MODEL_ENTITIES)!, TAG.ENTITIES);
+  const modelEnts = at(sections.get(TAG.MODEL_ENTITIES), TAG.ENTITIES);
   let rootEnts = empty();
   if (!modelEnts) note(ctx, '모형 요소(01f6)를 찾지 못했습니다');
   else
     try {
-      rootEnts = readEntities(ctx, modelEnts);
+      rootEnts = readEntities(ctx, modelEnts, true);
     } catch {
+      ctx.damaged = true;
       note(ctx, '모형 요소(01f6)가 깨져 읽지 못했습니다');
     }
 
   const options = sections.get(TAG.OPTIONS);
-  const lengthUnit = options ? readLengthUnit(r, options) : undefined;
+  let lengthUnit: number | undefined;
+  try {
+    lengthUnit = options && !options.clipped ? readLengthUnit(r, options) : undefined;
+  } catch {
+    note(ctx, '단위 설정을 읽지 못했습니다');
+  }
 
   const warnings = [...ctx.warn].map(([m, k]) => (k > 1 ? `${m} (${k}개)` : m));
   const model: SkpModel = { materials, layers, definitions, root: rootEnts, counts: ctx.counts, warnings };
   if (defaultLayer !== undefined) model.defaultLayer = defaultLayer;
   if (lengthUnit !== undefined) model.lengthUnit = lengthUnit;
+  if (ctx.damaged) model.damaged = true;
   return model;
 }
