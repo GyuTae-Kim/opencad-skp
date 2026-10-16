@@ -62,7 +62,8 @@ export function tlv(tag: number, ...payload: Uint8Array[]): Uint8Array {
   return concat([u16(tag), u32(body.length), body]);
 }
 
-export const idBox = (id: number): Uint8Array => tlv(0x05dc, tlv(0x05de, uintLE(id)));
+/** 번호 상자(05dc). attrs를 주면 속성 목록(05dd)을 함께 넣는다 */
+export const idBox = (id: number, attrs?: Uint8Array): Uint8Array => tlv(0x05dc, tlv(0x05de, uintLE(id)), ...(attrs ? [tlv(0x05dd, attrs)] : []));
 
 export interface BaseOpts {
   material?: number;
@@ -70,9 +71,27 @@ export interface BaseOpts {
   flags?: number;
 }
 
-export function base(id: number | undefined, o: BaseOpts = {}): Uint8Array {
+/** 면 한쪽 무늬 투영: 종류(0 그대로, 1 위치 잡음, 2·3 방향 투영), 행렬 9개(열 우선, 무늬 인치 → 면 평면 틀), 투영 방향 */
+export interface TextureMapOpts {
+  kind?: number;
+  matrix: readonly number[];
+  dir?: readonly [number, number, number];
+}
+
+const texSide = (o: TextureMapOpts): Uint8Array =>
+  tlv(0x2713, tlv(0x2714, i32(o.kind ?? 1)), tlv(0x2715, f64(...o.matrix)), tlv(0x2716, f64(...(o.dir ?? [0, 0, 0]))), tlv(0x2717));
+
+/** 면 무늬 위치 속성(36b1 → 36b2 → 2710 → 2711 앞·2712 뒤 → 2713 …) — 05dd 안에 넣는다 */
+export function textureMapping(front?: TextureMapOpts, back?: TextureMapOpts): Uint8Array {
+  const sides: Uint8Array[] = [tlv(0x36b0)];
+  if (front) sides.push(tlv(0x2711, texSide(front)));
+  if (back) sides.push(tlv(0x2712, texSide(back)));
+  return tlv(0x36b1, tlv(0x36b2, tlv(0x2710, ...sides)));
+}
+
+export function base(id: number | undefined, o: BaseOpts & { attrs?: Uint8Array } = {}): Uint8Array {
   const parts: Uint8Array[] = [];
-  if (id !== undefined) parts.push(idBox(id));
+  if (id !== undefined) parts.push(idBox(id, o.attrs));
   if (o.material !== undefined) parts.push(tlv(0x07d1, uintLE(o.material)));
   if (o.layer !== undefined) parts.push(tlv(0x07d2, uintLE(o.layer)));
   parts.push(tlv(0x07d3, new Uint8Array([o.flags ?? 6])));
@@ -86,11 +105,15 @@ export const edge = (id: number, a: number, b: number, o: BaseOpts = {}): Uint8A
 
 export interface FaceOpts extends BaseOpts {
   back?: number;
+  /** 앞·뒷면 무늬 투영(무늬 위치 도구로 옮긴 무늬) */
+  frontMap?: TextureMapOpts;
+  backMap?: TextureMapOpts;
 }
 
 /** loops: 고리마다 [모서리 번호, 뒤집힘] */
 export function face(id: number, plane: [number, number, number, number], loops: [number, boolean][][], o: FaceOpts = {}): Uint8Array {
-  const parts = [base(id, o)];
+  const attrs = o.frontMap || o.backMap ? textureMapping(o.frontMap, o.backMap) : undefined;
+  const parts = [base(id, attrs ? { ...o, attrs } : o)];
   if (o.back !== undefined) parts.push(tlv(0x0daf, uintLE(o.back)));
   parts.push(tlv(0x0dad, f64(...plane)));
   parts.push(
@@ -199,10 +222,37 @@ export function modelDat(o: ModelOpts): Uint8Array {
   return tlv(0x01f4, ...parts);
 }
 
-export function materialXml(name: string, rgb: [number, number, number], trans = 1, useTrans = 0, hasTexture = false): string {
+/** material.xml의 무늬(관찰한 꼴: texture 꼬리표 + images/image) */
+export interface MaterialTextureOpts {
+  /** 그림 파일 이름(재질 폴더 안) */
+  file: string;
+  /** 무늬 한 장 가로·세로(인치) */
+  width: number;
+  height: number;
+  /** 원래 그림 평균색(avgColor로 ABGR 정수) */
+  average?: readonly [number, number, number];
+  /** 색을 바꾼 무늬(type 2)의 방식: 0 shift · 1 tint */
+  colorizeType?: 0 | 1;
+}
+
+const xmlAttr = (v: string): string => v.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/**
+ * material.xml 글. hasTexture이고 tex를 주면 texture 꼬리표를 넣는다(colorizeType이 있으면 type 2 — 색을 바꾼 무늬, 아니면 type 1).
+ * rgb는 무늬 재질이면 무늬 평균색(type 1) 또는 바꾼 색(type 2)
+ */
+export function materialXml(name: string, rgb: [number, number, number], trans = 1, useTrans = 0, hasTexture = false, tex?: MaterialTextureOpts): string {
+  const type = hasTexture && tex ? (tex.colorizeType !== undefined ? 2 : 1) : 0;
+  const head = `  <mat:material name="${xmlAttr(name)}" type="${type}" colorRed="${rgb[0]}" colorGreen="${rgb[1]}" colorBlue="${rgb[2]}" colorizeType="${tex?.colorizeType ?? 0}" trans="${trans}" useTrans="${useTrans}" hasTexture="${hasTexture ? 1 : 0}"`;
+  if (!(hasTexture && tex)) return `<?xml version="1.0" encoding="UTF-8" standalone="no" ?>\n<materialDocument>\n${head} />\n</materialDocument>\n`;
+  const a = tex.average;
+  const avg = a ? ` avgColor="${((0xff << 24) | (a[2] << 16) | (a[1] << 8) | a[0]) >>> 0}"` : '';
   return (
     '<?xml version="1.0" encoding="UTF-8" standalone="no" ?>\n<materialDocument>\n' +
-    `  <mat:material name="${name.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}" type="0" colorRed="${rgb[0]}" colorGreen="${rgb[1]}" colorBlue="${rgb[2]}" colorizeType="0" trans="${trans}" useTrans="${useTrans}" hasTexture="${hasTexture ? 1 : 0}" />\n</materialDocument>\n`
+    `${head}>\n` +
+    `    <mat:texture textureFilename="${xmlAttr(tex.file)}" xScale="${tex.width}" yScale="${tex.height}"${avg}>\n` +
+    `      <mat:images>\n        <mat:image id="1" path="./${xmlAttr(tex.file)}" file_name="${xmlAttr(tex.file)}"/>\n      </mat:images>\n` +
+    '    </mat:texture>\n  </mat:material>\n</materialDocument>\n'
   );
 }
 

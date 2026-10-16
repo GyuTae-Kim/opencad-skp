@@ -1,12 +1,15 @@
 /**
  * 해석 워커: SketchUp(.skp) 파일을 화면 밖에서 해석해 Scene3d로 돌려준다.
  * 화면이 그룹·컴포넌트를 여러 단계로 고를 수 있게 outline(나무)을, 부드러운 모서리·숨긴 형상을 켜고 끌 수 있게 extras를 켜고 읽는다.
- * 꾸러미 안 그림(무늬·미리보기)도 여기서 꺼내 바이트로 넘긴다(화면이 Blob 주소로 바꾼다 — 워커가 끝나도 주소가 살아 있게).
- * 결과의 형식 배열은 이전 가능한 버퍼로 넘긴다(app/protocol.ts collectTransfers).
+ * 꾸러미 안 그림(무늬·미리보기)을 먼저 꺼내(개수·크기 한도) 무늬 재질 그림은 해석기에 넘겨 3D 무늬로 입히고(scene.textures),
+ * 색을 바꾼 무늬·알파 그림은 여기서 풀어 손질한다(textures.ts). 그림 바이트는 화면이 Blob 주소로 바꾼다(견본·미리보기).
+ * 결과의 형식 배열·ImageBitmap은 복사 없이 넘긴다(app/protocol.ts collectTransfers).
  */
 /// <reference lib="webworker" />
-import { readSkpImages, skpToScene } from '../index';
+import { TEXTURE_LIMIT } from 'opencad-viewer3d/texture';
+import { readSkpImages, skpToScene, type SkpImages } from '../index';
 import { collectTransfers, errorText, type ParseRequest, type ParseResponse, type ParseResult } from '../app/protocol';
+import { prepareSceneTextures } from './textures';
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 
@@ -14,7 +17,7 @@ function post(msg: ParseResponse, transfer: Transferable[] = []): void {
   ctx.postMessage(msg, transfer);
 }
 
-function open(req: ParseRequest): ParseResult {
+async function open(req: ParseRequest): Promise<ParseResult> {
   const id = req.id;
   let last = 0;
   const progress = (fraction: number, stage: string): void => {
@@ -26,26 +29,38 @@ function open(req: ParseRequest): ParseResult {
   const t0 = performance.now();
   const bytes = new Uint8Array(req.bytes);
   const name = req.name.replace(/^.*[\\/]/, '');
-  const scene = skpToScene(bytes, { name, outline: true, extras: true, onProgress: progress });
-  const result: ParseResult = { scene, ms: 0 };
-  progress(0.96, '그림 꺼내는 중');
+  progress(0.01, '그림 꺼내는 중');
+  let images: SkpImages | undefined;
   try {
-    const images = readSkpImages(bytes);
-    if (images.model || images.materials.length || images.components.length || images.scenes.length) result.images = images;
+    // 개수·한 장·전체 크기 한도는 readSkpImages 기본값(images.ts)
+    images = readSkpImages(bytes);
   } catch {
     /* 그림은 없어도 된다 */
+  }
+  const scene = skpToScene(bytes, { name, outline: true, extras: true, onProgress: progress, textures: images?.materials });
+  const result: ParseResult = { scene, ms: 0 };
+  if (images && (images.model || images.materials.length || images.components.length || images.scenes.length)) result.images = images;
+  if (scene.textures?.length) {
+    const limit = req.textureLimit && req.textureLimit > 0 ? req.textureLimit : TEXTURE_LIMIT;
+    const prep = await prepareSceneTextures(scene, limit, (d, n) => progress(0.96 + (0.02 * d) / Math.max(1, n), '무늬 그림 손질하는 중'));
+    // 색을 바꾼 무늬는 재질 목록 견본도 바꾼 색으로
+    if (images && prep.swatches.size)
+      images.materials = images.materials.map((m) => {
+        const sw = prep.swatches.get(m.folder);
+        return sw ? { ...m, bytes: sw, mime: 'image/png' } : m;
+      });
   }
   progress(0.98, '화면으로 넘기는 중');
   result.ms = performance.now() - t0;
   return result;
 }
 
-ctx.onmessage = (ev: MessageEvent<ParseRequest>) => {
+ctx.onmessage = async (ev: MessageEvent<ParseRequest>) => {
   const req = ev.data;
   if (!req || req.type !== 'open') return;
   let result: ParseResult;
   try {
-    result = open(req);
+    result = await open(req);
   } catch (e) {
     post({ id: req.id, type: 'error', message: errorText(e) });
     return;

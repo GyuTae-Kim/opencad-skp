@@ -60,6 +60,8 @@ export interface MaterialRow {
   folder: string | null;
   color: [number, number, number, number];
   textured: boolean;
+  /** 3D에 입힌 무늬 그림 id(Scene3d.textures에 있을 때만, 없으면 평균색) */
+  texture: string | null;
   faces: number | null;
   meshIds: string[];
 }
@@ -260,6 +262,7 @@ export function tagRows(scene: Scene3d): TagRow[] {
 export function materialRows(scene: Scene3d): MaterialRow[] {
   const stats = meta(scene).materialStats;
   const ids = new Set(scene.meshes.map((m) => m.id));
+  const texIds = new Set((scene.textures ?? []).map((t) => t.id));
   const rows: MaterialRow[] = [];
   if (Array.isArray(stats)) {
     for (const x of stats) {
@@ -270,14 +273,15 @@ export function materialRows(scene: Scene3d): MaterialRow[] {
       const c = Array.isArray(o.color) ? o.color : [];
       const color: [number, number, number, number] = [num(c[0]) ?? 0.8, num(c[1]) ?? 0.8, num(c[2]) ?? 0.8, num(c[3]) ?? 1];
       const meshIds = Array.isArray(o.meshIds) ? o.meshIds.filter((id): id is string => typeof id === 'string' && ids.has(id)) : [];
-      rows.push({ name, folder: str(o.folder), color, textured: o.textured === true, faces: num(o.faces), meshIds });
+      const tex = str(o.texture);
+      rows.push({ name, folder: str(o.folder), color, textured: o.textured === true, texture: tex !== null && texIds.has(tex) ? tex : null, faces: num(o.faces), meshIds });
     }
   } else {
     const map = new Map<string, MaterialRow>();
     for (const m of scene.meshes) {
       const name = (m.name ?? '').split(' · ')[0] || '기본 재질';
       let r = map.get(name);
-      if (!r) map.set(name, (r = { name, folder: null, color: [m.color[0], m.color[1], m.color[2], m.color[3]], textured: false, faces: null, meshIds: [] }));
+      if (!r) map.set(name, (r = { name, folder: null, color: [m.color[0], m.color[1], m.color[2], m.color[3]], textured: false, texture: null, faces: null, meshIds: [] }));
       r.meshIds.push(m.id);
     }
     rows.push(...map.values());

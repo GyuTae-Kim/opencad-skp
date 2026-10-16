@@ -207,7 +207,7 @@ describe('그림 주소', () => {
     const d = { images: imgs };
     expect(componentImage(d, '의자')).toBe(imgs.components.get('의자'));
     expect(componentImage(d, '없음')).toBeNull();
-    const row = { name: '잔디', folder: '잔디', color: [0, 0, 0, 1] as [number, number, number, number], textured: true, faces: 1, meshIds: [] };
+    const row = { name: '잔디', folder: '잔디', color: [0, 0, 0, 1] as [number, number, number, number], textured: true, texture: null, faces: 1, meshIds: [] };
     expect(materialImage(d, row)).toBe(imgs.materials.get('잔디')!.url);
     expect(materialImage(d, { ...row, folder: null })).toBeNull();
     expect(docImages(undefined, () => 'x')).toBeNull();

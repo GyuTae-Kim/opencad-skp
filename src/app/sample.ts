@@ -5,6 +5,8 @@
  * 겹친 단계 확인용으로 의자 안에 다리 컴포넌트 넷, 나무 안에 줄기·수관 그룹을 두고, 숨긴 그룹(옛 담장) 하나를 둔다.
  * 꾸러미에는 조사 기록에서 본 자리에 작은 그림을 넣는다: 모형 미리보기, 무늬 재질(잔디·기와·마루)의 무늬 그림,
  * 컴포넌트 미리보기(의자·탁자·나무), 장면 미리보기 둘. 그림은 의존성 없이 PNG로 직접 만든다.
+ * 무늬는 셋 다 다른 길로 칠한다: 잔디는 기본 투영, 마루는 무늬 위치 도구로 90° 돌린 저장된 투영(널이 앞뒤로),
+ * 기와는 지붕 판 면에 재질을 두지 않고 지붕 그룹에 칠해 물려받는다(기본 투영 — 줄이 처마와 나란하다).
  *
  * model.dat는 브라우저의 CompressionStream('deflate-raw')로 압축한다(없으면 저장 방식) — 실제 파일처럼 해석기의 풀기 경로를 탄다.
  */
@@ -20,6 +22,8 @@ import {
   skpFile,
   vertex as vertexBytes,
   type Compressor,
+  type FaceOpts,
+  type TextureMapOpts,
   type ZipEntry,
 } from './skpwrite';
 
@@ -58,8 +62,11 @@ const MATERIALS: [number, string, [number, number, number], number?][] = [
   [11, '돌', [158, 156, 150]],
 ];
 const MAT = Object.fromEntries(MATERIALS.map(([id, name]) => [name, id])) as Record<string, number>;
-/** 무늬(텍스처) 재질로 적는 재질 — 꾸러미에 무늬 그림을 넣고 material.xml에 hasTexture="1" */
-const TEXTURED = new Set(['잔디', '기와', '마루']);
+/** 무늬(텍스처) 재질로 적는 재질과 무늬 한 장 크기(mm) — 꾸러미에 무늬 그림을 넣고 material.xml에 hasTexture="1" */
+const TEXTURE_TILE: Record<string, number> = { 잔디: 1000, 기와: 600, 마루: 800 };
+const TEXTURED = new Set(Object.keys(TEXTURE_TILE));
+/** 마루 무늬 위치: 무늬를 90° 돌리고 100 mm 옮긴 저장된 투영(행렬은 무늬 인치 → 면 평면 틀, 열 우선) */
+const FLOOR_MAP = { kind: 1, matrix: [0, 1, 0, -1, 0, 0, 100 * (1 / 25.4), 0, 1] };
 /** 숨김 깃발(07d3 비트 0) */
 const FLAG_HIDDEN_INST = 0x07;
 
@@ -105,6 +112,8 @@ interface FaceOpt {
   material?: number;
   back?: number;
   layer?: number;
+  /** 앞면 무늬 투영(무늬 위치 도구로 옮긴 무늬) */
+  frontMap?: TextureMapOpts;
 }
 
 /** 요소 묶음(정점·모서리·면·인스턴스) 짓기. 좌표는 mm */
@@ -162,10 +171,11 @@ class Ents {
       return vs.map((a, i) => this.e(a, vs[(i + 1) % vs.length]!));
     });
     const d = -dot(n, ring[0]!) * MM;
-    const fo: FaceOpt = {};
+    const fo: FaceOpts = {};
     if (o.material !== undefined) fo.material = o.material;
     if (o.back !== undefined) fo.back = o.back;
     if (o.layer !== undefined) fo.layer = o.layer;
+    if (o.frontMap) fo.frontMap = o.frontMap;
     this.faces.push(faceBytes(this.ids.next(), [n[0], n[1], n[2], d], uses, fo));
   }
 
@@ -253,7 +263,7 @@ function house(ids: Ids): Def {
       [W, D, 0],
       [0, D, 0],
     ],
-    { material: MAT['마루']!, want: [0, 0, 1] },
+    { material: MAT['마루']!, want: [0, 0, 1], frontMap: FLOOR_MAP },
   );
   // 앞벽: 문은 바깥 고리의 홈, 창 둘은 구멍
   const win = (x0: number, x1: number, y: number): V3[] => [
@@ -344,7 +354,8 @@ function roof(ids: Ids): Def {
     ];
     let n = loopNormal(loop);
     if (n[2] < 0) n = [-n[0], -n[1], -n[2]];
-    e.prism(loop, [n[0] * t, n[1] * t, n[2] * t], { material: MAT['기와']! });
+    // 지붕 판 면에는 재질을 두지 않는다 — 지붕 그룹의 기와를 물려받는다(무늬는 기본 투영)
+    e.prism(loop, [n[0] * t, n[1] * t, n[2] * t]);
   }
   // 박공(벽과 같은 재질)
   for (const [x, nx] of [
@@ -486,7 +497,7 @@ export function sampleModelDat(): Uint8Array {
   root.box([2500, -3500, 0], [3500, 0, 30], { material: MAT['돌']!, skip: ['bottom'] });
 
   root.group(houseDef.id, placement(0, 0, 0), { name: '집', layer: TAG.walls });
-  root.group(roofDef.id, placement(0, 0, 0), { name: '지붕', layer: TAG.roof });
+  root.group(roofDef.id, placement(0, 0, 0), { name: '지붕', layer: TAG.roof, material: MAT['기와']! });
   // 식탁 한 벌(같은 의자 컴포넌트를 돌려 놓고, 인스턴스마다 재질을 바꾼다)
   const tx = 3000;
   const ty = 2300;
@@ -645,7 +656,11 @@ function sampleFile(model: Uint8Array, compress?: Compressor): Uint8Array {
     version: SAMPLE_VERSION,
     materials: MATERIALS.map(([, name, rgb, alpha]) => [
       name,
-      alpha !== undefined ? materialXml(name, rgb, alpha, 1) : materialXml(name, rgb, 1, 0, TEXTURED.has(name)),
+      alpha !== undefined
+        ? materialXml(name, rgb, alpha, 1)
+        : TEXTURED.has(name)
+          ? materialXml(name, rgb, 1, 0, true, { file: `${name}.png`, width: TEXTURE_TILE[name]! / 25.4, height: TEXTURE_TILE[name]! / 25.4, average: rgb })
+          : materialXml(name, rgb),
     ]),
     extra: sampleImages(),
   };

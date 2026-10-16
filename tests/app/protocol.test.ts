@@ -28,7 +28,7 @@ describe('collectTransfers', () => {
     o.self = o;
     const t = collectTransfers(o);
     expect(t.length).toBe(1);
-    expect(t[0]!.byteLength).toBe(8);
+    expect((t[0] as ArrayBuffer).byteLength).toBe(8);
     expect(collectTransfers(null)).toEqual([]);
     expect(collectTransfers(42)).toEqual([]);
   });

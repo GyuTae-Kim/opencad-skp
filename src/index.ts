@@ -2,20 +2,25 @@
  * SketchUp(.skp) 해석기 — 클린룸: 공개 표본 파일의 바이트만 보고 구조를 추론했다(docs/formats/skp.md).
  *
  * 지원: SketchUp 2021~2026(머리 뒤 "VFF" 블록 + ZIP 꾸러미, 안의 model.dat가 TLV). 면(구멍 포함)·모서리·재질 색·
- * 그룹/컴포넌트 인스턴스 변환·태그를 읽는다. 무늬(텍스처)·문자·치수·보조선·장면은 아직 읽지 않는다.
+ * 그룹/컴포넌트 인스턴스 변환·태그를 읽는다. 무늬(텍스처)는 그림(readSkpImages)을 넘기면 면 무늬 좌표를 읽어 입힌다.
+ * 문자·치수·보조선·장면은 아직 읽지 않는다.
  * 2020 이하(MFC 객체 직렬화)는 아직 읽지 못해 경고와 함께 빈 장면을 돌려준다.
  */
 
-import type { Scene3d } from 'opencad-viewer3d/types';
+import type { Scene3d, Texture3d } from 'opencad-viewer3d/types';
+import { imageInfo } from 'opencad-viewer3d/texture';
 import { readSkpHeader } from './header';
+import type { SkpImages } from './images';
 import { parseMaterialXml, type SkpMaterialInfo } from './materials';
 import { readModelDat, type SkpModel } from './model';
-import { buildSceneParts } from './scene';
+import { buildSceneParts, type SceneTexture } from './scene';
 import { findSkpZipItems, readZipItem, readZipItemPartial } from './zip';
 
 export { readSkpHeader, type SkpHeader } from './header';
 export { readModelDat, type SkpModel } from './model';
 export { readSkpImages, type SkpImage, type SkpImages, type SkpImageOptions } from './images';
+export { parseMaterialXml, type SkpMaterialInfo, type SkpMaterialTexture } from './materials';
+export { colorizeRgba, rgbToHls, hlsToRgb, type ColorizeSpec } from './colorize';
 export type { SkpExtraItems, SkpMaterialStat, SkpOutlineEntry, SkpTagStat, SkpTree } from './scene';
 export { TREE_HIDDEN, TREE_MORE } from './scene';
 
@@ -39,6 +44,37 @@ export interface SkpOptions {
   extras?: boolean;
   /** 진행 알림(0~1, 단계 글). 해석은 동기라 단계 안에서도 몇천 항목마다 부른다 */
   onProgress?: (fraction: number, stage: string) => void;
+  /**
+   * 무늬 그림(readSkpImages(bytes).materials). 주면 무늬 재질 면의 무늬 투영을 읽어 그물에 무늬 좌표(uvs)·무늬 id(texture)를 두고
+   * 쓰인 그림을 scene.textures에 넣는다(바이트는 복사하지 않고 같은 배열을 쓴다). 그림 정보·색 바꾸기는 meta.textures.
+   * 주지 않으면 예전처럼 무늬 평균색만 칠한다.
+   */
+  textures?: SkpImages['materials'];
+  /** 무늬를 입힐 재질 수 한도(기본 MAX_SKP_TEXTURES — 넘는 재질은 평균색) */
+  maxTextures?: number;
+  /** 무늬 좌표를 다는 정점 수 한도(기본 scene.ts MAX_UV_VERTICES) */
+  maxUvVertices?: number;
+}
+
+/** 무늬를 입힐 재질 수 기본 한도 */
+export const MAX_SKP_TEXTURES = 256;
+
+/** 무늬 그림 정보(meta.textures) — 화면(워커)이 그림을 풀어 알파를 재거나 색을 바꿀 때 쓴다 */
+export interface SkpTextureInfo {
+  /** Scene3d.textures의 id */
+  id: string;
+  /** 재질 표시 이름 */
+  material: string;
+  /** 재질 폴더(= model.dat 재질 이름) */
+  folder: string;
+  /** 꾸러미 안 그림 경로 */
+  path: string;
+  /** 무늬 한 장 크기(인치) */
+  tile: [number, number];
+  /** 투명 화소를 담을 수 있는 꼴(PNG 알파 등) — 실제로 쓰는지는 풀어 봐야 안다 */
+  alphaPossible: boolean;
+  /** 색을 바꾼 무늬(재질 type 2): 방식·재질 색(0~255)·원래 평균색 */
+  colorize?: { type: 'shift' | 'tint'; color: [number, number, number]; average?: [number, number, number] };
 }
 
 /** UnitsOptions/LengthUnit → 장면 단위와 인치에서의 배율 */
@@ -87,6 +123,8 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
     warnings.push(`표본으로 확인하지 않은 SketchUp 버전 ${header.version}입니다. 2021~2026 형식으로 읽어 봅니다.`);
   let model: SkpModel;
   const materials = new Map<string, SkpMaterialInfo>();
+  /** 무늬를 입힐 재질 폴더 → 그림 */
+  const texImages = new Map<string, SkpImages['materials'][number]>();
   let damaged = false;
   try {
     progress(0.05, '꾸러미(ZIP) 목록 읽는 중');
@@ -119,6 +157,20 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
         warnings.push(`재질 파일을 읽지 못했습니다: ${item.name}`);
       }
     }
+    // 무늬: 그림이 있는 무늬 재질만(재질 폴더 = model.dat 재질 이름). 한도를 넘는 재질은 평균색
+    if (opts.textures?.length) {
+      const byFolder = new Map(opts.textures.map((t) => [t.folder, t] as const));
+      let skipped = 0;
+      for (const item of dir) {
+        const m = /^materials\/(.+)\/material\.xml$/.exec(item.name);
+        const info = m ? materials.get(m[1]!) : undefined;
+        const img = m ? byFolder.get(m[1]!) : undefined;
+        if (!info?.texture || !img || texImages.has(m![1]!)) continue;
+        if (texImages.size >= (opts.maxTextures ?? MAX_SKP_TEXTURES)) skipped++;
+        else texImages.set(m![1]!, img);
+      }
+      if (skipped) warnings.push(`무늬 재질이 너무 많아(${opts.maxTextures ?? MAX_SKP_TEXTURES}개 한도) ${skipped}개는 평균색으로 그렸습니다`);
+    }
     progress(0.2, 'model.dat 푸는 중');
     const unpacking = (f: number): void => progress(0.2 + 0.19 * f, 'model.dat 푸는 중');
     let dat: Uint8Array;
@@ -142,21 +194,34 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
       }
     }
     progress(0.4, '모형 요소 읽는 중');
-    model = readModelDat(dat, (f) => progress(0.4 + 0.24 * f, '모형 요소 읽는 중'));
+    model = readModelDat(dat, (f) => progress(0.4 + 0.24 * f, '모형 요소 읽는 중'), { textured: texImages.keys() });
   } catch (e) {
     return emptyScene(name, [...warnings, `SketchUp 파일을 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`], meta);
   }
   warnings.push(...model.warnings);
 
   const u = unitsFor(model.lengthUnit);
+  // 무늬 재질: model.dat 재질 번호 → 무늬 id·한 장 크기
+  const sceneTex = new Map<number, SceneTexture>();
+  const texByMat = new Map<number, { folder: string; info: SkpMaterialInfo; img: SkpImages['materials'][number] }>();
+  for (const [id, folder] of model.materials) {
+    const img = texImages.get(folder);
+    const info = materials.get(folder);
+    if (!img || !info?.texture) continue;
+    sceneTex.set(id, { id: `skp-tex-${id}`, w: info.texture.width, h: info.texture.height });
+    texByMat.set(id, { folder, info, img });
+  }
   let parts: ReturnType<typeof buildSceneParts>;
   try {
     progress(0.65, '면 삼각화·인스턴스 펼치는 중');
-    parts = buildSceneParts(model, materials, u.scale, {
+    const build: Parameters<typeof buildSceneParts>[3] = {
       outline: !!opts.outline,
       extras: !!opts.extras,
       onProgress: (f) => progress(0.65 + 0.3 * f, '면 삼각화·인스턴스 펼치는 중'),
-    });
+    };
+    if (sceneTex.size) build.textures = sceneTex;
+    if (opts.maxUvVertices !== undefined) build.maxUvVertices = opts.maxUvVertices;
+    parts = buildSceneParts(model, materials, u.scale, build);
   } catch (e) {
     return emptyScene(name, [...warnings, `장면을 만들지 못했습니다: ${e instanceof Error ? e.message : String(e)}`], meta);
   }
@@ -183,5 +248,34 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
   if (parts.limited) meta.limited = true;
   const scene: Scene3d = { name, units: u.units, meshes: parts.meshes, lines: parts.lines, warnings, meta };
   if (parts.bounds) scene.bounds = parts.bounds;
+  // 그물이 쓰는 무늬만 장면에 넣는다
+  if (sceneTex.size) {
+    const used = new Set<string>();
+    for (const m of scene.meshes) if (m.texture) used.add(m.texture);
+    const textures: Texture3d[] = [];
+    const infos: SkpTextureInfo[] = [];
+    for (const [id, t] of sceneTex) {
+      if (!used.has(t.id)) continue;
+      const { folder, info, img } = texByMat.get(id)!;
+      const head = imageInfo(img.bytes);
+      const tex: Texture3d = { id: t.id, data: img.bytes, mime: img.mime };
+      if (head?.width && head.height) {
+        tex.width = head.width;
+        tex.height = head.height;
+      }
+      textures.push(tex);
+      const ti: SkpTextureInfo = { id: t.id, material: info.name, folder, path: img.path, tile: [t.w, t.h], alphaPossible: head?.alpha ?? true };
+      if (info.colorize) {
+        const c = info.color;
+        ti.colorize = { type: info.colorize, color: [Math.round(c[0] * 255), Math.round(c[1] * 255), Math.round(c[2] * 255)] };
+        if (info.texture?.average) ti.colorize.average = info.texture.average;
+      }
+      infos.push(ti);
+    }
+    if (textures.length) {
+      scene.textures = textures;
+      meta.textures = infos;
+    }
+  }
   return scene;
 }
