@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import { siteMetadata } from './tools/site-plugin.mjs';
 
 /**
  * 앱 빌드·개발 서버와 시험 설정을 함께 둔다.
@@ -6,6 +7,7 @@ import { defineConfig } from 'vitest/config';
  */
 export default defineConfig({
   base: './',
+  plugins: [siteMetadata()],
   build: {
     target: 'es2022',
     sourcemap: true,
