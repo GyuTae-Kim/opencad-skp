@@ -2,11 +2,12 @@
  * SketchUp(.skp) 해석기. 형식 지식은 공개 표본 바이트로 추론한 것에 PRISME 엔진(SketchUp C API를 비교 기준으로 맞춘 해석기)의
  * 형식 지식을 옮겨 더했다(docs/formats/skp.md).
  *
- * 지원: SketchUp 2021~2026(머리 뒤 "VFF" 블록 + ZIP 꾸러미, 안의 model.dat가 TLV). 면(구멍 포함)·모서리·재질 색·
- * 그룹/컴포넌트/그림 인스턴스 변환·태그(보임·색·폴더·선 종류)·문자·치수·보조선·단면 평면·속성 사전·
- * 단위·카메라·장면(페이지)·스타일(style.xml + 렌더링 설정)을 읽는다. 부드러운 음영(매끈한 모서리)은 smooth 선택으로 낸다.
- * 무늬(텍스처)는 그림(readSkpImages)을 textures로 넘기면 면 무늬 좌표를 읽어 입힌다(넘기지 않으면 재질 색 = 무늬 평균색).
- * 2020 이하(MFC 객체 직렬화)는 아직 읽지 못해 경고와 함께 빈 장면을 돌려준다.
+ * 지원: SketchUp 2021~2026(머리 뒤 "VFF" 블록 + ZIP 꾸러미, 안의 model.dat가 TLV)과
+ * SketchUp 7·8·2013~2020(머리 뒤 MFC 객체 직렬화, src/mfcmodel.ts). 두 해석기가 같은 중간 모형(SkpModel)을 내서 장면 출력은 하나다.
+ * 면(구멍 포함)·모서리·재질 색·그룹/컴포넌트/그림 인스턴스 변환·태그(보임·색·폴더·선 종류)·문자·치수·보조선·단면 평면·속성 사전·
+ * 단위·카메라·장면(페이지)·스타일(style.xml 또는 옛 스타일 기록 + 렌더링 설정)을 읽는다. 부드러운 음영(매끈한 모서리)은 smooth 선택으로 낸다.
+ * 무늬(텍스처)는 그림(readSkpImages)을 textures로 넘기면 면 무늬 좌표를 읽어 입힌다(2021+ 꾸러미만 — 넘기지 않거나 옛 판이면 재질 색 = 무늬 평균색).
+ * SketchUp 3~6(옛 MFC 스키마)은 읽지 않고 까닭을 적은 경고와 빈 장면(meta.unsupported)을 돌려준다.
  */
 
 import type { Scene3d, Texture3d } from 'opencad-viewer3d/types';
@@ -15,6 +16,7 @@ import { readSkpHeader } from './header';
 import type { SkpImages } from './images';
 import { parseMaterialXml, type SkpMaterialInfo } from './materials';
 import type { SkpMetaExtras } from './meta';
+import { MfcRefused, readMfcModel, rememberMfcImages } from './mfcmodel';
 import { readModelDat, type SkpModel } from './model';
 import { buildSceneParts, type SceneTexture } from './scene';
 import { cameraMeta, pagesMeta, styleFor, unitsFor } from './scene-meta';
@@ -31,8 +33,10 @@ export { TREE_HIDDEN, TREE_MORE } from './scene';
 export type * from './meta';
 export { cameraMeta, pagesMeta, unitsFor } from './scene-meta';
 
-/** 확인한 가장 낮은 판(이보다 낮으면 형식이 다르다) */
-export const SKP_MIN_SUPPORTED_MAJOR = 21;
+/** 읽는 가장 낮은 판(SketchUp 7). 3~6은 MFC 스키마가 달라 읽지 않는다 */
+export const SKP_MIN_SUPPORTED_MAJOR = 7;
+/** 2021+ 형식(VFF + ZIP)이 시작하는 판. 이보다 낮으면 MFC 객체 직렬화다 */
+export const SKP_ZIP_MIN_MAJOR = 21;
 /** 표본으로 확인한 가장 높은 판 */
 export const SKP_MAX_CHECKED_MAJOR = 26;
 /** 꾸러미 style.xml 한 파일 크기 한도 */
@@ -58,7 +62,7 @@ export interface SkpOptions {
   /**
    * 무늬 그림(readSkpImages(bytes).materials). 주면 무늬 재질 면의 무늬 투영을 읽어 그물에 무늬 좌표(uvs)·무늬 id(texture)를 두고
    * 쓰인 그림을 scene.textures에 넣는다(바이트는 복사하지 않고 같은 배열을 쓴다). 그림 정보·색 바꾸기는 meta.textures.
-   * 주지 않으면 예전처럼 무늬 평균색만 칠한다.
+   * 주지 않으면 예전처럼 무늬 평균색만 칠한다. 2021+ 꾸러미에서만 쓴다(옛 판은 평균색).
    */
   textures?: SkpImages['materials'];
   /** 무늬를 입힐 재질 수 한도(기본 MAX_SKP_TEXTURES — 넘는 재질은 평균색) */
@@ -88,6 +92,8 @@ export interface SkpTextureInfo {
   colorize?: { type: 'shift' | 'tint'; color: [number, number, number]; average?: [number, number, number] };
 }
 
+type TexImage = SkpImages['materials'][number];
+
 function emptyScene(name: string, warnings: string[], meta: Record<string, unknown>): Scene3d {
   return { name, units: 'unknown', meshes: [], lines: [], warnings, meta };
 }
@@ -106,115 +112,37 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
   const header = readSkpHeader(bytes);
   if (!header) return emptyScene(name, ['SketchUp 파일이 아닙니다(머리 표지 "SketchUp Model"이 없습니다)'], { format: 'SketchUp' });
   const meta: Record<string, unknown> = { format: 'SketchUp', version: header.version, container: header.container };
-  if (header.container !== 'zip' || !(header.major >= SKP_MIN_SUPPORTED_MAJOR))
-    return emptyScene(
-      name,
-      [`아직 지원하지 않는 SketchUp 버전 ${header.version}입니다(2020 이하의 옛 이진 형식). SketchUp 2021 이상으로 저장한 파일을 열어 주세요.`],
-      meta,
-    );
-
   const warnings: string[] = [];
-  if (header.major > SKP_MAX_CHECKED_MAJOR)
-    warnings.push(`표본으로 확인하지 않은 SketchUp 버전 ${header.version}입니다. 2021~2026 형식으로 읽어 봅니다.`);
-  let model: SkpModel;
-  const materials = new Map<string, SkpMaterialInfo>();
-  /** 무늬를 입힐 재질 폴더 → 그림 */
-  const texImages = new Map<string, SkpImages['materials'][number]>();
-  /** 꾸러미의 styles/<폴더>/style.xml(폴더 이름 = 스타일 이름) */
-  const styles = new Map<string, Map<number, string>>();
-  let damaged = false;
-  try {
-    progress(0.05, '꾸러미(ZIP) 목록 읽는 중');
-    const found = findSkpZipItems(bytes, header.bodyOffset);
-    const dir = found.items;
-    if (!dir) return emptyScene(name, [found.error ? `SketchUp 꾸러미(ZIP)가 깨졌습니다: ${found.error}` : 'SketchUp 꾸러미(ZIP)를 찾지 못했습니다'], meta);
-    const modelItem = dir.find((d) => d.name === 'model.dat');
-    if (!modelItem)
-      return emptyScene(
-        name,
-        [found.salvaged || found.truncated ? '파일이 잘렸거나 깨져 model.dat를 찾지 못했습니다(파일을 끝까지 받았는지 확인해 주세요)' : '꾸러미에 model.dat가 없습니다'],
-        meta,
-      );
-    if (found.salvaged) {
-      damaged = true;
-      warnings.push('파일 끝의 꾸러미(ZIP) 목록이 없거나 깨져, 앞에서부터 항목을 찾아 읽었습니다 — 파일이 잘렸을 수 있습니다');
+  let read: Package | Scene3d;
+  if (header.container === 'mfc') {
+    // SketchUp 2020 이하: 객체 직렬화 하나(꾸러미·압축 없음)
+    progress(0.05, '옛 형식(2020 이하) 모형 읽는 중');
+    try {
+      const res = readMfcModel(bytes, header, (f) => progress(0.05 + 0.59 * f, '모형 요소 읽는 중'));
+      rememberMfcImages(bytes, res.images);
+      read = { model: res.model, materials: res.materials, styles: res.styles, damaged: false, texImages: new Map() };
+    } catch (e) {
+      if (e instanceof MfcRefused) {
+        // 화면이 "아직 못 읽는 판" 안내를 띄우는 표시
+        meta.unsupported = true;
+        return emptyScene(name, [e.message], meta);
+      }
+      return emptyScene(name, [`SketchUp 파일을 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`], meta);
     }
-    const text = new TextDecoder('utf-8');
-    progress(0.1, '재질 읽는 중');
-    for (const item of dir) {
-      const st = /^styles\/(.+)\/style\.xml$/.exec(item.name);
-      if (st) {
-        // 한 파일 16 MiB까지(엔진과 같은 한도 — 스타일 글은 보통 수십 KB)
-        if (item.size > MAX_STYLE_XML_BYTES) {
-          warnings.push(`스타일 파일이 너무 커서 건너뛰었습니다: ${item.name}`);
-          continue;
-        }
-        try {
-          styles.set(st[1]!, parseStyleXml(text.decode(readZipItem(bytes, item))));
-        } catch {
-          warnings.push(`스타일 파일을 읽지 못했습니다: ${item.name}`);
-        }
-        continue;
-      }
-      const m = /^materials\/(.+)\/material\.xml$/.exec(item.name);
-      if (!m) continue;
-      try {
-        const info = parseMaterialXml(text.decode(readZipItem(bytes, item)));
-        if (!info) continue;
-        // model.dat의 재질 이름은 폴더 이름과 같고(예: '<Black>' → '_Black_'), XML의 name은 원래 이름이다 → 둘 다로 찾는다
-        materials.set(m[1]!, info);
-        if (!materials.has(info.name)) materials.set(info.name, info);
-      } catch {
-        warnings.push(`재질 파일을 읽지 못했습니다: ${item.name}`);
-      }
-    }
-    // 무늬: 그림이 있는 무늬 재질만(재질 폴더 = model.dat 재질 이름). 한도를 넘는 재질은 평균색
-    if (opts.textures?.length) {
-      const byFolder = new Map(opts.textures.map((t) => [t.folder, t] as const));
-      let skipped = 0;
-      for (const item of dir) {
-        const m = /^materials\/(.+)\/material\.xml$/.exec(item.name);
-        const info = m ? materials.get(m[1]!) : undefined;
-        const img = m ? byFolder.get(m[1]!) : undefined;
-        if (!info?.texture || !img || texImages.has(m![1]!)) continue;
-        if (texImages.size >= (opts.maxTextures ?? MAX_SKP_TEXTURES)) skipped++;
-        else texImages.set(m![1]!, img);
-      }
-      if (skipped) warnings.push(`무늬 재질이 너무 많아(${opts.maxTextures ?? MAX_SKP_TEXTURES}개 한도) ${skipped}개는 평균색으로 그렸습니다`);
-    }
-    progress(0.2, 'model.dat 푸는 중');
-    const unpacking = (f: number): void => progress(0.2 + 0.19 * f, 'model.dat 푸는 중');
-    let dat: Uint8Array;
-    if (found.salvaged || modelItem.truncated) {
-      const part = readZipItemPartial(bytes, modelItem, unpacking);
-      dat = part.data;
-      if (!part.complete) {
-        damaged = true;
-        warnings.push('model.dat가 잘렸거나 압축이 깨져 앞부분만 읽었습니다 — 일부 형상이 빠졌을 수 있습니다');
-      }
-    } else {
-      try {
-        dat = readZipItem(bytes, modelItem, unpacking);
-      } catch (e) {
-        // 압축이 중간에 깨졌으면 앞부분이라도
-        const part = readZipItemPartial(bytes, modelItem);
-        if (part.data.length < 6) throw e;
-        dat = part.data;
-        damaged = true;
-        warnings.push(`model.dat를 끝까지 풀지 못해 앞부분만 읽었습니다(${e instanceof Error ? e.message : String(e)})`);
-      }
-    }
-    progress(0.4, '모형 요소 읽는 중');
-    model = readModelDat(dat, (f) => progress(0.4 + 0.24 * f, '모형 요소 읽는 중'), { textured: texImages.keys() });
-  } catch (e) {
-    return emptyScene(name, [...warnings, `SketchUp 파일을 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`], meta);
+  } else {
+    if (header.major > SKP_MAX_CHECKED_MAJOR)
+      warnings.push(`표본으로 확인하지 않은 SketchUp 버전 ${header.version}입니다. 2021~2026 형식으로 읽어 봅니다.`);
+    else if (!(header.major >= SKP_ZIP_MIN_MAJOR)) warnings.push(`2021 이후 꼴(VFF + ZIP)인데 판이 ${header.version}입니다. 2021~2026 형식으로 읽어 봅니다.`);
+    read = readZipPackage(bytes, header.bodyOffset, name, meta, warnings, progress, opts);
   }
+  if (!('model' in read)) return read;
+  const { model, materials, styles, damaged, texImages } = read;
   warnings.push(...model.warnings);
 
   const u = unitsFor(model.lengthUnit);
   // 무늬 재질: model.dat 재질 번호 → 무늬 id·한 장 크기
   const sceneTex = new Map<number, SceneTexture>();
-  const texByMat = new Map<number, { folder: string; info: SkpMaterialInfo; img: SkpImages['materials'][number] }>();
+  const texByMat = new Map<number, { folder: string; info: SkpMaterialInfo; img: TexImage }>();
   for (const [id, folder] of model.materials) {
     const img = texImages.get(folder);
     const info = materials.get(folder);
@@ -301,6 +229,122 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
     }
   }
   return scene;
+}
+
+/** 해석기 하나가 낸 것: 중간 모형, 재질 이름 → 색, 스타일 이름 → 항목, 꾸러미·압축이 깨졌는지 */
+interface Package {
+  model: SkpModel;
+  materials: Map<string, SkpMaterialInfo>;
+  styles: Map<string, Map<number, string>>;
+  damaged: boolean;
+  /** 무늬를 입힐 재질 폴더 → 그림(2021+ 꾸러미에서 textures를 받았을 때) */
+  texImages: Map<string, TexImage>;
+}
+
+/** 2021+ 꾸러미(ZIP): material.xml·style.xml과 model.dat. 꾸러미를 찾지 못하면 경고와 빈 장면 */
+function readZipPackage(
+  bytes: Uint8Array,
+  bodyOffset: number,
+  name: string,
+  meta: Record<string, unknown>,
+  warnings: string[],
+  progress: (f: number, stage: string) => void,
+  opts: Pick<SkpOptions, 'textures' | 'maxTextures'> = {},
+): Package | Scene3d {
+  let model: SkpModel;
+  const materials = new Map<string, SkpMaterialInfo>();
+  /** 무늬를 입힐 재질 폴더 → 그림 */
+  const texImages = new Map<string, TexImage>();
+  /** 꾸러미의 styles/<폴더>/style.xml(폴더 이름 = 스타일 이름) */
+  const styles = new Map<string, Map<number, string>>();
+  let damaged = false;
+  try {
+    progress(0.05, '꾸러미(ZIP) 목록 읽는 중');
+    const found = findSkpZipItems(bytes, bodyOffset);
+    const dir = found.items;
+    if (!dir) return emptyScene(name, [found.error ? `SketchUp 꾸러미(ZIP)가 깨졌습니다: ${found.error}` : 'SketchUp 꾸러미(ZIP)를 찾지 못했습니다'], meta);
+    const modelItem = dir.find((d) => d.name === 'model.dat');
+    if (!modelItem)
+      return emptyScene(
+        name,
+        [found.salvaged || found.truncated ? '파일이 잘렸거나 깨져 model.dat를 찾지 못했습니다(파일을 끝까지 받았는지 확인해 주세요)' : '꾸러미에 model.dat가 없습니다'],
+        meta,
+      );
+    if (found.salvaged) {
+      damaged = true;
+      warnings.push('파일 끝의 꾸러미(ZIP) 목록이 없거나 깨져, 앞에서부터 항목을 찾아 읽었습니다 — 파일이 잘렸을 수 있습니다');
+    }
+    const text = new TextDecoder('utf-8');
+    progress(0.1, '재질 읽는 중');
+    for (const item of dir) {
+      const st = /^styles\/(.+)\/style\.xml$/.exec(item.name);
+      if (st) {
+        // 한 파일 16 MiB까지(엔진과 같은 한도 — 스타일 글은 보통 수십 KB)
+        if (item.size > MAX_STYLE_XML_BYTES) {
+          warnings.push(`스타일 파일이 너무 커서 건너뛰었습니다: ${item.name}`);
+          continue;
+        }
+        try {
+          styles.set(st[1]!, parseStyleXml(text.decode(readZipItem(bytes, item))));
+        } catch {
+          warnings.push(`스타일 파일을 읽지 못했습니다: ${item.name}`);
+        }
+        continue;
+      }
+      const m = /^materials\/(.+)\/material\.xml$/.exec(item.name);
+      if (!m) continue;
+      try {
+        const info = parseMaterialXml(text.decode(readZipItem(bytes, item)));
+        if (!info) continue;
+        // model.dat의 재질 이름은 폴더 이름과 같고(예: '<Black>' → '_Black_'), XML의 name은 원래 이름이다 → 둘 다로 찾는다
+        materials.set(m[1]!, info);
+        if (!materials.has(info.name)) materials.set(info.name, info);
+      } catch {
+        warnings.push(`재질 파일을 읽지 못했습니다: ${item.name}`);
+      }
+    }
+    // 무늬: 그림이 있는 무늬 재질만(재질 폴더 = model.dat 재질 이름). 한도를 넘는 재질은 평균색
+    if (opts.textures?.length) {
+      const byFolder = new Map(opts.textures.map((t) => [t.folder, t] as const));
+      let skipped = 0;
+      for (const item of dir) {
+        const m = /^materials\/(.+)\/material\.xml$/.exec(item.name);
+        const info = m ? materials.get(m[1]!) : undefined;
+        const img = m ? byFolder.get(m[1]!) : undefined;
+        if (!info?.texture || !img || texImages.has(m![1]!)) continue;
+        if (texImages.size >= (opts.maxTextures ?? MAX_SKP_TEXTURES)) skipped++;
+        else texImages.set(m![1]!, img);
+      }
+      if (skipped) warnings.push(`무늬 재질이 너무 많아(${opts.maxTextures ?? MAX_SKP_TEXTURES}개 한도) ${skipped}개는 평균색으로 그렸습니다`);
+    }
+    progress(0.2, 'model.dat 푸는 중');
+    const unpacking = (f: number): void => progress(0.2 + 0.19 * f, 'model.dat 푸는 중');
+    let dat: Uint8Array;
+    if (found.salvaged || modelItem.truncated) {
+      const part = readZipItemPartial(bytes, modelItem, unpacking);
+      dat = part.data;
+      if (!part.complete) {
+        damaged = true;
+        warnings.push('model.dat가 잘렸거나 압축이 깨져 앞부분만 읽었습니다 — 일부 형상이 빠졌을 수 있습니다');
+      }
+    } else {
+      try {
+        dat = readZipItem(bytes, modelItem, unpacking);
+      } catch (e) {
+        // 압축이 중간에 깨졌으면 앞부분이라도
+        const part = readZipItemPartial(bytes, modelItem);
+        if (part.data.length < 6) throw e;
+        dat = part.data;
+        damaged = true;
+        warnings.push(`model.dat를 끝까지 풀지 못해 앞부분만 읽었습니다(${e instanceof Error ? e.message : String(e)})`);
+      }
+    }
+    progress(0.4, '모형 요소 읽는 중');
+    model = readModelDat(dat, (f) => progress(0.4 + 0.24 * f, '모형 요소 읽는 중'), { textured: texImages.keys() });
+  } catch (e) {
+    return emptyScene(name, [...warnings, `SketchUp 파일을 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`], meta);
+  }
+  return { model, materials, styles, damaged, texImages };
 }
 
 /** 뿌리 절·주석·나무 정보 → meta에 더할 칸(src/meta.ts SkpMetaExtras). 없거나 풀지 못한 칸은 빠진다 */

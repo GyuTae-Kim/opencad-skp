@@ -1,5 +1,5 @@
 /**
- * SketchUp 2021 이후 꾸러미(ZIP) 안의 그림 꺼내기(동기, 의존성 없음).
+ * SketchUp 파일 안의 그림 꺼내기(동기, 의존성 없음). 2021 이후는 꾸러미(ZIP) 안 파일, 2020 이하는 객체 직렬화 안의 CDib 기록이다.
  * 조사 기록(docs/formats/skp.md)에서 표본으로 본 자리만 쓴다:
  *   meta/model_thumbnail.png(·meta/preview_thumbnail.png) 모형 미리보기,
  *   materials/<재질 폴더>/(material.xml 말고) 무늬 그림 jpg/png — 폴더에 그림이 여럿이면(PBR 그림 등) material.xml이 가리키는 것,
@@ -7,12 +7,17 @@
  *   scene_thumbnails/<장면>.png 장면 미리보기.
  * 그림 자체만 돌려준다(화면의 견본·목록용, 무늬 재질 그림은 skpToScene의 textures로 넘기면 3D에 입힌다).
  *
+ * 2020 이하(src/mfcmodel.ts가 읽으며 모은 자리): 모형 미리보기, 재질 무늬(폴더 = 재질 열쇠), 컴포넌트 미리보기(CThumbnail),
+ * 2020 장면 미리보기. 날 Windows DIB(아주 옛 파일)는 BMP 파일 머리를 붙여 브라우저가 그릴 수 있게 한다.
+ *
  * 그림 꼴은 이름이 아니라 첫 바이트(PNG·JPEG·GIF·BMP·WebP 표지)로 가린다. 브라우저가 못 그리는 꼴은 건너뛴다.
  * 큰 파일·많은 파일에서 메모리가 터지지 않게 개수·한 장 크기·전체 크기 한도를 둔다(풀기 전에 중앙 목록의 크기로 거른다).
  */
 
 import { readSkpHeader } from './header';
 import { parseMaterialXml } from './materials';
+import type { MfcImageRef } from './mfcstate';
+import { mfcImageRefs } from './mfcmodel';
 import { findSkpZipItems, readZipItem, type ZipItem } from './zip';
 
 export interface SkpImage {
@@ -69,11 +74,76 @@ function stem(file: string): string {
   return file.replace(/\.[^./]+$/, '');
 }
 
-/** 꾸러미 안 그림을 꺼낸다. SketchUp 2021 이후 파일이 아니면 빈 결과 */
+/**
+ * 날 DIB(BITMAPINFOHEADER + 색 표 + 화소) → BMP 파일(14바이트 파일 머리를 붙인다). 머리를 모르면 null.
+ * 화소 시작 = 파일 머리 + 정보 머리 + (BI_BITFIELDS 40바이트 머리면 가면 12바이트) + 색 표.
+ */
+export function dibToBmp(dib: Uint8Array): Uint8Array | null {
+  if (dib.length < 40) return null;
+  const dv = new DataView(dib.buffer, dib.byteOffset, dib.byteLength);
+  const headerSize = dv.getUint32(0, true);
+  const bits = dv.getUint16(14, true);
+  const compression = dv.getUint32(16, true);
+  const used = dv.getUint32(32, true);
+  if (headerSize < 40 || headerSize > dib.length || ![1, 4, 8, 16, 24, 32].includes(bits)) return null;
+  const palette = 4 * (used || (bits <= 8 ? 1 << bits : 0));
+  const masks = compression === 3 && headerSize === 40 ? 12 : 0;
+  const offset = 14 + headerSize + masks + palette;
+  if (offset > 14 + dib.length) return null;
+  const out = new Uint8Array(14 + dib.length);
+  const ov = new DataView(out.buffer);
+  out[0] = 0x42;
+  out[1] = 0x4d;
+  ov.setUint32(2, out.length, true);
+  ov.setUint32(10, offset, true);
+  out.set(dib, 14);
+  return out;
+}
+
+/** 2020 이하: 모은 그림 자리 → 그림(한도·꼴 거르기는 꾸러미와 같다) */
+function mfcImages(bytes: Uint8Array, refs: readonly MfcImageRef[], out: SkpImages, maxCount: number, maxEach: number, maxTotal: number): SkpImages {
+  const order: Record<MfcImageRef['kind'], number> = { model: 0, scene: 1, material: 2, component: 3 };
+  const seenFolders = new Set<string>();
+  let count = 0;
+  let total = 0;
+  for (const ref of [...refs].sort((a, b) => order[a.kind] - order[b.kind])) {
+    if (ref.kind === 'model' && out.model) continue;
+    if (ref.kind === 'material' && (ref.folder === undefined || seenFolders.has(ref.folder))) continue;
+    const size = ref.end - ref.start;
+    if (count >= maxCount || size > maxEach || total + size > maxTotal || ref.end > bytes.length) {
+      out.skipped++;
+      continue;
+    }
+    const raw = bytes.subarray(ref.start, ref.end);
+    let data: Uint8Array | null = imageMime(raw) ? raw.slice() : null;
+    if (!data && (ref.dib || raw[0] === 40)) data = dibToBmp(raw);
+    const mime = data && imageMime(data);
+    if (!data || !mime) {
+      out.skipped++;
+      continue;
+    }
+    count++;
+    total += data.length;
+    const path = ref.path ?? `${ref.kind}/${ref.name}`;
+    const img: SkpImage = { path, name: ref.name, mime, bytes: data };
+    if (ref.kind === 'model') out.model = img;
+    else if (ref.kind === 'material') {
+      seenFolders.add(ref.folder!);
+      out.materials.push({ ...img, folder: ref.folder! });
+    } else if (ref.kind === 'component') out.components.push(img);
+    else out.scenes.push(img);
+  }
+  if (out.skipped) out.warnings.push(`그림 ${out.skipped}개는 너무 크거나 많거나 모르는 꼴이라 건너뛰었습니다`);
+  return out;
+}
+
+/** 파일 안 그림을 꺼낸다. SketchUp 파일이 아니면 빈 결과 */
 export function readSkpImages(bytes: Uint8Array, opts: SkpImageOptions = {}): SkpImages {
   const out: SkpImages = { materials: [], components: [], scenes: [], skipped: 0, warnings: [] };
   const header = readSkpHeader(bytes);
-  if (!header || header.container !== 'zip') return out;
+  if (!header) return out;
+  if (header.container === 'mfc')
+    return mfcImages(bytes, mfcImageRefs(bytes, header), out, opts.maxCount ?? MAX_IMAGE_COUNT, opts.maxBytesEach ?? MAX_IMAGE_BYTES, opts.maxTotalBytes ?? MAX_IMAGE_TOTAL);
   const found = findSkpZipItems(bytes, header.bodyOffset);
   const dir = found.items;
   if (!dir) return out;
