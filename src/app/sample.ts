@@ -5,6 +5,8 @@
  * 겹친 단계 확인용으로 의자 안에 다리 컴포넌트 넷, 나무 안에 줄기·수관 그룹을 두고, 숨긴 그룹(옛 담장) 하나를 둔다.
  * 꾸러미에는 조사 기록에서 본 자리에 작은 그림을 넣는다: 모형 미리보기, 무늬 재질(잔디·기와·마루)의 무늬 그림,
  * 컴포넌트 미리보기(의자·탁자·나무), 장면 미리보기 둘. 그림은 의존성 없이 PNG로 직접 만든다.
+ * 장면 넷(앞마당·식탁·단면·위에서)과 저장 카메라, 현관 지시선 글·화면 글, 집 폭·깊이 치수, 보조선, 집 단면 평면,
+ * 태그 폴더(건물·주석)와 태그 색, 의자 속성 사전, 모형 이름·설명, 단위 형식(mm 십진)도 넣는다.
  * 무늬는 셋 다 다른 길로 칠한다: 잔디는 기본 투영, 마루는 무늬 위치 도구로 90° 돌린 저장된 투영(널이 앞뒤로),
  * 기와는 지붕 판 면에 재질을 두지 않고 지붕 그룹에 칠해 물려받는다(기본 투영 — 줄이 처마와 나란하다).
  *
@@ -12,15 +14,23 @@
  */
 
 import {
+  dimPoint,
   edge as edgeBytes,
   entities,
   face as faceBytes,
+  guideLines,
   instance,
+  linearDims,
   materialXml,
   modelDat,
   pngRgb,
+  sectionPlanes,
   skpFile,
+  texts,
+  val,
   vertex as vertexBytes,
+  type AttrDictsSpec,
+  type CamOpts,
   type Compressor,
   type FaceOpts,
   type TextureMapOpts,
@@ -38,13 +48,22 @@ const MM = 1 / 25.4;
 const FLAG_SOFT = 0x1e;
 
 /** 태그 번호 */
-const TAG = { untagged: 1, walls: 2, roof: 3, furniture: 4, landscape: 5 } as const;
+const TAG = { untagged: 1, walls: 2, roof: 3, furniture: 4, landscape: 5, dims: 6 } as const;
 const LAYERS: [number, string][] = [
   [TAG.untagged, 'Layer0'],
   [TAG.walls, '벽'],
   [TAG.roof, '지붕'],
   [TAG.furniture, '가구'],
   [TAG.landscape, '조경'],
+  [TAG.dims, '치수'],
+];
+/** 태그 색(태그 색 재질 이름 → 꾸러미의 materials/<이름>/material.xml) */
+const TAG_COLORS: [number, string, [number, number, number]][] = [
+  [TAG.walls, 'Layer_벽', [214, 190, 150]],
+  [TAG.roof, 'Layer_지붕', [190, 80, 60]],
+  [TAG.furniture, 'Layer_가구', [120, 150, 210]],
+  [TAG.landscape, 'Layer_조경', [96, 170, 96]],
+  [TAG.dims, 'Layer_치수', [120, 120, 120]],
 ];
 
 /** 재질 [번호, 이름, rgb, 불투명도] */
@@ -108,6 +127,15 @@ class Ids {
   }
 }
 
+interface InstOpt {
+  name?: string;
+  layer?: number;
+  material?: number;
+  flags?: number;
+  attrs?: AttrDictsSpec;
+  guid?: Uint8Array;
+}
+
 interface FaceOpt {
   material?: number;
   back?: number;
@@ -124,6 +152,12 @@ class Ents {
   private faces: Uint8Array[] = [];
   private groups: Uint8Array[] = [];
   private comps: Uint8Array[] = [];
+  /** 주석 목록(texts·linearDims·guideLines·sectionPlanes로 만든 것) */
+  readonly extra: Uint8Array[] = [];
+  /** 이 묶음의 활성 단면 번호 */
+  activeSection?: number;
+  /** 묶음 머리 속성 사전(정의 속성) */
+  attrs?: AttrDictsSpec;
 
   constructor(private readonly ids: Ids) {}
 
@@ -214,11 +248,11 @@ class Ents {
     );
   }
 
-  group(def: number, m13: number[], o: { name?: string; layer?: number; material?: number; flags?: number } = {}): void {
+  group(def: number, m13: number[], o: InstOpt = {}): void {
     this.groups.push(instance(this.ids.next(), def, m13, o));
   }
 
-  component(def: number, m13: number[], o: { name?: string; layer?: number; material?: number; flags?: number } = {}): void {
+  component(def: number, m13: number[], o: InstOpt = {}): void {
     this.comps.push(instance(this.ids.next(), def, m13, o));
   }
 
@@ -227,6 +261,9 @@ class Ents {
     const o: Parameters<typeof entities>[1] = { vertices: this.vBytes, edges, faces: this.faces };
     if (this.groups.length) o.groups = this.groups;
     if (this.comps.length) o.components = this.comps;
+    if (this.extra.length) o.extra = this.extra;
+    if (this.activeSection !== undefined) o.activeSection = this.activeSection;
+    if (this.attrs) o.attrs = this.attrs;
     return entities(id, o);
   }
 }
@@ -244,6 +281,9 @@ interface Def {
   id: number;
   name: string;
   ents: Ents;
+  /** 0 컴포넌트 · 1 그룹 */
+  kind?: number;
+  description?: string;
 }
 
 function house(ids: Ids): Def {
@@ -330,7 +370,7 @@ function house(ids: Ids): Def {
     );
     e.face(sw, { ...glass, want: [nx, 0, 0] });
   }
-  return { id: ids.next(), name: '집 벽체', ents: e };
+  return { id: ids.next(), name: '집 벽체', ents: e, kind: 1 };
 }
 
 function roof(ids: Ids): Def {
@@ -370,14 +410,14 @@ function roof(ids: Ids): Def {
       ],
       { material: MAT['벽 흰색']!, want: [nx, 0, 0] },
     );
-  return { id: ids.next(), name: '박공지붕', ents: e };
+  return { id: ids.next(), name: '박공지붕', ents: e, kind: 1 };
 }
 
 /** 의자 다리: 40 × 40 × 430 mm, 원점이 한 구석(재질은 의자 인스턴스에서 물려받는다) */
 function chairLeg(ids: Ids): Def {
   const e = new Ents(ids);
   e.box([0, 0, 0], [40, 40, 430], { skip: ['top'] });
-  return { id: ids.next(), name: '의자 다리', ents: e };
+  return { id: ids.next(), name: '의자 다리', ents: e, description: '의자 다리 하나(네 번 놓는다)' };
 }
 
 /** 의자: 원점이 가운데, 등받이는 +y 쪽(앉은 사람은 -y를 본다). 다리는 안쪽 컴포넌트 넷. 재질은 인스턴스에서 물려받는다 */
@@ -393,7 +433,9 @@ function chair(ids: Ids, leg: Def): Def {
   ];
   for (const [name, x, y] of legs) e.component(leg.id, placement(x, y, 0), { name });
   e.box([-s, s - 40, 470], [s, s, 920], { skip: ['bottom'] });
-  return { id: ids.next(), name: '의자', ents: e };
+  // 정의 속성 사전(SketchUp 확장이 붙이는 꼴): 엔티티 정보의 "정의" 사전으로 보인다
+  e.attrs = [['제품', [['이름', val.str('식탁 의자')], ['가격', val.i32(120000)], ['폭', val.length(450 * MM)], ['쌓을 수 있음', val.bool(true)]]]];
+  return { id: ids.next(), name: '의자', ents: e, description: '네 다리 나무 의자(인스턴스마다 재질을 바꿔 놓았다)' };
 }
 
 function table(ids: Ids): Def {
@@ -406,7 +448,7 @@ function table(ids: Ids): Def {
     [510, 310],
   ] as const)
     e.box([x, y, 0], [x + 50, y + 50, 720], { skip: ['top'] });
-  return { id: ids.next(), name: '탁자', ents: e };
+  return { id: ids.next(), name: '탁자', ents: e, description: '네 사람 식탁' };
 }
 
 /** 나무: 육각 줄기 그룹 + 여덟 모 수관 그룹(곡면처럼 모서리를 부드럽게). 정의 셋(줄기·수관 그룹 정의와 나무)을 돌려준다 */
@@ -445,8 +487,8 @@ function tree(ids: Ids): [Def, Def, Def] {
     for (let r = 0; r < rings.length; r++) e.soften(rings[r]![i]!, rings[r]![j]!);
     for (let r = 0; r < rings.length - 1; r++) e.soften(rings[r]![i]!, rings[r + 1]![i]!);
   }
-  const trunkDef: Def = { id: ids.next(), name: '그룹#1', ents: trunk };
-  const crownDef: Def = { id: ids.next(), name: '그룹#2', ents: crown };
+  const trunkDef: Def = { id: ids.next(), name: '그룹#1', ents: trunk, kind: 1 };
+  const crownDef: Def = { id: ids.next(), name: '그룹#2', ents: crown, kind: 1 };
   const whole = new Ents(ids);
   whole.group(trunkDef.id, placement(0, 0, 0), { name: '줄기' });
   whole.group(crownDef.id, placement(0, 0, 0), { name: '수관' });
@@ -457,7 +499,7 @@ function tree(ids: Ids): [Def, Def, Def] {
 function oldFence(ids: Ids): Def {
   const e = new Ents(ids);
   e.box([-3000, 6800, 0], [10500, 7000, 600], { material: MAT['돌']!, skip: ['bottom'] });
-  return { id: ids.next(), name: '옛 담장', ents: e };
+  return { id: ids.next(), name: '옛 담장', ents: e, kind: 1 };
 }
 
 /** 예제 model.dat 바이트 */
@@ -502,7 +544,7 @@ export function sampleModelDat(): Uint8Array {
   const tx = 3000;
   const ty = 2300;
   root.component(tableDef.id, placement(tx, ty, 0), { layer: TAG.furniture, material: MAT['원목']! });
-  root.component(chairDef.id, placement(tx, ty + 650, 0, 0), { name: '의자 북', layer: TAG.furniture, material: MAT['원목']! });
+  root.component(chairDef.id, placement(tx, ty + 650, 0, 0), { name: '의자 북', layer: TAG.furniture, material: MAT['원목']!, attrs: [['배치', [['자리', val.str('북쪽')], ['주인', val.str('집주인')]]]] });
   root.component(chairDef.id, placement(tx, ty - 650, 0, 180), { name: '의자 남', layer: TAG.furniture, material: MAT['원목']! });
   root.component(chairDef.id, placement(tx + 850, ty, 0, -90), { name: '의자 동', layer: TAG.furniture, material: MAT['파란 천']! });
   root.component(chairDef.id, placement(tx - 850, ty, 0, 90), { name: '의자 서', layer: TAG.furniture, material: MAT['파란 천']! });
@@ -513,13 +555,80 @@ export function sampleModelDat(): Uint8Array {
   // 숨긴 그룹(기본으로는 그리지 않는다)
   root.group(fenceDef.id, placement(0, 0, 0), { name: '옛 담장', layer: TAG.landscape, flags: FLAG_HIDDEN_INST });
 
+  // 주석: 현관 지시선 글, 화면 글, 집 폭·깊이 치수(앞·오른쪽으로 띄움), 마당 앞 보조선
+  const pt = (x: number, y: number, z: number): [number, number, number] => [x * MM, y * MM, z * MM];
+  root.extra.push(
+    texts([
+      { id: ids.next(), text: '현관', point: dimPoint(1, pt(3000, 0, 2100)), leader: pt(-1400, -1600, 900), leaderType: 2, layer: TAG.dims },
+      { id: ids.next(), text: 'OpenCAD 예제 집', point: dimPoint(0, [0, 0, 0]), screen: [0.62, 0.92] },
+    ]),
+    linearDims([
+      { id: ids.next(), start: dimPoint(1, pt(0, 0, 0)), end: dimPoint(1, pt(6000, 0, 0)), xaxis: [1, 0, 0], alignment: 1, offset: -900 * MM, layer: TAG.dims, arrow: 3 },
+      { id: ids.next(), start: dimPoint(1, pt(6000, 0, 0)), end: dimPoint(1, pt(6000, 4000, 0)), xaxis: [1, 0, 0], alignment: 2, offset: -900 * MM, layer: TAG.dims, arrow: 3 },
+    ]),
+    guideLines([{ id: ids.next(), point: pt(-3500, -2600, 0), direction: [1, 0, 0] }]),
+  );
+  // 집을 x = 4200 mm에서 세로로 자르는 단면(x ≤ 4200 쪽이 남는다). 평소에는 끄고 "단면" 장면에서만 켠다
+  const sectionId = ids.next();
+  root.extra.push(sectionPlanes([{ id: sectionId, plane: [-1, 0, 0, 4200 * MM], name: '집 단면', symbol: 'A' }]));
+
+  const cam = (eye: V3, target: V3, o: Partial<CamOpts> = {}): CamOpts => {
+    // SketchUp은 위 벡터를 시선과 직교로 적는다
+    const d = sub(target, eye);
+    const right: V3 = [d[1], -d[0], 0];
+    const up: V3 = [right[1] * d[2] - right[2] * d[1], right[2] * d[0] - right[0] * d[2], right[0] * d[1] - right[1] * d[0]];
+    const len = Math.hypot(...up) || 1;
+    return { eye: pt(...eye), target: pt(...target), up: [up[0] / len, up[1] / len, up[2] / len], fov: 35, ...o };
+  };
+  const front = cam([-4000, -11000, 6200], [3000, 2000, 1200]);
+  const pageIds = [ids.next(), ids.next(), ids.next(), ids.next()];
   return modelDat({
     materials: MATERIALS.map(([id, name]) => [id, name]),
-    layers: LAYERS,
+    tags: LAYERS.map(([id, name]) => {
+      const color = TAG_COLORS.find(([t]) => t === id);
+      return color ? { id, name, color: color[1] } : { id, name };
+    }),
+    // 태그 폴더: 건물(벽·지붕), 주석(치수)
+    tagFolders: [
+      { id: ids.next(), name: '건물', tags: [TAG.walls, TAG.roof] },
+      { id: ids.next(), name: '주석', tags: [TAG.dims] },
+    ],
     defaultLayer: TAG.untagged,
-    definitions: defs.map((d) => ({ name: d.name, entities: d.ents.bytes(d.id) })),
+    definitions: defs.map((d) => ({
+      name: d.name,
+      entities: d.ents.bytes(d.id),
+      ...(d.kind !== undefined ? { kind: d.kind } : {}),
+      ...(d.description !== undefined ? { description: d.description } : {}),
+    })),
     root: root.bytes(undefined),
-    lengthUnit: 2,
+    options: [
+      [
+        'UnitsOptions',
+        [
+          ['LengthUnit', val.i32(2)],
+          ['LengthFormat', val.i32(0)],
+          ['LengthPrecision', val.i32(0)],
+          ['AnglePrecision', val.i32(1)],
+          ['AreaUnit', val.i32(4)],
+          ['AreaPrecision', val.i32(2)],
+          ['SuppressUnitsDisplay', val.bool(false)],
+        ],
+      ],
+      ['PageOptions', [['ShowTransition', val.bool(true)], ['TransitionTime', val.f64(1)]]],
+    ],
+    properties: [['ModelProperties', [['Name', val.str('예제 집')], ['Description', val.str('브라우저에서 만든 작은 집 모형(장면·치수·단면 시험용)')]]]],
+    camera: front,
+    pages: {
+      // use 깃발: 0x01 카메라, 0x20 숨긴 태그, 0x40 단면
+      list: [
+        { id: pageIds[0]!, name: '앞마당', description: '집 앞에서 본 모습', flags: 0x21, camera: front, thumbnail: 'scene_thumbnails/앞마당.png' },
+        { id: pageIds[1]!, name: '식탁', description: '지붕을 숨기고 위에서 본 식탁', flags: 0x21, camera: cam([3000, -2600, 7600], [3000, 2300, 500]), tags: [TAG.roof], thumbnail: 'scene_thumbnails/식탁.png' },
+        { id: pageIds[2]!, name: '단면', description: 'x = 4.2 m에서 자른 집', flags: 0x61, camera: cam([9000, -8000, 4600], [3000, 2000, 1200]), sections: [sectionId] },
+        { id: pageIds[3]!, name: '위에서', description: '평행 투영 평면도', flags: 0x21, camera: { eye: pt(3750, 2000, 30000), target: pt(3750, 2000, 0), up: [0, 1, 0], perspective: false, height: 15000 * MM } },
+      ],
+      // 활성 장면은 장면의 영구 번호로 가리킨다
+      active: pageIds[0]!,
+    },
   });
 }
 
@@ -654,14 +763,18 @@ function sampleImages(): ZipEntry[] {
 function sampleFile(model: Uint8Array, compress?: Compressor): Uint8Array {
   const opts: Parameters<typeof skpFile>[1] = {
     version: SAMPLE_VERSION,
-    materials: MATERIALS.map(([, name, rgb, alpha]) => [
-      name,
-      alpha !== undefined
-        ? materialXml(name, rgb, alpha, 1)
-        : TEXTURED.has(name)
-          ? materialXml(name, rgb, 1, 0, true, { file: `${name}.png`, width: TEXTURE_TILE[name]! / 25.4, height: TEXTURE_TILE[name]! / 25.4, average: rgb })
-          : materialXml(name, rgb),
-    ]),
+    materials: [
+      ...MATERIALS.map(([, name, rgb, alpha]): [string, string] => [
+        name,
+        alpha !== undefined
+          ? materialXml(name, rgb, alpha, 1)
+          : TEXTURED.has(name)
+            ? materialXml(name, rgb, 1, 0, true, { file: `${name}.png`, width: TEXTURE_TILE[name]! / 25.4, height: TEXTURE_TILE[name]! / 25.4, average: rgb })
+            : materialXml(name, rgb),
+      ]),
+      // 태그 색 재질(재질 목록에는 없고 태그 안에서만 가리킨다)
+      ...TAG_COLORS.map(([, name, rgb]): [string, string] => [name, materialXml(name, rgb)]),
+    ],
     extra: sampleImages(),
   };
   if (compress) opts.compress = compress;

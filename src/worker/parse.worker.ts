@@ -1,6 +1,7 @@
 /**
  * 해석 워커: SketchUp(.skp) 파일을 화면 밖에서 해석해 Scene3d로 돌려준다.
- * 화면이 그룹·컴포넌트를 여러 단계로 고를 수 있게 outline(나무)을, 부드러운 모서리·숨긴 형상을 켜고 끌 수 있게 extras를 켜고 읽는다.
+ * 화면이 그룹·컴포넌트를 여러 단계로 고를 수 있게 outline(나무)을, 부드러운 모서리·숨긴 형상(숨긴 주석 선분 포함)을 켜고 끌 수 있게 extras를,
+ * 곡면을 SketchUp처럼 부드럽게 칠하게 smooth(꼭짓점 법선)를 켜고 읽는다.
  * 꾸러미 안 그림(무늬·미리보기)을 먼저 꺼내(개수·크기 한도) 무늬 재질 그림은 해석기에 넘겨 3D 무늬로 입히고(scene.textures),
  * 색을 바꾼 무늬·알파 그림은 여기서 풀어 손질한다(textures.ts). 그림 바이트는 화면이 Blob 주소로 바꾼다(견본·미리보기).
  * 결과의 형식 배열·ImageBitmap은 복사 없이 넘긴다(app/protocol.ts collectTransfers).
@@ -37,7 +38,7 @@ async function open(req: ParseRequest): Promise<ParseResult> {
   } catch {
     /* 그림은 없어도 된다 */
   }
-  const scene = skpToScene(bytes, { name, outline: true, extras: true, onProgress: progress, textures: images?.materials });
+  const scene = skpToScene(bytes, { name, outline: true, extras: true, smooth: true, onProgress: progress, textures: images?.materials });
   const result: ParseResult = { scene, ms: 0 };
   if (images && (images.model || images.materials.length || images.components.length || images.scenes.length)) result.images = images;
   if (scene.textures?.length) {

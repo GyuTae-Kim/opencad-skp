@@ -483,6 +483,14 @@ describe('예제 모형의 무늬', () => {
       for (const m of ms) expect(m.uvs!.length).toBe((m.positions.length / 3) * 2);
     }
     // 마루(6 m × 4 m, 무늬 800 mm를 90° 돌림): u는 y 방향 4000/800 = 5장, v는 x 방향 7.5장
+    // 부드러운 음영(smooth) 꼭짓점 법선과 무늬 좌표는 같은 정점 차례로 쌓인다
+    const sm = skpToScene(bytes, { textures: imgs.materials, outline: true, smooth: true });
+    for (const m of sm.meshes.filter((x) => x.texture)) {
+      const nv = m.positions.length / 3;
+      expect(m.uvs!.length).toBe(nv * 2);
+      if (m.normals) expect(m.normals.length).toBe(nv * 3);
+    }
+    expect(sm.meshes.filter((x) => x.texture).map((x) => [...x.uvs!])).toEqual(s.meshes.filter((x) => x.texture).map((x) => [...x.uvs!]));
     const floor = s.meshes.find((m) => m.texture === tex.get('마루'))!;
     const c = corners(floor);
     const us = c.map((p) => p[2]!), vs = c.map((p) => p[3]!);

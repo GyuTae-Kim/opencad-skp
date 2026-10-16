@@ -13,8 +13,13 @@ import {
   componentImage,
   definitionCounts,
   docLabel,
+  folderHidden,
+  measureAxes,
+  measureText,
+  folderTags,
   materialImage,
   panelTabs,
+  selectionEntity,
   releaseName,
   selectionText,
   selectedNode,
@@ -25,8 +30,11 @@ import {
   type PanelTab,
   type Selection,
   type SkpDoc,
+  type TagRow,
 } from './doc';
 import { fmtCount, fmtNum, fmtPt, formatBytes, formatMs, rgbCss } from './format';
+import { entityInfo } from './entity';
+import { mmPerSceneUnit, unitsLabel } from './units';
 import { NODE_HIDDEN, NODE_MORE, childrenOf, hiddenByNodes, isSplit, nodeDefinition, nodeName, nodeTag, treeDefinitionCounts, type PickMode, type TreeView } from './tree';
 
 /** 패널이 부르는 앱 기능 */
@@ -40,6 +48,18 @@ export interface PanelHost {
   setPickMode(mode: PickMode): void;
   setShowSoft(on: boolean): void;
   setShowHidden(on: boolean): void;
+  setFolderVisible(folder: number, on: boolean): void;
+  setAnnotationVisible(kind: 'texts' | 'dimensions' | 'guides' | 'sectionPlanes', on: boolean): void;
+  /** 파일 단면(meta.sectionPlanes 차례) 적용, null = 끔 */
+  setFileSection(index: number | null): void;
+  /** 장면(meta.pages 차례) 적용 */
+  applyPage(index: number): void;
+  hideSelection(): void;
+  isolateSelection(): void;
+  unhideAll(): void;
+  readonly isolated: boolean;
+  /** 측정 도구 안내 글(없으면 null) */
+  readonly measureHint: string | null;
   select(sel: Selection | null): void;
   zoomToSelection(): void;
   closePanel(): void;
@@ -89,6 +109,10 @@ export class Panel {
   refreshSelection(reveal = false): void {
     const d = this.doc;
     if (!d) return;
+    if (d.panelTab === 'entity') {
+      this.body.innerHTML = '';
+      this.renderEntity(d);
+    }
     const key = selKey(d.selection);
     for (const el of this.body.querySelectorAll<HTMLElement>('[data-sel]')) {
       const on = el.dataset.sel === key;
@@ -104,6 +128,17 @@ export class Panel {
     const d = this.doc;
     if (!d) return;
     for (const cb of this.body.querySelectorAll<HTMLInputElement>('input[data-tag]')) cb.checked = !d.hiddenTags.has(cb.dataset.tag!);
+    for (const cb of this.body.querySelectorAll<HTMLInputElement>('input[data-folder]')) cb.checked = !d.hiddenFolders.has(Number(cb.dataset.folder));
+    // 숨긴 폴더 안의 태그·폴더는 흐리게
+    for (const el of this.body.querySelectorAll<HTMLElement>('[data-tagrow]')) {
+      const t = d.tags.find((x) => x.name === el.dataset.tagrow);
+      el.classList.toggle('dimmed', !!t && t.folder >= 0 && folderHidden(d, t.folder));
+    }
+    for (const el of this.body.querySelectorAll<HTMLElement>('[data-folderrow]')) {
+      const p = d.tagFolders[Number(el.dataset.folderrow)]?.parent ?? -1;
+      el.classList.toggle('dimmed', p >= 0 && folderHidden(d, p));
+    }
+    this.renderFoot();
     for (const cb of this.body.querySelectorAll<HTMLInputElement>('input[data-outline]')) cb.checked = !d.hiddenOutline.has(Number(cb.dataset.outline));
     const t = d.tree;
     if (t)
@@ -137,6 +172,7 @@ export class Panel {
     }
     if (d.panelTab === 'tags') this.renderTags(d);
     else if (d.panelTab === 'outline') this.renderOutline(d);
+    else if (d.panelTab === 'entity') this.renderEntity(d);
     else this.renderInfo(d);
     this.refreshSelection();
     this.refreshVisibility();
@@ -147,60 +183,122 @@ export class Panel {
 
   private renderTags(d: SkpDoc): void {
     const x = d.extras;
-    if (x) {
-      const toggle = (label: string, count: string, on: boolean, disabled: boolean, set: (v: boolean) => void, title: string): HTMLElement => {
-        const cb = h('input', { type: 'checkbox', 'aria-label': label });
-        cb.checked = on;
-        cb.disabled = disabled;
-        cb.addEventListener('change', () => set(cb.checked));
-        return h('label', { class: `prow${disabled ? ' off' : ''}`, title }, cb, h('span', { class: 'name' }, label), h('span', { class: 'count' }, count));
-      };
-      this.body.append(
-        section(
-          '보기',
-          toggle(
-            '부드러운 모서리 보기',
-            x.softSegments ? `선분 ${fmtCount(x.softSegments)}` : '없음',
-            d.showSoft,
-            !x.soft.size,
-            (v) => this.host.setShowSoft(v),
-            '곡면을 이루는 부드러운·매끈한 모서리를 옅은 선으로 보입니다(SketchUp 화면에서는 숨는 선)',
-          ),
-          toggle(
-            '숨긴 형상 보기',
-            x.hiddenFaces || x.hiddenSegments ? `면 ${fmtCount(x.hiddenFaces)} · 선분 ${fmtCount(x.hiddenSegments)}` : '없음',
-            d.showHidden,
-            !x.hidden.size,
-            (v) => this.host.setShowHidden(v),
-            '모형에서 숨긴 면·모서리·그룹·컴포넌트를 반투명 면과 점선으로 보입니다',
-          ),
+    const toggle = (label: string, count: string, on: boolean, disabled: boolean, set: (v: boolean) => void, title: string): HTMLElement => {
+      const cb = h('input', { type: 'checkbox', 'aria-label': label });
+      cb.checked = on;
+      cb.disabled = disabled;
+      cb.addEventListener('change', () => set(cb.checked));
+      return h('label', { class: `prow${disabled ? ' off' : ''}`, title }, cb, h('span', { class: 'name' }, label), h('span', { class: 'count' }, count));
+    };
+    const view: HTMLElement[] = [];
+    if (x)
+      view.push(
+        toggle(
+          '부드러운 모서리 보기',
+          x.softSegments ? `선분 ${fmtCount(x.softSegments)}` : '없음',
+          d.showSoft,
+          !x.soft.size,
+          (v) => this.host.setShowSoft(v),
+          '곡면을 이루는 부드러운·매끈한 모서리를 옅은 선으로 보입니다(SketchUp 화면에서는 숨는 선)',
+        ),
+        toggle(
+          '숨긴 형상 보기',
+          x.hiddenFaces || x.hiddenSegments ? `면 ${fmtCount(x.hiddenFaces)} · 선분 ${fmtCount(x.hiddenSegments)}` : '없음',
+          d.showHidden,
+          !x.hidden.size,
+          (v) => this.host.setShowHidden(v),
+          '모형에서 숨긴 면·모서리·그룹·컴포넌트를 반투명 면과 점선으로 보입니다',
         ),
       );
+    // 주석: 파일에 있는 것만 켜고 끄기를 보인다
+    const items = d.annotationItems;
+    const texts = d.texts.length;
+    const dims = d.dimensions.length;
+    if (texts || items?.leaders.length)
+      view.push(toggle('글 보기', `${fmtCount(texts)}개`, d.showTexts, false, (v) => this.host.setAnnotationVisible('texts', v), '모형의 글(문자)과 지시선을 보입니다'));
+    if (dims || items?.dimensions.length)
+      view.push(toggle('치수 보기', `${fmtCount(dims)}개`, d.showDimensions, false, (v) => this.host.setAnnotationVisible('dimensions', v), '모형의 치수선과 치수 글을 보입니다'));
+    if (items?.guides.length)
+      view.push(toggle('보조선 보기', `묶음 ${fmtCount(items.guides.length)}`, d.showGuides, false, (v) => this.host.setAnnotationVisible('guides', v), '보조선(안내선)·보조점을 점선으로 보입니다'));
+    if (d.sectionPlanes.length || items?.sectionPlanes.length)
+      view.push(
+        toggle('단면 기호 보기', `${fmtCount(d.sectionPlanes.length)}개`, d.showSectionPlanes, false, (v) => this.host.setAnnotationVisible('sectionPlanes', v), '파일에 놓인 단면 평면의 기호(사각형)를 보입니다'),
+      );
+    if (view.length) this.body.append(section('보기', ...view));
+
+    // 파일 단면: 누르면 그 평면으로 자른다(코어 단면은 평면 하나 — 그룹 안 단면도 모형 전체를 자른다)
+    if (d.sectionPlanes.length) {
+      const list = h('div', { class: 'plist' });
+      d.sectionPlanes.slice(0, LIST_LIMIT).forEach((sp, i) => {
+        const on = d.fileSection === i;
+        const b = h(
+          'button',
+          { class: `prow pick${on ? ' sel' : ''}`, type: 'button', 'aria-pressed': on ? 'true' : 'false', title: on ? '누르면 단면을 끕니다' : '누르면 이 단면으로 모형을 자릅니다' },
+          h('span', { class: 'swatch sec', 'aria-hidden': 'true' }),
+          h('span', { class: 'name' }, sp.name || `단면 ${i + 1}`),
+          sp.active ? h('span', { class: 'chip', title: '파일에서 활성인 단면' }, '활성') : null,
+          sp.node >= 0 ? h('span', { class: 'chip', title: '그룹·컴포넌트 안의 단면 — 이 뷰어는 모형 전체를 자릅니다' }, '그룹 안') : null,
+          sp.tag ? h('span', { class: 'count' }, sp.tag) : null,
+        );
+        b.addEventListener('click', () => this.host.setFileSection(on ? null : i));
+        list.append(b);
+      });
+      this.body.append(section(`단면 평면 ${d.sectionPlanes.length}개`, list));
     }
 
+    // 태그: 폴더 없는 태그 → 폴더(앞 순회 차례)와 그 안 태그
     const tags = d.tags;
     const allOn = h('button', { class: 'mini-btn', type: 'button' }, '모두 보기');
     const allOff = h('button', { class: 'mini-btn', type: 'button' }, '모두 숨기기');
     allOn.addEventListener('click', () => this.host.setAllTagsVisible(true));
     allOff.addEventListener('click', () => this.host.setAllTagsVisible(false));
     const list = h('div', { class: 'plist' });
-    for (const t of tags) {
+    const tagRow = (t: TagRow, depth: number): HTMLElement => {
       const cb = h('input', { type: 'checkbox', 'data-tag': t.name, 'aria-label': `태그 ${t.name} 보이기` });
       cb.checked = !d.hiddenTags.has(t.name);
       cb.disabled = !t.hasGeometry;
       cb.addEventListener('change', () => this.host.setTagVisible(t.name, cb.checked));
       const count = t.faces !== null ? `면 ${fmtCount(t.faces)}` : '';
+      return h(
+        'label',
+        {
+          class: `prow${t.hasGeometry ? '' : ' off'}`,
+          'data-tagrow': t.name,
+          style: depth ? `padding-left:${8 + depth * 14}px` : undefined,
+          title: t.hasGeometry ? `${t.name}: 면 ${fmtCount(t.faces)} · 모서리 ${fmtCount(t.edges)}` : `${t.name}: 그릴 것이 없는 태그`,
+        },
+        cb,
+        t.color ? h('span', { class: 'swatch tag', style: `background:${rgbCss(t.color)}`, title: '태그 색' }) : null,
+        h('span', { class: 'name' }, t.name),
+        t.default ? h('span', { class: 'chip' }, '기본') : null,
+        t.lineStyle ? h('span', { class: 'chip', title: `선 종류: ${t.lineStyle} — 이 태그의 모서리를 점선으로 그립니다` }, '점선') : null,
+        !t.visible ? h('span', { class: 'chip', title: '파일에서 숨긴 태그' }, '숨김') : null,
+        h('span', { class: 'count' }, t.hasGeometry ? count : '비어 있음'),
+      );
+    };
+    for (const t of tags) if (t.folder < 0 || t.folder >= d.tagFolders.length) list.append(tagRow(t, 0));
+    const depthOf = (f: number): number => {
+      let k = 0;
+      for (let p = d.tagFolders[f]?.parent ?? -1; p >= 0 && k < 64; p = d.tagFolders[p]?.parent ?? -1) k++;
+      return k;
+    };
+    d.tagFolders.forEach((f, i) => {
+      const depth = depthOf(i);
+      const cb = h('input', { type: 'checkbox', 'data-folder': String(i), 'aria-label': `태그 폴더 ${f.name} 보이기` });
+      cb.checked = !d.hiddenFolders.has(i);
+      cb.addEventListener('change', () => this.host.setFolderVisible(i, cb.checked));
       list.append(
         h(
           'label',
-          { class: `prow${t.hasGeometry ? '' : ' off'}`, title: t.hasGeometry ? `${t.name}: 면 ${fmtCount(t.faces)} · 모서리 ${fmtCount(t.edges)}` : `${t.name}: 그릴 것이 없는 태그` },
+          { class: 'prow folder', 'data-folderrow': String(i), style: depth ? `padding-left:${8 + depth * 14}px` : undefined, title: `태그 폴더 ${f.name} — 숨기면 안의 태그가 모두 숨습니다` },
           cb,
-          h('span', { class: 'name' }, t.name),
-          t.default ? h('span', { class: 'chip' }, '기본') : null,
-          h('span', { class: 'count' }, t.hasGeometry ? count : '비어 있음'),
+          h('span', { class: 'fold-ico', html: icon('folder', 14) }),
+          h('span', { class: 'name' }, f.name || '(이름 없는 폴더)'),
+          h('span', { class: 'count' }, `태그 ${fmtCount(folderTags(d, i).length)}`),
         ),
       );
-    }
+      for (const t of tags) if (t.folder === i) list.append(tagRow(t, depth + 1));
+    });
     this.body.append(
       section(`태그 ${tags.length}개`, tags.length ? h('div', { class: 'pbar' }, allOn, allOff) : null, tags.length ? list : h('p', { class: 'hint' }, '태그가 없습니다.')),
     );
@@ -369,8 +467,9 @@ export class Panel {
     addChildren(-1);
 
     const groups = countKind(t, 0);
-    const comps = t.count - groups;
-    const notes: string[] = [`그룹 ${fmtCount(groups)} · 컴포넌트 ${fmtCount(comps)}(모든 단계, ${t.listedDepth}단계까지).`];
+    const images = countKind(t, 2);
+    const comps = t.count - groups - images;
+    const notes: string[] = [`그룹 ${fmtCount(groups)} · 컴포넌트 ${fmtCount(comps)}${images ? ` · 그림 ${fmtCount(images)}` : ''}(모든 단계, ${t.listedDepth}단계까지).`];
     notes.push('› 단추로 펼치면 3D에서 누를 때도 그 안의 항목을 고릅니다. 누르면 강조, 두 번 누르면 확대합니다.');
     if (t.unlisted) notes.push(`노드가 많아 ${t.listedDepth + 1}단계부터는 목록에 넣지 않았습니다(그 안을 누르면 ${t.listedDepth}단계 항목을 고릅니다).`);
     if (d.outlineSkipped) notes.push(`모형 바로 아래 항목이 ${fmtCount(d.outlineSkipped)}개로 많아 그물을 나누지 않고, 숨기기·강조는 그물 안 구간으로 합니다.`);
@@ -418,7 +517,7 @@ export class Panel {
     cb.disabled = !canHide;
     cb.addEventListener('change', () => this.host.setNodeVisible(n, cb.checked));
     cb.addEventListener('click', (e) => e.stopPropagation());
-    const kind = t.kind[n] === 0 ? 'group' : 'component';
+    const kind = t.kind[n] === 0 ? 'group' : t.kind[n] === 2 ? 'image' : 'component';
     const sub = [def && def !== name ? def : null, tag].filter(Boolean).join(' · ');
     const item = h(
       'div',
@@ -474,6 +573,31 @@ export class Panel {
     this.body.append(section(title, h('table', { class: 'ptable' }, h('thead', {}, h('tr', {}, h('th', {}, '정의'), h('th', { class: 'num' }, '개수'))), tbody)));
   }
 
+  // ───────────────────────── 선택(엔티티 정보) ─────────────────────────
+
+  /** 고른 것의 정보(SketchUp의 엔티티 정보처럼): 이름·정의·태그·재질·크기·넓이·GUID·설명·속성 사전. 고른 것이 없으면 모형 */
+  private renderEntity(d: SkpDoc): void {
+    const e = entityInfo(selectionEntity(d), d.units, mmPerSceneUnit(d.scene.units));
+    const rows = e.rows.map((r) => {
+      const el = row(r.label, r.value);
+      if (r.title) el.querySelector('.v')?.setAttribute('title', r.title);
+      return el;
+    });
+    this.body.append(section(e.title, ...rows, !d.selection ? h('p', { class: 'hint' }, '3D나 구성 목록에서 그룹·컴포넌트·재질을 고르면 그 정보를 보입니다.') : null));
+    if (e.dicts.length) {
+      const blocks = e.dicts.map((dict) =>
+        h(
+          'details',
+          { class: 'attr-dict', open: e.dicts.length <= 3 ? true : undefined },
+          h('summary', {}, dict.name, h('span', { class: 'chip' }, dict.source === 'definition' ? '정의' : '이 항목'), h('span', { class: 'count' }, `${fmtCount(dict.entries.length)}개`)),
+          ...dict.entries.map(([k, v]) => row(k, v)),
+          dict.more ? h('p', { class: 'hint' }, `열쇠 ${fmtCount(dict.more)}개는 더 있어 줄였습니다.`) : null,
+        ),
+      );
+      this.body.append(section('속성 사전', ...blocks, e.moreDicts ? h('p', { class: 'hint' }, `사전 ${fmtCount(e.moreDicts)}개는 줄였습니다.`) : null));
+    }
+  }
+
   // ───────────────────────── 정보 ─────────────────────────
 
   private renderInfo(d: SkpDoc): void {
@@ -488,7 +612,10 @@ export class Panel {
         row('이름', d.name),
         row('형식', docLabel(info)),
         row('SketchUp 판', info.version ? `${info.version} (${releaseName(info.version)})` : '모름'),
+        d.modelName ? row('모형 이름', d.modelName) : null,
+        d.modelDescription ? row('설명', d.modelDescription) : null,
         row('단위', unitSummary(info, s.units)),
+        row('단위 형식', unitsLabel(d.units)),
         row('크기', formatBytes(d.size)),
         row('읽은 시간', formatMs(d.ms)),
       ),
@@ -510,17 +637,28 @@ export class Panel {
     if (s.bounds) rows.push(row('최소', fmtPt(s.bounds.min, 1)), row('최대', fmtPt(s.bounds.max, 1)));
     this.body.append(section('모형 통계', ...rows));
     const scenes = d.images?.scenes ?? [];
-    if (scenes.length) {
+    if (d.pages.length) {
+      // 장면(페이지): 누르면 그 장면의 카메라·숨긴 태그·숨긴 개체·단면·스타일을 적용한다
+      const thumbs = new Map(scenes.map((sc) => [sc.path, sc.url] as const));
+      const grid = h('div', { class: 'scene-grid' });
+      d.pages.slice(0, 200).forEach((pg, i) => {
+        const url = (pg.thumbnail && thumbs.get(pg.thumbnail)) || scenes.find((sc) => sc.name === pg.name)?.url || null;
+        const on = d.page === i;
+        const card = h(
+          'button',
+          { class: `scene-card pick${on ? ' sel' : ''}`, type: 'button', 'aria-pressed': on ? 'true' : 'false', title: [pg.name, pg.description].filter(Boolean).join('\n') },
+          url ? h('img', { src: url, alt: '', loading: 'lazy', decoding: 'async' }) : h('span', { class: 'scene-blank', html: icon('scene', 28) }),
+          h('span', { class: 'scene-cap' }, pg.name || `장면 ${i + 1}`, d.activePage === i ? h('span', { class: 'chip', title: '파일을 저장할 때 고른 장면' }, '활성') : null),
+        );
+        card.addEventListener('click', () => this.host.applyPage(i));
+        grid.append(card);
+      });
+      this.body.append(section(`장면 ${d.pages.length}개`, h('p', { class: 'hint' }, '누르면 그 장면으로 바꿉니다(카메라·숨긴 태그·숨긴 개체·단면·스타일 중 장면이 기억하는 것). PageUp·PageDown으로도 넘깁니다.'), grid));
+    } else if (scenes.length) {
       const grid = h('div', { class: 'scene-grid' });
       for (const sc of scenes.slice(0, 100))
         grid.append(h('figure', { class: 'scene-card', title: sc.name }, h('img', { src: sc.url, alt: '', loading: 'lazy', decoding: 'async' }), h('figcaption', {}, sc.name)));
-      this.body.append(
-        section(
-          `장면 ${scenes.length}개`,
-          h('p', { class: 'hint' }, '파일 안의 장면 미리보기 그림입니다. 장면의 카메라 값을 아직 읽지 못해 장면 전환은 아직 안 됩니다.'),
-          grid,
-        ),
-      );
+      this.body.append(section(`장면 그림 ${scenes.length}개`, h('p', { class: 'hint' }, '파일 안의 장면 미리보기 그림입니다(장면 목록을 읽지 못한 파일).'), grid));
     }
     const warns = s.warnings ?? [];
     this.body.append(
@@ -568,10 +706,33 @@ export class Panel {
       if (d.tree && n !== null && n >= 0 && d.tree.childCount[n]! > 0 && !d.expanded.has(n) && d.pickMode === 'open')
         lines.push(h('div', { class: 'dim' }, '안쪽 항목을 고르려면 3D에서 두 번 누르거나 목록에서 › 단추로 펼치세요.'));
     }
+    // 고른 그룹·컴포넌트: 숨기기·분리해서 보기, 숨긴 것이 있으면 모두 보이기
+    const canHide = d.selection?.kind === 'outline' || d.selection?.kind === 'node';
+    const anyHidden = d.hiddenNodes.size > 0 || d.hiddenOutline.size > 0;
+    if (canHide || anyHidden) {
+      const act = (label: string, ico: string, title: string, run: () => void, on = false): HTMLButtonElement => {
+        const b = h('button', { class: `mini-btn${on ? ' on' : ''}`, type: 'button', title, 'aria-pressed': on ? 'true' : undefined, html: `${icon(ico, 14)}<span>${label}</span>` });
+        b.addEventListener('click', run);
+        return b;
+      };
+      lines.push(
+        h(
+          'div',
+          { class: 'pbar foot-acts' },
+          canHide ? act('숨기기', 'hide', '고른 것을 보기에서 숨깁니다(파일은 그대로)', () => this.host.hideSelection()) : null,
+          canHide || this.host.isolated
+            ? act(this.host.isolated ? '분리 풀기' : '분리해서 보기', 'isolate', '고른 것만 보입니다 — 다시 누르면 모두 보입니다', () => this.host.isolateSelection(), this.host.isolated)
+            : null,
+          anyHidden ? act('모두 보이기', 'show', '숨긴 그룹·컴포넌트를 모두 다시 보입니다(태그는 그대로)', () => this.host.unhideAll()) : null,
+        ),
+      );
+    }
     if (d.measure) {
       const m = d.measure;
-      lines.push(h('div', {}, h('b', {}, '거리 '), `${fmtNum(m.distance, 2)} ${u}`, h('span', { class: 'dim' }, ` · dx ${fmtNum(m.dx, 2)} · dy ${fmtNum(m.dy, 2)} · dz ${fmtNum(m.dz, 2)}`)));
-    } else if (this.host.measuring) lines.push(h('div', { class: 'dim' }, '측정: 두 점을 누르세요(꼭짓점·끝점 가까우면 그 점에 붙습니다). Esc = 지우기, 한 번 더 = 측정 끄기'));
+      const mm = mmPerSceneUnit(d.scene.units);
+      const axes = measureAxes(m, d.units, mm);
+      lines.push(h('div', {}, h('b', {}, `${measureText(m, d.units, mm)} `), axes ? h('span', { class: 'dim' }, axes) : null));
+    } else if (this.host.measuring) lines.push(h('div', { class: 'dim' }, this.host.measureHint ?? '측정: 점을 누르세요 · Esc = 지우기, 한 번 더 = 끄기'));
     f.hidden = !lines.length;
     f.append(...lines);
   }
