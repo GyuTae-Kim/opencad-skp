@@ -3,6 +3,8 @@
  * 자동 확인용으로 window.opencadApp을 둔다.
  */
 import './styles.css';
+import { initAnalytics } from './analytics';
+import { GA4_MEASUREMENT_ID } from './analytics-config';
 import { SkpViewerApp, type AppSnapshot } from './app';
 import { parseLaunch } from './launch';
 
@@ -27,6 +29,7 @@ declare global {
 
 const root = document.getElementById('app');
 if (root) {
+  initAnalytics(GA4_MEASUREMENT_ID, 'skp');
   const app = new SkpViewerApp(root);
   app.mount();
   window.opencadApp = {
