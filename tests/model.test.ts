@@ -349,9 +349,15 @@ describe('skpToScene', () => {
   it('SketchUp 파일이 아니거나 깨졌으면 경고', () => {
     expect(skpToScene(utf8('hello')).warnings![0]).toContain('SketchUp 파일이 아닙니다');
     const file = skpFile(testModel());
+    // 끝의 ZIP 목록(끝 레코드)만 잘린 파일: 예전에는 빈 장면이었지만, 이제 지역 머리를 따라 model.dat를 찾아 읽고 경고한다
     const cut = file.subarray(0, file.length - 30);
     const s = skpToScene(cut);
-    expect(s.meshes.length).toBe(0);
-    expect(s.warnings!.length).toBeGreaterThan(0);
+    expect(s.meshes.length).toBe(3);
+    expect(s.warnings!.some((w) => w.includes('꾸러미(ZIP) 목록이 없거나 깨져'))).toBe(true);
+    expect(s.meta?.damaged).toBe(true);
+    // 머리 뒤가 거의 없으면 빈 장면과 경고
+    const head = skpToScene(file.subarray(0, 90));
+    expect(head.meshes.length).toBe(0);
+    expect(head.warnings!.length).toBeGreaterThan(0);
   });
 });

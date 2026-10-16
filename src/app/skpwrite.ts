@@ -199,10 +199,10 @@ export function modelDat(o: ModelOpts): Uint8Array {
   return tlv(0x01f4, ...parts);
 }
 
-export function materialXml(name: string, rgb: [number, number, number], trans = 1, useTrans = 0): string {
+export function materialXml(name: string, rgb: [number, number, number], trans = 1, useTrans = 0, hasTexture = false): string {
   return (
     '<?xml version="1.0" encoding="UTF-8" standalone="no" ?>\n<materialDocument>\n' +
-    `  <mat:material name="${name.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}" type="0" colorRed="${rgb[0]}" colorGreen="${rgb[1]}" colorBlue="${rgb[2]}" colorizeType="0" trans="${trans}" useTrans="${useTrans}" hasTexture="0" />\n</materialDocument>\n`
+    `  <mat:material name="${name.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}" type="0" colorRed="${rgb[0]}" colorGreen="${rgb[1]}" colorBlue="${rgb[2]}" colorizeType="0" trans="${trans}" useTrans="${useTrans}" hasTexture="${hasTexture ? 1 : 0}" />\n</materialDocument>\n`
   );
 }
 
@@ -221,6 +221,60 @@ export function crc32(data: Uint8Array): number {
   let c = 0xffffffff;
   for (let i = 0; i < data.length; i++) c = crcTable[(c ^ data[i]!) & 0xff]! ^ (c >>> 8);
   return (c ^ 0xffffffff) >>> 0;
+}
+
+/** Adler-32(zlib 꼬리) */
+export function adler32(data: Uint8Array): number {
+  let a = 1;
+  let b = 0;
+  for (let i = 0; i < data.length; i++) {
+    a = (a + data[i]!) % 65521;
+    b = (b + a) % 65521;
+  }
+  return ((b << 16) | a) >>> 0;
+}
+
+/** zlib 흐름(무압축 저장 블록만 — PNG 그림을 의존성 없이 만들려고) */
+export function zlibStored(data: Uint8Array): Uint8Array {
+  const parts: Uint8Array[] = [new Uint8Array([0x78, 0x01])];
+  let o = 0;
+  do {
+    const n = Math.min(65535, data.length - o);
+    const last = o + n >= data.length ? 1 : 0;
+    parts.push(new Uint8Array([last, n & 0xff, n >> 8, ~n & 0xff, (~n >> 8) & 0xff]), data.subarray(o, o + n));
+    o += n;
+  } while (o < data.length);
+  const t = adler32(data);
+  parts.push(new Uint8Array([t >>> 24, (t >>> 16) & 0xff, (t >>> 8) & 0xff, t & 0xff]));
+  return concat(parts);
+}
+
+function pngChunk(type: string, data: Uint8Array): Uint8Array {
+  const head = utf8(type);
+  const len = new Uint8Array(4);
+  new DataView(len.buffer).setUint32(0, data.length);
+  const crc = new Uint8Array(4);
+  new DataView(crc.buffer).setUint32(0, crc32(concat([head, data])));
+  return concat([len, head, data, crc]);
+}
+
+/** 작은 RGB PNG(예제·시험용 그림). pixel(x, y) → [r, g, b] 0~255 */
+export function pngRgb(w: number, h: number, pixel: (x: number, y: number) => readonly [number, number, number]): Uint8Array {
+  const ihdr = new Uint8Array(13);
+  const dv = new DataView(ihdr.buffer);
+  dv.setUint32(0, w);
+  dv.setUint32(4, h);
+  ihdr.set([8, 2, 0, 0, 0], 8);
+  const raw = new Uint8Array(h * (1 + 3 * w));
+  for (let y = 0; y < h; y++) {
+    const row = y * (1 + 3 * w);
+    raw[row] = 0;
+    for (let x = 0; x < w; x++) {
+      const c = pixel(x, y);
+      raw.set([c[0] & 0xff, c[1] & 0xff, c[2] & 0xff], row + 1 + 3 * x);
+    }
+  }
+  return concat([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), pngChunk('IHDR', ihdr), pngChunk('IDAT', zlibStored(raw)), pngChunk('IEND', new Uint8Array(0))]);
 }
 
 /** 원시 DEFLATE 압축 함수(Node의 deflateRawSync 등). null을 돌려주거나 함수가 없으면 저장 방식 */
@@ -277,6 +331,8 @@ export interface SkpFileOpts {
   /** 압축할지(compress가 있을 때만 뜻이 있다, 기본 true) */
   deflate?: boolean;
   compress?: Compressor;
+  /** model.dat 앞에 넣을 항목(그림 등: meta/model_thumbnail.png, materials/<폴더>/<그림>, thumbnails/…, scene_thumbnails/…) */
+  extra?: ZipEntry[];
 }
 
 /** 2021 이후 꼴의 파일 전체 */
@@ -294,6 +350,7 @@ export function skpFile(model: Uint8Array, opts: SkpFileOpts = {}): Uint8Array {
   const entries: ZipEntry[] = [
     { name: 'meta/meta.dat', data: new Uint8Array([0x64, 0, 0, 0, 0, 0]) },
     ...(opts.materials ?? []).map(([n, xml]) => ({ name: `materials/${n}/material.xml`, data: utf8(xml), deflate })),
+    ...(opts.extra ?? []),
     { name: 'model.dat', data: model, deflate },
   ];
   return concat([head, zip(entries, opts.compress)]);
