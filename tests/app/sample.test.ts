@@ -17,8 +17,8 @@ describe('예제 모형', () => {
     expect(s.warnings).toEqual([]);
     expect(s.units).toBe('mm');
     expect(s.meta?.lengthUnit).toBe('mm');
-    // 태그 넷 + 기본, 재질 11, 윗단계 = 바로 놓인 형상 + 그룹 2 + 컴포넌트 8
-    expect((s.meta?.tags as string[]).length).toBe(5);
+    // 태그 다섯(치수 포함) + 기본, 재질 11, 윗단계 = 바로 놓인 형상 + 그룹 2 + 컴포넌트 8
+    expect((s.meta?.tags as string[]).length).toBe(6);
     expect(s.meta?.materials).toBe(11);
     expect((s.meta?.outline as unknown[]).length).toBe(11);
     // 집 6 m × 4 m를 mm로: 잔디 마당 범위 14.5 m × 11 m, 지붕 마루 4.3 m + 판 두께
@@ -26,6 +26,41 @@ describe('예제 모형', () => {
     expect(s.bounds!.max[1] - s.bounds!.min[1]).toBeCloseTo(11_000, 3);
     expect(s.bounds!.max[2]).toBeGreaterThan(4300);
     expect(s.bounds!.max[2]).toBeLessThan(4700);
+  });
+
+  it('장면·카메라·글·치수·단면·태그 폴더·속성이 읽힌다', () => {
+    const s = skpToScene(sampleSkpBytes(), { name: '예제', outline: true, extras: true, smooth: true });
+    const m = s.meta as Record<string, any>;
+    expect(s.warnings).toEqual([]);
+    expect(m.pages.map((p: { name: string }) => p.name)).toEqual(['앞마당', '식탁', '단면', '위에서']);
+    expect(m.activePage).toBe(0);
+    expect(m.pages[1].hiddenTags).toEqual(['지붕']);
+    expect(m.pages[2].sectionPlanes).toEqual([0]);
+    expect(m.pages[3].camera).toMatchObject({ perspective: false });
+    expect(m.pages[3].camera.height).toBeCloseTo(15000, 3);
+    expect(m.pages[0].thumbnail).toBe('scene_thumbnails/앞마당.png');
+    expect(m.camera.fovY).toBeCloseTo(35);
+    expect(m.units).toMatchObject({ lengthUnit: 'mm', lengthFormat: 'decimal', lengthPrecision: 0, areaUnit: 'square_m' });
+    expect(m.modelName).toBe('예제 집');
+    expect(m.tagFolders.map((f: { name: string }) => f.name)).toEqual(['건물', '주석']);
+    expect(m.texts.map((t: { text: string }) => t.text)).toEqual(['현관', 'OpenCAD 예제 집']);
+    expect(m.texts[1].screen).toEqual([0.62, 0.92]);
+    expect(m.dimensions.map((d: { value: number }) => Math.round(d.value))).toEqual([6000, 4000]);
+    expect(m.sectionPlanes).toHaveLength(1);
+    expect(m.sectionPlanes[0]).toMatchObject({ name: '집 단면', active: false, node: -1 });
+    expect(m.annotationItems.dimensions.length).toBeGreaterThan(0);
+    expect(m.annotationItems.guides.length).toBeGreaterThan(0);
+    // 의자 정의 속성 사전(넷 놓인 의자 노드 모두 같은 정의 사전)
+    const info = m.treeInfo;
+    const tree = m.tree;
+    const chair = tree.names.indexOf('의자 북');
+    expect(chair).toBeGreaterThanOrEqual(0);
+    expect(m.attributes[info.attrs[chair]]).toEqual({ 배치: { 자리: '북쪽', 주인: '집주인' } });
+    const def = tree.definition[chair];
+    expect(m.attributes[info.definitionAttrs[def]].제품.이름).toBe('식탁 의자');
+    expect(info.definitionDescription[def]).toContain('의자');
+    // 의자 크기(정의 범위 × 축 배율): 폭 약 0.45 m
+    expect(info.size[chair * 3]).toBeGreaterThan(300);
   });
 
   it('면 구멍(창)과 홈(문)이 삼각화된다 — 실패한 면이 없다', () => {

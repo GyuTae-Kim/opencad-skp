@@ -151,18 +151,19 @@ function writeEntities(w: W, defId: number | undefined, n: number, cols: number,
     w.u32v(0x1967, i.def);
     w.close();
   };
+  // 그룹은 138d 아래 1d4c 감싸개 → 1964, 컴포넌트는 138c 아래 1964 바로(SketchUp 배치)
   if (groups.length) {
-    w.open(0x138c);
-    groups.forEach(inst);
+    w.open(0x138d);
+    groups.forEach((g, k) => {
+      w.open(0x1d4c);
+      inst(g, k);
+      w.close();
+    });
     w.close();
   }
   if (comps.length) {
-    w.open(0x138d);
-    comps.forEach((c, k) => {
-      w.open(0x1d4c);
-      inst(c, k + groups.length);
-      w.close();
-    });
+    w.open(0x138c);
+    comps.forEach((c, k) => inst(c, k + groups.length));
     w.close();
   }
   w.close();
