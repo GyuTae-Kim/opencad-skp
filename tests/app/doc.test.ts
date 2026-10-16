@@ -20,6 +20,7 @@ import {
 } from '../../src/app/doc';
 import { skpToScene } from '../../src/index';
 import { oldSkpHeader } from '../build';
+import { mfcFile, squareEntities } from '../mfcwrite';
 import { sampleSkpBytes } from '../../src/app/sample';
 
 const sampleScene = (): Scene3d => skpToScene(sampleSkpBytes(), { name: '예제', outline: true });
@@ -35,10 +36,15 @@ describe('판·단위 글', () => {
     expect(releaseName('이상함')).toBe('SketchUp');
   });
 
-  it('2020 이하 판은 아직 못 읽는 판으로 가린다', () => {
-    expect(unsupportedVersion(skpToScene(oldSkpHeader('17.2.2555')))).toBe('17.2.2555');
+  it('SketchUp 3~6만 아직 못 읽는 판으로 가린다(7·8·2013~2020은 읽는다)', () => {
+    expect(unsupportedVersion(skpToScene(mfcFile({ schemas: 'v4', root: squareEntities() })))).toBe('4.0.1');
+    expect(unsupportedVersion(skpToScene(mfcFile({ schemas: 'v8', root: squareEntities() })))).toBeNull();
+    expect(unsupportedVersion(skpToScene(mfcFile({ schemas: 'v20', root: squareEntities() })))).toBeNull();
+    // 잘린 2017 파일은 판 안내가 아니라 열지 못한 파일이다
+    expect(unsupportedVersion(skpToScene(oldSkpHeader('17.2.2555')))).toBeNull();
     expect(unsupportedVersion(sampleScene())).toBeNull();
-    expect(unsupportedVersion({ name: 'x', units: 'unknown', meshes: [], lines: [], meta: { version: '20.0.1', container: 'zip' } })).toBe('20.0.1');
+    expect(unsupportedVersion({ name: 'x', units: 'unknown', meshes: [], lines: [], meta: { version: '6.0.1', container: 'mfc' } })).toBe('6.0.1');
+    expect(unsupportedVersion({ name: 'x', units: 'unknown', meshes: [], lines: [], meta: { version: '20.0.1', container: 'mfc' } })).toBeNull();
   });
 
   it('정보·단위 요약', () => {

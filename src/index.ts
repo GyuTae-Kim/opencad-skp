@@ -2,17 +2,19 @@
  * SketchUp(.skp) 해석기. 형식 지식은 공개 표본 바이트로 추론한 것에 PRISME 엔진(SketchUp C API를 비교 기준으로 맞춘 해석기)의
  * 형식 지식을 옮겨 더했다(docs/formats/skp.md).
  *
- * 지원: SketchUp 2021~2026(머리 뒤 "VFF" 블록 + ZIP 꾸러미, 안의 model.dat가 TLV). 면(구멍 포함)·모서리·재질 색·
- * 그룹/컴포넌트/그림 인스턴스 변환·태그(보임·색·폴더·선 종류)·문자·치수·보조선·단면 평면·속성 사전·
- * 단위·카메라·장면(페이지)·스타일(style.xml + 렌더링 설정)을 읽는다. 부드러운 음영(매끈한 모서리)은 smooth 선택으로 낸다.
+ * 지원: SketchUp 2021~2026(머리 뒤 "VFF" 블록 + ZIP 꾸러미, 안의 model.dat가 TLV)과
+ * SketchUp 7·8·2013~2020(머리 뒤 MFC 객체 직렬화, src/mfcmodel.ts). 두 해석기가 같은 중간 모형(SkpModel)을 내서 장면 출력은 하나다.
+ * 면(구멍 포함)·모서리·재질 색·그룹/컴포넌트/그림 인스턴스 변환·태그(보임·색·폴더·선 종류)·문자·치수·보조선·단면 평면·속성 사전·
+ * 단위·카메라·장면(페이지)·스타일(style.xml 또는 옛 스타일 기록 + 렌더링 설정)을 읽는다. 부드러운 음영(매끈한 모서리)은 smooth 선택으로 낸다.
  * 무늬(텍스처) 그림은 장면에 입히지 않는다(재질 색은 무늬 평균색, 그림 바이트는 readSkpImages로 따로 꺼낸다).
- * 2020 이하(MFC 객체 직렬화)는 아직 읽지 못해 경고와 함께 빈 장면을 돌려준다.
+ * SketchUp 3~6(옛 MFC 스키마)은 읽지 않고 까닭을 적은 경고와 빈 장면(meta.unsupported)을 돌려준다.
  */
 
 import type { Scene3d } from 'opencad-viewer3d/types';
 import { readSkpHeader } from './header';
 import { parseMaterialXml, type SkpMaterialInfo } from './materials';
 import type { SkpMetaExtras } from './meta';
+import { MfcRefused, readMfcModel, rememberMfcImages } from './mfcmodel';
 import { readModelDat, type SkpModel } from './model';
 import { buildSceneParts } from './scene';
 import { cameraMeta, pagesMeta, styleFor, unitsFor } from './scene-meta';
@@ -27,8 +29,10 @@ export { TREE_HIDDEN, TREE_MORE } from './scene';
 export type * from './meta';
 export { cameraMeta, pagesMeta, unitsFor } from './scene-meta';
 
-/** 확인한 가장 낮은 판(이보다 낮으면 형식이 다르다) */
-export const SKP_MIN_SUPPORTED_MAJOR = 21;
+/** 읽는 가장 낮은 판(SketchUp 7). 3~6은 MFC 스키마가 달라 읽지 않는다 */
+export const SKP_MIN_SUPPORTED_MAJOR = 7;
+/** 2021+ 형식(VFF + ZIP)이 시작하는 판. 이보다 낮으면 MFC 객체 직렬화다 */
+export const SKP_ZIP_MIN_MAJOR = 21;
 /** 표본으로 확인한 가장 높은 판 */
 export const SKP_MAX_CHECKED_MAJOR = 26;
 /** 꾸러미 style.xml 한 파일 크기 한도 */
@@ -71,16 +75,100 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
   const header = readSkpHeader(bytes);
   if (!header) return emptyScene(name, ['SketchUp 파일이 아닙니다(머리 표지 "SketchUp Model"이 없습니다)'], { format: 'SketchUp' });
   const meta: Record<string, unknown> = { format: 'SketchUp', version: header.version, container: header.container };
-  if (header.container !== 'zip' || !(header.major >= SKP_MIN_SUPPORTED_MAJOR))
-    return emptyScene(
-      name,
-      [`아직 지원하지 않는 SketchUp 버전 ${header.version}입니다(2020 이하의 옛 이진 형식). SketchUp 2021 이상으로 저장한 파일을 열어 주세요.`],
-      meta,
-    );
-
   const warnings: string[] = [];
-  if (header.major > SKP_MAX_CHECKED_MAJOR)
-    warnings.push(`표본으로 확인하지 않은 SketchUp 버전 ${header.version}입니다. 2021~2026 형식으로 읽어 봅니다.`);
+  let read: Package | Scene3d;
+  if (header.container === 'mfc') {
+    // SketchUp 2020 이하: 객체 직렬화 하나(꾸러미·압축 없음)
+    progress(0.05, '옛 형식(2020 이하) 모형 읽는 중');
+    try {
+      const res = readMfcModel(bytes, header, (f) => progress(0.05 + 0.59 * f, '모형 요소 읽는 중'));
+      rememberMfcImages(bytes, res.images);
+      read = { model: res.model, materials: res.materials, styles: res.styles, damaged: false };
+    } catch (e) {
+      if (e instanceof MfcRefused) {
+        // 화면이 "아직 못 읽는 판" 안내를 띄우는 표시
+        meta.unsupported = true;
+        return emptyScene(name, [e.message], meta);
+      }
+      return emptyScene(name, [`SketchUp 파일을 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`], meta);
+    }
+  } else {
+    if (header.major > SKP_MAX_CHECKED_MAJOR)
+      warnings.push(`표본으로 확인하지 않은 SketchUp 버전 ${header.version}입니다. 2021~2026 형식으로 읽어 봅니다.`);
+    else if (!(header.major >= SKP_ZIP_MIN_MAJOR)) warnings.push(`2021 이후 꼴(VFF + ZIP)인데 판이 ${header.version}입니다. 2021~2026 형식으로 읽어 봅니다.`);
+    read = readZipPackage(bytes, header.bodyOffset, name, meta, warnings, progress);
+  }
+  if (!('model' in read)) return read;
+  const { model, materials, styles, damaged } = read;
+  warnings.push(...model.warnings);
+
+  const u = unitsFor(model.lengthUnit);
+  // 모형 스타일(렌더링 설정 + 그 스타일의 style.xml): 재질 없는 면은 스타일 앞면 색으로 칠한다(SketchUp 기본 화면처럼)
+  let style: ReturnType<typeof styleFor>;
+  try {
+    style = styleFor(model.rendering, styles);
+  } catch {
+    warnings.push('모형 스타일을 풀지 못했습니다');
+  }
+  const front = style?.front;
+  let parts: ReturnType<typeof buildSceneParts>;
+  try {
+    progress(0.65, '면 삼각화·인스턴스 펼치는 중');
+    parts = buildSceneParts(model, materials, u.scale, {
+      outline: !!opts.outline,
+      extras: !!opts.extras,
+      smooth: !!opts.smooth,
+      ...(front && front.every(Number.isFinite) ? { defaultFaceColor: [front[0], front[1], front[2], 1] as const } : {}),
+      onProgress: (f) => progress(0.65 + 0.3 * f, '면 삼각화·인스턴스 펼치는 중'),
+    });
+  } catch (e) {
+    return emptyScene(name, [...warnings, `장면을 만들지 못했습니다: ${e instanceof Error ? e.message : String(e)}`], meta);
+  }
+  warnings.push(...parts.warnings);
+  Object.assign(meta, {
+    lengthUnit: u.label,
+    definitions: model.definitions.size,
+    instances: model.counts.instances,
+    faces: model.counts.faces,
+    edges: model.counts.edges,
+    materials: model.materials.size,
+    tags: [...model.layers.values()],
+    triangles: parts.stats.triangles,
+    segments: parts.stats.segments,
+    tagStats: parts.tags,
+    materialStats: parts.materials,
+  });
+  if (parts.outline) meta.outline = parts.outline;
+  if (parts.outlineSkipped) meta.outlineSkipped = parts.outlineSkipped;
+  if (parts.tree) meta.tree = parts.tree;
+  if (parts.extras) meta.extraItems = parts.extras;
+  Object.assign(meta, extrasMeta(model, u.scale, styles, style, parts, warnings));
+  // 화면이 알림을 띄울지 가리는 표시: 깨지거나 잘린 곳(damaged), 출력 한도(limited)
+  if (damaged || model.damaged) meta.damaged = true;
+  if (parts.limited) meta.limited = true;
+  const scene: Scene3d = { name, units: u.units, meshes: parts.meshes, lines: parts.lines, warnings, meta };
+  if (parts.points.length) scene.points = parts.points;
+  if (parts.bounds) scene.bounds = parts.bounds;
+  return scene;
+}
+
+/** 해석기 하나가 낸 것: 중간 모형, 재질 이름 → 색, 스타일 이름 → 항목, 꾸러미·압축이 깨졌는지 */
+interface Package {
+  model: SkpModel;
+  materials: Map<string, SkpMaterialInfo>;
+  styles: Map<string, Map<number, string>>;
+  damaged: boolean;
+}
+
+/** 2021+ 꾸러미(ZIP): material.xml·style.xml과 model.dat. 꾸러미를 찾지 못하면 경고와 빈 장면 */
+function readZipPackage(
+  bytes: Uint8Array,
+  bodyOffset: number,
+  name: string,
+  meta: Record<string, unknown>,
+  warnings: string[],
+  progress: (f: number, stage: string) => void,
+): Package | Scene3d {
   let model: SkpModel;
   const materials = new Map<string, SkpMaterialInfo>();
   /** 꾸러미의 styles/<폴더>/style.xml(폴더 이름 = 스타일 이름) */
@@ -88,7 +176,7 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
   let damaged = false;
   try {
     progress(0.05, '꾸러미(ZIP) 목록 읽는 중');
-    const found = findSkpZipItems(bytes, header.bodyOffset);
+    const found = findSkpZipItems(bytes, bodyOffset);
     const dir = found.items;
     if (!dir) return emptyScene(name, [found.error ? `SketchUp 꾸러미(ZIP)가 깨졌습니다: ${found.error}` : 'SketchUp 꾸러미(ZIP)를 찾지 못했습니다'], meta);
     const modelItem = dir.find((d) => d.name === 'model.dat');
@@ -158,56 +246,7 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
   } catch (e) {
     return emptyScene(name, [...warnings, `SketchUp 파일을 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`], meta);
   }
-  warnings.push(...model.warnings);
-
-  const u = unitsFor(model.lengthUnit);
-  // 모형 스타일(렌더링 설정 + 그 스타일의 style.xml): 재질 없는 면은 스타일 앞면 색으로 칠한다(SketchUp 기본 화면처럼)
-  let style: ReturnType<typeof styleFor>;
-  try {
-    style = styleFor(model.rendering, styles);
-  } catch {
-    warnings.push('모형 스타일을 풀지 못했습니다');
-  }
-  const front = style?.front;
-  let parts: ReturnType<typeof buildSceneParts>;
-  try {
-    progress(0.65, '면 삼각화·인스턴스 펼치는 중');
-    parts = buildSceneParts(model, materials, u.scale, {
-      outline: !!opts.outline,
-      extras: !!opts.extras,
-      smooth: !!opts.smooth,
-      ...(front && front.every(Number.isFinite) ? { defaultFaceColor: [front[0], front[1], front[2], 1] as const } : {}),
-      onProgress: (f) => progress(0.65 + 0.3 * f, '면 삼각화·인스턴스 펼치는 중'),
-    });
-  } catch (e) {
-    return emptyScene(name, [...warnings, `장면을 만들지 못했습니다: ${e instanceof Error ? e.message : String(e)}`], meta);
-  }
-  warnings.push(...parts.warnings);
-  Object.assign(meta, {
-    lengthUnit: u.label,
-    definitions: model.definitions.size,
-    instances: model.counts.instances,
-    faces: model.counts.faces,
-    edges: model.counts.edges,
-    materials: model.materials.size,
-    tags: [...model.layers.values()],
-    triangles: parts.stats.triangles,
-    segments: parts.stats.segments,
-    tagStats: parts.tags,
-    materialStats: parts.materials,
-  });
-  if (parts.outline) meta.outline = parts.outline;
-  if (parts.outlineSkipped) meta.outlineSkipped = parts.outlineSkipped;
-  if (parts.tree) meta.tree = parts.tree;
-  if (parts.extras) meta.extraItems = parts.extras;
-  Object.assign(meta, extrasMeta(model, u.scale, styles, style, parts, warnings));
-  // 화면이 알림을 띄울지 가리는 표시: 깨지거나 잘린 곳(damaged), 출력 한도(limited)
-  if (damaged || model.damaged) meta.damaged = true;
-  if (parts.limited) meta.limited = true;
-  const scene: Scene3d = { name, units: u.units, meshes: parts.meshes, lines: parts.lines, warnings, meta };
-  if (parts.points.length) scene.points = parts.points;
-  if (parts.bounds) scene.bounds = parts.bounds;
-  return scene;
+  return { model, materials, styles, damaged };
 }
 
 /** 뿌리 절·주석·나무 정보 → meta에 더할 칸(src/meta.ts SkpMetaExtras). 없거나 풀지 못한 칸은 빠진다 */

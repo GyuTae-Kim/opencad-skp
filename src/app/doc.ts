@@ -276,10 +276,13 @@ export function readInfo(scene: Scene3d): SkpInfo {
   };
 }
 
-/** 아직 읽지 못하는 옛 판(2020 이하)이면 판 문자열, 아니면 null */
+/**
+ * 아직 읽지 못하는 아주 옛 판(SketchUp 3~6)이면 판 문자열, 아니면 null.
+ * 해석기가 거절한 파일(meta.unsupported)이거나 판 번호가 7보다 낮으면 그렇다. 7·8·2013~2020은 읽는다.
+ */
 export function unsupportedVersion(scene: Scene3d): string | null {
   const info = readInfo(scene);
-  if (info.container === 'mfc' || (info.major !== null && info.major < 21)) return info.version ?? '알 수 없음';
+  if (meta(scene).unsupported === true || (info.major !== null && info.major < 7)) return info.version ?? '알 수 없음';
   return null;
 }
 
