@@ -1,8 +1,7 @@
 name: CI
 
+# main에 들어간 커밋은 deploy.yml이 같은 확인(타입·시험·빌드)을 거친 뒤 게시한다
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -21,3 +20,4 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      - run: npm run build
