@@ -24,7 +24,7 @@ import { lerpCamera, type CameraState } from 'opencad-viewer3d/camera';
 import { ParseClient } from './client';
 import { AnnotationLabels } from './annotations';
 import { HISTORY_SETTLE_MS, ViewHistory } from './history';
-import { beginOpen, trackExport, type OpenAttempt } from './analytics';
+import { beginOpen, showAnalyticsSettings, trackExport, type OpenAttempt } from './analytics';
 import { MeasureTool, type MeasureMode, type MeasureToolResult } from './measure';
 import { initialCamera, initialSection, openingPage, pagePlan, renderModeForStyle, sectionToViewer, stepPage } from './pages';
 import { DEFAULT_UNITS, mmPerSceneUnit } from './units';
@@ -1535,13 +1535,13 @@ export class SkpViewerApp implements PanelHost {
     const cur = themeChoiceOf(this.themeStored);
     this.openMenu(
       btn,
-      '테마',
-      THEME_CHOICES.map((c) => ({
+      '앱 설정',
+      [...THEME_CHOICES.map((c) => ({
         label: c.choice === 'system' ? `${c.label}(지금 ${systemPrefersDark() ? '어두움' : '밝음'})` : c.label,
         icon: c.icon,
         checked: c.choice === cur,
         run: () => this.setThemeChoice(c.choice),
-      })),
+      })), { label: '방문 통계 설정', icon: 'lock', run: showAnalyticsSettings }],
     );
   }
 
@@ -1718,9 +1718,9 @@ export class SkpViewerApp implements PanelHost {
       const choice = themeChoiceOf(this.themeStored);
       const label = THEME_CHOICES.find((c) => c.choice === choice)!.label;
       const b = this.els.themeBtn;
-      b.innerHTML = `${icon(choice === 'system' ? 'system' : this.theme === 'dark' ? 'moon' : 'sun')}<span class="lbl">테마</span>`;
-      b.title = `테마: ${label}${choice === 'system' ? `(지금 ${this.theme === 'dark' ? '어두움' : '밝음'})` : ''} — 눌러서 바꾸기`;
-      b.setAttribute('aria-label', b.title);
+      b.innerHTML = `${icon(choice === 'system' ? 'system' : this.theme === 'dark' ? 'moon' : 'sun')}<span class="lbl">설정</span>`;
+      b.title = `앱 설정 · 테마: ${label}${choice === 'system' ? `(지금 ${this.theme === 'dark' ? '어두움' : '밝음'})` : ''} — 눌러서 바꾸기`;
+      b.setAttribute('aria-label', '앱 설정');
     }
   }
 
