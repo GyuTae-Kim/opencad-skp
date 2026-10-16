@@ -10,7 +10,8 @@ SketchUp(.skp) 파일을 설치 없이 브라우저에서 3D로 여는 뷰어 �
 
 SketchUp 형식은 공개 명세가 없습니다. 처음에는 인터넷에 공개된 표본 파일의 바이트만 보고 구조를 추론했고(SketchUp SDK·다른 SKP 읽기 프로그램의 코드는 보지 않음),
 2026-10에 PRISME 엔진(SketchUp C API를 비교 기준으로 맞춘 SKP 해석기)의 형식 지식과 PRISME 서비스 SKP 뷰어의 화면 규칙(단위 표기·부드러운 음영·치수선 그리기·장면 적용)을
-옮겨 더했습니다(코드는 이 저장소 꼴로 새로 씀). 조사 기록과 출처는 [docs/formats/skp.md](docs/formats/skp.md)에 있습니다.
+옮겨 더했습니다(코드는 이 저장소 꼴로 새로 씀). SketchUp 7·8·2013~2020의 옛 형식(MFC 객체 직렬화)도 같은 때 엔진의 legacy 해석기 지식을 옮겨 읽습니다.
+조사 기록과 출처는 [docs/formats/skp.md](docs/formats/skp.md)에 있습니다.
 
 ## 앱 사용법
 
@@ -57,7 +58,7 @@ SketchUp 형식은 공개 명세가 없습니다. 처음에는 인터넷에 공�
 테마 단추는 "시스템 설정 따르기 · 밝은 테마 · 어두운 테마"를 고르는 메뉴입니다(시스템을 고르면 기억을 지웁니다).
 좁은 화면에서 시트를 열고 닫을 때, 확대·이동해 둔 보기는 위쪽에 보이던 것이 같은 자리·같은 크기로 남게 카메라를 옮깁니다(움직이지 않았으면 다시 전체 보기).
 
-SketchUp 2020 이하에서 저장한 파일은 형식이 달라 아직 읽지 못합니다. 열면 판(예: SketchUp 2017 · 17.2.2555)과 함께 안내를 보입니다.
+SketchUp 7·8·2013~2020에서 저장한 옛 파일도 같은 화면으로 엽니다(태그·재질·구성·장면·문자·치수·단면). SketchUp 3~6에서 저장한 아주 옛 파일은 형식이 달라 읽지 못하고, 열면 판(예: SketchUp 6 · 6.0.1)과 함께 안내를 보입니다.
 
 ## 해석기가 읽는 것
 
@@ -67,7 +68,11 @@ SketchUp 2020 이하에서 저장한 파일은 형식이 달라 아직 읽지 �
   문자·치수(선형·반지름·지름, 붙은 점 풀기)·보조선·보조점·단면 평면, 곡선·호, 속성 사전(모형·정의·인스턴스·면·모서리·태그), 인스턴스·정의 GUID, 정의 설명·동작, 잠김, 모형 이름·설명, 글꼴.
   PRISME 엔진의 SketchUp 2026 표준 파일 20개(C API 기대값)와 견주어 같은 값을 읽는 것을 확인했습니다(표준 파일은 저장소에 넣지 않음).
 - 바로잡은 것: 0x138C는 컴포넌트, 0x138D(0x1D4C 감싸개)는 그룹(예전에는 거꾸로 붙임), 기본 태그는 태그 목록의 첫째(0x3A9A는 활성 태그).
-- 2020 이하 파일은 형식이 완전히 달라(MFC 객체 그래프) 아직 읽지 못하고, 경고와 함께 빈 장면을 돌려줍니다.
+- SketchUp 7·8·2013~2020(2026-10, MFC 객체 직렬화, `src/mfc*.ts`): 2021+와 같은 중간 모형으로 면·모서리·재질(색·불투명도·무늬 평균색)·태그(숨김·색·선 종류·2020 폴더)·
+  정의·인스턴스(GUID·숨김·잠김)·곡선·문자·치수·보조선·단면·속성 사전·단위·카메라·장면(숨긴 태그·숨긴 개체·활성 단면·스타일·2020 미리보기)·스타일(`CSkpStyle` + 렌더링 설정)·글꼴·문자/치수 기본값을 읽습니다.
+  PRISME 엔진의 옛 판 표준 파일 34개(7·8·2013~2020, C API 기대값)와 견주어 같은 값을 읽는 것을 확인했습니다(표준 파일은 저장소에 넣지 않음).
+  기록 길이가 없는 형식이라 읽는 함수가 없는 클래스를 만나면 그 앞까지의 형상을 그리고 경고하고, 형상 가운데에서 잘린 파일은 읽은 데까지 그립니다(`meta.damaged`).
+  SketchUp 3~6은 까닭을 적은 경고와 빈 장면(`meta.unsupported`)을 돌려줍니다.
 - 깨진 파일: 끝(ZIP 목록)이 잘렸으면 지역 머리를 앞에서부터 따라가 `model.dat`를 찾고, `model.dat`가 잘렸거나 압축이 깨졌으면 앞부분만 풀어
   꼬리표 길이가 맞는 데까지 읽습니다(`meta.damaged`). 잘린 DEFLATE 흐름이 끝없이 도는 문제를 막았습니다.
 - 한도: 펼친 면 정점 1,200만 · 선분 300만 · 인스턴스 배치 200만(서로를 여러 번 품는 정의) · 자기 자신을 품는 정의는 64겹(`meta.limited`).
@@ -102,6 +107,7 @@ const scene = skpToScene(bytes, { name: 'model.skp' });
 
 꾸러미 안 그림은 `readSkpImages(bytes, { maxCount, maxBytesEach, maxTotalBytes })`로 꺼냅니다: 모형 미리보기(`meta/model_thumbnail.png`), 재질 폴더별 무늬 그림,
 컴포넌트 미리보기(`thumbnails/`), 장면 미리보기(`scene_thumbnails/`). 꼴은 첫 바이트로 가리고 개수 600·한 장 8 MB·전체 64 MB 한도를 둡니다.
+2020 이하 파일은 객체 직렬화 안의 그림 기록(`CDib`: 모형 미리보기·재질 무늬·컴포넌트 미리보기·2020 장면 미리보기)을 꺼냅니다. 같은 바이트로 `skpToScene`을 먼저 불렀으면 그때 모은 자리를 써서 다시 풀지 않습니다.
 
 ## 구조
 
@@ -127,11 +133,12 @@ const scene = skpToScene(bytes, { name: 'model.skp' });
 | `src/zip.ts`, `src/inflate.ts` | ZIP 꾸러미(잘린 파일은 지역 머리 따라가기)와 deflate 풀기(잘린 흐름은 앞부분만) |
 | `src/images.ts` | 꾸러미 안 그림(무늬·미리보기) 꺼내기 |
 | `src/tlv.ts`, `src/model.ts` | `model.dat` 꼬리표-길이-값 해석(형상·중간 모형 자료형) |
+| `src/mfcstream.ts`, `src/mfcstate.ts`, `src/mfcmodel.ts`, `src/mfcview.ts`, `src/mfcannot.ts` | SketchUp 7~2020 해석: MFC 객체 꼬리표·문자열, 앞머리·형 있는 값, 모형 본문·형상·재질·태그·정의, 카메라·스타일·장면·모형 꼬리, 주석 |
 | `src/vfftags.ts`, `src/vffcommon.ts`, `src/vffroot.ts`, `src/vffannot.ts` | 꼬리표 표, 형 있는 값·속성 사전·설정, 뿌리 절(카메라·장면·태그·폴더·스타일·글꼴), 주석(문자·치수·보조선·단면·곡선) |
 | `src/styles.ts`, `src/meta.ts` | 렌더링 설정 + style.xml → 스타일, 화면과의 meta 계약 |
 | `src/scene-meta.ts`, `src/scene-annotations.ts`, `src/scene-smooth.ts` | 단위·카메라·장면 meta, 주석 펼치기(치수 배치·보조선 자르기·단면 기호), 꼭짓점 법선 |
 | `src/materials.ts`, `src/scene.ts` | 재질과 `Scene3d` 만들기(면은 earcut 삼각화, 태그·재질 통계, outline) |
-| `tests/` | 해석기 시험(`tests/build.ts`는 시험용 바이트 만들기), `tests/app/`은 앱 순수 로직 시험 |
+| `tests/` | 해석기 시험(`tests/build.ts`는 시험용 바이트 만들기, `tests/mfcwrite.ts`는 2020 이하 꼴 바이트 만들기), `tests/app/`은 앱 순수 로직 시험 |
 | `docs/formats/skp.md` | 형식 조사 기록 |
 
 ## 개발
@@ -145,7 +152,7 @@ npm run build      # dist/
 npm run preview
 ```
 
-시험은 표본 파일 없이 `tests/build.ts`(본체는 `src/app/skpwrite.ts`)로 만든 작은 바이트로 돌립니다. 표본 파일은 저장소에 넣지 않습니다.
+시험은 표본 파일 없이 `tests/build.ts`(본체는 `src/app/skpwrite.ts`)와 `tests/mfcwrite.ts`(2020 이하 꼴)로 만든 작은 바이트로 돌립니다. 표본 파일은 저장소에 넣지 않습니다.
 확인용 표본·임시 파일은 `.runtime/`(git 무시)에만 둡니다.
 `SKP_BIG=1 npx vitest run tests/large.test.ts`는 수십만 면 합성 모형으로 해석 시간을 재고 `.runtime/tmp/`에 파일을 씁니다(확인 뒤 지우세요).
 3D 뷰어 코어는 `github:GyuTae-Kim/opencad-viewer3d#v0.4.0`(단면 보기·묶음 원점)으로 받습니다.
@@ -159,7 +166,8 @@ npm run preview
 
 ## 남은 일
 
-- SketchUp 2020 이하(MFC 객체 그래프) — PRISME 엔진은 7·8·2013~2020을 읽으므로 그 지식을 옮기면 된다
+- SketchUp 3~6(모형 스키마가 달라 판별 배치를 새로 알아야 함 — 엔진도 읽지 않음)
+- 옛 판: 실제 큰 모형으로 확인(표준 파일은 기능 하나씩 담은 작은 모형), 면 무늬 위치(`CFaceTextureCoords`)를 무늬 좌표로 쓰기, `CRelationship`(정의 관계) 읽기
 - 무늬 좌표(UV)를 읽어 3D에 무늬 입히기 — 코어(opencad-viewer3d)에 UV·무늬 그리기가 먼저 있어야 함(지금은 무늬 그림을 견본으로만 보이고 3D는 평균색)
 - 앞·뒷면 다른 색(뒷면 재질·스타일 뒷면 색), 은선·단색 면 스타일, 하늘·지면, 그림자 — 코어 기능이 필요함
 - 장면이 "모형에서는 숨겼지만 이 장면에서는 보이는" 개체, 장면별 태그 폴더 보임, 노드 안 단면(그 그룹 안쪽만 자르기), 여러 단면

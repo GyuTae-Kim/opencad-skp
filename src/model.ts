@@ -1,5 +1,5 @@
 /**
- * SketchUp 2021 이후 model.dat(TLV) → 중간 모형.
+ * SketchUp 2021 이후 model.dat(TLV) → 중간 모형. 중간 모형(SkpModel …) 자료형은 2020 이하 해석기(src/mfcmodel.ts)도 같이 쓴다.
  * 꼬리표의 뜻은 공개 표본 바이트로 추론한 것과 2026-10 PRISME 엔진(SketchUp C API를 비교 기준으로 맞춘 해석기)의 형식 지식을 옮긴 것이다(docs/formats/skp.md).
  * 모르는 꼬리표는 건너뛴다.
  *
@@ -311,7 +311,7 @@ export interface SkpRenderingRaw {
   values: Map<number, Uint8Array>;
   /** 모자란 값을 찾을 스타일(0x0206 목록)의 이름 — styles/<이름>/style.xml. 모형은 작업 사본 → 없으면 활성 스타일, 장면은 장면 스타일 */
   styleName?: string;
-  /** 모형 렌더링: 보이는 스타일 이름(활성 스타일). 장면은 없음(styleName과 같다) */
+  /** 모형 렌더링: 보이는 스타일 이름(활성 스타일). 2021+ 장면은 없음(styleName과 같다), 2020 이하는 장면도 스타일 이름(styleName은 스타일 사본 열쇠) */
   activeName?: string;
 }
 

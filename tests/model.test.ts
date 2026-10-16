@@ -339,11 +339,13 @@ describe('skpToScene', () => {
     expect(s.warnings![0]).toContain('확인하지 않은 SketchUp 버전 27.0.10');
   });
 
-  it('2020 이하 판은 경고와 빈 장면', () => {
+  it('2020 이하 판은 MFC 해석기로 읽고, 머리만 있는(잘린) 파일은 경고와 빈 장면', () => {
     const s = skpToScene(oldSkpHeader('17.2.2555'));
     expect(s.meshes.length).toBe(0);
-    expect(s.warnings![0]).toContain('아직 지원하지 않는 SketchUp 버전 17.2.2555');
+    expect(s.warnings![0]).toContain('SketchUp 파일을 읽지 못했습니다');
+    expect(s.warnings![0]).toContain('잘렸습니다');
     expect(s.meta?.container).toBe('mfc');
+    expect(s.meta?.unsupported).toBeUndefined();
   });
 
   it('SketchUp 파일이 아니거나 깨졌으면 경고', () => {
