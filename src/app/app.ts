@@ -7,8 +7,7 @@
  *   같은 키를 뷰어로 보낸다. F7 = 격자, Esc = 측정·고르기 지우기.
  * - 자동 확인용으로 window.opencadApp에 상태를 둔다.
  */
-import { VIEW_LABELS, Viewer3d, sceneBounds, type MeasureResult, type Pick3d, type Projection, type RenderMode, type ViewName } from 'opencad-viewer3d';
-import { fitCamera } from 'opencad-viewer3d/camera';
+import { VIEW_LABELS, Viewer3d, type MeasureResult, type Pick3d, type Projection, type RenderMode, type ViewName } from 'opencad-viewer3d';
 import { ParseClient } from './client';
 import { h, icon } from './dom';
 import {
@@ -36,6 +35,9 @@ const TOOLS_URL = 'https://gyutae-kim.github.io/opencad';
 const REPO_URL = 'https://github.com/GyuTae-Kim/opencad-skp';
 /** 이보다 좁으면 패널이 아래 시트가 된다(styles.css와 같은 값) */
 export const NARROW_WIDTH = 760;
+/** 뷰 큐브 한 변(CSS 화소): 넓은 화면 · 좁은 화면 */
+export const VIEW_CUBE_WIDE = 112;
+export const VIEW_CUBE_NARROW = 76;
 
 const RENDER_MODES: [RenderMode, string, string][] = [
   ['shaded', '음영', 'shaded'],
@@ -105,9 +107,8 @@ export class SkpViewerApp implements PanelHost {
   private readonly client = new ParseClient();
   private readonly panel: Panel;
   private panelOpen: boolean;
-  private gridOn = true;
-  private cubeOn = true;
-  private axesOn = true;
+  private readonly narrowQuery: MediaQueryList | null =
+    typeof window.matchMedia === 'function' ? window.matchMedia(`(max-width: ${NARROW_WIDTH - 0.02}px)`) : null;
   private projection: Projection = 'perspective';
   private renderMode: RenderMode = 'shadedEdges';
   private theme: ThemeName;
@@ -124,7 +125,7 @@ export class SkpViewerApp implements PanelHost {
     const stored = readStoredTheme();
     this.themeChosen = stored !== null;
     this.theme = resolveTheme(stored, systemPrefersDark());
-    this.panelOpen = typeof window.matchMedia === 'function' ? window.matchMedia(`(min-width: ${NARROW_WIDTH}px)`).matches : true;
+    this.panelOpen = !this.narrowQuery?.matches;
     this.panel = new Panel(this);
   }
 
@@ -367,6 +368,8 @@ export class SkpViewerApp implements PanelHost {
       /* 오래된 브라우저 */
     }
     window.addEventListener('resize', () => this.closeMenu());
+    // 좁은 화면에서는 뷰 큐브를 줄인다
+    this.narrowQuery?.addEventListener('change', () => this.viewer?.setViewCubeSize(this.viewCubeSize()));
   }
 
   // ───────────────────────── 열기 ─────────────────────────
@@ -503,11 +506,9 @@ export class SkpViewerApp implements PanelHost {
     try {
       const v = new Viewer3d(this.els.viewHost, {
         theme: this.theme,
-        grid: this.gridOn,
-        viewCube: this.cubeOn,
-        axes: this.axesOn,
         projection: this.projection,
         renderMode: this.renderMode,
+        viewCubeSize: this.viewCubeSize(),
       });
       v.onPick((p) => this.onPick(p));
       v.onMeasure((m) => this.onMeasure(m));
@@ -517,6 +518,10 @@ export class SkpViewerApp implements PanelHost {
       this.showNotice('error', '3D 보기를 열 수 없습니다', errorText(e));
       return null;
     }
+  }
+
+  private viewCubeSize(): number {
+    return this.narrowQuery?.matches ? VIEW_CUBE_NARROW : VIEW_CUBE_WIDE;
   }
 
   // ───────────────────────── 고르기·측정 ─────────────────────────
@@ -559,12 +564,9 @@ export class SkpViewerApp implements PanelHost {
     const d = this.doc;
     const v = this.viewer;
     if (!d || !v) return;
-    const ids = new Set(selectionIds(d, d.selection));
-    if (!ids.size) return;
-    const box = sceneBounds(d.scene, (it) => ids.has(it.id));
-    if (!(box.min[0] <= box.max[0])) return;
-    const r = v.canvas.getBoundingClientRect();
-    v.setCamera(fitCamera(v.getCamera(), box, Math.max(1, r.width) / Math.max(1, r.height), 1.4));
+    const ids = selectionIds(d, d.selection);
+    // 보이는 것만 맞춰 본다(모두 숨겼으면 뷰어가 전체 보기로)
+    if (ids.length) v.fitItems(ids);
   }
 
   get measuring(): boolean {
@@ -630,20 +632,30 @@ export class SkpViewerApp implements PanelHost {
     this.refreshToolbar();
   }
 
+  // 격자·뷰 큐브·좌표축 상태는 뷰어가 들고 있다(뷰어를 만들기 전에는 뷰어 기본값 켜짐)
+  private get gridOn(): boolean {
+    return this.viewer?.gridVisible ?? true;
+  }
+
+  private get cubeOn(): boolean {
+    return this.viewer?.viewCubeVisible ?? true;
+  }
+
+  private get axesOn(): boolean {
+    return this.viewer?.axesVisible ?? true;
+  }
+
   toggleGrid(on = !this.gridOn): void {
-    this.gridOn = on;
     this.viewer?.setGridVisible(on);
     this.refreshToolbar();
   }
 
   toggleCube(on = !this.cubeOn): void {
-    this.cubeOn = on;
     this.viewer?.setViewCubeVisible(on);
     this.refreshToolbar();
   }
 
   toggleAxes(on = !this.axesOn): void {
-    this.axesOn = on;
     this.viewer?.setAxesVisible(on);
     this.refreshToolbar();
   }
@@ -748,21 +760,23 @@ export class SkpViewerApp implements PanelHost {
       meta: ev.metaKey,
       alt: ev.altKey,
       editable: isEditableTarget(ev.target),
-      onCanvas: !!v && ev.target === v.canvas,
       hasDoc: !!this.doc && !!v && !this.busy,
+      measurePoints: v?.measurePointCount ?? 0,
     });
     if (!act || !v) return;
-    if (act.kind === 'escape') {
-      // 측정 중이면 측정을, 아니면 고른 것을 지운다(뷰어도 캔버스에서 측정 Esc를 받는다)
-      if (v.measureMode) v.clearMeasure();
-      else this.applySelection(null, false);
+    if (act.kind === 'clearSelection') {
+      // 단추의 Esc 기본 동작 등은 그대로 두고 고른 것만 지운다
+      this.applySelection(null, false);
       return;
     }
-    ev.preventDefault();
-    ev.stopPropagation();
-    if (act.kind === 'grid') this.toggleGrid();
-    else if (act.kind === 'fit') v.fit();
-    else v.setView(act.view);
+    if (act.kind === 'grid') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.toggleGrid();
+      return;
+    }
+    // F·1~7·Esc(측정 지우기)는 뷰어 규칙대로. 캡처 단계에서 처리했으면 캔버스의 같은 키 처리까지 가지 않게 막는다
+    if (v.handleKey(ev)) ev.stopPropagation();
   }
 
   // ───────────────────────── 테마 ─────────────────────────

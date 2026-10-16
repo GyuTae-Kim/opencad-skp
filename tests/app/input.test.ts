@@ -1,35 +1,31 @@
 import { describe, expect, it } from 'vitest';
+import { VIEW_KEYS } from 'opencad-viewer3d';
 import { VIEW_KEY_OF, VIEW_MENU, isEditableTarget, keyAction } from '../../src/app/keys';
 import { parseLaunch } from '../../src/app/launch';
 import { THEME_KEY, readStoredTheme, resolveTheme, storeTheme } from '../../src/app/theme';
 
-describe('키 → 보기 명령', () => {
+describe('키 → 할 일', () => {
   const base = { hasDoc: true };
-  it('초점이 캔버스 밖이어도 F·1~7·Esc·F7이 뷰어로 간다', () => {
-    expect(keyAction({ ...base, key: 'f' })).toEqual({ kind: 'fit' });
-    expect(keyAction({ ...base, key: 'F' })).toEqual({ kind: 'fit' });
-    expect(keyAction({ ...base, key: '1' })).toEqual({ kind: 'view', view: 'front' });
-    expect(keyAction({ ...base, key: '5' })).toEqual({ kind: 'view', view: 'top' });
-    expect(keyAction({ ...base, key: '7' })).toEqual({ kind: 'view', view: 'seIso' });
-    expect(keyAction({ ...base, key: '8' })).toBeNull();
-    expect(keyAction({ ...base, key: 'Escape' })).toEqual({ kind: 'escape' });
+  it('F·1~7은 뷰어 규칙(handleKey)으로, F7은 격자', () => {
+    expect(keyAction({ ...base, key: 'f' })).toEqual({ kind: 'viewer' });
+    expect(keyAction({ ...base, key: '5' })).toEqual({ kind: 'viewer' });
     expect(keyAction({ ...base, key: 'F7' })).toEqual({ kind: 'grid' });
   });
 
-  it('캔버스에 초점이면 F·1~7은 뷰어가 직접 받고, Esc·F7만 앱이 받는다', () => {
-    const c = { ...base, onCanvas: true };
-    expect(keyAction({ ...c, key: 'f' })).toBeNull();
-    expect(keyAction({ ...c, key: '3' })).toBeNull();
-    expect(keyAction({ ...c, key: 'Escape' })).toEqual({ kind: 'escape' });
-    expect(keyAction({ ...c, key: 'F7' })).toEqual({ kind: 'grid' });
+  it('Esc: 측정 점이 있으면 뷰어가 측정을, 없으면 앱이 고른 것을 지운다', () => {
+    expect(keyAction({ ...base, key: 'Escape', measurePoints: 1 })).toEqual({ kind: 'viewer' });
+    expect(keyAction({ ...base, key: 'Escape', measurePoints: 2 })).toEqual({ kind: 'viewer' });
+    expect(keyAction({ ...base, key: 'Escape', measurePoints: 0 })).toEqual({ kind: 'clearSelection' });
+    expect(keyAction({ ...base, key: 'Escape' })).toEqual({ kind: 'clearSelection' });
   });
 
-  it('입력 칸·보조키·문서 없음은 건드리지 않는다', () => {
+  it('입력 칸·보조키·문서 없음(해석 중)은 건드리지 않는다', () => {
     expect(keyAction({ ...base, key: 'f', editable: true })).toBeNull();
     expect(keyAction({ ...base, key: '1', ctrl: true })).toBeNull();
     expect(keyAction({ ...base, key: '1', meta: true })).toBeNull();
     expect(keyAction({ ...base, key: 'F7', alt: true })).toBeNull();
     expect(keyAction({ key: 'f' })).toBeNull();
+    expect(keyAction({ key: 'Escape', hasDoc: false, measurePoints: 2 })).toBeNull();
   });
 
   it('입력 칸 가리기(체크 상자·단추는 입력 칸이 아니다)', () => {
@@ -44,8 +40,9 @@ describe('키 → 보기 명령', () => {
     expect(isEditableTarget(null)).toBe(false);
   });
 
-  it('표준 뷰 메뉴의 키 안내', () => {
+  it('표준 뷰 메뉴의 키 안내는 뷰어의 VIEW_KEYS에서', () => {
     expect(VIEW_MENU.length).toBe(10);
+    for (const [k, v] of Object.entries(VIEW_KEYS)) expect(VIEW_KEY_OF[v]).toBe(k);
     expect(VIEW_KEY_OF.top).toBe('5');
     expect(VIEW_KEY_OF.seIso).toBe('7');
     expect(VIEW_KEY_OF.nwIso).toBeUndefined();

@@ -92,7 +92,7 @@ npm run preview
 
 시험은 표본 파일 없이 `tests/build.ts`(본체는 `src/app/skpwrite.ts`)로 만든 작은 바이트로 돌립니다. 표본 파일은 저장소에 넣지 않습니다.
 확인용 표본·임시 파일은 `.runtime/`(git 무시)에만 둡니다.
-3D 뷰어 코어는 `github:GyuTae-Kim/opencad-viewer3d#v0.1.0`으로 받습니다.
+3D 뷰어 코어는 `github:GyuTae-Kim/opencad-viewer3d#v0.2.0`으로 받습니다.
 
 ## 배포
 
