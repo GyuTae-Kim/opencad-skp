@@ -1,0 +1,61 @@
+{
+  "title": "OpenCAD 무료 SKP 뷰어 | SketchUp 파일 3D 보기",
+  "description": "SketchUp 2021~2026에서 저장한 SKP 파일을 설치 없이 여는 무료 뷰어입니다. 태그·재질·그룹·컴포넌트 확인, 두 점 거리 측정과 PNG 저장을 지원합니다. 파일은 서버에 업로드하지 않고 브라우저에서 처리합니다.",
+  "url": "https://gyutae-kim.github.io/opencad-skp/",
+  "siteName": "OpenCAD SketchUp 뷰어",
+  "language": "ko",
+  "locale": "ko_KR",
+  "image": {
+    "url": "https://gyutae-kim.github.io/opencad-skp/og-opencad.jpg",
+    "type": "image/jpeg",
+    "width": 1200,
+    "height": 630,
+    "alt": "OpenCAD의 DWG·DXF, STEP, SketchUp, NC 무료 뷰어 화면"
+  },
+  "author": {
+    "@type": "Person",
+    "name": "김규태 · Sean Kim",
+    "url": "https://gyutae-kim.github.io/"
+  },
+  "application": {
+    "name": "OpenCAD SketchUp 뷰어",
+    "alternateName": "OpenCAD 무료 SKP 뷰어",
+    "applicationCategory": "DesignApplication",
+    "operatingSystem": "Web browser",
+    "browserRequirements": "JavaScript와 WebGL2 지원 브라우저",
+    "isAccessibleForFree": true,
+    "license": "https://github.com/GyuTae-Kim/opencad-skp/blob/main/LICENSE",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "KRW"
+    },
+    "featureList": [
+      "SketchUp 2021~2026 SKP 파일 열기",
+      "태그·재질·그룹·컴포넌트 확인",
+      "표준 뷰와 원근·평행 투영",
+      "두 점 측정과 PNG 저장"
+    ],
+    "sameAs": "https://github.com/GyuTae-Kim/opencad-skp"
+  },
+  "breadcrumbs": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "김규태 · Sean Kim",
+      "item": "https://gyutae-kim.github.io/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "OpenCAD",
+      "item": "https://gyutae-kim.github.io/opencad"
+    },
+    {
+      "@type": "ListItem",
+      "position": 3,
+      "name": "OpenCAD SketchUp 뷰어",
+      "item": "https://gyutae-kim.github.io/opencad-skp/"
+    }
+  ]
+}
