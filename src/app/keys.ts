@@ -13,7 +13,8 @@ export const VIEW_KEY_OF: Readonly<Partial<Record<ViewName, string>>> = Object.f
 
 /**
  * grid = 격자 켜고 끄기, viewer = Viewer3d.handleKey에 넘기기, clearSelection = 고른 것 지우기,
- * measureOff = 측정 끄기(측정 점이 없을 때 Esc — 첫 Esc는 뷰어가 점을 지운다), cancelOpen = 여는 중인 파일 그만 열기, open = 열기 상자
+ * measureOff = 측정 끄기(측정 점이 없을 때 Esc — 첫 Esc는 뷰어가 점을 지운다), cancelOpen = 여는 중인 파일 그만 열기, open = 열기 상자,
+ * page = 이전·다음 장면(PageUp·PageDown), tape = 줄자 켜고 끄기(T)
  */
 export type KeyAction =
   | { kind: 'grid' }
@@ -21,7 +22,9 @@ export type KeyAction =
   | { kind: 'clearSelection' }
   | { kind: 'measureOff' }
   | { kind: 'cancelOpen' }
-  | { kind: 'open' };
+  | { kind: 'open' }
+  | { kind: 'page'; delta: 1 | -1 }
+  | { kind: 'tape' };
 
 export interface KeyInput {
   key: string;
@@ -38,6 +41,8 @@ export interface KeyInput {
   measureMode?: boolean;
   /** 파일을 여는(해석하는) 중인지 */
   busy?: boolean;
+  /** 장면(페이지)이 있는지 — PageUp·PageDown으로 넘긴다 */
+  hasPages?: boolean;
 }
 
 /**
@@ -53,6 +58,9 @@ export function keyAction(k: KeyInput): KeyAction | null {
   if (!k.hasDoc) return null;
   if (mod || k.alt) return null;
   if (k.key === 'F7') return { kind: 'grid' };
+  if (k.hasPages && (k.key === 'PageDown' || k.key === 'PageUp')) return { kind: 'page', delta: k.key === 'PageDown' ? 1 : -1 };
+  // SketchUp 기본 키: T = 줄자
+  if (k.key === 't' || k.key === 'T') return { kind: 'tape' };
   if (k.key === 'Escape') {
     if ((k.measurePoints ?? 0) > 0) return { kind: 'viewer' };
     if (k.measureMode) return { kind: 'measureOff' };

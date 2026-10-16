@@ -1,16 +1,22 @@
 /**
- * SketchUp(.skp) 해석기 — 클린룸: 공개 표본 파일의 바이트만 보고 구조를 추론했다(docs/formats/skp.md).
+ * SketchUp(.skp) 해석기. 형식 지식은 공개 표본 바이트로 추론한 것에 PRISME 엔진(SketchUp C API를 비교 기준으로 맞춘 해석기)의
+ * 형식 지식을 옮겨 더했다(docs/formats/skp.md).
  *
  * 지원: SketchUp 2021~2026(머리 뒤 "VFF" 블록 + ZIP 꾸러미, 안의 model.dat가 TLV). 면(구멍 포함)·모서리·재질 색·
- * 그룹/컴포넌트 인스턴스 변환·태그를 읽는다. 무늬(텍스처)·문자·치수·보조선·장면은 아직 읽지 않는다.
+ * 그룹/컴포넌트/그림 인스턴스 변환·태그(보임·색·폴더·선 종류)·문자·치수·보조선·단면 평면·속성 사전·
+ * 단위·카메라·장면(페이지)·스타일(style.xml + 렌더링 설정)을 읽는다. 부드러운 음영(매끈한 모서리)은 smooth 선택으로 낸다.
+ * 무늬(텍스처) 그림은 장면에 입히지 않는다(재질 색은 무늬 평균색, 그림 바이트는 readSkpImages로 따로 꺼낸다).
  * 2020 이하(MFC 객체 직렬화)는 아직 읽지 못해 경고와 함께 빈 장면을 돌려준다.
  */
 
 import type { Scene3d } from 'opencad-viewer3d/types';
 import { readSkpHeader } from './header';
 import { parseMaterialXml, type SkpMaterialInfo } from './materials';
+import type { SkpMetaExtras } from './meta';
 import { readModelDat, type SkpModel } from './model';
 import { buildSceneParts } from './scene';
+import { cameraMeta, pagesMeta, styleFor, unitsFor } from './scene-meta';
+import { parseStyleXml } from './styles';
 import { findSkpZipItems, readZipItem, readZipItemPartial } from './zip';
 
 export { readSkpHeader, type SkpHeader } from './header';
@@ -18,11 +24,15 @@ export { readModelDat, type SkpModel } from './model';
 export { readSkpImages, type SkpImage, type SkpImages, type SkpImageOptions } from './images';
 export type { SkpExtraItems, SkpMaterialStat, SkpOutlineEntry, SkpTagStat, SkpTree } from './scene';
 export { TREE_HIDDEN, TREE_MORE } from './scene';
+export type * from './meta';
+export { cameraMeta, pagesMeta, unitsFor } from './scene-meta';
 
 /** 확인한 가장 낮은 판(이보다 낮으면 형식이 다르다) */
 export const SKP_MIN_SUPPORTED_MAJOR = 21;
 /** 표본으로 확인한 가장 높은 판 */
 export const SKP_MAX_CHECKED_MAJOR = 26;
+/** 꾸러미 style.xml 한 파일 크기 한도 */
+const MAX_STYLE_XML_BYTES = 16 * 1024 * 1024;
 
 export interface SkpOptions {
   /** 장면 이름(보통 파일 이름) */
@@ -37,24 +47,10 @@ export interface SkpOptions {
    * 항목 id는 meta.extraItems에 적는다. 기본 false(예전처럼 그리지 않는다). 장면 범위(bounds)에는 넣지 않는다.
    */
   extras?: boolean;
+  /** 매끈한 모서리로 이어진 면을 부드럽게 칠할 꼭짓점 법선(Mesh3d.normals)을 낸다. 기본 false(예전처럼 평면 음영) */
+  smooth?: boolean;
   /** 진행 알림(0~1, 단계 글). 해석은 동기라 단계 안에서도 몇천 항목마다 부른다 */
   onProgress?: (fraction: number, stage: string) => void;
-}
-
-/** UnitsOptions/LengthUnit → 장면 단위와 인치에서의 배율 */
-function unitsFor(lengthUnit: number | undefined): { units: Scene3d['units']; scale: number; label: string } {
-  switch (lengthUnit) {
-    case 2:
-      return { units: 'mm', scale: 25.4, label: 'mm' };
-    case 3:
-      return { units: 'mm', scale: 25.4, label: 'cm' };
-    case 4:
-      return { units: 'm', scale: 0.0254, label: 'm' };
-    case 1:
-      return { units: 'inch', scale: 1, label: 'ft' };
-    default:
-      return { units: 'inch', scale: 1, label: 'inch' };
-  }
 }
 
 function emptyScene(name: string, warnings: string[], meta: Record<string, unknown>): Scene3d {
@@ -87,6 +83,8 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
     warnings.push(`표본으로 확인하지 않은 SketchUp 버전 ${header.version}입니다. 2021~2026 형식으로 읽어 봅니다.`);
   let model: SkpModel;
   const materials = new Map<string, SkpMaterialInfo>();
+  /** 꾸러미의 styles/<폴더>/style.xml(폴더 이름 = 스타일 이름) */
+  const styles = new Map<string, Map<number, string>>();
   let damaged = false;
   try {
     progress(0.05, '꾸러미(ZIP) 목록 읽는 중');
@@ -107,6 +105,20 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
     const text = new TextDecoder('utf-8');
     progress(0.1, '재질 읽는 중');
     for (const item of dir) {
+      const st = /^styles\/(.+)\/style\.xml$/.exec(item.name);
+      if (st) {
+        // 한 파일 16 MiB까지(엔진과 같은 한도 — 스타일 글은 보통 수십 KB)
+        if (item.size > MAX_STYLE_XML_BYTES) {
+          warnings.push(`스타일 파일이 너무 커서 건너뛰었습니다: ${item.name}`);
+          continue;
+        }
+        try {
+          styles.set(st[1]!, parseStyleXml(text.decode(readZipItem(bytes, item))));
+        } catch {
+          warnings.push(`스타일 파일을 읽지 못했습니다: ${item.name}`);
+        }
+        continue;
+      }
       const m = /^materials\/(.+)\/material\.xml$/.exec(item.name);
       if (!m) continue;
       try {
@@ -149,12 +161,22 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
   warnings.push(...model.warnings);
 
   const u = unitsFor(model.lengthUnit);
+  // 모형 스타일(렌더링 설정 + 그 스타일의 style.xml): 재질 없는 면은 스타일 앞면 색으로 칠한다(SketchUp 기본 화면처럼)
+  let style: ReturnType<typeof styleFor>;
+  try {
+    style = styleFor(model.rendering, styles);
+  } catch {
+    warnings.push('모형 스타일을 풀지 못했습니다');
+  }
+  const front = style?.front;
   let parts: ReturnType<typeof buildSceneParts>;
   try {
     progress(0.65, '면 삼각화·인스턴스 펼치는 중');
     parts = buildSceneParts(model, materials, u.scale, {
       outline: !!opts.outline,
       extras: !!opts.extras,
+      smooth: !!opts.smooth,
+      ...(front && front.every(Number.isFinite) ? { defaultFaceColor: [front[0], front[1], front[2], 1] as const } : {}),
       onProgress: (f) => progress(0.65 + 0.3 * f, '면 삼각화·인스턴스 펼치는 중'),
     });
   } catch (e) {
@@ -178,10 +200,48 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
   if (parts.outlineSkipped) meta.outlineSkipped = parts.outlineSkipped;
   if (parts.tree) meta.tree = parts.tree;
   if (parts.extras) meta.extraItems = parts.extras;
+  Object.assign(meta, extrasMeta(model, u.scale, styles, style, parts, warnings));
   // 화면이 알림을 띄울지 가리는 표시: 깨지거나 잘린 곳(damaged), 출력 한도(limited)
   if (damaged || model.damaged) meta.damaged = true;
   if (parts.limited) meta.limited = true;
   const scene: Scene3d = { name, units: u.units, meshes: parts.meshes, lines: parts.lines, warnings, meta };
+  if (parts.points.length) scene.points = parts.points;
   if (parts.bounds) scene.bounds = parts.bounds;
   return scene;
+}
+
+/** 뿌리 절·주석·나무 정보 → meta에 더할 칸(src/meta.ts SkpMetaExtras). 없거나 풀지 못한 칸은 빠진다 */
+function extrasMeta(
+  model: SkpModel,
+  scale: number,
+  styles: Map<string, Map<number, string>>,
+  style: SkpMetaExtras['style'],
+  parts: ReturnType<typeof buildSceneParts>,
+  warnings: string[],
+): SkpMetaExtras {
+  const out: SkpMetaExtras = {};
+  if (model.units) out.units = model.units;
+  const cam = cameraMeta(model.camera, scale);
+  if (cam) out.camera = cam;
+  if (style) out.style = style;
+  try {
+    if (model.pages?.length) {
+      const p = pagesMeta(model, scale, { styles, nodePids: parts.nodePids, sectionPids: parts.sectionPids });
+      out.pages = p.pages;
+      if (p.activePage !== undefined) out.activePage = p.activePage;
+    }
+  } catch (e) {
+    warnings.push(`장면 목록을 풀지 못했습니다(${e instanceof Error ? e.message : String(e)})`);
+  }
+  if (model.tagFolders?.length) out.tagFolders = model.tagFolders.map((f) => ({ name: f.name, visible: f.visible !== false, parent: f.parent }));
+  if (model.name) out.modelName = model.name;
+  if (model.description) out.modelDescription = model.description;
+  if (parts.texts) out.texts = parts.texts;
+  if (parts.dimensions) out.dimensions = parts.dimensions;
+  if (parts.sectionPlanes) out.sectionPlanes = parts.sectionPlanes;
+  if (parts.annotationItems) out.annotationItems = parts.annotationItems;
+  if (parts.attributes) out.attributes = parts.attributes;
+  if (parts.modelAttrs !== undefined) out.modelAttrs = parts.modelAttrs;
+  if (parts.treeInfo) out.treeInfo = parts.treeInfo;
+  return out;
 }

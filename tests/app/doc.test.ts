@@ -47,7 +47,7 @@ describe('판·단위 글', () => {
     expect(info.version).toBe('26.1.194');
     expect(info.container).toBe('zip');
     expect(info.lengthUnit).toBe('mm');
-    expect(info.tags).toBe(5);
+    expect(info.tags).toBe(6);
     expect(docLabel(info)).toBe('SketchUp 2026 · 26.1.194');
     expect(unitSummary(info, 'mm')).toBe('mm');
     expect(unitSummary({ ...info, lengthUnit: 'cm' }, 'mm')).toBe('cm · 좌표 mm');
@@ -60,9 +60,13 @@ describe('판·단위 글', () => {
 describe('패널 목록', () => {
   it('태그: 모형 차례, 기본 태그 표시, 그릴 것이 있는지', () => {
     const rows = tagRows(sampleScene());
-    expect(rows.map((r) => r.name)).toEqual(['Layer0', '벽', '지붕', '가구', '조경']);
+    expect(rows.map((r) => r.name)).toEqual(['Layer0', '벽', '지붕', '가구', '조경', '치수']);
     expect(rows[0]!.default).toBe(true);
-    expect(rows.every((r) => r.hasGeometry && (r.faces ?? 0) > 0)).toBe(true);
+    // 치수 태그에는 치수선·지시선만 있다
+    expect(rows.filter((r) => r.name !== '치수').every((r) => r.hasGeometry && (r.faces ?? 0) > 0)).toBe(true);
+    expect(rows.find((r) => r.name === '치수')).toMatchObject({ hasGeometry: true, faces: 0, folder: 1 });
+    expect(rows.find((r) => r.name === '벽')).toMatchObject({ folder: 0, visible: true });
+    expect(rows.find((r) => r.name === '벽')!.color![0]).toBeCloseTo(214 / 255);
     const furniture = rows.find((r) => r.name === '가구')!;
     // 탁자 26면 + 의자 31면 × 4
     expect(furniture.faces).toBe(26 + 31 * 4);
@@ -135,7 +139,7 @@ describe('패널 목록', () => {
 describe('문서·고르기', () => {
   it('고르기 결과는 윗단계 항목 전체를 강조한다', () => {
     const d = createDoc('예제.skp', 1234, { scene: sampleScene(), ms: 5 });
-    expect(panelTabs(d).map(([k]) => k)).toEqual(['tags', 'outline', 'info']);
+    expect(panelTabs(d).map(([k]) => k)).toEqual(['tags', 'outline', 'entity', 'info']);
     const chair = d.outline.find((r) => r.name === '의자 동')!;
     const meshId = chair.ids.find((id) => id.startsWith('skp-mesh'))!;
     const pick = { kind: 'mesh' as const, id: meshId, index: 0, point: [0, 0, 0] as [number, number, number] };
@@ -159,6 +163,6 @@ describe('문서·고르기', () => {
   it('outline이 없는 장면은 구성 탭을 숨긴다', () => {
     const d = createDoc('x.skp', 1, { scene: skpToScene(sampleSkpBytes()), ms: 1 });
     expect(d.outline).toEqual([]);
-    expect(panelTabs(d).map(([k]) => k)).toEqual(['tags', 'info']);
+    expect(panelTabs(d).map(([k]) => k)).toEqual(['tags', 'entity', 'info']);
   });
 });

@@ -1,6 +1,7 @@
 /**
  * 해석 워커: SketchUp(.skp) 파일을 화면 밖에서 해석해 Scene3d로 돌려준다.
- * 화면이 그룹·컴포넌트를 여러 단계로 고를 수 있게 outline(나무)을, 부드러운 모서리·숨긴 형상을 켜고 끌 수 있게 extras를 켜고 읽는다.
+ * 화면이 그룹·컴포넌트를 여러 단계로 고를 수 있게 outline(나무)을, 부드러운 모서리·숨긴 형상(숨긴 주석 선분 포함)을 켜고 끌 수 있게 extras를,
+ * 곡면을 SketchUp처럼 부드럽게 칠하게 smooth(꼭짓점 법선)를 켜고 읽는다.
  * 꾸러미 안 그림(무늬·미리보기)도 여기서 꺼내 바이트로 넘긴다(화면이 Blob 주소로 바꾼다 — 워커가 끝나도 주소가 살아 있게).
  * 결과의 형식 배열은 이전 가능한 버퍼로 넘긴다(app/protocol.ts collectTransfers).
  */
@@ -26,7 +27,7 @@ function open(req: ParseRequest): ParseResult {
   const t0 = performance.now();
   const bytes = new Uint8Array(req.bytes);
   const name = req.name.replace(/^.*[\\/]/, '');
-  const scene = skpToScene(bytes, { name, outline: true, extras: true, onProgress: progress });
+  const scene = skpToScene(bytes, { name, outline: true, extras: true, smooth: true, onProgress: progress });
   const result: ParseResult = { scene, ms: 0 };
   progress(0.96, '그림 꺼내는 중');
   try {
