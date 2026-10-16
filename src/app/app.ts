@@ -24,6 +24,7 @@ import { lerpCamera, type CameraState } from 'opencad-viewer3d/camera';
 import { ParseClient } from './client';
 import { AnnotationLabels } from './annotations';
 import { HISTORY_SETTLE_MS, ViewHistory } from './history';
+import { beginOpen, trackExport, type OpenAttempt } from './analytics';
 import { MeasureTool, type MeasureMode, type MeasureToolResult } from './measure';
 import { initialCamera, initialSection, openingPage, pagePlan, renderModeForStyle, sectionToViewer, stepPage } from './pages';
 import { DEFAULT_UNITS, mmPerSceneUnit } from './units';
@@ -536,7 +537,9 @@ export class SkpViewerApp implements PanelHost {
   }
 
   async openFile(file: File): Promise<void> {
+    const attempt = beginOpen('local', 'skp');
     if (file.size > MAX_FILE_BYTES) {
+      attempt.error('size_limit');
       this.showNotice('error', `"${file.name}" 파일이 너무 큽니다`, `${formatBytes(file.size)} — 이 뷰어는 ${formatBytes(MAX_FILE_BYTES)}까지 엽니다.`);
       return;
     }
@@ -549,15 +552,17 @@ export class SkpViewerApp implements PanelHost {
       if (seq === this.openSeq) {
         this.setBusy(null);
         this.showNotice('error', `"${file.name}" 파일을 읽지 못했습니다`, errorText(e));
+        attempt.error('read_error');
       }
       return;
     }
     if (seq !== this.openSeq) return;
-    await this.openBuffer(baseName(file.name), buf, seq);
+    await this.openBuffer(baseName(file.name), buf, seq, attempt);
   }
 
   /** 같은 출처 주소의 파일 열기(?open=) */
   async openUrl(url: string, name = baseName(new URL(url, location.href).pathname) || 'model.skp'): Promise<void> {
+    const attempt = beginOpen('url', 'skp');
     const seq = ++this.openSeq;
     this.setBusy(name, 0.005, '파일 받는 중');
     let buf: ArrayBuffer;
@@ -569,14 +574,16 @@ export class SkpViewerApp implements PanelHost {
       if (seq === this.openSeq) {
         this.setBusy(null);
         this.showNotice('error', `"${name}" 파일을 받지 못했습니다`, errorText(e));
+        attempt.error('fetch_error');
       }
       return;
     }
     if (seq !== this.openSeq) return;
-    await this.openBuffer(name, buf, seq);
+    await this.openBuffer(name, buf, seq, attempt);
   }
 
   async openSample(): Promise<void> {
+    const attempt = beginOpen('sample', 'skp');
     const seq = ++this.openSeq;
     this.setBusy('예제 모형', 0.005, '예제 모형 만드는 중');
     let bytes: Uint8Array;
@@ -590,12 +597,13 @@ export class SkpViewerApp implements PanelHost {
       if (seq === this.openSeq) {
         this.setBusy(null);
         this.showNotice('error', '예제를 만들지 못했습니다', errorText(e));
+        attempt.error('read_error');
       }
       return;
     }
     if (seq !== this.openSeq) return;
     const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-    await this.openBuffer(name, buf, seq);
+    await this.openBuffer(name, buf, seq, attempt);
   }
 
   /** 여는 중인 파일을 그만 연다(해석 중이면 워커를 끝낸다). 열려 있던 문서는 그대로 둔다 */
@@ -609,7 +617,7 @@ export class SkpViewerApp implements PanelHost {
   private parsingSeq = 0;
 
   /** 바이트 해석(buf는 워커로 이전된다). seq가 더 새 요청에 밀리면 결과를 버린다 */
-  private async openBuffer(name: string, buf: ArrayBuffer, seq: number): Promise<void> {
+  private async openBuffer(name: string, buf: ArrayBuffer, seq: number, attempt: OpenAttempt): Promise<void> {
     const size = buf.byteLength;
     this.setBusy(name, 0.01, '해석 준비 중');
     // 앞 파일을 아직 해석 중이면 멈추고(동기 해석이라 기다리면 늦어진다) 새 파일을 읽는다
@@ -627,6 +635,7 @@ export class SkpViewerApp implements PanelHost {
       if (seq !== this.openSeq) return;
       const old = unsupportedVersion(res.scene);
       if (old) {
+        attempt.error('unsupported');
         this.showNotice(
           'warn',
           `아직 읽지 못하는 판입니다: ${releaseName(old)} (${old})`,
@@ -635,6 +644,7 @@ export class SkpViewerApp implements PanelHost {
         return;
       }
       if (!sceneHasGeometry(res.scene)) {
+        attempt.error('empty');
         const why = res.scene.warnings?.[0] ?? '그릴 면이나 모서리를 찾지 못했습니다.';
         this.showNotice('error', `"${name}" 파일을 열지 못했습니다`, why);
         return;
@@ -649,9 +659,11 @@ export class SkpViewerApp implements PanelHost {
       });
       this.noticeDamage(doc);
       await uploaded;
+      if (seq === this.openSeq) attempt.success();
     } catch (e) {
       if (seq !== this.openSeq) return;
       this.showNotice('error', `"${name}" 파일을 열지 못했습니다`, errorText(e));
+      attempt.error('parse_error');
     } finally {
       if (this.parsingSeq === seq) this.parsingSeq = 0;
       if (seq === this.openSeq) this.setBusy(null);
@@ -1487,6 +1499,7 @@ export class SkpViewerApp implements PanelHost {
       document.body.append(a);
       a.click();
       a.remove();
+      trackExport('png');
       setTimeout(() => URL.revokeObjectURL(a.href), 4000);
     } catch (e) {
       this.showNotice('error', '그림을 저장하지 못했습니다', errorText(e));
