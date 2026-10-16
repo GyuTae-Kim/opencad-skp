@@ -22,6 +22,12 @@
  *
  * 재질 물려받기(SketchUp 화면과 같게 잡은 규칙): 면 앞 재질 → 감싼 인스턴스 재질(안쪽부터) → 면 뒤 재질 → 기본색(스타일 앞면 색).
  * 태그 물려받기: 요소 태그가 없거나 기본 태그면 감싼 인스턴스의 태그를 따른다.
+ *
+ * 무늬(textures 선택): 칠하는 재질이 무늬 재질이면 그물에 무늬 좌표(uvs)와 무늬 id를 둔다(projection.ts).
+ *   - 면 자기 재질(앞, 또는 물려받을 것이 없어 뒤)로 칠하면 그쪽에 저장된 투영(없으면 기본 투영)과 그 재질의 무늬 크기.
+ *   - 인스턴스 재질을 물려받아 칠하면 기본 투영(정의 원점·면 평면 틀)과 물려받은 재질의 무늬 크기 — 정의마다 평면 좌표(인치)를
+ *     한 번 구해 두고 배치마다 무늬 크기로 나눈다. 무늬 좌표는 정의 좌표로 구하므로 인스턴스를 늘리면 무늬도 함께 늘어난다.
+ *   - 원근 무늬(면 위에서 q가 바뀌는 투영)가 하나라도 든 그물은 (u·q, v·q, q) 3값, 아니면 (u, v) 2값.
  */
 
 import earcut from 'earcut';
@@ -51,6 +57,7 @@ import type {
 import * as A from './scene-annotations';
 import { AttrPool } from './scene-meta';
 import { cornerNormals, faceUnitNormal } from './scene-smooth';
+import { applyFaceUvq, faceUvq, planeAxes } from './projection';
 
 export const DEFAULT_FACE_COLOR: Rgba = [0.82, 0.82, 0.8, 1];
 export const EDGE_COLOR: Rgba = [0.12, 0.12, 0.12, 1];
@@ -80,6 +87,8 @@ export const MAX_TREE_NODES = 50_000;
 export const MAX_SPLIT_ITEMS = 3000;
 /** 구간(runs) 수 한도 — 넘으면 구간을 버린다(나무와 나눈 항목은 남는다) */
 export const MAX_TREE_RUNS = 2_000_000;
+/** 무늬 좌표를 다는 정점 수 한도(넘으면 그 뒤 그물은 무늬 없이 평균색 — 정점마다 8~12바이트가 더 든다) */
+export const MAX_UV_VERTICES = 6_000_000;
 
 /**
  * 큰 좌표 기준(인치): 덧붙이는 형상(배치 하나의 한 묶음)의 첫 정점이 원점에서 이보다 멀면(어느 축이든),
@@ -128,6 +137,28 @@ interface Batch {
   /** smooth 선택일 때 꼭짓점 법선(로컬, 위치와 같은 차례)과 이어 칠한 면이 들었는지 */
   nrm?: Float32Array;
   smoothed?: boolean;
+  /** 자기 재질(앞, 또는 열쇠가 뒤 재질이면 뒤)이 무늬 재질일 때 무늬 좌표(무늬 한 장 단위) */
+  uv?: Float32Array;
+  uvStride?: 2 | 3;
+  /** 물려받은 무늬 재질용 기본 투영 평면 좌표(인치, 정점마다 2값 — 무늬 크기로 나눠 쓴다) */
+  plane?: Float32Array;
+}
+
+/** 무늬 재질(model.dat 재질 번호 → 무늬 id·무늬 한 장 크기(인치)) */
+export interface SceneTexture {
+  id: string;
+  w: number;
+  h: number;
+}
+
+/** 정의 준비 때 무늬 맥락 */
+interface PrepTex {
+  tile: (mat: number) => SceneTexture | undefined;
+  /** 물려받을 무늬 재질(인스턴스 재질)이 있어 평면 좌표가 필요한지 */
+  plane: boolean;
+  /** 원근 없이 칠한 면(Q 부호가 바뀌거나 소실점 가까이), 뒤집지 못한 투영 행렬 수 */
+  flat: number;
+  singular: number;
 }
 
 /** 모서리 갈래: 0 보통 · 1 부드러운·매끈한 · 2 숨긴 */
@@ -231,6 +262,10 @@ interface FaceGroup {
   pos: number[];
   idx: number[];
   faces: number;
+  /** 자기 무늬 재질의 무늬 좌표(정점마다 u, v, q) */
+  uv: number[] | null;
+  /** 기본 투영 평면 좌표(정점마다 x, y 인치) */
+  plane: number[] | null;
   area: number;
   fa: number[];
   fn: number[];
@@ -280,6 +315,7 @@ function prepare(
   extras: boolean,
   smooth: boolean,
   onFaces?: (n: number) => void,
+  tex?: PrepTex | null,
 ): Prepared {
   const layerKey = (l: number | undefined): number => (l === undefined || l === defaultLayer ? -1 : l);
   const groups = new Map<string, FaceGroup>();
@@ -297,7 +333,26 @@ function prepare(
     const key = `${mat}|${layer}`;
     const map = isHidden ? hidden : groups;
     let g = map.get(key);
-    if (!g) map.set(key, (g = { mat, layer, pos: [], idx: [], faces: 0, area: 0, fa: [], fn: [], nrm: smooth ? [] : null, smoothed: false }));
+    if (!g) {
+      const own = tex ? (mat >= 0 ? tex.tile(mat) : mat <= -2 ? tex.tile(-(mat + 2)) : undefined) : undefined;
+      map.set(
+        key,
+        (g = {
+          mat,
+          layer,
+          pos: [],
+          idx: [],
+          faces: 0,
+          area: 0,
+          fa: [],
+          fn: [],
+          nrm: smooth ? [] : null,
+          smoothed: false,
+          uv: own ? [] : null,
+          plane: tex?.plane && mat < 0 ? [] : null,
+        }),
+      );
+    }
     const before = g.pos.length;
     if (!triangulateFace(ents.points, f.loops, f.normal, g.pos, g.idx)) {
       if (!isHidden) counter.failed++;
@@ -319,6 +374,22 @@ function prepare(
         g.smoothed = true;
       } else for (let c = 0; c < corners; c++) g.nrm.push(fu[0]!, fu[1]!, fu[2]!);
     }
+    // 무늬 좌표: 자기 무늬 재질이면 저장된 투영(없으면 기본), 물려받을 수 있으면 기본 투영 평면 좌표(인치)
+    const v0 = before / 3;
+    const nv = (g.pos.length - before) / 3;
+    if (g.uv) {
+      const t = tex!.tile(mat >= 0 ? mat : -(mat + 2))!;
+      const r = faceUvq(f.normal, mat >= 0 ? f.frontMap : f.backMap, t.w, t.h);
+      if (r.singular) tex!.singular++;
+      if (applyFaceUvq(r.m, g.pos, v0, nv, g.uv).flat) tex!.flat++;
+    }
+    if (g.plane) {
+      const [x, y] = planeAxes(f.normal);
+      for (let i = before; i < g.pos.length; i += 3) {
+        const px = g.pos[i]!, py = g.pos[i + 1]!, pz = g.pos[i + 2]!;
+        g.plane.push(px * x[0] + py * x[1] + pz * x[2], px * y[0] + py * y[1] + pz * y[2]);
+      }
+    }
   }
   if (onFaces && k % 2048) onFaces(k % 2048);
   const toBatches = (m: Map<string, FaceGroup>): Batch[] => {
@@ -339,6 +410,22 @@ function prepare(
         b.nrm = Float32Array.from(g.nrm);
         b.smoothed = g.smoothed;
       }
+      if (g.uv) {
+        // 원근 무늬 면이 없으면 (u, v) 2값으로 줄인다
+        let q = false;
+        for (let i = 2; i < g.uv.length && !q; i += 3) q = g.uv[i] !== 1;
+        if (q) b.uv = Float32Array.from(g.uv);
+        else {
+          const uv = new Float32Array((g.uv.length / 3) * 2);
+          for (let i = 0, o = 0; i < g.uv.length; i += 3, o += 2) {
+            uv[o] = g.uv[i]!;
+            uv[o + 1] = g.uv[i + 1]!;
+          }
+          b.uv = uv;
+        }
+        b.uvStride = q ? 3 : 2;
+      }
+      if (g.plane) b.plane = Float32Array.from(g.plane);
       out.push(b);
     }
     return out;
@@ -468,6 +555,8 @@ export interface SkpMaterialStat {
   color: [number, number, number, number];
   /** 무늬(텍스처) 재질이면 true — 색은 무늬 평균색 */
   textured: boolean;
+  /** 3D에 무늬 그림을 입힌 그물이 있으면 그 무늬 id(Scene3d.textures) */
+  texture?: string;
   faces: number;
   /** 그린 면 넓이 합(세계, 장면 단위²) */
   area: number;
@@ -582,6 +671,10 @@ export interface BuildOptions {
   defaultFaceColor?: Rgba;
   /** 큰 좌표 기준(장면 단위). 기본은 LARGE_COORD_INCH × scale(= 100 m). Infinity면 origin을 쓰지 않는다 */
   originThreshold?: number;
+  /** 무늬를 입힐 재질(model.dat 재질 번호 → 무늬 id·한 장 크기). 없으면 무늬 좌표를 만들지 않는다 */
+  textures?: ReadonlyMap<number, SceneTexture>;
+  /** 무늬 좌표를 다는 정점 수 한도 */
+  maxUvVertices?: number;
   /** 진행 알림(0~1) */
   onProgress?: (fraction: number) => void;
 }
@@ -677,10 +770,26 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       }
     : undefined;
 
+  // 무늬: 물려받을 무늬 재질(인스턴스 재질)이 하나라도 있을 때만 정의마다 평면 좌표를 구해 둔다
+  const texMap = opts.textures && opts.textures.size ? opts.textures : null;
+  let prepTex: PrepTex | null = null;
+  if (texMap) {
+    let inherits = false;
+    const scan = (e: SkpEntities): void => {
+      for (const inst of e.instances) if (inst.material !== undefined && texMap.has(inst.material)) inherits = true;
+    };
+    scan(model.root);
+    for (const d of model.definitions.values()) if (!inherits) scan(d.entities);
+    prepTex = { tile: (m) => texMap.get(m), plane: inherits, flat: 0, singular: 0 };
+  }
+  const maxUv = opts.maxUvVertices ?? MAX_UV_VERTICES;
+  let uvVerts = 0;
+  let uvLimited = false;
+
   const cache = new Map<SkpEntities, Prepared>();
   const prep = (e: SkpEntities): Prepared => {
     let p = cache.get(e);
-    if (!p) cache.set(e, (p = prepare(e, model.defaultLayer, counter, extras, smooth, onFaces)));
+    if (!p) cache.set(e, (p = prepare(e, model.defaultLayer, counter, extras, smooth, onFaces, prepTex)));
     return p;
   };
 
@@ -865,6 +974,9 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     nrm?: F32;
     /** 큰 좌표면 묶음 원점(처음 넣을 때 정한다, null = 원점 없음) */
     origin?: [number, number, number] | null;
+    /** 무늬 재질이면 무늬 좌표(정점마다 uvStride값). 한도에 걸리면 null로 버린다 */
+    uv: F32 | null;
+    uvStride: 2 | 3;
   }
   interface LineBucket {
     serial: number;
@@ -980,7 +1092,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     // 보통(가까운) 형상의 열쇠는 예전과 같다(기본 호출 출력이 바뀌지 않게). 먼 형상은 칸 열쇠를 붙인다
     const key = (cls ? `${slot}|h|${layer}|${mat ?? 'd'}` : `${slot}|${layer}|${mat ?? 'd'}`) + (far ? far.key : '');
     let bk = buckets.get(key);
-    if (!bk) buckets.set(key, (bk = { serial: serials++, slot, cls, layer, mat, pos: new F32(), idx: new U32(), faces: 0, area: 0, origin: far ? far.origin : null }));
+    if (!bk) buckets.set(key, (bk = { serial: serials++, slot, cls, layer, mat, pos: new F32(), idx: new U32(), faces: 0, area: 0, origin: far ? far.origin : null, uv: mat !== undefined && texMap?.has(mat) ? new F32() : null, uvStride: 2 }));
     return bk;
   };
   const lineBucket = (slot: number, cls: LineCls, layer: number, far: ReturnType<typeof farCell>): LineBucket => {
@@ -988,6 +1100,55 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     let lb = lineBuckets.get(key);
     if (!lb) lineBuckets.set(key, (lb = { serial: serials++, slot, cls, layer, pos: new F32(), origin: far ? far.origin : null }));
     return lb;
+  };
+  /** 묶음의 무늬 좌표를 3값으로 넓힌다(원근 무늬가 처음 들어올 때, q = 1을 끼운다) */
+  const widenUv = (bk: Bucket): void => {
+    const old = bk.uv!;
+    const nv = old.n / 2;
+    const w = new F32();
+    w.reserve(nv * 3);
+    for (let i = 0; i < nv; i++) {
+      w.a[i * 3] = old.a[i * 2]!;
+      w.a[i * 3 + 1] = old.a[i * 2 + 1]!;
+      w.a[i * 3 + 2] = 1;
+    }
+    w.n = nv * 3;
+    bk.uv = w;
+    bk.uvStride = 3;
+  };
+  /**
+   * 무늬 좌표 덧붙이기. src: 자기 재질 무늬 좌표(stride 2·3) 또는 물려받은 재질용 평면 좌표와 무늬 크기 역수(scale).
+   * src가 없으면(그럴 일은 없지만) 0으로 채워 정점 수를 맞춘다
+   */
+  const appendUv = (bk: Bucket, nv: number, src: { arr: Float32Array; stride: 2 | 3; scale?: [number, number] } | null): void => {
+    if (!bk.uv) return;
+    if (uvVerts + nv > maxUv) {
+      // 한도: 이 묶음은 무늬 없이(평균색) 그린다
+      bk.uv = null;
+      uvLimited = true;
+      return;
+    }
+    uvVerts += nv;
+    if (src && src.stride === 3 && bk.uvStride === 2) widenUv(bk);
+    const st = bk.uvStride;
+    const dst = bk.uv;
+    dst.reserve(nv * st);
+    let n = dst.n;
+    const a = dst.a;
+    const sx = src?.scale?.[0] ?? 1, sy = src?.scale?.[1] ?? 1;
+    for (let i = 0; i < nv; i++) {
+      if (!src) {
+        a[n++] = 0;
+        a[n++] = 0;
+        if (st === 3) a[n++] = 1;
+        continue;
+      }
+      const o = i * src.stride;
+      a[n++] = src.arr[o]! * sx;
+      a[n++] = src.arr[o + 1]! * sy;
+      if (st === 3) a[n++] = src.stride === 3 ? src.arr[o + 2]! : 1;
+    }
+    dst.n = n;
   };
   /** 이어 칠한 면이 처음 들어온 묶음: 이미 든 정점의 법선을 삼각형에서 채운다(같은 면 정점은 한 평면이라 면 법선과 같다) */
   const backfillNormals = (bk: Bucket, base: number): F32 => {
@@ -1043,7 +1204,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     dst.n = n;
   };
   /** 묶음 하나를 덧붙이고 그 배치의 면 넓이(세계)를 돌려준다 */
-  const appendFaces = (bk: Bucket, b: Batch, m: Float64Array, node: number, L: Linear): number => {
+  const appendFaces = (bk: Bucket, b: Batch, m: Float64Array, node: number, L: Linear, inhMat?: number): number => {
     const base = bk.pos.n / 3;
     addRun(bk.serial, bk.idx.n / 3, node);
     put(bk.pos, b.pos, m, bk.cls === 0, bk.origin);
@@ -1054,6 +1215,17 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     bk.idx.reserve(b.idx.length);
     for (let i = 0; i < b.idx.length; i++) bk.idx.a[bk.idx.n++] = base + b.idx[i]!;
     bk.faces += b.faces;
+    if (bk.uv) {
+      // 자기 재질(앞, 또는 물려받을 것이 없을 때 뒤)로 칠하면 그 무늬 좌표, 물려받은 재질이면 평면 좌표 ÷ 무늬 크기
+      const own = b.mat >= 0 || (b.mat <= -2 && inhMat === undefined);
+      let src: Parameters<typeof appendUv>[2] = null;
+      if (own && b.uv) src = { arr: b.uv, stride: b.uvStride ?? 2 };
+      else if (!own && b.plane && bk.mat !== undefined) {
+        const t = texMap!.get(bk.mat)!;
+        src = { arr: b.plane, stride: 2, scale: [1 / t.w, 1 / t.h] };
+      }
+      appendUv(bk, b.pos.length / 3, src);
+    }
     const area = placedArea(b, L);
     bk.area += area;
     return area;
@@ -1384,14 +1556,14 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
           continue;
         }
         extraVerts += nv;
-        appendFaces(faceBucket(slot, 1, layer, matOf(b), farCell(b.pos, m)), b, m, node, L);
+        appendFaces(faceBucket(slot, 1, layer, matOf(b), farCell(b.pos, m)), b, m, node, L, inhMat);
         continue;
       }
       if (outVerts + nv > MAX_OUTPUT_VERTICES) {
         truncated = true;
         return;
       }
-      const area = appendFaces(faceBucket(slot, 0, layer, matOf(b), farCell(b.pos, m)), b, m, node, L);
+      const area = appendFaces(faceBucket(slot, 0, layer, matOf(b), farCell(b.pos, m)), b, m, node, L, inhMat);
       outVerts += nv;
       if (node >= 0) {
         ownFaces![node]! += b.faces;
@@ -1406,7 +1578,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
         continue;
       }
       extraVerts += nv;
-      appendFaces(faceBucket(slot, 1, b.layer >= 0 ? b.layer : layerHere, matOf(b), farCell(b.pos, m)), b, m, node, L);
+      appendFaces(faceBucket(slot, 1, b.layer >= 0 ? b.layer : layerHere, matOf(b), farCell(b.pos, m)), b, m, node, L, inhMat);
     }
     // 보통 모서리(예전 규칙 그대로: 한도에 걸리면 이 배치의 나머지 보통 모서리는 건너뛴다)
     for (const l of p.lines) {
@@ -1530,6 +1702,14 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   const hiddenIds: string[] = [];
   let hiddenFaces = 0;
   let triangles = 0;
+  /** 무늬 재질 묶음이면 무늬 좌표·무늬 id를 단다 */
+  const withTexture = (mesh: Mesh3d, bk: Bucket): void => {
+    if (!bk.uv || bk.mat === undefined) return;
+    const t = texMap?.get(bk.mat);
+    if (!t || bk.uv.n !== (bk.pos.n / 3) * bk.uvStride) return;
+    mesh.uvs = bk.uv.done();
+    mesh.texture = t.id;
+  };
   const sorted = [...buckets.values()].sort((a, b) => a.slot - b.slot || a.cls - b.cls || a.layer - b.layer || (a.mat ?? -1) - (b.mat ?? -1));
   for (const bk of sorted) {
     const stored = bk.mat !== undefined ? model.materials.get(bk.mat) : undefined;
@@ -1553,6 +1733,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       };
       if (bk.nrm) hm.normals = bk.nrm.done();
       if (bk.origin) hm.origin = bk.origin;
+      withTexture(hm, bk);
       meshes.push(hm);
       hiddenIds.push(id);
       hiddenFaces += bk.faces;
@@ -1570,6 +1751,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     };
     if (bk.nrm) mesh.normals = bk.nrm.done();
     if (bk.origin) mesh.origin = bk.origin;
+    withTexture(mesh, bk);
     triangles += mesh.indices!.length / 3;
     meshes.push(mesh);
     tagStat(tag).faces += bk.faces;
@@ -1580,6 +1762,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       if (stored !== undefined) ms.folder = stored;
       matStats.set(matName, ms);
     }
+    if (mesh.texture) ms.texture = mesh.texture;
     ms.faces += bk.faces;
     ms.area += bk.area;
     ms.meshIds.push(mesh.id);
@@ -1736,6 +1919,9 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       `인스턴스 배치가 너무 많아(${maxPlacements.toLocaleString('en-US')}번 한도) 일부만 그렸습니다 — 서로를 여러 번 품는 컴포넌트 정의가 있을 수 있습니다`,
     );
   if (extrasTruncated) warnings.push('부드러운 모서리·숨긴 형상이 너무 많아 일부만 담았습니다');
+  if (uvLimited) warnings.push(`무늬를 입힐 면이 너무 많아(정점 ${maxUv.toLocaleString('en-US')}개 한도) 일부 면은 무늬 없이 평균색으로 그렸습니다`);
+  if (prepTex?.singular) warnings.push(`무늬 위치 행렬을 뒤집을 수 없는 면 ${prepTex.singular}개는 기본 투영으로 칠했습니다`);
+  if (prepTex?.flat) warnings.push(`원근으로 일그러뜨린 무늬 중 ${prepTex.flat}개 면은 원근 없이 칠했습니다(투영이 면 위에서 뒤집힘)`);
 
   const parts: SceneParts = {
     meshes,

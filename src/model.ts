@@ -17,6 +17,9 @@
  *            ├ 138c 컴포넌트 1964, 138d 그룹 1d4c/1964, 1390 그림 1f40/1964(바탕, 이름 1965, 변환 1966 = f64×13, 정의 1967, GUID 1968)
  *            ├ 1396 곡선·1397 호, 1398 문자, 1399·139a 치수, 1391·1392 보조선·보조점, 1393 단면 + 1394 활성 단면
  *   바탕 07d0 ─ 05dc 머리(05de 번호, 05dd 속성 사전), 07d1 재질, 07d2 태그, 07d3 깃발(0x01 숨김, 0x08 soft, 0x10 smooth, 0x20 잠김)
+ *   면 무늬 위치(관찰 + PRISME 엔진 기록): 면 바탕 07d0 → 05dc → 속성 05dd → 36b1 → 36b2 → 2710 무늬 위치
+ *     ─ 2711 앞 · 2712 뒤 ─ 2713 ─ 2714 종류(i32: 0 그대로, 1 위치 잡음, 2·3 방향으로 투영), 2715 행렬(f64×9, 열 우선),
+ *       2716 투영 방향(f64×3, 종류 2·3), 2717 핀(무늬 위치 도구의 점 — 읽지 않는다)
  */
 
 import type { SkpUnitsMeta } from './meta';
@@ -65,6 +68,16 @@ export type SkpAttr =
 /** 사전 이름 → 열쇠 → 값 */
 export type SkpAttrDicts = Record<string, Record<string, SkpAttr>>;
 
+/**
+ * 면 한쪽의 무늬 투영(무늬 위치 도구로 옮긴 무늬). 행렬은 무늬 좌표(인치) → 면 평면 틀 좌표(projection.ts의 planeAxes)의
+ * 3×3 동차 변환이고 저장한 그대로 열 우선(matrix[c * 3 + r]). 종류 2·3은 면 법선 대신 dir 방향으로 투영한다.
+ */
+export interface SkpTextureMap {
+  kind: number;
+  matrix: Float64Array;
+  dir?: [number, number, number];
+}
+
 export interface SkpFace {
   /** 고리마다 정점 번호(SkpEntities.points 안). 첫 고리가 바깥, 나머지는 구멍(표본에서 확인) */
   loops: number[][];
@@ -79,6 +92,9 @@ export interface SkpFace {
   /** 고리마다, 꼭짓점 k에서 나가는 모서리(SkpEntities.edges 차례) — 매끈한 모서리 건너 법선 잇기용 */
   loopEdges?: number[][];
   attrs?: SkpAttrDicts;
+  /** 앞·뒷면 무늬 투영(그쪽 재질이 무늬 재질이고 저장된 투영이 있을 때만 — readModelDat의 textured) */
+  frontMap?: SkpTextureMap;
+  backMap?: SkpTextureMap;
 }
 
 export interface SkpEdge {
@@ -410,6 +426,8 @@ interface Ctx {
   tick: (pos: number) => void;
   /** 깨지거나 잘린 곳을 만났는지 */
   damaged: boolean;
+  /** 무늬 투영을 읽을 재질 번호(무늬 재질) */
+  texturedIds: Set<number>;
   fonts: Map<number, SkpFont>;
   /** 읽은 요소 묶음 노드(붙은 점의 정점을 다시 찾을 때) */
   entityNodes: TlvNode[];
@@ -437,6 +455,29 @@ function eul(word: string): string {
 function iga(word: string): string {
   const c = word.charCodeAt(word.length - 1) - 0xac00;
   return word + (c >= 0 && c < 11172 && c % 28 !== 0 ? '이' : '가');
+}
+
+/** 면 바탕의 무늬 투영(앞·뒤). 없거나 깨졌으면 빈 결과 */
+function readTextureMaps(r: TlvReader, face: TlvNode): { front?: SkpTextureMap; back?: SkpTextureMap } {
+  const out: { front?: SkpTextureMap; back?: SkpTextureMap } = {};
+  const items = r.path(face, TAG.BASE, TAG.ID_BOX, TAG.ATTRS, TAG.ATTR_LIST, TAG.ATTR_ITEMS);
+  if (!items) return out;
+  r.each(items.start, items.end, (tag, start, end) => {
+    if (tag !== TAG.TEX_MAP) return;
+    r.each(start, end, (st, ss, se) => {
+      if (st !== TAG.TEX_FRONT && st !== TAG.TEX_BACK) return;
+      const side = r.first({ tag: st, start: ss, end: se }, TAG.TEX_SIDE);
+      if (!side) return;
+      const m = r.f64s(r.first(side, TAG.TEX_MATRIX));
+      if (!m || m.length < 9) return;
+      const map: SkpTextureMap = { kind: r.i32(r.first(side, TAG.TEX_KIND)) ?? r.u8(r.first(side, TAG.TEX_KIND)) ?? 0, matrix: Float64Array.from(m.slice(0, 9)) };
+      const d = r.f64s(r.first(side, TAG.TEX_DIR));
+      if (d && d.length >= 3) map.dir = [d[0]!, d[1]!, d[2]!];
+      if (st === TAG.TEX_FRONT) out.front ??= map;
+      else out.back ??= map;
+    });
+  });
+  return out;
 }
 
 /** 13개 f64(3×3 행 우선, 이동 3, 나눔수 1) → 4×4 열 우선 */
@@ -616,6 +657,18 @@ function readEntities(ctx: Ctx, n: TlvNode, tolerant: boolean): SkpEntities {
     if (b.id !== undefined) f.pid = b.id;
     const attrs = readHeaderAttrs(r, b.header, warn);
     if (attrs) f.attrs = attrs;
+    // 무늬 투영은 그쪽 재질이 무늬 재질인 면만 읽는다(무늬를 지운 재질의 면에도 남아 있다)
+    const tf = f.front !== undefined && ctx.texturedIds.has(f.front);
+    const tb = back !== undefined && ctx.texturedIds.has(back);
+    if (tf || tb) {
+      try {
+        const maps = readTextureMaps(r, node);
+        if (tf && maps.front) f.frontMap = maps.front;
+        if (tb && maps.back) f.backMap = maps.back;
+      } catch {
+        note(ctx, '깨진 무늬 투영을 건너뛰었습니다(기본 투영으로 칠합니다)');
+      }
+    }
     faces.push(f);
   });
   ctx.counts.faces += faces.length;
@@ -865,13 +918,18 @@ function finish(ctx: Ctx, all: SkpEntities[], definitions: Map<number, SkpDefini
   }
 }
 
+export interface ReadModelOptions {
+  /** 무늬 재질 이름(model.dat의 재질 이름 = 꾸러미 폴더 이름). 이 재질을 칠한 면 쪽의 무늬 투영을 읽는다 */
+  textured?: Iterable<string>;
+}
+
 /**
  * model.dat 바이트 → 중간 모형. 뿌리가 맞지 않으면 Error.
  * 잘렸거나 꼬리표 길이가 깨진 곳이 있으면 그 앞까지 읽고 경고한다(모형이 damaged).
  * 뿌리 절(카메라·장면·태그·스타일 …)은 하나가 깨져도 그 절만 버리고 형상 읽기는 계속한다.
  * onProgress는 읽은 바이트 위치로 진행(0~1)을 알린다.
  */
-export function readModelDat(bytes: Uint8Array, onProgress?: (fraction: number) => void): SkpModel {
+export function readModelDat(bytes: Uint8Array, onProgress?: (fraction: number) => void, opts: ReadModelOptions = {}): SkpModel {
   const r = new TlvReader(bytes);
   if (bytes.length < 6 || r.dv.getUint16(0, true) !== TAG.ROOT) throw new Error('model.dat 뿌리 꼬리표가 다릅니다');
   const rootLen = r.dv.getUint32(2, true);
@@ -897,6 +955,7 @@ export function readModelDat(bytes: Uint8Array, onProgress?: (fraction: number) 
     entityNodes: [],
     pendingPoints: [],
     pendingArcs: [],
+    texturedIds: new Set(),
   };
   const warn: Warn = (m) => note(ctx, m);
   if (6 + rootLen > bytes.length) {
@@ -954,6 +1013,8 @@ export function readModelDat(bytes: Uint8Array, onProgress?: (fraction: number) 
         note(ctx, '깨진 재질 항목을 건너뛰었습니다');
       }
     });
+  const texturedNames = new Set(opts.textured ?? []);
+  if (texturedNames.size) for (const [id, n] of materials) if (texturedNames.has(n)) ctx.texturedIds.add(id);
 
   const lineStyles = section(TAG.LINESTYLE_SECTION, '선 종류', (n) => readLineStyles(r, n)) ?? new Map<number, string>();
   const layerSet: LayerSet = section(TAG.LAYERS, '태그 목록', (n) => readLayers(r, n, lineStyles, warn)) ?? {

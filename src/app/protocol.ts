@@ -1,7 +1,7 @@
 /**
  * 해석 워커(src/worker/parse.worker.ts)와 화면 사이의 메시지 꼴과 직렬화 도움(순수 함수, DOM 없음).
  *
- * 파일 바이트는 화면 → 워커로 이전(transfer)하고, 결과 장면의 형식 배열은 워커 → 화면으로 이전한다(복사 없이).
+ * 파일 바이트는 화면 → 워커로 이전(transfer)하고, 결과 장면의 형식 배열·무늬 ImageBitmap은 워커 → 화면으로 이전한다(복사 없이).
  * 한 메시지 안에서 같은 버퍼를 여러 곳이 가리킬 수 있으므로 이전 목록은 버퍼마다 한 번만 넣는다.
  */
 import type { Scene3d } from 'opencad-viewer3d/types';
@@ -14,6 +14,8 @@ export interface ParseRequest {
   name: string;
   /** 파일 바이트(이전된다) */
   bytes: ArrayBuffer;
+  /** 워커가 푸는 무늬 그림(색 바꾸기·알파 재기)의 긴 변 한도(화소, 기본 코어 TEXTURE_LIMIT) — 뷰어의 textureLimit과 같게 */
+  textureLimit?: number;
 }
 
 export type ParseResponse =
@@ -30,11 +32,11 @@ export interface ParseResult {
 }
 
 /**
- * 값 안의 모든 ArrayBuffer(형식 배열의 버퍼 포함)를 한 번씩 모은다 — postMessage 이전 목록.
+ * 값 안의 모든 ArrayBuffer(형식 배열의 버퍼 포함)와 ImageBitmap을 한 번씩 모은다 — postMessage 이전 목록.
  * 일반 객체·배열·Map·Set을 따라 들어가고, 같은 객체는 한 번만 본다. SharedArrayBuffer는 넣지 않는다.
  */
-export function collectTransfers(value: unknown): ArrayBuffer[] {
-  const out = new Set<ArrayBuffer>();
+export function collectTransfers(value: unknown): (ArrayBuffer | ImageBitmap)[] {
+  const out = new Set<ArrayBuffer | ImageBitmap>();
   const seen = new Set<object>();
   const stack: unknown[] = [value];
   while (stack.length) {
@@ -44,6 +46,10 @@ export function collectTransfers(value: unknown): ArrayBuffer[] {
     seen.add(v);
     if (v instanceof ArrayBuffer) {
       if (v.byteLength > 0) out.add(v);
+      continue;
+    }
+    if (typeof ImageBitmap !== 'undefined' && v instanceof ImageBitmap) {
+      out.add(v);
       continue;
     }
     if (ArrayBuffer.isView(v)) {

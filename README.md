@@ -11,6 +11,7 @@ SketchUp(.skp) 파일을 설치 없이 브라우저에서 3D로 여는 뷰어 �
 SketchUp 형식은 공개 명세가 없습니다. 처음에는 인터넷에 공개된 표본 파일의 바이트만 보고 구조를 추론했고(SketchUp SDK·다른 SKP 읽기 프로그램의 코드는 보지 않음),
 2026-10에 PRISME 엔진(SketchUp C API를 비교 기준으로 맞춘 SKP 해석기)의 형식 지식과 PRISME 서비스 SKP 뷰어의 화면 규칙(단위 표기·부드러운 음영·치수선 그리기·장면 적용)을
 옮겨 더했습니다(코드는 이 저장소 꼴로 새로 씀). SketchUp 7·8·2013~2020의 옛 형식(MFC 객체 직렬화)도 같은 때 엔진의 legacy 해석기 지식을 옮겨 읽습니다.
+무늬(텍스처) 투영·색 바꾼 무늬 규칙도 같은 기록에서 옮겼습니다.
 조사 기록과 출처는 [docs/formats/skp.md](docs/formats/skp.md)에 있습니다.
 
 ## 앱 사용법
@@ -30,7 +31,8 @@ SketchUp 형식은 공개 명세가 없습니다. 처음에는 인터넷에 공�
    - 창이 좁아지면 아이콘으로 알 수 있는 단추부터 글을 숨기고(제목 풍선은 남음), 태블릿 폭에서는 줄을 바꿉니다.
 3. **패널**(폭 760px 미만이면 아래 시트). 가장자리를 끌면 폭(시트는 높이)이 바뀌고 이 브라우저에 기억합니다. 두 번 누르면 처음 크기.
    - 태그·재질: 부드러운 모서리 보기·숨긴 형상 보기(기본 꺼짐), 글·치수·보조선·단면 기호 보기, 파일 단면 평면 목록(누르면 그 평면으로 자름),
-     태그 폴더 나무와 태그 켜고 끄기(파일에서 숨긴 태그·폴더는 처음부터 숨김, 태그 색 견본, 점선 선 종류), 재질 견본(무늬 재질은 파일 안 무늬 그림)·이름·쓰인 면 수(누르면 그 재질의 면을 강조)
+     태그 폴더 나무와 태그 켜고 끄기(파일에서 숨긴 태그·폴더는 처음부터 숨김, 태그 색 견본, 점선 선 종류), 재질 견본(무늬 재질은 파일 안 무늬 그림, 색을 바꾼 무늬는 바꾼 색)·이름·쓰인 면 수(누르면 그 재질의 면을 강조).
+     무늬 재질은 3D에도 무늬 그림을 입힙니다("무늬" 표시). 그림이 없거나 한도를 넘으면 평균색으로 칠하고 "무늬 · 평균색"으로 보입니다
    - 구성: 여러 단계 그룹·컴포넌트 나무(› 단추로 펼치기, 누르면 강조, 두 번 누르면 확대, 체크로 숨기기), 3D 누르기 방식(펼친 단계·가장 안쪽), 컴포넌트 정의별 개수(파일 안 미리보기 그림)
    - 선택: SketchUp 엔티티 정보처럼 고른 것의 종류·이름·정의·놓인 수·위치·태그·재질·크기(정의 범위 × 축 배율)·넓이·면·모서리·설명·GUID·잠김·숨김과
      속성 사전(인스턴스·정의, 접고 펴기). 아무것도 고르지 않으면 모형 이름·설명·모형 속성.
@@ -68,6 +70,9 @@ SketchUp 7·8·2013~2020에서 저장한 옛 파일도 같은 화면으로 엽�
   문자·치수(선형·반지름·지름, 붙은 점 풀기)·보조선·보조점·단면 평면, 곡선·호, 속성 사전(모형·정의·인스턴스·면·모서리·태그), 인스턴스·정의 GUID, 정의 설명·동작, 잠김, 모형 이름·설명, 글꼴.
   PRISME 엔진의 SketchUp 2026 표준 파일 20개(C API 기대값)와 견주어 같은 값을 읽는 것을 확인했습니다(표준 파일은 저장소에 넣지 않음).
 - 바로잡은 것: 0x138C는 컴포넌트, 0x138D(0x1D4C 감싸개)는 그룹(예전에는 거꾸로 붙임), 기본 태그는 태그 목록의 첫째(0x3A9A는 활성 태그).
+- 무늬(텍스처, `textures` 선택): material.xml의 무늬 크기(`xScale`·`yScale` 인치)와 면마다 저장된 무늬 위치(앞·뒤 따로, 행렬·방향 투영·원근 q)를 읽어
+  그물에 무늬 좌표를 둡니다. 저장된 위치가 없거나 인스턴스 재질을 물려받은 면은 SketchUp 기본 투영(정의 원점·면 평면 틀). 색을 바꾼 무늬(재질 type 2)는
+  앱 워커가 그림 화소의 색을 바꿔 넘기고, 투명 화소를 쓰는 PNG는 반투명으로 그립니다. 옛 판(2020 이하)은 아직 무늬 평균색입니다.
 - SketchUp 7·8·2013~2020(2026-10, MFC 객체 직렬화, `src/mfc*.ts`): 2021+와 같은 중간 모형으로 면·모서리·재질(색·불투명도·무늬 평균색)·태그(숨김·색·선 종류·2020 폴더)·
   정의·인스턴스(GUID·숨김·잠김)·곡선·문자·치수·보조선·단면·속성 사전·단위·카메라·장면(숨긴 태그·숨긴 개체·활성 단면·스타일·2020 미리보기)·스타일(`CSkpStyle` + 렌더링 설정)·글꼴·문자/치수 기본값을 읽습니다.
   PRISME 엔진의 옛 판 표준 파일 34개(7·8·2013~2020, C API 기대값)와 견주어 같은 값을 읽는 것을 확인했습니다(표준 파일은 저장소에 넣지 않음).
@@ -76,6 +81,8 @@ SketchUp 7·8·2013~2020에서 저장한 옛 파일도 같은 화면으로 엽�
 - 깨진 파일: 끝(ZIP 목록)이 잘렸으면 지역 머리를 앞에서부터 따라가 `model.dat`를 찾고, `model.dat`가 잘렸거나 압축이 깨졌으면 앞부분만 풀어
   꼬리표 길이가 맞는 데까지 읽습니다(`meta.damaged`). 잘린 DEFLATE 흐름이 끝없이 도는 문제를 막았습니다.
 - 한도: 펼친 면 정점 1,200만 · 선분 300만 · 인스턴스 배치 200만(서로를 여러 번 품는 정의) · 자기 자신을 품는 정의는 64겹(`meta.limited`).
+  무늬: 무늬 재질 256개 · 무늬 좌표를 다는 정점 600만(넘으면 그 뒤 그물은 평균색), 그림은 `readSkpImages` 한도(개수 600·한 장 8 MB·전체 64 MB),
+  화면은 기기에 따라 한 장 긴 변 2048(메모리 4 GB 이하·손가락+좁은 화면 1024, 2 GB 이하 512) 화소·GPU 예산 256(96·48) MB.
 - 큰 좌표: 원점에서 100 m보다 먼 형상은 1 km 칸마다 따로 묶고 묶음 원점(`Mesh3d.origin`·`LineSet3d.origin`)을 두어 positions를 그만큼 빼서 적습니다
   (float32 떨림 방지, 코어 v0.4). 모든 형상이 100 m 안인 모형은 예전 출력과 같습니다.
 
@@ -100,13 +107,25 @@ const scene = skpToScene(bytes, { name: 'model.skp' });
 - `smooth: true` — 매끈한 모서리(깃발 0x10)로 이어진 면의 꼭짓점 법선을 평균해 `Mesh3d.normals`로 냅니다(둥근 곡면 음영, 크게 접힌 곳은 평균하지 않음). 기본 꺼짐(예전과 같은 평면 음영).
 - `annotations`(기본 켬) — 문자·치수·보조선·단면을 펼쳐 선분 묶음(`skp-dims-*`·`skp-leaders-*`·`skp-guides-*`·`skp-sections-*`, 보조점은 `scene.points`)과 `meta.texts`·`meta.dimensions`·`meta.sectionPlanes`로 냅니다(범위에는 넣지 않음). 주석이 없는 모형은 출력이 예전과 같습니다.
 - `onProgress(fraction, stage)` — 진행률(단계 안에서도 몇천 항목·몇 MB마다)을 알립니다(워커에서 진행 막대용).
+- `textures: readSkpImages(bytes).materials` — 무늬 재질 면에 무늬 좌표(`Mesh3d.uvs`, 원근 무늬가 섞인 그물은 `(u·q, v·q, q)` 3값)와 무늬 id(`Mesh3d.texture`)를 두고,
+  쓰인 그림을 `scene.textures`(`Texture3d`: 그림 바이트를 복사하지 않고 같은 배열, 화소 크기)에 넣습니다(코어 v0.5). `meta.textures`에는 무늬마다
+  재질·폴더·그림 경로·무늬 크기(인치)·알파 가능성·색 바꾸기(`colorize`: 방식·재질 색·원래 평균색)를 적습니다. `maxTextures`·`maxUvVertices`로 한도를 바꿉니다.
+  주지 않으면 예전처럼 평균색만 칠합니다(출력이 바뀌지 않음).
 
-`meta`에는 판(`version`)·그릇(`container`)·단위(`lengthUnit`)·개수 통계와 함께, 태그별 면·모서리 수(`tagStats`), 재질별 색·면 수·그물 id·꾸러미 폴더(`materialStats`),
+```ts
+import { readSkpImages, skpToScene } from 'opencad-skp';
+
+const images = readSkpImages(bytes);
+const scene = skpToScene(bytes, { textures: images.materials }); // Viewer3d.setScene(scene)이 무늬를 풀어 입힌다
+```
+
+`meta`에는 판(`version`)·그릇(`container`)·단위(`lengthUnit`)·개수 통계와 함께, 태그별 면·모서리 수(`tagStats`), 재질별 색·면 수·그물 id·꾸러미 폴더·입힌 무늬 id(`materialStats`),
 깨짐·한도 표시(`damaged`·`limited`)가 들어 있습니다. 2026-10에 더한 칸(`units`·`camera`·`pages`·`activePage`·`style`·`tagFolders`·`modelName`·`texts`·`dimensions`·`sectionPlanes`·
 `annotationItems`·`attributes`·`treeInfo` 등)의 꼴은 [`src/meta.ts`](src/meta.ts)에 있습니다. 파일 스타일에 앞면 색이 있으면 재질 없는 면을 그 색으로 칠합니다.
 
 꾸러미 안 그림은 `readSkpImages(bytes, { maxCount, maxBytesEach, maxTotalBytes })`로 꺼냅니다: 모형 미리보기(`meta/model_thumbnail.png`), 재질 폴더별 무늬 그림,
 컴포넌트 미리보기(`thumbnails/`), 장면 미리보기(`scene_thumbnails/`). 꼴은 첫 바이트로 가리고 개수 600·한 장 8 MB·전체 64 MB 한도를 둡니다.
+재질 폴더에 그림이 여럿이면(PBR 그림 등) material.xml이 가리키는 그림을 고릅니다. 색 바꾸기 규칙은 `colorizeRgba(rgba, { type, color, average })`로 씁니다.
 2020 이하 파일은 객체 직렬화 안의 그림 기록(`CDib`: 모형 미리보기·재질 무늬·컴포넌트 미리보기·2020 장면 미리보기)을 꺼냅니다. 같은 바이트로 `skpToScene`을 먼저 불렀으면 그때 모은 자리를 써서 다시 풀지 않습니다.
 
 ## 구조
@@ -123,11 +142,12 @@ const scene = skpToScene(bytes, { name: 'model.skp' });
 | `src/app/overlay.ts`, `src/app/annotations.ts` | 3D 위 덧그림 층(DOM·SVG), 문자·치수 라벨(배치·겹침 피하기) |
 | `src/app/snap.ts`, `src/app/measure.ts` | 줄자·각도기 추정(끝점·중간점·모서리·면·축 고정)과 도구 |
 | `src/app/entity.ts`, `src/app/units.ts` | 엔티티 정보 행·속성 사전, 모형 단위 글(십진·건축·분수·공학, 넓이·부피·각도) |
-| `src/app/protocol.ts`, `src/app/client.ts` | 해석 워커 메시지·이전 목록, 워커 손님 |
+| `src/app/protocol.ts`, `src/app/client.ts` | 해석 워커 메시지·이전 목록(형식 배열·ImageBitmap), 워커 손님 |
+| `src/app/texlimits.ts` | 기기별 무늬 그림 한도(한 장 긴 변·GPU 예산, 순수 함수) |
 | `src/app/format.ts`, `src/app/keys.ts`, `src/app/launch.ts`, `src/app/theme.ts` | 글 꼴, 키, 주소 인자, 테마(순수 함수) |
 | `src/app/sample.ts`, `src/app/skpwrite.ts` | 예제 모형 만들기와 SKP 바이트 쓰기 도구(시험과 함께 씀) |
 | `src/app/dom.ts`, `src/app/styles.css` | DOM 도우미·아이콘, 스타일(밝은·어두운 테마) |
-| `src/worker/parse.worker.ts` | 해석 워커 |
+| `src/worker/parse.worker.ts`, `src/worker/textures.ts` | 해석 워커, 무늬 손질(색 바꾸기·알파 재기 — OffscreenCanvas) |
 | `src/index.ts` | 해석기 공개 입구(`skpToScene`, `readSkpImages`, 지원 판 범위) |
 | `src/header.ts` | 파일 머리와 판 |
 | `src/zip.ts`, `src/inflate.ts` | ZIP 꾸러미(잘린 파일은 지역 머리 따라가기)와 deflate 풀기(잘린 흐름은 앞부분만) |
@@ -137,7 +157,8 @@ const scene = skpToScene(bytes, { name: 'model.skp' });
 | `src/vfftags.ts`, `src/vffcommon.ts`, `src/vffroot.ts`, `src/vffannot.ts` | 꼬리표 표, 형 있는 값·속성 사전·설정, 뿌리 절(카메라·장면·태그·폴더·스타일·글꼴), 주석(문자·치수·보조선·단면·곡선) |
 | `src/styles.ts`, `src/meta.ts` | 렌더링 설정 + style.xml → 스타일, 화면과의 meta 계약 |
 | `src/scene-meta.ts`, `src/scene-annotations.ts`, `src/scene-smooth.ts` | 단위·카메라·장면 meta, 주석 펼치기(치수 배치·보조선 자르기·단면 기호), 꼭짓점 법선 |
-| `src/materials.ts`, `src/scene.ts` | 재질과 `Scene3d` 만들기(면은 earcut 삼각화, 태그·재질 통계, outline) |
+| `src/materials.ts`, `src/scene.ts` | 재질(색·무늬)과 `Scene3d` 만들기(면은 earcut 삼각화, 무늬 좌표, 태그·재질 통계, outline) |
+| `src/projection.ts`, `src/colorize.ts` | 면 무늬 투영(평면 틀·행렬·원근 q), 색 바꾼 무늬의 화소 색 바꾸기 |
 | `tests/` | 해석기 시험(`tests/build.ts`는 시험용 바이트 만들기, `tests/mfcwrite.ts`는 2020 이하 꼴 바이트 만들기), `tests/app/`은 앱 순수 로직 시험 |
 | `docs/formats/skp.md` | 형식 조사 기록 |
 
@@ -155,7 +176,7 @@ npm run preview
 시험은 표본 파일 없이 `tests/build.ts`(본체는 `src/app/skpwrite.ts`)와 `tests/mfcwrite.ts`(2020 이하 꼴)로 만든 작은 바이트로 돌립니다. 표본 파일은 저장소에 넣지 않습니다.
 확인용 표본·임시 파일은 `.runtime/`(git 무시)에만 둡니다.
 `SKP_BIG=1 npx vitest run tests/large.test.ts`는 수십만 면 합성 모형으로 해석 시간을 재고 `.runtime/tmp/`에 파일을 씁니다(확인 뒤 지우세요).
-3D 뷰어 코어는 `github:GyuTae-Kim/opencad-viewer3d#v0.4.0`(단면 보기·묶음 원점)으로 받습니다.
+3D 뷰어 코어는 `github:GyuTae-Kim/opencad-viewer3d#v0.5.0`(단면 보기·묶음 원점·무늬)으로 받습니다.
 의존을 올릴 때는 `npm install "opencad-viewer3d@github:GyuTae-Kim/opencad-viewer3d#<태그>"`로 받아야 잠금 파일의 커밋이 바뀝니다.
 
 ## 배포
@@ -168,8 +189,8 @@ npm run preview
 
 - SketchUp 3~6(모형 스키마가 달라 판별 배치를 새로 알아야 함 — 엔진도 읽지 않음)
 - 옛 판: 실제 큰 모형으로 확인(표준 파일은 기능 하나씩 담은 작은 모형), 면 무늬 위치(`CFaceTextureCoords`)를 무늬 좌표로 쓰기, `CRelationship`(정의 관계) 읽기
-- 무늬 좌표(UV)를 읽어 3D에 무늬 입히기 — 코어(opencad-viewer3d)에 UV·무늬 그리기가 먼저 있어야 함(지금은 무늬 그림을 견본으로만 보이고 3D는 평균색)
-- 앞·뒷면 다른 색(뒷면 재질·스타일 뒷면 색), 은선·단색 면 스타일, 하늘·지면, 그림자 — 코어 기능이 필요함
+- 무늬: PBR 그림(법선·거칠기), 그림 요소(이미지 엔터티)에 그림 입히기, 무늬 위치 핀만으로 투영 복원(행렬이 없는 파일은 본 적 없음)
+- 앞·뒷면 다른 색·무늬(뒷면 재질·스타일 뒷면 색 — 지금은 앞 → 물려받기 → 뒤 중 한 재질), 은선·단색 면 스타일, 하늘·지면, 그림자 — 코어 기능이 필요함
 - 장면이 "모형에서는 숨겼지만 이 장면에서는 보이는" 개체, 장면별 태그 폴더 보임, 노드 안 단면(그 그룹 안쪽만 자르기), 여러 단면
 - 주석 선분을 나무 노드별로 나누기(지금은 바로 놓인 형상을 숨길 때만 함께 숨김), 형상 뒤 라벨 가리기, 끝 표시를 화면 크기로
 - 측정값 입력 칸(VCB), 안내선 만들기, 호 가운데 추정, PNG 저장에 라벨·측정 표시 합치기

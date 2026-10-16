@@ -60,6 +60,7 @@ import type { LaunchRequest } from './launch';
 import { PANEL_WIDTH_DEFAULT, SHEET_DEFAULT, clampPanelWidth, clampSheetFraction, readLayout, storeLayout, type StoredLayout } from './layout';
 import { Panel, type PanelHost } from './panel';
 import { errorText, sceneHasGeometry } from './protocol';
+import { deviceHints, textureLimitsFor, type TextureLimits } from './texlimits';
 import { THEME_CHOICES, applyThemeChoice, readStoredTheme, resolveTheme, storeTheme, systemPrefersDark, themeChoiceOf, type ThemeChoice, type ThemeName } from './theme';
 import { childrenOf, isAncestor, isSplit, nodeBox, nodePath, type PickMode } from './tree';
 import { cameraForBox, keepViewOnHeightChange } from './view';
@@ -183,6 +184,8 @@ export class SkpViewerApp implements PanelHost {
   private viewer: Viewer3d | null = null;
   private doc: SkpDoc | null = null;
   private readonly client = new ParseClient();
+  /** 무늬 그림 한도(기기마다 — 뷰어와 해석 워커가 같은 값을 쓴다) */
+  private readonly texLimits: TextureLimits = textureLimitsFor(deviceHints());
   private readonly panel: Panel;
   private panelOpen: boolean;
   private readonly narrowQuery: MediaQueryList | null =
@@ -613,9 +616,14 @@ export class SkpViewerApp implements PanelHost {
     if (this.parsingSeq) this.client.cancel();
     this.parsingSeq = seq;
     try {
-      const res = await this.client.open(name, buf, (f, stage) => {
-        if (seq === this.openSeq) this.setBusy(name, f, stage);
-      });
+      const res = await this.client.open(
+        name,
+        buf,
+        (f, stage) => {
+          if (seq === this.openSeq) this.setBusy(name, f, stage);
+        },
+        { textureLimit: this.texLimits.limit },
+      );
       if (seq !== this.openSeq) return;
       const old = unsupportedVersion(res.scene);
       if (old) {
@@ -747,6 +755,8 @@ export class SkpViewerApp implements PanelHost {
         projection: this.projection,
         renderMode: this.renderMode,
         viewCubeSize: this.viewCubeSize(),
+        textureLimit: this.texLimits.limit,
+        textureBudget: this.texLimits.budget,
       });
       v.onPick((p, e) => this.onPick(p, e));
       // 단면 상태(앱 단추·슬라이더·새 장면으로 꺼짐 등)는 코어 알림으로 도구 막대에 맞춘다
@@ -1873,7 +1883,7 @@ export class SkpViewerApp implements PanelHost {
   }
 }
 
-/** 문서가 쓰던 그림 Blob 주소를 푼다 */
+/** 문서가 쓰던 그림 Blob 주소와 워커가 넘긴 무늬 ImageBitmap을 푼다(뷰어는 이미 다음 장면으로 바꿨다) */
 function revokeImages(d: SkpDoc): void {
   for (const u of d.images?.urls ?? [])
     try {
@@ -1882,4 +1892,10 @@ function revokeImages(d: SkpDoc): void {
       /* 이미 풀렸다 */
     }
   if (d.images) d.images.urls.length = 0;
+  for (const t of d.scene.textures ?? [])
+    try {
+      t.bitmap?.close();
+    } catch {
+      /* 이미 닫혔다 */
+    }
 }

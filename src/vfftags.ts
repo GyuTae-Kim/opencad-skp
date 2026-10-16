@@ -147,6 +147,17 @@ export const TAG = {
   VALUE_POINT: 0x38b4,
   VALUE_VECTOR: 0x38b5,
 
+  // ── 면 무늬 위치(속성 목록 36b2 안의 항목) ──
+  TEX_MAP: 0x2710,
+  TEX_FRONT: 0x2711,
+  TEX_BACK: 0x2712,
+  TEX_SIDE: 0x2713,
+  /** i32: 0 그대로, 1 위치 잡음, 2·3 방향(TEX_DIR)으로 투영 */
+  TEX_KIND: 0x2714,
+  /** f64×9: 무늬 좌표(인치) → 면 평면 틀 좌표의 3×3 동차 변환, 열 우선 */
+  TEX_MATRIX: 0x2715,
+  TEX_DIR: 0x2716,
+
   // ── 카메라 ──
   CAMERA: 0x34bc,
   CAMERA_EYE: 0x34bd,

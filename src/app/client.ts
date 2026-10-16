@@ -15,8 +15,8 @@ export class ParseClient {
   private seq = 0;
   private pending = new Map<number, Pending>();
 
-  /** 파일 해석(data는 이전되어 비워진다) */
-  open(name: string, data: ArrayBuffer, progress?: (fraction: number, stage: string) => void): Promise<ParseResult> {
+  /** 파일 해석(data는 이전되어 비워진다). textureLimit: 워커가 푸는 무늬 그림의 긴 변 한도 */
+  open(name: string, data: ArrayBuffer, progress?: (fraction: number, stage: string) => void, opts: { textureLimit?: number } = {}): Promise<ParseResult> {
     let w: Worker;
     try {
       w = this.ensure();
@@ -27,6 +27,7 @@ export class ParseClient {
     return new Promise<ParseResult>((resolve, reject) => {
       this.pending.set(id, { resolve, reject, progress });
       const req: ParseRequest = { id, type: 'open', name, bytes: data };
+      if (opts.textureLimit) req.textureLimit = opts.textureLimit;
       try {
         w.postMessage(req, [data]);
       } catch (e) {
