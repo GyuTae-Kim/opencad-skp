@@ -9,13 +9,27 @@
  * - 패널 가장자리를 끌어 폭(좁은 화면은 시트 높이)을 바꾼다. 좁은 화면에서 시트를 열고 닫아도 확대해 둔 보기는 지킨다.
  * - 자동 확인용으로 window.opencadApp에 상태를 둔다.
  */
-import { VIEW_LABELS, Viewer3d, type MeasureResult, type Pick3d, type Projection, type RenderMode, type SectionAxis, type ViewName } from 'opencad-viewer3d';
+import {
+  VIEW_LABELS,
+  Viewer3d,
+  type MeasureResult,
+  type Pick3d,
+  type IndexRange,
+  type PickEvent,
+  type Projection,
+  type RenderMode,
+  type SectionAxis,
+  type ViewName,
+} from 'opencad-viewer3d';
 import { lerpCamera, type CameraState } from 'opencad-viewer3d/camera';
 import { ParseClient } from './client';
 import { h, icon } from './dom';
 import {
+  canHideNode,
   createDoc,
   docLabel,
+  hiddenNodeRanges,
+  isBigScene,
   itemVisible,
   nodeSelection,
   pickDeepest,
@@ -23,6 +37,7 @@ import {
   selectedNode,
   selectionForPick,
   selectionIds,
+  selectionRanges,
   selectionSegments,
   selectionText,
   unitLabel,
@@ -156,10 +171,11 @@ export class SkpViewerApp implements PanelHost {
   private layout: StoredLayout;
   /** 3D 보기를 사용자가 직접 돌리거나 옮기거나 확대했는지(전체 보기·표준 뷰를 하면 false) */
   private userMoved = false;
-  /** 지난 3D 고르기의 가장 안쪽 노드(두 번 누르기로 한 단계 들어갈 때) */
-  private lastDeepest: number | null = null;
-  /** 누를 때 Alt를 눌렀는지(가장 안쪽 고르기) */
-  private pickAlt = false;
+  /** 구간을 숨겨 둔 항목 id(다음에 바뀌면 풀려고)와 지금 숨긴 구간(항목 차례 → 구간) */
+  private rangedIds = new Set<string>();
+  private hiddenRanges = new Map<number, IndexRange[]>();
+  /** 나눠 올리기가 끝나면 부를 것(새 문서로 바뀌면 바로 부른다) */
+  private uploadDone: (() => void) | null = null;
   private camAnim = 0;
   private openSeq = 0;
   private busy = false;
@@ -561,13 +577,16 @@ export class SkpViewerApp implements PanelHost {
         this.showNotice('error', `"${name}" 파일을 열지 못했습니다`, why);
         return;
       }
-      // 큰 모형은 GPU에 올리는 동안 화면이 잠깐 멈추므로, 그 전에 단계 글을 한 번 그린다
-      this.setBusy(name, 0.99, '화면에 올리는 중');
+      // GPU에 올리기: 작은 모형은 한 번에(그 전에 단계 글을 한 번 그린다), 큰 모형은 프레임마다 나눠 올리며 실제 진행을 보인다
+      this.setBusy(name, isBigScene(res) ? 0 : 0.99, '화면에 올리는 중');
       await new Promise<void>((r) => requestAnimationFrame(() => setTimeout(r, 0)));
       if (seq !== this.openSeq) return;
       const doc = createDoc(name, size, res, { makeUrl: (b, mime) => URL.createObjectURL(new Blob([b as BlobPart], { type: mime })) });
-      this.setDoc(doc);
+      const uploaded = this.setDoc(doc, (done, total) => {
+        if (seq === this.openSeq) this.setBusy(name, total ? done / total : 1, `화면에 올리는 중 · 묶음 ${fmtCount(done)}/${fmtCount(total)}`);
+      });
       this.noticeDamage(doc);
+      await uploaded;
     } catch (e) {
       if (seq !== this.openSeq) return;
       this.showNotice('error', `"${name}" 파일을 열지 못했습니다`, errorText(e));
@@ -577,28 +596,56 @@ export class SkpViewerApp implements PanelHost {
     }
   }
 
-  private setDoc(d: SkpDoc): void {
+  /**
+   * 문서를 뷰어에 올린다. 큰 장면(삼각형+선분 INCREMENTAL_PRIMS 이상 또는 묶음 INCREMENTAL_ITEMS 이상)은
+   * 코어의 나눠 올리기(프레임마다 8 ms)로 올리고 progress(올린 묶음, 전체)를 알린다. 올리기가 끝나면 풀리는 약속을 돌려준다
+   */
+  private setDoc(d: SkpDoc, progress?: (done: number, total: number) => void): Promise<void> {
     const v = this.ensureViewer();
     if (!v) {
       revokeImages(d);
-      return;
+      return Promise.resolve();
     }
     this.closeNotice();
     const old = this.doc;
     this.doc = d;
-    v.setScene(d.scene);
+    // 앞 문서의 나눠 올리기를 기다리던 것은 끝낸다
+    this.uploadDone?.();
+    this.uploadDone = null;
+    this.rangedIds.clear();
+    const big = isBigScene(d);
+    const done = new Promise<void>((resolve) => {
+      if (!big) {
+        resolve();
+        return;
+      }
+      this.uploadDone = resolve;
+    });
+    if (big)
+      v.setScene(d.scene, {
+        incremental: true,
+        onProgress: (n, total) => {
+          progress?.(n, total);
+          if (n >= total && this.doc === d) {
+            this.uploadDone?.();
+            this.uploadDone = null;
+          }
+        },
+      });
+    else v.setScene(d.scene);
     v.setRenderMode(this.renderMode);
     v.highlight(null);
+    v.highlightRanges(null);
     v.setHighlightSegments(null);
     if (v.measureMode) v.clearMeasure();
     // 부드러운 모서리·숨긴 형상은 처음에 숨긴다(장면 범위에는 들어 있지 않다)
     this.refreshItemVisibility();
     this.userMoved = false;
-    this.lastDeepest = null;
     if (old && old !== d) revokeImages(old);
     this.panel.show(d);
     document.title = `${d.name} - ${APP_TITLE}`;
     this.refreshChrome();
+    return done;
   }
 
   /** 잘렸거나 깨진 파일·출력 한도는 알림으로 알린다(경고 목록은 정보 탭) */
@@ -622,8 +669,10 @@ export class SkpViewerApp implements PanelHost {
         renderMode: this.renderMode,
         viewCubeSize: this.viewCubeSize(),
       });
-      v.onPick((p) => this.onPick(p));
+      v.onPick((p, e) => this.onPick(p, e));
       v.onMeasure((m) => this.onMeasure(m));
+      // 단면 상태(앱 단추·슬라이더·새 장면으로 꺼짐 등)는 코어 알림으로 도구 막대에 맞춘다
+      v.onSectionChange(() => this.refreshToolbar());
       this.watchCanvas(v);
       this.viewer = v;
       return v;
@@ -639,12 +688,11 @@ export class SkpViewerApp implements PanelHost {
 
   // ───────────────────────── 고르기·측정 ─────────────────────────
 
-  /** 3D 보기 입력 엿보기: Alt 누르기(가장 안쪽), 두 번 누르기(한 단계 들어가기), 사용자가 보기를 움직였는지 */
+  /** 3D 보기 입력 엿보기: 사용자가 보기를 직접 움직였는지(Alt·두 번 누르기는 코어의 onPick 두 번째 인자로 받는다) */
   private watchCanvas(v: Viewer3d): void {
     const cv = v.canvas;
     let down: { x: number; y: number } | null = null;
     cv.addEventListener('pointerdown', (e) => {
-      this.pickAlt = e.altKey;
       down = { x: e.clientX, y: e.clientY };
     });
     cv.addEventListener('pointermove', (e) => {
@@ -652,20 +700,19 @@ export class SkpViewerApp implements PanelHost {
     });
     cv.addEventListener('pointerup', () => (down = null));
     cv.addEventListener('wheel', () => (this.userMoved = true), { passive: true });
-    cv.addEventListener('dblclick', () => this.enterLevel());
     // 뷰 큐브를 누르면 표준 뷰 + 전체 보기
     v.host.querySelector('.v3d-cube')?.addEventListener('pointerdown', () => (this.userMoved = false));
   }
 
-  private onPick(p: Pick3d | null): void {
+  /** 3D 고르기: Alt = 가장 안쪽, 두 번째 누르기(e.clicks = 2) = 고른 그룹에 한 단계 들어가기 */
+  private onPick(p: Pick3d | null, e?: PickEvent): void {
     const d = this.doc;
     if (!d) return;
     // 단면에서 잘린 면(채운 면)은 형상이 아니므로 고르기에서 무시한다
     if (p?.section) return;
+    if (e?.clicks === 2 && this.enterLevel(p)) return;
     d.pick = p;
-    this.lastDeepest = pickDeepest(d, p);
-    const sel = selectionForPick(d, p, this.pickAlt);
-    this.pickAlt = false;
+    const sel = selectionForPick(d, p, !!e?.altKey);
     // 가장 안쪽을 골랐으면 목록에서 보이게 조상을 펼친다(펼친 단계 방식이면 이미 펼쳐져 있다)
     const n = selectedNode(d, sel);
     let opened = false;
@@ -679,20 +726,22 @@ export class SkpViewerApp implements PanelHost {
     this.applySelection(sel, true);
   }
 
-  /** 3D에서 두 번 누르기: 고른 그룹·컴포넌트를 펼치고, 누른 곳을 품은 바로 안쪽 항목을 고른다 */
-  private enterLevel(): void {
+  /** 3D에서 두 번 누르기: 고른 그룹·컴포넌트를 펼치고, 누른 곳을 품은 바로 안쪽 항목을 고른다. 들어갔으면 true */
+  private enterLevel(p: Pick3d | null): boolean {
     const d = this.doc;
     const t = d?.tree;
-    const deep = this.lastDeepest;
-    if (!d || !t || deep === null || deep < 0 || this.measuring) return;
+    const deep = d ? pickDeepest(d, p) : null;
+    if (!d || !t || deep === null || deep < 0 || this.measuring) return false;
     const n = selectedNode(d, d.selection);
-    if (n === null || n < 0 || n === deep || !isAncestor(t, n, deep)) return;
+    if (n === null || n < 0 || n === deep || !isAncestor(t, n, deep)) return false;
     const path = nodePath(t, deep);
     const next = path[path.indexOf(n) + 1];
-    if (next === undefined) return;
+    if (next === undefined) return false;
+    d.pick = p;
     d.expanded.add(n);
     if (d.panelTab === 'outline') this.panel.rerender();
     this.applySelection(nodeSelection(d, next), true);
+    return true;
   }
 
   private onMeasure(m: MeasureResult | null): void {
@@ -719,8 +768,10 @@ export class SkpViewerApp implements PanelHost {
     const ids = selectionIds(d, sel);
     const v = this.viewer;
     v?.highlight(ids.length ? ids : null);
-    // 나누지 않은 깊은 노드는 안쪽 모서리를 굵은 강조 선으로(보이는 항목만)
-    const seg = v ? selectionSegments(d, sel, (item) => v.isVisible(this.itemId(item))) : null;
+    // 나누지 않은 깊은 노드: 면은 구간 강조(코어 highlightRanges), 안쪽 모서리는 굵은 강조 선(가려진 부분은 흐리게).
+    // 숨긴 구간과 겹치면 코어가 숨김을 앞세우고, 강조 선분도 숨긴 구간을 빼고 모은다
+    v?.highlightRanges(selectionRanges(d, sel));
+    const seg = v ? selectionSegments(d, sel, (item) => v.isVisible(this.itemId(item)), this.hiddenRanges) : null;
     v?.setHighlightSegments(seg?.positions ?? null, seg?.origin ? { width: 3, hidden: 0.25, origin: seg.origin } : { width: 3, hidden: 0.25 });
     this.panel.refreshSelection(reveal);
     this.refreshStatus();
@@ -737,7 +788,7 @@ export class SkpViewerApp implements PanelHost {
     if (!d || !v) return;
     const sel = d.selection;
     if (sel?.kind === 'node' && d.tree && !isSplit(d.tree, sel.index)) {
-      const box = nodeBox(d.tree, d.scene, sel.index, (item) => v.isVisible(this.itemId(item)));
+      const box = nodeBox(d.tree, d.scene, sel.index, (item) => v.isVisible(this.itemId(item)), this.hiddenRanges);
       if (box) this.animateCamera(cameraForBox(v.getCamera(), box, v.canvas.clientWidth / Math.max(1, v.canvas.clientHeight)));
       return;
     }
@@ -804,9 +855,10 @@ export class SkpViewerApp implements PanelHost {
     this.panel.refreshVisibility();
   }
 
+  /** 노드 보이기·숨기기: 따로 나눈 노드는 항목째, 나누지 않은 깊은 노드는 그물 안 구간째(코어 setHiddenRanges) */
   setNodeVisible(node: number, on: boolean): void {
     const d = this.doc;
-    if (!d?.tree || !isSplit(d.tree, node)) return;
+    if (!d?.tree || !canHideNode(d, node)) return;
     if (on) d.hiddenNodes.delete(node);
     else d.hiddenNodes.add(node);
     this.refreshItemVisibility();
@@ -862,6 +914,16 @@ export class SkpViewerApp implements PanelHost {
     if (!d || !v) return;
     const n = d.scene.meshes.length + d.scene.lines.length;
     for (let i = 0; i < n; i++) v.setItemVisible(this.itemId(i), itemVisible(d, i));
+    // 나누지 않은 깊은 노드 숨김: 항목마다 구간을 합쳐 한 번에 넘기고, 더는 숨길 것이 없는 항목은 푼다
+    this.hiddenRanges = hiddenNodeRanges(d);
+    const next = new Set<string>();
+    for (const [item, list] of this.hiddenRanges) {
+      const id = this.itemId(item);
+      next.add(id);
+      v.setHiddenRanges(id, list);
+    }
+    for (const id of this.rangedIds) if (!next.has(id)) v.setHiddenRanges(id, null);
+    this.rangedIds = next;
     if (d.selection?.kind === 'node') this.applySelection(d.selection, false);
   }
 

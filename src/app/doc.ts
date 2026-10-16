@@ -3,7 +3,7 @@
  * 해석기가 scene.meta에 적은 것(판·단위·통계·tagStats·materialStats·outline·tree·extraItems)을 안전하게 읽어 화면용 꼴로 바꾼다.
  * meta가 비었거나 옛 꼴이어도 장면(그물 이름·묶음)에서 최소한의 목록을 만든다.
  */
-import type { MeasureResult, Pick3d, Scene3d } from 'opencad-viewer3d';
+import type { IndexRange, MeasureResult, Pick3d, Scene3d } from 'opencad-viewer3d';
 import type { SkpImages } from '../images';
 import type { ParseResult } from './protocol';
 import {
@@ -11,10 +11,12 @@ import {
   hiddenByNodes,
   isSplit,
   levelNode,
+  mergeNodeRanges,
   nodeDefinition,
   nodeItemIds,
   nodeName,
   nodePath,
+  nodeRanges,
   nodeSegments,
   nodeTag,
   readTree,
@@ -484,10 +486,49 @@ export function selectionIds(d: SkpDoc, sel: Selection | null): string[] {
   return [sel.id];
 }
 
-/** 나누지 않은 깊은 노드를 고르면 그 안쪽 모서리 선분(강조용, 큰 좌표면 원점과 함께). 그 밖에는 null */
-export function selectionSegments(d: SkpDoc, sel: Selection | null, visible?: (item: number) => boolean): SegmentSet | null {
+/**
+ * 나누지 않은 깊은 노드를 고르면 그 안쪽 모서리 선분(강조용, 큰 좌표면 원점과 함께). 그 밖에는 null.
+ * hidden(항목 → 숨긴 구간)을 주면 숨긴 부분은 뺀다(숨김과 강조가 겹칠 때)
+ */
+export function selectionSegments(
+  d: SkpDoc,
+  sel: Selection | null,
+  visible?: (item: number) => boolean,
+  hidden?: ReadonlyMap<number, readonly IndexRange[]>,
+): SegmentSet | null {
   if (!sel || sel.kind !== 'node' || !d.tree || isSplit(d.tree, sel.index)) return null;
-  return nodeSegments(d.tree, d.scene, sel.index, visible);
+  return nodeSegments(d.tree, d.scene, sel.index, visible, undefined, hidden);
+}
+
+/** 나누지 않은 깊은 노드를 고르면 면 강조용 구간(그물 항목만 — 항목 id → 삼각형 구간). 그 밖에는 null */
+export function selectionRanges(d: SkpDoc, sel: Selection | null): Map<string, IndexRange[]> | null {
+  if (!sel || sel.kind !== 'node' || !d.tree || isSplit(d.tree, sel.index)) return null;
+  const out = new Map<string, IndexRange[]>();
+  for (const [it, list] of nodeRanges(d.tree, d.scene, sel.index)) if (it < d.scene.meshes.length) out.set(d.scene.meshes[it]!.id, list);
+  return out.size ? out : null;
+}
+
+/** 숨길 수 있는 노드인지: 따로 나눈 노드(항목째) 또는 구간이 있는 깊은 노드(구간째) */
+export function canHideNode(d: SkpDoc, node: number): boolean {
+  const t = d.tree;
+  if (!t || node < 0 || node >= t.count) return false;
+  return isSplit(t, node) || !t.runsDropped;
+}
+
+/**
+ * 숨긴 나누지 않은 노드들의 구간을 항목마다 합친다(코어 setHiddenRanges용, 항목 차례 → 구간).
+ * 조상이 이미 숨은 노드는 건너뛴다(조상 구간·항목 숨김에 들어 있다)
+ */
+export function hiddenNodeRanges(d: SkpDoc): Map<number, IndexRange[]> {
+  const t = d.tree;
+  if (!t || !d.hiddenNodes.size || t.runsDropped) return new Map();
+  const nodes: number[] = [];
+  for (const n of d.hiddenNodes) {
+    if (n < 0 || n >= t.count || isSplit(t, n)) continue;
+    if (t.parent[n]! >= 0 && hiddenByNodes(t, d.hiddenNodes, t.parent[n]!)) continue;
+    nodes.push(n);
+  }
+  return mergeNodeRanges(t, d.scene, nodes);
 }
 
 /** 항목(차례)이 지금 보여야 하는지: 부드러운·숨긴 형상 켜짐, 숨긴 윗단계 항목·나무 노드(태그는 뷰어가 따로 가린다) */
@@ -561,4 +602,19 @@ export function boundsSize(s: Scene3d): [number, number, number] | null {
   const b = s.bounds;
   if (!b) return null;
   return [b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]];
+}
+
+/** 나눠 올리기 기준: 삼각형+선분 수 */
+export const INCREMENTAL_PRIMS = 1_000_000;
+/** 나눠 올리기 기준: 그물·선 묶음 수 */
+export const INCREMENTAL_ITEMS = 1500;
+
+/** GPU에 나눠 올릴 만큼 큰 장면인지(작은 모형은 지금처럼 한 번에) */
+export function isBigScene(d: { scene: Scene3d }): boolean {
+  const s = d.scene;
+  if (s.meshes.length + s.lines.length >= INCREMENTAL_ITEMS) return true;
+  let prims = 0;
+  for (const m of s.meshes) prims += (m.indices ? m.indices.length : m.positions.length / 3) / 3;
+  for (const l of s.lines) prims += l.positions.length / 6;
+  return prims >= INCREMENTAL_PRIMS;
 }

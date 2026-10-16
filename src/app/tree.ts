@@ -5,7 +5,7 @@
  *   "펼친 단계" 방식이면 뿌리에서 내려가며 처음 만나는 접힌 노드를 고른다(SketchUp에서 그룹에 들어가 고르는 것과 비슷하게).
  * - 강조·숨기기·맞춰 보기: 따로 나눈 노드는 항목 id(그물·모서리)로, 나누지 않은 깊은 노드는 구간에서 모은 선분·범위로 한다.
  */
-import type { Box3, Scene3d } from 'opencad-viewer3d';
+import type { Box3, IndexRange, Scene3d } from 'opencad-viewer3d';
 
 /** 해석기 SkpTree와 같은 꼴(화면 쪽에서 검사해 받는다) */
 export interface TreeData {
@@ -214,6 +214,85 @@ export function nodeItemIds(t: TreeData, scene: Scene3d, i: number): string[] {
 /** 강조 선분 수 한도(이보다 많으면 앞부분만) */
 export const MAX_HIGHLIGHT_SEGMENTS = 2_000_000;
 
+/** 정렬된 구간 목록에 구간을 더한다(맞닿거나 겹치면 합친다). list는 시작 차례로 정렬돼 있어야 한다 */
+export function addRange(list: IndexRange[], start: number, count: number): void {
+  if (count <= 0) return;
+  const last = list[list.length - 1];
+  if (last && start >= last.start && start <= last.start + last.count) {
+    last.count = Math.max(last.count, start + count - last.start);
+    return;
+  }
+  list.push({ start, count });
+  if (last && start < last.start) normalizeRanges(list);
+}
+
+/** 정렬하고 겹치거나 맞닿은 구간을 합친다(제자리) */
+export function normalizeRanges(list: IndexRange[]): IndexRange[] {
+  list.sort((a, b) => a.start - b.start);
+  let w = 0;
+  for (const r of list) {
+    if (r.count <= 0) continue;
+    const prev = w > 0 ? list[w - 1]! : null;
+    if (prev && r.start <= prev.start + prev.count) prev.count = Math.max(prev.count, r.start + r.count - prev.start);
+    else list[w++] = { start: r.start, count: r.count };
+  }
+  list.length = w;
+  return list;
+}
+
+/** a에서 b(둘 다 합친 구간 목록)를 뺀다 */
+export function subtractRanges(a: readonly IndexRange[], b: readonly IndexRange[] | undefined): IndexRange[] {
+  if (!b?.length) return a.map((r) => ({ ...r }));
+  const out: IndexRange[] = [];
+  let j = 0;
+  for (const r of a) {
+    let s = r.start;
+    const e = r.start + r.count;
+    while (j < b.length && b[j]!.start + b[j]!.count <= s) j++;
+    let k = j;
+    while (s < e && k < b.length && b[k]!.start < e) {
+      const h = b[k]!;
+      if (h.start > s) out.push({ start: s, count: h.start - s });
+      s = Math.max(s, h.start + h.count);
+      k++;
+    }
+    if (s < e) out.push({ start: s, count: e - s });
+  }
+  return out;
+}
+
+/**
+ * 노드 안쪽 전부의 구간(항목 차례 → 삼각형·선분 번호 구간). 나누지 않은 깊은 노드 숨기기·강조(코어 setHiddenRanges·highlightRanges)용.
+ * 구간이 없으면(버렸으면) 빈 Map
+ */
+export function nodeRanges(t: TreeView, scene: Scene3d, i: number): Map<number, IndexRange[]> {
+  const out = new Map<number, IndexRange[]>();
+  if (t.runsDropped) return out;
+  ensureRuns(t, scene);
+  const stop = t.runStop!;
+  for (let r = t.runFirst[i]!; r < t.runEnd[i]!; r++) {
+    const it = t.runItem[r]!;
+    let list = out.get(it);
+    if (!list) out.set(it, (list = []));
+    addRange(list, t.runStart[r]!, stop[r]! - t.runStart[r]!);
+  }
+  return out;
+}
+
+/** 여러 노드의 구간을 항목마다 합친다 */
+export function mergeNodeRanges(t: TreeView, scene: Scene3d, nodes: Iterable<number>): Map<number, IndexRange[]> {
+  const out = new Map<number, IndexRange[]>();
+  for (const n of nodes)
+    for (const [it, list] of nodeRanges(t, scene, n)) {
+      const cur = out.get(it);
+      if (cur) {
+        cur.push(...list);
+        normalizeRanges(cur);
+      } else out.set(it, list);
+    }
+  return out;
+}
+
 /** 강조 선분: 위치(origin 기준 좌표)와 그 원점(코어 v0.4 setHighlightSegments의 origin) */
 export interface SegmentSet {
   positions: Float32Array;
@@ -227,12 +306,23 @@ type Origin = readonly [number, number, number] | undefined;
  * 모서리가 하나도 없으면(면만 있는 노드) 삼각형 변으로 대신한다. 없으면 null.
  * 항목마다 묶음 원점(origin)이 다를 수 있어, 처음 만난 항목의 원점을 공통 원점으로 삼고 차이를 double로 더해 적는다.
  */
-export function nodeSegments(t: TreeView, scene: Scene3d, i: number, visible: (item: number) => boolean = () => true, cap = MAX_HIGHLIGHT_SEGMENTS): SegmentSet | null {
+export function nodeSegments(
+  t: TreeView,
+  scene: Scene3d,
+  i: number,
+  visible: (item: number) => boolean = () => true,
+  cap = MAX_HIGHLIGHT_SEGMENTS,
+  hidden?: ReadonlyMap<number, readonly IndexRange[]>,
+): SegmentSet | null {
   if (t.runsDropped) return null;
-  ensureRuns(t, scene);
-  const stop = t.runStop!;
-  const r0 = t.runFirst[i]!;
-  const r1 = t.runEnd[i]!;
+  // 숨긴 구간을 뺀 노드 구간(항목마다)
+  const own = nodeRanges(t, scene, i);
+  const parts: [number, IndexRange[]][] = [];
+  for (const [it, list] of own) {
+    if (!visible(it)) continue;
+    const left = subtractRanges(list, hidden?.get(it));
+    if (left.length) parts.push([it, left]);
+  }
   let common: Origin;
   let commonSet = false;
   /** 이 항목 원점 → 공통 원점 차이 */
@@ -245,54 +335,59 @@ export function nodeSegments(t: TreeView, scene: Scene3d, i: number, visible: (i
   };
   const done = (positions: Float32Array): SegmentSet => (common ? { positions, origin: [common[0], common[1], common[2]] } : { positions });
   let n = 0;
-  for (let r = r0; r < r1; r++) {
-    const it = t.runItem[r]!;
-    if (it >= t.meshCount && visible(it)) n += stop[r]! - t.runStart[r]!;
-  }
+  for (const [it, list] of parts) if (it >= t.meshCount) for (const r of list) n += r.count;
   if (n > 0) {
     const out = new Float32Array(Math.min(n, cap) * 6);
     let o = 0;
-    for (let r = r0; r < r1 && o < out.length; r++) {
-      const it = t.runItem[r]!;
-      if (it < t.meshCount || !visible(it)) continue;
+    for (const [it, list] of parts) {
+      if (it < t.meshCount) continue;
       const line = scene.lines[it - t.meshCount]!;
       const d = delta(line.origin);
       const pos = line.positions;
-      const a = t.runStart[r]! * 6;
-      const b = Math.min(stop[r]! * 6, a + (out.length - o));
-      if (!d[0] && !d[1] && !d[2]) out.set(pos.subarray(a, b), o);
-      else for (let k = a; k < b; k++) out[o + k - a] = pos[k]! + d[k % 3]!;
-      o += b - a;
+      for (const r of list) {
+        if (o >= out.length) break;
+        const a = r.start * 6;
+        const b = Math.min((r.start + r.count) * 6, a + (out.length - o));
+        if (!d[0] && !d[1] && !d[2]) out.set(pos.subarray(a, b), o);
+        else for (let k = a; k < b; k++) out[o + k - a] = pos[k]! + d[k % 3]!;
+        o += b - a;
+      }
     }
     return done(out);
   }
   // 모서리가 없으면 삼각형 변
   let tris = 0;
-  for (let r = r0; r < r1; r++) if (t.runItem[r]! < t.meshCount && visible(t.runItem[r]!)) tris += stop[r]! - t.runStart[r]!;
+  for (const [it, list] of parts) if (it < t.meshCount) for (const r of list) tris += r.count;
   if (!tris) return null;
   const out = new Float32Array(Math.min(tris * 3, cap) * 6);
   let o = 0;
-  for (let r = r0; r < r1 && o < out.length; r++) {
-    const it = t.runItem[r]!;
-    if (it >= t.meshCount || !visible(it)) continue;
+  for (const [it, list] of parts) {
+    if (it >= t.meshCount) continue;
     const m = scene.meshes[it]!;
     const d = delta(m.origin);
     const P = m.positions;
-    for (let tri = t.runStart[r]!; tri < stop[r]! && o < out.length; tri++) {
-      const v = [0, 1, 2].map((k) => (m.indices ? m.indices[3 * tri + k]! : 3 * tri + k));
-      for (let k = 0; k < 3 && o < out.length; k++) {
-        const a = v[k]! * 3;
-        const b = v[(k + 1) % 3]! * 3;
-        out.set([P[a]! + d[0], P[a + 1]! + d[1], P[a + 2]! + d[2], P[b]! + d[0], P[b + 1]! + d[1], P[b + 2]! + d[2]], o);
-        o += 6;
+    for (const r of list)
+      for (let tri = r.start; tri < r.start + r.count && o < out.length; tri++) {
+        const v = [0, 1, 2].map((k) => (m.indices ? m.indices[3 * tri + k]! : 3 * tri + k));
+        for (let k = 0; k < 3 && o < out.length; k++) {
+          const a = v[k]! * 3;
+          const b = v[(k + 1) % 3]! * 3;
+          out.set([P[a]! + d[0], P[a + 1]! + d[1], P[a + 2]! + d[2], P[b]! + d[0], P[b + 1]! + d[1], P[b + 2]! + d[2]], o);
+          o += 6;
+        }
       }
-    }
   }
   return done(out);
 }
 
 /** 노드 안쪽 형상의 범위(세계 좌표 — 묶음 원점을 더한다, 보이는 항목만). 없으면 null */
-export function nodeBox(t: TreeView, scene: Scene3d, i: number, visible: (item: number) => boolean = () => true): Box3 | null {
+export function nodeBox(
+  t: TreeView,
+  scene: Scene3d,
+  i: number,
+  visible: (item: number) => boolean = () => true,
+  hidden?: ReadonlyMap<number, readonly IndexRange[]>,
+): Box3 | null {
   const min: [number, number, number] = [Infinity, Infinity, Infinity];
   const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
   const add = (P: Float32Array, v: number, o: Origin): void => {
@@ -314,17 +409,16 @@ export function nodeBox(t: TreeView, scene: Scene3d, i: number, visible: (item: 
       for (let v = 0; v < l.positions.length / 3; v++) add(l.positions, v, l.origin);
     }
   } else if (!t.runsDropped) {
-    ensureRuns(t, scene);
-    const stop = t.runStop!;
-    for (let r = t.runFirst[i]!; r < t.runEnd[i]!; r++) {
-      const it = t.runItem[r]!;
+    for (const [it, list] of nodeRanges(t, scene, i)) {
       if (!visible(it)) continue;
-      if (it < t.meshCount) {
-        const m = scene.meshes[it]!;
-        for (let tri = t.runStart[r]!; tri < stop[r]!; tri++) for (let k = 0; k < 3; k++) add(m.positions, m.indices ? m.indices[3 * tri + k]! : 3 * tri + k, m.origin);
-      } else {
-        const l = scene.lines[it - t.meshCount]!;
-        for (let s = t.runStart[r]! * 2; s < stop[r]! * 2; s++) add(l.positions, s, l.origin);
+      for (const r of subtractRanges(list, hidden?.get(it))) {
+        if (it < t.meshCount) {
+          const m = scene.meshes[it]!;
+          for (let tri = r.start; tri < r.start + r.count; tri++) for (let k = 0; k < 3; k++) add(m.positions, m.indices ? m.indices[3 * tri + k]! : 3 * tri + k, m.origin);
+        } else {
+          const l = scene.lines[it - t.meshCount]!;
+          for (let p = r.start * 2; p < (r.start + r.count) * 2; p++) add(l.positions, p, l.origin);
+        }
       }
     }
   }

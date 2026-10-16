@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { Pick3d, Scene3d } from 'opencad-viewer3d';
 import {
+  INCREMENTAL_PRIMS,
+  canHideNode,
   componentImage,
   createDoc,
+  hiddenNodeRanges,
+  isBigScene,
+  selectionRanges,
   docImages,
   fileSafeName,
   itemVisible,
@@ -15,7 +20,22 @@ import {
   selectionText,
 } from '../../src/app/doc';
 import { sampleModelDat, sampleSkpBytes } from '../../src/app/sample';
-import { childrenOf, deepestNodeAt, isSplit, levelNode, nodeBox, nodeName, nodePath, readTree, treeDefinitionCounts } from '../../src/app/tree';
+import {
+  addRange,
+  childrenOf,
+  deepestNodeAt,
+  isSplit,
+  levelNode,
+  mergeNodeRanges,
+  nodeBox,
+  nodeName,
+  nodePath,
+  nodeRanges,
+  normalizeRanges,
+  readTree,
+  subtractRanges,
+  treeDefinitionCounts,
+} from '../../src/app/tree';
 import { readSkpImages, skpToScene } from '../../src/index';
 import { readModelDat } from '../../src/model';
 import { buildSceneParts } from '../../src/scene';
@@ -229,5 +249,95 @@ describe('큰 좌표(묶음 원점)', () => {
     const box = nodeBox(d.tree!, scene, leg)!;
     expect(box.min[0]).toBeGreaterThan(shift - 1000);
     expect(box.max[2] - box.min[2]).toBeCloseTo(430 / 25.4, 3);
+  });
+});
+
+/** 그물 안 구간으로 깊은 노드를 숨기고 강조하는 예제(윗단계만 나눔) */
+function mergedDoc() {
+  const parts = buildSceneParts(readModelDat(sampleModelDat()), new Map(), 1, { outline: true, maxSplitItems: 1 });
+  const scene: Scene3d = { name: 'x', units: 'inch', meshes: parts.meshes, lines: parts.lines, meta: { tree: parts.tree, outline: parts.outline } };
+  return createDoc('x', 1, { scene, ms: 1 });
+}
+
+describe('그물 안 구간(나누지 않은 깊은 노드)', () => {
+  it('구간 더하기·합치기·빼기', () => {
+    const l: { start: number; count: number }[] = [];
+    addRange(l, 0, 3);
+    addRange(l, 3, 2);
+    addRange(l, 10, 1);
+    expect(l).toEqual([
+      { start: 0, count: 5 },
+      { start: 10, count: 1 },
+    ]);
+    addRange(l, 4, 0);
+    expect(normalizeRanges([{ start: 8, count: 4 }, { start: 0, count: 2 }, { start: 1, count: 3 }, { start: 5, count: 0 }])).toEqual([
+      { start: 0, count: 4 },
+      { start: 8, count: 4 },
+    ]);
+    expect(subtractRanges([{ start: 0, count: 10 }], [{ start: 2, count: 3 }, { start: 8, count: 5 }])).toEqual([
+      { start: 0, count: 2 },
+      { start: 5, count: 3 },
+    ]);
+    expect(subtractRanges([{ start: 0, count: 4 }, { start: 6, count: 2 }], [{ start: 0, count: 10 }])).toEqual([]);
+    expect(subtractRanges([{ start: 3, count: 2 }], undefined)).toEqual([{ start: 3, count: 2 }]);
+  });
+
+  it('노드 구간: 의자 다리 하나 = 그물 삼각형 10 + 모서리 선분 12, 다리 넷을 합치면 항목마다 한 목록', () => {
+    const d = mergedDoc();
+    const t = d.tree!;
+    const legs = childrenOf(t, 5);
+    const r = nodeRanges(t, d.scene, legs[0]!);
+    let tris = 0;
+    let segs = 0;
+    for (const [it, list] of r) for (const x of list) (it < t.meshCount ? (tris += x.count) : (segs += x.count));
+    expect(tris).toBe(10);
+    expect(segs).toBe(12);
+    const all = mergeNodeRanges(t, d.scene, legs);
+    for (const list of all.values()) for (let i = 1; i < list.length; i++) expect(list[i]!.start).toBeGreaterThan(list[i - 1]!.start + list[i - 1]!.count);
+    let total = 0;
+    for (const [it, list] of all) if (it < t.meshCount) for (const x of list) total += x.count;
+    expect(total).toBe(40);
+  });
+
+  it('숨김: 깊은 노드도 숨길 수 있고, 여러 노드는 항목마다 합치며, 조상이 숨으면 건너뛴다', () => {
+    const d = mergedDoc();
+    const t = d.tree!;
+    const legs = childrenOf(t, 5);
+    expect(isSplit(t, legs[0]!)).toBe(false);
+    expect(canHideNode(d, legs[0]!)).toBe(true);
+    d.hiddenNodes.add(legs[0]!);
+    d.hiddenNodes.add(legs[1]!);
+    const h = hiddenNodeRanges(d);
+    const legsOnly = mergeNodeRanges(t, d.scene, [legs[0]!, legs[1]!]);
+    expect([...h.keys()].sort()).toEqual([...legsOnly.keys()].sort());
+    // 의자 자체(나눈 노드)를 숨기면 그 항목째 숨으므로 다리 구간은 따로 넘기지 않는다
+    d.hiddenNodes.add(5);
+    expect(hiddenNodeRanges(d).size).toBe(0);
+    // 구간을 버린 나무는 깊은 노드를 숨길 수 없다
+    expect(canHideNode({ ...d, tree: { ...t, runsDropped: true } }, legs[0]!)).toBe(false);
+  });
+
+  it('강조: 면은 그물 구간, 숨긴 구간과 겹치면 강조 선분에서 뺀다', () => {
+    const d = mergedDoc();
+    const t = d.tree!;
+    const leg = childrenOf(t, 5)[0]!;
+    const sel = nodeSelection(d, leg);
+    const ranges = selectionRanges(d, sel)!;
+    expect([...ranges.keys()].every((id) => id.startsWith('skp-mesh'))).toBe(true);
+    expect([...ranges.values()].flat().reduce((a, r) => a + r.count, 0)).toBe(10);
+    expect(selectionRanges(d, nodeSelection(d, 5))).toBeNull();
+    d.hiddenNodes.add(leg);
+    expect(selectionSegments(d, sel, undefined, hiddenNodeRanges(d))).toBeNull();
+    // 범위도 숨긴 부분을 빼면 비어 맞춰 볼 것이 없다
+    expect(nodeBox(t, d.scene, leg, undefined, hiddenNodeRanges(d))).toBeNull();
+  });
+
+  it('큰 장면만 나눠 올린다', () => {
+    const d = sampleDoc();
+    expect(isBigScene(d)).toBe(false);
+    const big = new Uint32Array(3 * INCREMENTAL_PRIMS);
+    expect(isBigScene({ scene: { ...d.scene, meshes: [{ id: 'a', positions: new Float32Array(9), indices: big, color: [1, 1, 1, 1] }] } })).toBe(true);
+    const many = Array.from({ length: 1600 }, (_, i) => ({ id: `l${i}`, positions: new Float32Array(6) }));
+    expect(isBigScene({ scene: { ...d.scene, meshes: [], lines: many } })).toBe(true);
   });
 });

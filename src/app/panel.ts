@@ -364,9 +364,9 @@ export class Panel {
     const notes: string[] = [`그룹 ${fmtCount(groups)} · 컴포넌트 ${fmtCount(comps)}(모든 단계, ${t.listedDepth}단계까지).`];
     notes.push('› 단추로 펼치면 3D에서 누를 때도 그 안의 항목을 고릅니다. 누르면 강조, 두 번 누르면 확대합니다.');
     if (t.unlisted) notes.push(`노드가 많아 ${t.listedDepth + 1}단계부터는 목록에 넣지 않았습니다(그 안을 누르면 ${t.listedDepth}단계 항목을 고릅니다).`);
-    if (d.outlineSkipped) notes.push(`모형 바로 아래 항목이 ${fmtCount(d.outlineSkipped)}개로 많아 숨기기는 끄고, 강조는 모서리 선으로 합니다.`);
+    if (d.outlineSkipped) notes.push(`모형 바로 아래 항목이 ${fmtCount(d.outlineSkipped)}개로 많아 그물을 나누지 않고, 숨기기·강조는 그물 안 구간으로 합니다.`);
     else if (t.splitDepth < t.listedDepth)
-      notes.push(`그리기가 느려지지 않게 ${t.splitDepth}단계까지만 따로 숨길 수 있습니다. 더 깊은 항목은 모서리 선으로 강조합니다.`);
+      notes.push(`그리기가 느려지지 않게 ${t.splitDepth}단계까지만 따로 그물을 나누고, 더 깊은 항목은 그물 안 구간으로 숨기고 강조합니다.`);
     if (t.runsDropped) notes.push('항목이 너무 많아 3D에서 깊은 단계를 눌러 고르지는 못합니다.');
     this.body.append(
       section(
@@ -399,13 +399,14 @@ export class Panel {
         e.stopPropagation();
         this.host.setExpanded(n, !open);
       });
+    const canHide = split || !t.runsDropped;
     const cb = h('input', {
       type: 'checkbox',
       'aria-label': `${name} 보이기`,
-      title: split ? '보이기·숨기기' : '이 단계는 다른 항목과 한 그물로 묶여 따로 숨길 수 없습니다 — 위 단계를 숨기세요',
+      title: canHide ? '보이기·숨기기' : '항목이 너무 많아 이 단계는 따로 숨길 수 없습니다 — 위 단계를 숨기세요',
     });
     cb.checked = !d.hiddenNodes.has(n);
-    cb.disabled = !split;
+    cb.disabled = !canHide;
     cb.addEventListener('change', () => this.host.setNodeVisible(n, cb.checked));
     cb.addEventListener('click', (e) => e.stopPropagation());
     const kind = t.kind[n] === 0 ? 'group' : 'component';
