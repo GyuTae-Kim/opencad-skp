@@ -4,18 +4,26 @@
  * - 파일은 하나만 연다(새로 열면 바꾼다). 해석은 웹 워커(src/worker/parse.worker.ts)에서 하고 진행률을 덮개로 보인다.
  *   새 파일이 실패하면 열려 있던 문서는 그대로 둔다.
  * - 키: 캔버스에 초점이 있으면 뷰어가 F·1~7을 직접 받고, 초점이 단추 등 다른 곳이어도(입력 칸 제외) 창 캡처 단계에서
- *   같은 키를 뷰어로 보낸다. F7 = 격자, Esc = 측정·고르기 지우기.
+ *   같은 키를 뷰어로 보낸다. F7 = 격자, Ctrl/⌘+O = 열기, Esc = 취소 → 측정 점 지우기 → 측정 끄기 → 고른 것 지우기.
+ * - 3D 고르기: 구성 나무에서 펼친 단계까지 들어가 고른다(Alt+누르기 = 가장 안쪽, 3D에서 두 번 누르기 = 한 단계 들어가기).
+ * - 패널 가장자리를 끌어 폭(좁은 화면은 시트 높이)을 바꾼다. 좁은 화면에서 시트를 열고 닫아도 확대해 둔 보기는 지킨다.
  * - 자동 확인용으로 window.opencadApp에 상태를 둔다.
  */
-import { VIEW_LABELS, Viewer3d, type MeasureResult, type Pick3d, type Projection, type RenderMode, type ViewName } from 'opencad-viewer3d';
+import { VIEW_LABELS, Viewer3d, type MeasureResult, type Pick3d, type Projection, type RenderMode, type SectionAxis, type ViewName } from 'opencad-viewer3d';
+import { lerpCamera, type CameraState } from 'opencad-viewer3d/camera';
 import { ParseClient } from './client';
 import { h, icon } from './dom';
 import {
   createDoc,
   docLabel,
+  itemVisible,
+  nodeSelection,
+  pickDeepest,
   releaseName,
+  selectedNode,
   selectionForPick,
   selectionIds,
+  selectionSegments,
   selectionText,
   unitLabel,
   unitSummary,
@@ -26,9 +34,12 @@ import {
 import { MAX_FILE_BYTES, SKP_ACCEPT, baseName, fmtCount, fmtNum, formatBytes, formatMs, stripExtension } from './format';
 import { VIEW_KEY_OF, VIEW_MENU, isEditableTarget, keyAction } from './keys';
 import type { LaunchRequest } from './launch';
+import { PANEL_WIDTH_DEFAULT, SHEET_DEFAULT, clampPanelWidth, clampSheetFraction, readLayout, storeLayout, type StoredLayout } from './layout';
 import { Panel, type PanelHost } from './panel';
 import { errorText, sceneHasGeometry } from './protocol';
-import { readStoredTheme, resolveTheme, storeTheme, systemPrefersDark, type ThemeName } from './theme';
+import { THEME_CHOICES, applyThemeChoice, readStoredTheme, resolveTheme, storeTheme, systemPrefersDark, themeChoiceOf, type ThemeChoice, type ThemeName } from './theme';
+import { isAncestor, isSplit, nodeBox, nodePath, type PickMode } from './tree';
+import { cameraForBox, keepViewOnHeightChange } from './view';
 
 export const APP_TITLE = 'OpenCAD SketchUp 뷰어';
 const TOOLS_URL = 'https://gyutae-kim.github.io/opencad';
@@ -70,6 +81,22 @@ export interface AppSnapshot {
   renderMode: RenderMode;
   projection: Projection;
   selection: string;
+  /** 테마 고르기(시스템·밝게·어둡게) */
+  themeChoice: ThemeChoice;
+  measuring: boolean;
+  /** 나무 노드 수(없으면 0) · 펼친 노드 수 · 3D 고르기 방식 */
+  treeNodes: number;
+  expanded: number;
+  pickMode: PickMode;
+  showSoft: boolean;
+  showHidden: boolean;
+  /** 꾸러미 안 그림 수(모형·무늬·컴포넌트·장면) */
+  images: number;
+  /** 패널 폭(px) · 시트 높이 비율 */
+  panelWidth: number;
+  sheet: number;
+  /** 단면(꺼져 있으면 null) */
+  section: { axis: SectionAxis | null; t: number; flip: boolean } | null;
 }
 
 interface Els {
@@ -84,6 +111,9 @@ interface Els {
   axesBtn: HTMLButtonElement;
   measureBtn: HTMLButtonElement;
   panelBtn: HTMLButtonElement;
+  secBtns: Map<SectionAxis | 'off', HTMLButtonElement>;
+  secRange: HTMLInputElement;
+  secFlip: HTMLButtonElement;
   workspace: HTMLElement;
   viewHost: HTMLElement;
   start: HTMLElement;
@@ -97,6 +127,15 @@ interface Els {
   stSel: HTMLElement;
   dropCover: HTMLElement;
   fileInput: HTMLInputElement;
+  resizer: HTMLElement;
+}
+
+interface MenuItem {
+  label: string;
+  icon?: string;
+  kbd?: string;
+  checked?: boolean;
+  run: () => void;
 }
 
 export class SkpViewerApp implements PanelHost {
@@ -112,7 +151,16 @@ export class SkpViewerApp implements PanelHost {
   private projection: Projection = 'perspective';
   private renderMode: RenderMode = 'shadedEdges';
   private theme: ThemeName;
-  private themeChosen: boolean;
+  /** 기억한 테마(null = 시스템 설정 따르기) */
+  private themeStored: ThemeName | null;
+  private layout: StoredLayout;
+  /** 3D 보기를 사용자가 직접 돌리거나 옮기거나 확대했는지(전체 보기·표준 뷰를 하면 false) */
+  private userMoved = false;
+  /** 지난 3D 고르기의 가장 안쪽 노드(두 번 누르기로 한 단계 들어갈 때) */
+  private lastDeepest: number | null = null;
+  /** 누를 때 Alt를 눌렀는지(가장 안쪽 고르기) */
+  private pickAlt = false;
+  private camAnim = 0;
   private openSeq = 0;
   private busy = false;
   private ready = false;
@@ -122,9 +170,9 @@ export class SkpViewerApp implements PanelHost {
 
   constructor(root: HTMLElement) {
     this.root = root;
-    const stored = readStoredTheme();
-    this.themeChosen = stored !== null;
-    this.theme = resolveTheme(stored, systemPrefersDark());
+    this.themeStored = readStoredTheme();
+    this.theme = resolveTheme(this.themeStored, systemPrefersDark());
+    this.layout = readLayout();
     this.panelOpen = !this.narrowQuery?.matches;
     this.panel = new Panel(this);
   }
@@ -146,7 +194,9 @@ export class SkpViewerApp implements PanelHost {
 
     // 제목 막대
     const docName = h('span', { class: 'docname' });
-    const themeBtn = tbtn('테마', 'moon', '', () => this.toggleTheme(), 'icon-only');
+    const themeBtn = tbtn('테마', 'moon', '', () => this.toggleThemeMenu(), 'icon-only');
+    themeBtn.setAttribute('aria-haspopup', 'menu');
+    themeBtn.setAttribute('aria-expanded', 'false');
     const title = h(
       'header',
       { class: 'titlebar' },
@@ -182,8 +232,23 @@ export class SkpViewerApp implements PanelHost {
     const cubeBtn = tbtn('뷰 큐브', 'cube', '뷰 큐브 보이기', () => this.toggleCube());
     const axesBtn = tbtn('좌표축', 'axes', '좌표축 보이기', () => this.toggleAxes());
     const measureBtn = tbtn('측정', 'measure', '두 점 측정(거리·dx·dy·dz, Esc로 지우기)', () => this.toggleMeasure());
-    const pngBtn = tbtn('PNG 저장', 'image', '지금 화면을 PNG 그림으로 저장', () => void this.savePng());
+    const pngBtn = tbtn('PNG 저장', 'image', '지금 화면을 PNG 그림으로 저장', () => void this.savePng(), 'compact');
     const panelBtn = tbtn('패널', 'panel', '패널 열기·닫기', () => this.setPanelOpen(!this.panelOpen));
+    // 단면 보기: 끔·X·Y·Z, 위치 슬라이더(장면 범위 안 0~1), 뒤집기. 잘린 면은 채우지 않고 테두리만(SKP는 입체 여부를 모른다)
+    const axisBtn = (axis: SectionAxis): HTMLButtonElement => {
+      const b = h('button', { class: 'tbtn sec-axis', type: 'button', title: `${axis.toUpperCase()}축에 수직인 단면(+${axis.toUpperCase()} 쪽을 잘라 냄)`, 'aria-label': `${axis.toUpperCase()}축 단면` }, axis.toUpperCase());
+      b.addEventListener('click', () => this.setSectionAxis(axis));
+      return b;
+    };
+    const secBtns = new Map<SectionAxis | 'off', HTMLButtonElement>([
+      ['off', tbtn('단면 끔', 'section', '단면 보기 끄기', () => this.setSectionAxis(null), 'sec-off icon-only')],
+      ['x', axisBtn('x')],
+      ['y', axisBtn('y')],
+      ['z', axisBtn('z')],
+    ]);
+    const secRange = h('input', { class: 'sec-range', type: 'range', min: '0', max: '1000', step: '1', value: '500', 'aria-label': '단면 위치', title: '단면 위치(장면 범위 안)' });
+    secRange.addEventListener('input', () => this.viewer?.setSectionPosition(Number(secRange.value) / 1000));
+    const secFlip = tbtn('뒤집기', 'flip', '자르는 쪽 뒤집기', () => this.flipSection(), 'icon-only');
     const toolbar = h(
       'div',
       { class: 'toolbar', role: 'toolbar', 'aria-label': '보기 도구' },
@@ -193,9 +258,11 @@ export class SkpViewerApp implements PanelHost {
       sep(),
       h('div', { class: 'tgroup seg', role: 'group', 'aria-label': '그리기 방식' }, ...modeBtns.values()),
       sep(),
-      h('div', { class: 'tgroup' }, gridBtn, cubeBtn, axesBtn),
+      h('div', { class: 'tgroup compact' }, gridBtn, cubeBtn, axesBtn),
       sep(),
       h('div', { class: 'tgroup' }, measureBtn, pngBtn),
+      sep(),
+      h('div', { class: 'tgroup sec-group', role: 'group', 'aria-label': '단면 보기' }, h('div', { class: 'tgroup seg' }, ...secBtns.values()), secRange, secFlip),
       h('span', { class: 'spacer' }),
       h('div', { class: 'tgroup' }, panelBtn),
     );
@@ -221,7 +288,15 @@ export class SkpViewerApp implements PanelHost {
     );
     const start = this.buildStart();
     const stage = h('div', { class: 'stage' }, viewHost, start, notice, busy);
-    const workspace = h('main', { class: 'workspace' }, stage, this.panel.el);
+    const resizer = h('div', {
+      class: 'resizer',
+      role: 'separator',
+      tabindex: '0',
+      'aria-label': '패널 크기 바꾸기(끌기·화살표 키, 두 번 누르면 처음 크기)',
+      title: '끌어서 패널 크기 바꾸기 · 두 번 누르면 처음 크기',
+      hidden: true,
+    });
+    const workspace = h('main', { class: 'workspace' }, stage, resizer, this.panel.el);
 
     // 상태 막대
     const stMain = h('span', { class: 'st-main' });
@@ -251,6 +326,9 @@ export class SkpViewerApp implements PanelHost {
       axesBtn,
       measureBtn,
       panelBtn,
+      secBtns,
+      secRange,
+      secFlip,
       workspace,
       viewHost,
       start,
@@ -264,9 +342,12 @@ export class SkpViewerApp implements PanelHost {
       stSel,
       dropCover,
       fileInput,
+      resizer,
     };
 
     this.bindWindow();
+    this.bindResizer();
+    this.applyLayout();
     this.applyTheme();
     this.refreshChrome();
     this.ready = true;
@@ -360,14 +441,17 @@ export class SkpViewerApp implements PanelHost {
     // 시스템 테마(직접 고르지 않았을 때만 따른다)
     try {
       matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
-        if (this.themeChosen) return;
+        if (this.themeStored) return;
         this.theme = e.matches ? 'dark' : 'light';
         this.applyTheme();
       });
     } catch {
       /* 오래된 브라우저 */
     }
-    window.addEventListener('resize', () => this.closeMenu());
+    window.addEventListener('resize', () => {
+      this.closeMenu();
+      this.applyLayout();
+    });
     // 좁은 화면에서는 뷰 큐브를 줄인다
     this.narrowQuery?.addEventListener('change', () => this.viewer?.setViewCubeSize(this.viewCubeSize()));
   }
@@ -477,7 +561,13 @@ export class SkpViewerApp implements PanelHost {
         this.showNotice('error', `"${name}" 파일을 열지 못했습니다`, why);
         return;
       }
-      this.setDoc(createDoc(name, size, res));
+      // 큰 모형은 GPU에 올리는 동안 화면이 잠깐 멈추므로, 그 전에 단계 글을 한 번 그린다
+      this.setBusy(name, 0.99, '화면에 올리는 중');
+      await new Promise<void>((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+      if (seq !== this.openSeq) return;
+      const doc = createDoc(name, size, res, { makeUrl: (b, mime) => URL.createObjectURL(new Blob([b as BlobPart], { type: mime })) });
+      this.setDoc(doc);
+      this.noticeDamage(doc);
     } catch (e) {
       if (seq !== this.openSeq) return;
       this.showNotice('error', `"${name}" 파일을 열지 못했습니다`, errorText(e));
@@ -489,16 +579,38 @@ export class SkpViewerApp implements PanelHost {
 
   private setDoc(d: SkpDoc): void {
     const v = this.ensureViewer();
-    if (!v) return;
+    if (!v) {
+      revokeImages(d);
+      return;
+    }
     this.closeNotice();
+    const old = this.doc;
     this.doc = d;
     v.setScene(d.scene);
     v.setRenderMode(this.renderMode);
     v.highlight(null);
+    v.setHighlightSegments(null);
     if (v.measureMode) v.clearMeasure();
+    // 부드러운 모서리·숨긴 형상은 처음에 숨긴다(장면 범위에는 들어 있지 않다)
+    this.refreshItemVisibility();
+    this.userMoved = false;
+    this.lastDeepest = null;
+    if (old && old !== d) revokeImages(old);
     this.panel.show(d);
     document.title = `${d.name} - ${APP_TITLE}`;
     this.refreshChrome();
+  }
+
+  /** 잘렸거나 깨진 파일·출력 한도는 알림으로 알린다(경고 목록은 정보 탭) */
+  private noticeDamage(d: SkpDoc): void {
+    const warns = d.scene.warnings ?? [];
+    if (d.damaged) {
+      const why = warns.find((w) => /잘렸|깨져|깨진/.test(w)) ?? warns[0] ?? '';
+      this.showNotice('warn', `"${d.name}" 파일의 일부만 보입니다`, `파일이 잘렸거나 깨진 곳이 있어 읽을 수 있는 부분만 그렸습니다. ${why}`);
+    } else if (d.limited) {
+      const why = warns.find((w) => /한도/.test(w)) ?? '';
+      this.showNotice('warn', '모형이 너무 커서 일부만 그렸습니다', why);
+    }
   }
 
   private ensureViewer(): Viewer3d | null {
@@ -512,6 +624,7 @@ export class SkpViewerApp implements PanelHost {
       });
       v.onPick((p) => this.onPick(p));
       v.onMeasure((m) => this.onMeasure(m));
+      this.watchCanvas(v);
       this.viewer = v;
       return v;
     } catch (e) {
@@ -526,11 +639,60 @@ export class SkpViewerApp implements PanelHost {
 
   // ───────────────────────── 고르기·측정 ─────────────────────────
 
+  /** 3D 보기 입력 엿보기: Alt 누르기(가장 안쪽), 두 번 누르기(한 단계 들어가기), 사용자가 보기를 움직였는지 */
+  private watchCanvas(v: Viewer3d): void {
+    const cv = v.canvas;
+    let down: { x: number; y: number } | null = null;
+    cv.addEventListener('pointerdown', (e) => {
+      this.pickAlt = e.altKey;
+      down = { x: e.clientX, y: e.clientY };
+    });
+    cv.addEventListener('pointermove', (e) => {
+      if (down && e.buttons && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) this.userMoved = true;
+    });
+    cv.addEventListener('pointerup', () => (down = null));
+    cv.addEventListener('wheel', () => (this.userMoved = true), { passive: true });
+    cv.addEventListener('dblclick', () => this.enterLevel());
+    // 뷰 큐브를 누르면 표준 뷰 + 전체 보기
+    v.host.querySelector('.v3d-cube')?.addEventListener('pointerdown', () => (this.userMoved = false));
+  }
+
   private onPick(p: Pick3d | null): void {
     const d = this.doc;
     if (!d) return;
+    // 단면에서 잘린 면(채운 면)은 형상이 아니므로 고르기에서 무시한다
+    if (p?.section) return;
     d.pick = p;
-    this.applySelection(selectionForPick(d, p), true);
+    this.lastDeepest = pickDeepest(d, p);
+    const sel = selectionForPick(d, p, this.pickAlt);
+    this.pickAlt = false;
+    // 가장 안쪽을 골랐으면 목록에서 보이게 조상을 펼친다(펼친 단계 방식이면 이미 펼쳐져 있다)
+    const n = selectedNode(d, sel);
+    let opened = false;
+    if (d.tree && n !== null && n >= 0)
+      for (const a of nodePath(d.tree, n).slice(0, -1))
+        if (!d.expanded.has(a)) {
+          d.expanded.add(a);
+          opened = true;
+        }
+    if (opened && d.panelTab === 'outline') this.panel.rerender();
+    this.applySelection(sel, true);
+  }
+
+  /** 3D에서 두 번 누르기: 고른 그룹·컴포넌트를 펼치고, 누른 곳을 품은 바로 안쪽 항목을 고른다 */
+  private enterLevel(): void {
+    const d = this.doc;
+    const t = d?.tree;
+    const deep = this.lastDeepest;
+    if (!d || !t || deep === null || deep < 0 || this.measuring) return;
+    const n = selectedNode(d, d.selection);
+    if (n === null || n < 0 || n === deep || !isAncestor(t, n, deep)) return;
+    const path = nodePath(t, deep);
+    const next = path[path.indexOf(n) + 1];
+    if (next === undefined) return;
+    d.expanded.add(n);
+    if (d.panelTab === 'outline') this.panel.rerender();
+    this.applySelection(nodeSelection(d, next), true);
   }
 
   private onMeasure(m: MeasureResult | null): void {
@@ -555,18 +717,49 @@ export class SkpViewerApp implements PanelHost {
     d.selection = sel;
     if (!sel) d.pick = null;
     const ids = selectionIds(d, sel);
-    this.viewer?.highlight(ids.length ? ids : null);
+    const v = this.viewer;
+    v?.highlight(ids.length ? ids : null);
+    // 나누지 않은 깊은 노드는 안쪽 모서리를 굵은 강조 선으로(보이는 항목만)
+    const seg = v ? selectionSegments(d, sel, (item) => v.isVisible(this.itemId(item))) : null;
+    v?.setHighlightSegments(seg?.positions ?? null, seg?.origin ? { width: 3, hidden: 0.25, origin: seg.origin } : { width: 3, hidden: 0.25 });
     this.panel.refreshSelection(reveal);
     this.refreshStatus();
+  }
+
+  private itemId(item: number): string {
+    const s = this.doc!.scene;
+    return item < s.meshes.length ? s.meshes[item]!.id : (s.lines[item - s.meshes.length]?.id ?? '');
   }
 
   zoomToSelection(): void {
     const d = this.doc;
     const v = this.viewer;
     if (!d || !v) return;
-    const ids = selectionIds(d, d.selection);
+    const sel = d.selection;
+    if (sel?.kind === 'node' && d.tree && !isSplit(d.tree, sel.index)) {
+      const box = nodeBox(d.tree, d.scene, sel.index, (item) => v.isVisible(this.itemId(item)));
+      if (box) this.animateCamera(cameraForBox(v.getCamera(), box, v.canvas.clientWidth / Math.max(1, v.canvas.clientHeight)));
+      return;
+    }
+    const ids = selectionIds(d, sel);
     // 보이는 것만 맞춰 본다(모두 숨겼으면 뷰어가 전체 보기로)
     if (ids.length) v.fitItems(ids);
+  }
+
+  /** 카메라를 부드럽게 옮긴다(뷰어의 맞춰 보기 움직임과 비슷한 시간) */
+  private animateCamera(to: CameraState, ms = 320): void {
+    const v = this.viewer;
+    if (!v) return;
+    cancelAnimationFrame(this.camAnim);
+    const from = v.getCamera();
+    const t0 = performance.now();
+    const step = (now: number): void => {
+      const k = Math.min(1, (now - t0) / ms);
+      const e = 1 - (1 - k) ** 3;
+      v.setCamera(lerpCamera(from, to, e));
+      if (k < 1) this.camAnim = requestAnimationFrame(step);
+    };
+    this.camAnim = requestAnimationFrame(step);
   }
 
   get measuring(): boolean {
@@ -600,10 +793,76 @@ export class SkpViewerApp implements PanelHost {
     const d = this.doc;
     const r = d?.outline[index];
     if (!d || !r) return;
+    // 나무가 있으면 윗단계 항목도 나무 노드로 숨긴다(안쪽 노드 숨김과 겹쳐도 맞게)
+    if (r.node !== null && d.tree) {
+      this.setNodeVisible(r.node, on);
+      return;
+    }
     if (on) d.hiddenOutline.delete(index);
     else d.hiddenOutline.add(index);
-    for (const id of r.ids) this.viewer?.setItemVisible(id, on);
+    this.refreshItemVisibility();
     this.panel.refreshVisibility();
+  }
+
+  setNodeVisible(node: number, on: boolean): void {
+    const d = this.doc;
+    if (!d?.tree || !isSplit(d.tree, node)) return;
+    if (on) d.hiddenNodes.delete(node);
+    else d.hiddenNodes.add(node);
+    this.refreshItemVisibility();
+    this.panel.refreshVisibility();
+  }
+
+  setExpanded(node: number, on: boolean): void {
+    const d = this.doc;
+    if (!d?.tree) return;
+    if (on) d.expanded.add(node);
+    else {
+      // 접으면 안쪽에 펼쳐 둔 것도 접는다
+      for (const n of [...d.expanded]) if (isAncestor(d.tree, node, n)) d.expanded.delete(n);
+    }
+    this.panel.rerender();
+    this.refreshStatus();
+  }
+
+  collapseAll(): void {
+    const d = this.doc;
+    if (!d) return;
+    d.expanded.clear();
+    this.panel.rerender();
+  }
+
+  setPickMode(mode: PickMode): void {
+    const d = this.doc;
+    if (!d || d.pickMode === mode) return;
+    d.pickMode = mode;
+    this.panel.rerender();
+  }
+
+  setShowSoft(on: boolean): void {
+    const d = this.doc;
+    if (!d) return;
+    d.showSoft = on;
+    this.refreshItemVisibility();
+    this.panel.rerender();
+  }
+
+  setShowHidden(on: boolean): void {
+    const d = this.doc;
+    if (!d) return;
+    d.showHidden = on;
+    this.refreshItemVisibility();
+    this.panel.rerender();
+  }
+
+  /** 항목마다 보이기(부드러운·숨긴 형상 켜짐, 숨긴 윗단계·노드)를 뷰어에 맞춘다. 강조 선분도 다시 모은다 */
+  private refreshItemVisibility(): void {
+    const d = this.doc;
+    const v = this.viewer;
+    if (!d || !v) return;
+    const n = d.scene.meshes.length + d.scene.lines.length;
+    for (let i = 0; i < n; i++) v.setItemVisible(this.itemId(i), itemVisible(d, i));
+    if (d.selection?.kind === 'node') this.applySelection(d.selection, false);
   }
 
   closePanel(): void {
@@ -670,12 +929,128 @@ export class SkpViewerApp implements PanelHost {
     this.refreshStatus();
   }
 
+  // ───────────────────────── 단면 ─────────────────────────
+
+  /** 단면 축 고르기(null = 끔). 같은 축이면 위치는 그대로, 새 축이면 가운데 */
+  setSectionAxis(axis: SectionAxis | null): void {
+    const v = this.viewer;
+    if (!v || !this.doc) return;
+    if (!axis) v.setSection(null);
+    else {
+      const cur = v.section;
+      v.setSectionAxis(axis, cur && cur.axis === axis ? cur.t : 0.5, { caps: 'closed', outline: true, plane: true });
+    }
+    this.refreshToolbar();
+  }
+
+  flipSection(): void {
+    this.viewer?.flipSection();
+    this.refreshToolbar();
+  }
+
   setPanelOpen(on: boolean): void {
     if (this.panelOpen === on) return;
+    const h0 = this.els.viewHost.clientHeight;
     this.panelOpen = on;
     this.refreshChrome();
-    // 좁은 화면에서는 아래 시트가 3D 보기 높이를 크게 바꾸므로, 크기가 정해진 뒤 다시 맞춘다
-    if (this.viewer && this.doc && window.innerWidth < NARROW_WIDTH) requestAnimationFrame(() => requestAnimationFrame(() => this.viewer?.fit(false)));
+    if (this.viewer && this.doc && this.narrowQuery?.matches) this.afterViewHeightChange(h0);
+  }
+
+  /**
+   * 좁은 화면에서 아래 시트가 3D 보기 높이를 바꾼 뒤: 사용자가 보기를 움직이지 않았으면 다시 전체 보기,
+   * 확대·이동해 두었으면 위쪽에 보이던 것이 같은 자리·같은 크기로 남게 카메라를 옮긴다.
+   */
+  private afterViewHeightChange(h0: number): void {
+    const v = this.viewer;
+    if (!v) return;
+    const h1 = this.els.viewHost.clientHeight;
+    if (!this.userMoved) {
+      requestAnimationFrame(() => requestAnimationFrame(() => this.viewer?.fit(false)));
+      return;
+    }
+    if (h0 > 0 && h1 > 0 && h0 !== h1) v.setCamera(keepViewOnHeightChange(v.getCamera(), h0, h1));
+  }
+
+  // ───────────────────────── 패널 크기 ─────────────────────────
+
+  private get narrow(): boolean {
+    return !!this.narrowQuery?.matches;
+  }
+
+  /** 기억한 패널 폭·시트 높이를 CSS 변수로 */
+  private applyLayout(): void {
+    const st = this.root.style;
+    const w = this.layout.panelWidth;
+    if (w !== undefined) st.setProperty('--panel-w', `${clampPanelWidth(w, window.innerWidth)}px`);
+    else st.removeProperty('--panel-w');
+    const f = this.layout.sheet;
+    if (f !== undefined) st.setProperty('--sheet-h', `${(clampSheetFraction(f, this.els?.workspace.clientHeight || window.innerHeight) * 100).toFixed(2)}%`);
+    else st.removeProperty('--sheet-h');
+  }
+
+  private bindResizer(): void {
+    const el = this.els.resizer;
+    let drag: { id: number } | null = null;
+    const moveTo = (clientX: number, clientY: number): void => {
+      const ws = this.els.workspace.getBoundingClientRect();
+      if (this.narrow) {
+        const h0 = this.els.viewHost.clientHeight;
+        this.layout.sheet = clampSheetFraction((ws.bottom - clientY) / ws.height, ws.height);
+        this.applyLayout();
+        if (this.viewer && this.doc && this.userMoved) {
+          const h1 = this.els.viewHost.clientHeight;
+          if (h0 > 0 && h1 > 0 && h0 !== h1) this.viewer.setCamera(keepViewOnHeightChange(this.viewer.getCamera(), h0, h1));
+        }
+      } else {
+        this.layout.panelWidth = clampPanelWidth(ws.right - clientX, window.innerWidth);
+        this.applyLayout();
+      }
+    };
+    el.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      drag = { id: e.pointerId };
+      try {
+        el.setPointerCapture(e.pointerId);
+      } catch {
+        /* 붙잡지 못해도 끌기는 된다 */
+      }
+      el.classList.add('dragging');
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (drag && e.pointerId === drag.id) moveTo(e.clientX, e.clientY);
+    });
+    const end = (e: PointerEvent): void => {
+      if (!drag || e.pointerId !== drag.id) return;
+      drag = null;
+      el.classList.remove('dragging');
+      storeLayout(this.layout);
+    };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+    el.addEventListener('dblclick', () => {
+      const h0 = this.els.viewHost.clientHeight;
+      if (this.narrow) delete this.layout.sheet;
+      else delete this.layout.panelWidth;
+      this.applyLayout();
+      storeLayout(this.layout);
+      if (this.narrow && this.doc) this.afterViewHeightChange(h0);
+    });
+    el.addEventListener('keydown', (e) => {
+      const ws = this.els.workspace.getBoundingClientRect();
+      const step = e.shiftKey ? 64 : 16;
+      if (this.narrow && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        e.preventDefault();
+        const cur = (this.layout.sheet ?? SHEET_DEFAULT) * ws.height;
+        moveTo(0, ws.bottom - (cur + (e.key === 'ArrowUp' ? step : -step)));
+        storeLayout(this.layout);
+      } else if (!this.narrow && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        e.preventDefault();
+        const cur = this.layout.panelWidth ?? PANEL_WIDTH_DEFAULT;
+        moveTo(ws.right - (cur + (e.key === 'ArrowLeft' ? step : -step)), 0);
+        storeLayout(this.layout);
+      }
+    });
   }
 
   async savePng(): Promise<void> {
@@ -702,24 +1077,74 @@ export class SkpViewerApp implements PanelHost {
       return;
     }
     if (!this.viewer || !this.doc) return;
-    const menu = h('div', { class: 'menu', role: 'menu', 'aria-label': '표준 뷰' });
-    for (const v of VIEW_MENU) {
-      const key = VIEW_KEY_OF[v];
-      const item = h('button', { class: 'menu-item', type: 'button', role: 'menuitem' }, h('span', {}, VIEW_LABELS[v]), key ? h('kbd', {}, key) : null);
+    this.openMenu(
+      btn,
+      '표준 뷰',
+      VIEW_MENU.map((v) => {
+        const item: MenuItem = { label: VIEW_LABELS[v], run: () => this.setView(v) };
+        const key = VIEW_KEY_OF[v];
+        if (key) item.kbd = key;
+        return item;
+      }),
+    );
+  }
+
+  /** 테마 메뉴: 시스템 설정 따르기 · 밝게 · 어둡게 */
+  private toggleThemeMenu(): void {
+    const btn = this.els.themeBtn;
+    if (this.menu) {
+      const same = this.menuBtn === btn;
+      this.closeMenu();
+      if (same) return;
+    }
+    const cur = themeChoiceOf(this.themeStored);
+    this.openMenu(
+      btn,
+      '테마',
+      THEME_CHOICES.map((c) => ({
+        label: c.choice === 'system' ? `${c.label}(지금 ${systemPrefersDark() ? '어두움' : '밝음'})` : c.label,
+        icon: c.icon,
+        checked: c.choice === cur,
+        run: () => this.setThemeChoice(c.choice),
+      })),
+    );
+  }
+
+  private menuBtn: HTMLButtonElement | null = null;
+
+  private openMenu(btn: HTMLButtonElement, label: string, items: MenuItem[]): void {
+    const menu = h('div', { class: 'menu', role: 'menu', 'aria-label': label });
+    for (const it of items) {
+      const item = h(
+        'button',
+        { class: `menu-item${it.checked ? ' checked' : ''}`, type: 'button', role: it.checked === undefined ? 'menuitem' : 'menuitemradio', 'aria-checked': it.checked === undefined ? null : it.checked ? 'true' : 'false' },
+        it.checked !== undefined ? h('span', { class: 'menu-check', html: it.checked ? icon('check', 15) : '' }) : null,
+        it.icon ? h('span', { class: 'menu-ico', html: icon(it.icon, 16) }) : null,
+        h('span', { class: 'menu-label' }, it.label),
+        it.kbd ? h('kbd', {}, it.kbd) : null,
+      );
       item.addEventListener('click', () => {
         this.closeMenu();
-        this.setView(v);
+        it.run();
       });
       menu.append(item);
     }
+    menu.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+      e.preventDefault();
+      const list = [...menu.querySelectorAll<HTMLElement>('.menu-item')];
+      const i = list.indexOf(document.activeElement as HTMLElement);
+      list[(i + (e.key === 'ArrowDown' ? 1 : list.length - 1)) % list.length]?.focus();
+    });
     document.body.append(menu);
     const r = btn.getBoundingClientRect();
     const w = menu.offsetWidth;
     menu.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, r.left))}px`;
     menu.style.top = `${r.bottom + 4}px`;
     this.menu = menu;
+    this.menuBtn = btn;
     btn.setAttribute('aria-expanded', 'true');
-    (menu.firstElementChild as HTMLElement | null)?.focus();
+    ((menu.querySelector('.menu-item.checked') ?? menu.firstElementChild) as HTMLElement | null)?.focus();
     const away = (e: PointerEvent): void => {
       if (menu.contains(e.target as Node) || btn.contains(e.target as Node)) return;
       this.closeMenu();
@@ -736,10 +1161,12 @@ export class SkpViewerApp implements PanelHost {
     this.menu = null;
     this.menuOff?.();
     this.menuOff = null;
-    this.els.viewBtn.setAttribute('aria-expanded', 'false');
+    this.menuBtn?.setAttribute('aria-expanded', 'false');
+    this.menuBtn = null;
   }
 
   setView(v: ViewName): void {
+    this.userMoved = false;
     this.viewer?.setView(v);
   }
 
@@ -749,8 +1176,9 @@ export class SkpViewerApp implements PanelHost {
     if (this.menu && ev.key === 'Escape') {
       ev.preventDefault();
       ev.stopPropagation();
+      const btn = this.menuBtn;
       this.closeMenu();
-      this.els.viewBtn.focus();
+      btn?.focus();
       return;
     }
     const v = this.viewer;
@@ -762,11 +1190,33 @@ export class SkpViewerApp implements PanelHost {
       editable: isEditableTarget(ev.target),
       hasDoc: !!this.doc && !!v && !this.busy,
       measurePoints: v?.measurePointCount ?? 0,
+      measureMode: !!v?.measureMode,
+      busy: this.busy,
     });
-    if (!act || !v) return;
+    if (!act) return;
+    if (act.kind === 'open') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.chooseFile();
+      return;
+    }
+    if (act.kind === 'cancelOpen') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.cancelOpen();
+      return;
+    }
+    if (!v) return;
     if (act.kind === 'clearSelection') {
       // 단추의 Esc 기본 동작 등은 그대로 두고 고른 것만 지운다
       this.applySelection(null, false);
+      return;
+    }
+    if (act.kind === 'measureOff') {
+      // 측정 점을 지운 뒤 한 번 더 누른 Esc: 측정을 끈다(다른 두 앱과 같게)
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.toggleMeasure(false);
       return;
     }
     if (act.kind === 'grid') {
@@ -776,16 +1226,26 @@ export class SkpViewerApp implements PanelHost {
       return;
     }
     // F·1~7·Esc(측정 지우기)는 뷰어 규칙대로. 캡처 단계에서 처리했으면 캔버스의 같은 키 처리까지 가지 않게 막는다
-    if (v.handleKey(ev)) ev.stopPropagation();
+    if (v.handleKey(ev)) {
+      ev.stopPropagation();
+      if (ev.key !== 'Escape') this.userMoved = false;
+    }
   }
 
   // ───────────────────────── 테마 ─────────────────────────
 
-  toggleTheme(): void {
-    this.theme = this.theme === 'dark' ? 'light' : 'dark';
-    this.themeChosen = true;
-    storeTheme(this.theme);
+  /** 테마 고르기(시스템이면 기억을 지우고 시스템 설정을 따른다) */
+  setThemeChoice(choice: ThemeChoice): void {
+    const r = applyThemeChoice(choice, systemPrefersDark());
+    this.themeStored = r.stored;
+    this.theme = r.theme;
+    storeTheme(r.stored);
     this.applyTheme();
+  }
+
+  /** 밝게 ↔ 어둡게(기억한다) */
+  toggleTheme(): void {
+    this.setThemeChoice(this.theme === 'dark' ? 'light' : 'dark');
   }
 
   private applyTheme(): void {
@@ -793,10 +1253,11 @@ export class SkpViewerApp implements PanelHost {
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', this.theme === 'dark' ? '#1b2027' : '#f4f5f7');
     this.viewer?.setTheme(this.theme);
     if (this.els) {
-      const next = this.theme === 'dark' ? '밝은' : '어두운';
+      const choice = themeChoiceOf(this.themeStored);
+      const label = THEME_CHOICES.find((c) => c.choice === choice)!.label;
       const b = this.els.themeBtn;
-      b.innerHTML = `${icon(this.theme === 'dark' ? 'sun' : 'moon')}<span class="lbl">테마</span>`;
-      b.title = `${next} 테마로 바꾸기${this.themeChosen ? '' : ' (지금은 시스템 설정을 따름)'}`;
+      b.innerHTML = `${icon(choice === 'system' ? 'system' : this.theme === 'dark' ? 'moon' : 'sun')}<span class="lbl">테마</span>`;
+      b.title = `테마: ${label}${choice === 'system' ? `(지금 ${this.theme === 'dark' ? '어두움' : '밝음'})` : ''} — 눌러서 바꾸기`;
       b.setAttribute('aria-label', b.title);
     }
   }
@@ -845,6 +1306,7 @@ export class SkpViewerApp implements PanelHost {
     e.docName.title = d ? `${d.name} (${docLabel(d.info)})` : '';
     const open = this.panelOpen && !!d;
     this.panel.el.hidden = !open;
+    e.resizer.hidden = !open;
     this.root.classList.toggle('panel-open', open);
     this.refreshToolbar();
     this.refreshStatus();
@@ -866,6 +1328,12 @@ export class SkpViewerApp implements PanelHost {
     press(e.axesBtn, this.axesOn);
     press(e.measureBtn, this.measuring);
     press(e.panelBtn, this.panelOpen && has);
+    const sec = this.viewer?.section ?? null;
+    for (const [k, b] of e.secBtns) press(b, k === 'off' ? !sec : sec?.axis === k);
+    e.secRange.disabled = !has || !sec;
+    e.secFlip.disabled = !has || !sec;
+    press(e.secFlip, !!sec?.flip);
+    if (sec) e.secRange.value = String(Math.round(Math.min(1, Math.max(0, sec.t)) * 1000));
   }
 
   private refreshStatus(): void {
@@ -927,6 +1395,20 @@ export class SkpViewerApp implements PanelHost {
       renderMode: this.renderMode,
       projection: this.projection,
       selection: d ? selectionText(d, d.selection, d.pick) : '',
+      themeChoice: themeChoiceOf(this.themeStored),
+      measuring: this.measuring,
+      treeNodes: d?.tree?.count ?? 0,
+      expanded: d?.expanded.size ?? 0,
+      pickMode: d?.pickMode ?? 'open',
+      showSoft: d?.showSoft ?? false,
+      showHidden: d?.showHidden ?? false,
+      images: d?.images ? (d.images.model ? 1 : 0) + d.images.materials.size + d.images.components.size + d.images.scenes.length : 0,
+      panelWidth: this.panel.el.getBoundingClientRect().width,
+      sheet: this.layout.sheet ?? SHEET_DEFAULT,
+      section: (() => {
+        const sec = this.viewer?.section;
+        return sec ? { axis: sec.axis, t: sec.t, flip: sec.flip } : null;
+      })(),
     };
   }
 
@@ -940,4 +1422,15 @@ export class SkpViewerApp implements PanelHost {
     else if (req.kind === 'url') await this.openUrl(req.url, req.name);
     else if (req.kind === 'error') this.showNotice('error', '주소의 파일을 열 수 없습니다', req.message);
   }
+}
+
+/** 문서가 쓰던 그림 Blob 주소를 푼다 */
+function revokeImages(d: SkpDoc): void {
+  for (const u of d.images?.urls ?? [])
+    try {
+      URL.revokeObjectURL(u);
+    } catch {
+      /* 이미 풀렸다 */
+    }
+  if (d.images) d.images.urls.length = 0;
 }

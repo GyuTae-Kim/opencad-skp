@@ -1,10 +1,27 @@
 /**
  * 열린 SketchUp 문서의 상태와 패널 목록 만들기(순수 함수, DOM 없음).
- * 해석기가 scene.meta에 적은 것(판·단위·통계·tagStats·materialStats·outline)을 안전하게 읽어 화면용 꼴로 바꾼다.
+ * 해석기가 scene.meta에 적은 것(판·단위·통계·tagStats·materialStats·outline·tree·extraItems)을 안전하게 읽어 화면용 꼴로 바꾼다.
  * meta가 비었거나 옛 꼴이어도 장면(그물 이름·묶음)에서 최소한의 목록을 만든다.
  */
 import type { MeasureResult, Pick3d, Scene3d } from 'opencad-viewer3d';
+import type { SkpImages } from '../images';
 import type { ParseResult } from './protocol';
+import {
+  deepestNodeAt,
+  hiddenByNodes,
+  isSplit,
+  levelNode,
+  nodeDefinition,
+  nodeItemIds,
+  nodeName,
+  nodePath,
+  nodeSegments,
+  nodeTag,
+  readTree,
+  type PickMode,
+  type SegmentSet,
+  type TreeView,
+} from './tree';
 
 export type PanelTab = 'tags' | 'outline' | 'info';
 
@@ -37,6 +54,8 @@ export interface TagRow {
 
 export interface MaterialRow {
   name: string;
+  /** model.dat의 재질 이름(= 꾸러미의 materials/<폴더>) — 무늬 그림 찾기용 */
+  folder: string | null;
   color: [number, number, number, number];
   textured: boolean;
   faces: number | null;
@@ -45,6 +64,8 @@ export interface MaterialRow {
 
 export interface OutlineRow {
   index: number;
+  /** meta.tree의 노드(바로 놓인 형상·옛 장면은 null) */
+  node: number | null;
   name: string;
   kind: 'group' | 'component' | 'loose';
   definition: string | null;
@@ -54,10 +75,34 @@ export interface OutlineRow {
   ids: string[];
 }
 
+/** 고른 것: outline = 윗단계 항목(바로 놓인 형상 포함), node = 나무의 더 깊은 노드, material = 재질, item = 그물·선 하나 */
 export type Selection =
   | { kind: 'outline'; index: number }
+  | { kind: 'node'; index: number }
   | { kind: 'material'; name: string }
   | { kind: 'item'; id: string };
+
+/** 부드러운·숨긴 형상(해석기 extras) */
+export interface DocExtras {
+  soft: Set<string>;
+  hidden: Set<string>;
+  softSegments: number;
+  hiddenFaces: number;
+  hiddenSegments: number;
+}
+
+/** 꾸러미 안 그림의 Blob 주소 */
+export interface DocImages {
+  model: { name: string; url: string } | null;
+  /** 재질 폴더 → 무늬 그림 */
+  materials: Map<string, { name: string; url: string }>;
+  /** 컴포넌트 미리보기(파일 이름 = 정의 이름으로 보임) */
+  components: Map<string, string>;
+  scenes: { name: string; url: string }[];
+  skipped: number;
+  /** 문서를 닫을 때 풀 주소들 */
+  urls: string[];
+}
 
 export interface SkpDoc {
   readonly id: number;
@@ -76,10 +121,31 @@ export interface SkpDoc {
   itemOutline: Map<string, number>;
   /** 그물 id → 재질 이름 */
   meshMaterial: Map<string, string>;
+  /** 여러 단계 나무(meta.tree, 없으면 null — 윗단계 목록만) */
+  tree: TreeView | null;
+  /** 윗단계 나무 노드 → outline 차례 */
+  nodeOutline: Map<number, number>;
+  /** 부드러운·숨긴 형상 항목(없으면 null) */
+  extras: DocExtras | null;
+  /** 꾸러미 안 그림(없으면 null) */
+  images: DocImages | null;
+  /** 파일이 잘렸거나 깨져 일부만 읽었는지(meta.damaged) · 출력 한도에 걸렸는지(meta.limited) */
+  damaged: boolean;
+  limited: boolean;
   // ── 보기 상태 ──
   hiddenTags: Set<string>;
   /** 숨긴 outline 차례 */
   hiddenOutline: Set<number>;
+  /** 숨긴 나무 노드 */
+  hiddenNodes: Set<number>;
+  /** 펼친 나무 노드(3D 고르기 단계도 이것을 따른다) */
+  expanded: Set<number>;
+  /** 노드마다 보일 자식 수(아주 많을 때 "더 보기") */
+  childLimit: Map<number, number>;
+  /** 3D 고르기 방식: open = 펼친 단계, deepest = 가장 안쪽 */
+  pickMode: PickMode;
+  showSoft: boolean;
+  showHidden: boolean;
   selection: Selection | null;
   pick: Pick3d | null;
   measure: MeasureResult | null;
@@ -202,14 +268,14 @@ export function materialRows(scene: Scene3d): MaterialRow[] {
       const c = Array.isArray(o.color) ? o.color : [];
       const color: [number, number, number, number] = [num(c[0]) ?? 0.8, num(c[1]) ?? 0.8, num(c[2]) ?? 0.8, num(c[3]) ?? 1];
       const meshIds = Array.isArray(o.meshIds) ? o.meshIds.filter((id): id is string => typeof id === 'string' && ids.has(id)) : [];
-      rows.push({ name, color, textured: o.textured === true, faces: num(o.faces), meshIds });
+      rows.push({ name, folder: str(o.folder), color, textured: o.textured === true, faces: num(o.faces), meshIds });
     }
   } else {
     const map = new Map<string, MaterialRow>();
     for (const m of scene.meshes) {
       const name = (m.name ?? '').split(' · ')[0] || '기본 재질';
       let r = map.get(name);
-      if (!r) map.set(name, (r = { name, color: [m.color[0], m.color[1], m.color[2], m.color[3]], textured: false, faces: null, meshIds: [] }));
+      if (!r) map.set(name, (r = { name, folder: null, color: [m.color[0], m.color[1], m.color[2], m.color[3]], textured: false, faces: null, meshIds: [] }));
       r.meshIds.push(m.id);
     }
     rows.push(...map.values());
@@ -230,6 +296,7 @@ export function outlineRows(scene: Scene3d): OutlineRow[] {
     const ids = Array.isArray(o.ids) ? o.ids.filter((id): id is string => typeof id === 'string' && known.has(id)) : [];
     rows.push({
       index: rows.length,
+      node: num(o.node),
       name: str(o.name) || '(이름 없음)',
       kind,
       definition: str(o.definition),
@@ -259,7 +326,60 @@ export const KIND_LABEL: Record<OutlineRow['kind'], string> = { group: '그룹',
 
 let serial = 0;
 
-export function createDoc(name: string, size: number, res: ParseResult): SkpDoc {
+/** meta.extraItems → 부드러운·숨긴 형상 */
+export function readExtras(scene: Scene3d): DocExtras | null {
+  const x = meta(scene).extraItems as Record<string, unknown> | undefined;
+  if (!x || typeof x !== 'object') return null;
+  const ids = new Set<string>([...scene.meshes.map((m) => m.id), ...scene.lines.map((l) => l.id)]);
+  const list = (v: unknown): Set<string> => new Set(Array.isArray(v) ? v.filter((id): id is string => typeof id === 'string' && ids.has(id)) : []);
+  return {
+    soft: list(x.soft),
+    hidden: list(x.hidden),
+    softSegments: num(x.softSegments) ?? 0,
+    hiddenFaces: num(x.hiddenFaces) ?? 0,
+    hiddenSegments: num(x.hiddenSegments) ?? 0,
+  };
+}
+
+/** 그림 바이트 → 주소 만들기(앱은 Blob 주소, 시험은 가짜) */
+export type UrlMaker = (bytes: Uint8Array, mime: string) => string;
+
+/** 꾸러미 그림 → 화면용 주소 묶음 */
+export function docImages(images: SkpImages | undefined, make: UrlMaker): DocImages | null {
+  if (!images) return null;
+  const urls: string[] = [];
+  const url = (b: Uint8Array, mime: string): string => {
+    const u = make(b, mime);
+    urls.push(u);
+    return u;
+  };
+  const out: DocImages = { model: null, materials: new Map(), components: new Map(), scenes: [], skipped: images.skipped ?? 0, urls };
+  if (images.model) out.model = { name: images.model.name, url: url(images.model.bytes, images.model.mime) };
+  for (const m of images.materials ?? []) if (!out.materials.has(m.folder)) out.materials.set(m.folder, { name: m.name, url: url(m.bytes, m.mime) });
+  for (const c of images.components ?? []) if (!out.components.has(c.name)) out.components.set(c.name, url(c.bytes, c.mime));
+  for (const sc of images.scenes ?? []) out.scenes.push({ name: sc.name, url: url(sc.bytes, sc.mime) });
+  return out;
+}
+
+/** 파일 이름에 못 쓰는 글자를 _로(재질 폴더 이름에서 '<'·'>'·'*'가 '_'로 바뀐 것과 같은 꼴로 맞춰 본다 — 컴포넌트 그림 이름 규칙은 확인하지 못했다) */
+export function fileSafeName(name: string): string {
+  return name.replace(/[<>:"/\\|?*]/g, '_');
+}
+
+/** 컴포넌트 정의 이름 → 미리보기 그림 주소(이름이 같거나, 못 쓰는 글자를 _로 바꾼 이름이 같으면) */
+export function componentImage(d: Pick<SkpDoc, 'images'>, definition: string): string | null {
+  const imgs = d.images?.components;
+  if (!imgs) return null;
+  return imgs.get(definition) ?? imgs.get(fileSafeName(definition)) ?? null;
+}
+
+/** 재질 줄 → 무늬 그림 주소 */
+export function materialImage(d: Pick<SkpDoc, 'images'>, row: MaterialRow): string | null {
+  if (!row.folder) return null;
+  return d.images?.materials.get(row.folder)?.url ?? null;
+}
+
+export function createDoc(name: string, size: number, res: ParseResult, opts: { makeUrl?: UrlMaker } = {}): SkpDoc {
   const scene = res.scene;
   const outline = outlineRows(scene);
   const materials = materialRows(scene);
@@ -268,6 +388,9 @@ export function createDoc(name: string, size: number, res: ParseResult): SkpDoc 
   const meshMaterial = new Map<string, string>();
   for (const m of materials) for (const id of m.meshIds) meshMaterial.set(id, m.name);
   const skipped = num(meta(scene).outlineSkipped) ?? 0;
+  const tree = readTree(scene);
+  const nodeOutline = new Map<number, number>();
+  if (tree) for (const r of outline) if (r.node !== null && r.node >= 0 && r.node < tree.count) nodeOutline.set(r.node, r.index);
   return {
     id: ++serial,
     name,
@@ -281,8 +404,20 @@ export function createDoc(name: string, size: number, res: ParseResult): SkpDoc 
     outlineSkipped: skipped,
     itemOutline,
     meshMaterial,
+    tree,
+    nodeOutline,
+    extras: readExtras(scene),
+    images: opts.makeUrl ? docImages(res.images, opts.makeUrl) : null,
+    damaged: meta(scene).damaged === true,
+    limited: meta(scene).limited === true,
     hiddenTags: new Set(),
     hiddenOutline: new Set(),
+    hiddenNodes: new Set(),
+    expanded: new Set(),
+    childLimit: new Map(),
+    pickMode: 'open',
+    showSoft: false,
+    showHidden: false,
     selection: null,
     pick: null,
     measure: null,
@@ -293,25 +428,94 @@ export function createDoc(name: string, size: number, res: ParseResult): SkpDoc 
 /** 패널 탭 목록 */
 export function panelTabs(d: SkpDoc): [PanelTab, string][] {
   const tabs: [PanelTab, string][] = [['tags', '태그·재질']];
-  if (d.outline.length || d.outlineSkipped) tabs.push(['outline', '구성']);
+  if (d.outline.length || d.outlineSkipped || d.tree) tabs.push(['outline', '구성']);
   tabs.push(['info', '정보']);
   return tabs;
 }
 
-/** 고르기 결과 → 고른 것(윗단계 항목에 들어 있으면 그 항목 전체) */
-export function selectionForPick(d: SkpDoc, p: Pick3d | null): Selection | null {
+/** 나무 노드 → 고른 것(윗단계 노드는 outline 항목으로 — 예전 고르기와 같은 열쇠) */
+export function nodeSelection(d: SkpDoc, node: number): Selection {
+  const o = d.nodeOutline.get(node);
+  return o !== undefined ? { kind: 'outline', index: o } : { kind: 'node', index: node };
+}
+
+/** 고른 것 → 나무 노드(없으면 null, 바로 놓인 형상은 -1) */
+export function selectedNode(d: SkpDoc, sel: Selection | null): number | null {
+  if (!sel) return null;
+  if (sel.kind === 'node') return sel.index;
+  if (sel.kind === 'outline') {
+    const r = d.outline[sel.index];
+    if (!r) return null;
+    return r.kind === 'loose' ? -1 : r.node;
+  }
+  return null;
+}
+
+/** 3D에서 고른 것 → 그것을 낸 가장 안쪽 나무 노드(-1 = 바로 놓인 형상, null = 모름) */
+export function pickDeepest(d: SkpDoc, p: Pick3d | null): number | null {
+  if (!p || !d.tree) return null;
+  return deepestNodeAt(d.tree, d.scene, p.id, p.raw ?? p.index);
+}
+
+/**
+ * 고르기 결과 → 고른 것. 나무가 있으면 펼친 단계(또는 deepest면 가장 안쪽)의 노드를,
+ * 없으면 예전처럼 윗단계 항목 전체를 고른다.
+ */
+export function selectionForPick(d: SkpDoc, p: Pick3d | null, deepest = false): Selection | null {
   if (!p) return null;
+  const n = pickDeepest(d, p);
+  if (n !== null && d.tree) {
+    if (n < 0) {
+      const loose = d.outline.findIndex((r) => r.kind === 'loose');
+      if (loose >= 0) return { kind: 'outline', index: loose };
+    } else return nodeSelection(d, levelNode(d.tree, n, d.expanded, deepest ? 'deepest' : d.pickMode));
+  }
   const i = d.itemOutline.get(p.id);
   if (i !== undefined) return { kind: 'outline', index: i };
   return { kind: 'item', id: p.id };
 }
 
-/** 고른 것 → 강조할 항목 id */
+/** 고른 것 → 강조할 항목 id(나누지 않은 깊은 노드는 빈 목록 — selectionSegments로 강조) */
 export function selectionIds(d: SkpDoc, sel: Selection | null): string[] {
   if (!sel) return [];
   if (sel.kind === 'outline') return d.outline[sel.index]?.ids ?? [];
+  if (sel.kind === 'node') return d.tree ? nodeItemIds(d.tree, d.scene, sel.index) : [];
   if (sel.kind === 'material') return d.materials.find((m) => m.name === sel.name)?.meshIds ?? [];
   return [sel.id];
+}
+
+/** 나누지 않은 깊은 노드를 고르면 그 안쪽 모서리 선분(강조용, 큰 좌표면 원점과 함께). 그 밖에는 null */
+export function selectionSegments(d: SkpDoc, sel: Selection | null, visible?: (item: number) => boolean): SegmentSet | null {
+  if (!sel || sel.kind !== 'node' || !d.tree || isSplit(d.tree, sel.index)) return null;
+  return nodeSegments(d.tree, d.scene, sel.index, visible);
+}
+
+/** 항목(차례)이 지금 보여야 하는지: 부드러운·숨긴 형상 켜짐, 숨긴 윗단계 항목·나무 노드(태그는 뷰어가 따로 가린다) */
+export function itemVisible(d: SkpDoc, item: number): boolean {
+  const s = d.scene;
+  const id = item < s.meshes.length ? s.meshes[item]?.id : s.lines[item - s.meshes.length]?.id;
+  if (id === undefined) return false;
+  if (d.extras) {
+    if (d.extras.soft.has(id) && !d.showSoft) return false;
+    if (d.extras.hidden.has(id) && !d.showHidden) return false;
+  }
+  if (d.hiddenOutline.size) {
+    const o = d.itemOutline.get(id);
+    if (o !== undefined && d.hiddenOutline.has(o)) return false;
+  }
+  if (d.tree && d.hiddenNodes.size) {
+    const owner = d.tree.itemOwner[item]!;
+    if (owner >= 0 && hiddenByNodes(d.tree, d.hiddenNodes, owner)) return false;
+  }
+  return true;
+}
+
+/** 노드의 경로 글("집 › 의자 › 다리") */
+export function nodePathText(d: SkpDoc, node: number): string {
+  if (!d.tree) return '';
+  return nodePath(d.tree, node)
+    .map((n) => nodeName(d.tree!, n))
+    .join(' › ');
 }
 
 /** 고른 것 한 줄 설명(상태 막대·패널 아래) */
@@ -325,6 +529,20 @@ export function selectionText(d: SkpDoc, sel: Selection | null, pick: Pick3d | n
     if (r.kind !== 'loose' && r.tag) parts.push(`태그 ${r.tag}`);
     if (pickedMat) parts.push(`재질 ${pickedMat}`);
     parts.push(`면 ${r.faces.toLocaleString('ko-KR')}`);
+    return parts.join(' · ');
+  }
+  if (sel.kind === 'node') {
+    const t = d.tree;
+    if (!t || sel.index < 0 || sel.index >= t.count) return '';
+    const i = sel.index;
+    const name = nodeName(t, i);
+    const def = nodeDefinition(t, i);
+    const parts = [`${t.kind[i] === 0 ? '그룹' : '컴포넌트'} ${name}${def && def !== name ? ` (${def})` : ''}`];
+    if (t.parent[i]! >= 0) parts.push(`위치 ${nodePathText(d, t.parent[i]!)}`);
+    const tag = nodeTag(t, i);
+    if (tag) parts.push(`태그 ${tag}`);
+    if (pickedMat) parts.push(`재질 ${pickedMat}`);
+    parts.push(`면 ${t.faces[i]!.toLocaleString('ko-KR')}`);
     return parts.join(' · ');
   }
   if (sel.kind === 'material') {

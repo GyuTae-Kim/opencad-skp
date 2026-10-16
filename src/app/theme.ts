@@ -47,6 +47,26 @@ export function storeTheme(theme: ThemeName | null, s: StorageLike | null = stor
   }
 }
 
+/** 테마 고르기: 시스템 설정 따르기 · 밝게 · 어둡게 */
+export type ThemeChoice = 'system' | ThemeName;
+
+export const THEME_CHOICES: readonly { choice: ThemeChoice; label: string; icon: string }[] = [
+  { choice: 'system', label: '시스템 설정 따르기', icon: 'system' },
+  { choice: 'light', label: '밝은 테마', icon: 'sun' },
+  { choice: 'dark', label: '어두운 테마', icon: 'moon' },
+];
+
+/** 기억한 선택 → 고르기 메뉴의 현재 항목 */
+export function themeChoiceOf(stored: ThemeName | null): ThemeChoice {
+  return stored ?? 'system';
+}
+
+/** 고르기 → 기억할 값(시스템이면 지운다)과 쓸 테마 */
+export function applyThemeChoice(choice: ThemeChoice, systemDark: boolean): { stored: ThemeName | null; theme: ThemeName } {
+  const stored = choice === 'system' ? null : choice;
+  return { stored, theme: resolveTheme(stored, systemDark) };
+}
+
 /** 시스템이 어두운 테마인지 */
 export function systemPrefersDark(): boolean {
   try {

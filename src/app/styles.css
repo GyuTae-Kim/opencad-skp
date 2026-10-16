@@ -667,6 +667,28 @@ input[type='checkbox'] {
   outline: none;
 }
 
+.menu-item .menu-label {
+  flex: 1 1 auto;
+}
+
+.menu-check,
+.menu-ico {
+  display: flex;
+  flex: none;
+  width: 16px;
+  justify-content: center;
+  color: var(--accent);
+}
+
+.menu-ico {
+  color: var(--text-dim);
+}
+
+.menu-item:has(.menu-check) {
+  justify-content: flex-start;
+  gap: 8px;
+}
+
 kbd {
   padding: 0 5px;
   border: 1px solid var(--border-soft);
@@ -678,9 +700,9 @@ kbd {
 /* ---------------------------------------------------------------- 패널 */
 .panel {
   display: flex;
-  flex: 0 0 330px;
+  flex: 0 0 var(--panel-w, 330px);
   flex-direction: column;
-  width: 330px;
+  width: var(--panel-w, 330px);
   min-height: 0;
   background: var(--bg-panel);
   border-left: 1px solid var(--border);
@@ -933,6 +955,253 @@ kbd {
   color: var(--text-dim);
 }
 
+/* 단면 보기 */
+.sec-group {
+  align-items: center;
+  gap: 6px;
+}
+
+.sec-axis {
+  min-width: 30px;
+  justify-content: center;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.sec-range {
+  width: 120px;
+  accent-color: var(--accent);
+}
+
+.sec-range:disabled {
+  opacity: 0.4;
+}
+
+/* 넓지 않은 화면: 아이콘으로 알 수 있는 단추부터 글을 숨긴다(제목 풍선은 남는다) */
+@media (max-width: 1679.98px) {
+  .toolbar .tgroup.compact .lbl,
+  .toolbar .tbtn.compact .lbl {
+    display: none;
+  }
+
+  .sec-range {
+    width: 84px;
+  }
+}
+
+@media (max-width: 1459.98px) {
+  .toolbar .tgroup.seg .lbl {
+    display: none;
+  }
+}
+
+@media (max-width: 1179.98px) {
+  .toolbar .lbl {
+    display: none;
+  }
+}
+
+/* 그래도 모자라면(태블릿 폭) 가로로 밀지 않고 줄을 바꾼다 */
+@media (max-width: 999.98px) {
+  .toolbar {
+    flex-wrap: wrap;
+    row-gap: 4px;
+    overflow-x: visible;
+  }
+
+  .tsep {
+    display: none;
+  }
+}
+
+/* 패널 크기 손잡이(넓은 화면: 왼쪽 가장자리, 좁은 화면: 시트 위 가장자리) */
+.resizer {
+  position: relative;
+  z-index: 3;
+  flex: 0 0 6px;
+  margin-right: -6px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.resizer::after {
+  content: '';
+  position: absolute;
+  inset: 0 2px 0 2px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background 0.12s;
+}
+
+.resizer:hover::after,
+.resizer.dragging::after,
+.resizer:focus-visible::after {
+  background: var(--accent);
+}
+
+.resizer:focus-visible {
+  outline: none;
+}
+
+/* 무늬 견본·미리보기 그림 */
+img.swatch.tex {
+  object-fit: cover;
+  image-rendering: auto;
+}
+
+.def-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.thumb {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-soft);
+  border-radius: 5px;
+  background: #fff;
+  object-fit: contain;
+}
+
+.model-thumb {
+  display: block;
+  width: 100%;
+  max-height: 200px;
+  margin: 2px 0 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: #fff;
+  object-fit: contain;
+}
+
+.scene-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 8px;
+  margin: 6px 2px 2px;
+}
+
+.scene-card {
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-elev);
+}
+
+.scene-card img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  background: #fff;
+}
+
+.scene-card figcaption {
+  padding: 3px 7px 4px;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 구성 나무 */
+.tree-bar {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.tree-bar .bar-label {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.tree-bar .spacer {
+  flex: 1 1 auto;
+}
+
+.seg-mini {
+  display: inline-flex;
+  padding: 1px;
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+}
+
+.seg-btn {
+  height: 22px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.seg-btn.on {
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.mini-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.prow.trow {
+  gap: 6px;
+}
+
+.twisty,
+.twisty-space {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.twisty {
+  cursor: pointer;
+}
+
+.twisty:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.twisty .ico {
+  transition: transform 0.12s;
+}
+
+.twisty.open .ico {
+  transform: rotate(90deg);
+}
+
+.prow.dimmed,
+.prow.empty {
+  opacity: 0.5;
+}
+
+.prow.model-hidden .name {
+  font-style: italic;
+}
+
+.more-btn {
+  align-self: flex-start;
+  margin: 2px 0 4px;
+}
+
 /* ---------------------------------------------------------------- 손가락 */
 @media (pointer: coarse) {
   .tbtn {
@@ -996,15 +1265,36 @@ kbd {
     padding: 0 8px;
   }
 
+  .sec-range {
+    width: 96px;
+  }
+
   .workspace {
     flex-direction: column;
   }
 
   .panel {
-    flex: 0 0 46%;
+    flex: 0 0 var(--sheet-h, 46%);
     width: auto;
     border-top: 1px solid var(--border);
     border-left: 0;
+  }
+
+  /* 시트 위 가장자리 손잡이(손가락으로 잡기 쉽게 높이를 두고, 가운데 손잡이 막대를 그린다) */
+  .resizer {
+    flex: 0 0 14px;
+    margin: 0 0 -14px;
+    cursor: row-resize;
+  }
+
+  .resizer::after {
+    inset: 4px calc(50% - 22px) auto;
+    height: 4px;
+    background: var(--border-soft);
+  }
+
+  .phead {
+    padding-top: 6px;
   }
 
   .start {
