@@ -198,7 +198,7 @@ npm run preview
 
 ## 내력
 
-[2dcad-viewer](https://github.com/GyuTae-Kim/2dcad-viewer)의 `src/formats/skp/`와 `docs/formats/skp.md`에서 분리했습니다(커밋 `d7c584a` 기준, 처음 들어온 것은 PR #7).
+[2dcad-viewer](https://github.com/GyuTae-Kim/opencad-dwgdxf)의 `src/formats/skp/`와 `docs/formats/skp.md`에서 분리했습니다(커밋 `d7c584a` 기준, 처음 들어온 것은 PR #7).
 앱 화면은 그 커밋의 2D 뷰어 안 3D 탭 화면(`src/app/view3d/`의 태그·재질 패널, 워커, 프로토콜)을 바탕으로, 혼자 도는 앱에 맞게 새로 짰습니다.
 
 ## 라이선스
