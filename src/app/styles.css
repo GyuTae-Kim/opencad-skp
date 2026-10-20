@@ -1569,7 +1569,7 @@ html:lang(zh-CN) { --font: -apple-system, "PingFang SC", "Microsoft YaHei", sans
 .language-list button:hover, .language-list button:focus { background: var(--bg-hover, ButtonFace); }
 .language-list button[aria-checked="true"]::after { content: '✓'; }
 @media (max-width: 767px) {
-  .titlebar { flex-wrap: nowrap; height: 44px; min-height: 44px; padding-block: 0; }
+  .titlebar { flex-wrap: nowrap; height: 44px; min-height: 44px; padding-bottom: 0; }
   .language-control { flex-basis: 36px; width: 36px; margin-left: 0; }
   .language-trigger { width: 36px; height: 36px; }
   .titlebar .brand { min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; }
