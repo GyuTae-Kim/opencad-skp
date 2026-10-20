@@ -237,6 +237,7 @@ export class SkpViewerApp implements PanelHost {
   // ───────────────────────── 틀 ─────────────────────────
 
   mount(): void {
+    this.root.addEventListener('languagechange', () => { if (this.viewer) this.viewer.setViewCubeSize(this.viewer.viewCubeSize); });
     this.root.innerHTML = '';
     this.root.className = 'app';
     this.applyTheme();

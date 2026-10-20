@@ -1,3 +1,4 @@
+import { siteLocalization } from './tools/localization-plugin.mjs';
 import { defineConfig } from 'vitest/config';
 import { siteMetadata } from './tools/site-plugin.mjs';
 
@@ -7,7 +8,7 @@ import { siteMetadata } from './tools/site-plugin.mjs';
  */
 export default defineConfig({
   base: './',
-  plugins: [siteMetadata()],
+  plugins: [siteLocalization(), siteMetadata()],
   build: {
     target: 'es2022',
     sourcemap: true,
