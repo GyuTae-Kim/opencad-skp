@@ -29,6 +29,7 @@ import { MeasureTool, type MeasureMode, type MeasureToolResult } from './measure
 import { initialCamera, initialSection, openingPage, pagePlan, renderModeForStyle, sectionToViewer, stepPage } from './pages';
 import { DEFAULT_UNITS, mmPerSceneUnit } from './units';
 import { Overlay } from './overlay';
+import { cardName, cardRows, entityInfo } from './entity';
 import { h, icon } from './dom';
 import {
   canHideNode,
@@ -46,6 +47,7 @@ import {
   selectionRanges,
   selectionSegments,
   selectionText,
+  selectionEntity,
   measureAxes,
   measureText,
   nodeHiddenForLabels,
@@ -176,6 +178,8 @@ interface Els {
   measureBar: HTMLElement;
   measureText: HTMLElement;
   measureClear: HTMLButtonElement;
+  selBar: HTMLElement;
+  selText: HTMLElement;
 }
 
 interface MenuItem {
@@ -382,7 +386,14 @@ export class SkpViewerApp implements PanelHost {
     const measureClose = h('button', { class: 'mb-btn icon', type: 'button', title: '측정 끝내기', 'aria-label': '측정 끝내기', html: icon('close', 16) });
     measureClose.addEventListener('click', () => this.setMeasureMode(null));
     const measureBar = h('div', { class: 'measure-bar', role: 'status', hidden: true }, measureText, h('div', { class: 'mb-acts' }, measureClear, measureClose));
-    const stage = h('div', { class: 'stage' }, viewHost, sceneTabs, measureBar, start, notice, busy);
+    // 고른 것 카드(휴대폰·터치): 패널을 열지 않고 고른 그룹·컴포넌트의 크기·태그를 보이고, 자세히(선택 탭)·선택 해제 단추를 둔다
+    const selText = h('div', { class: 'mb-text' });
+    const selMore = h('button', { class: 'mb-btn', type: 'button', title: '패널의 선택 탭에서 전체 정보 보기', html: `${icon('panel', 16)}<span>자세히</span>` });
+    selMore.addEventListener('click', () => this.showEntityTab());
+    const selClose = h('button', { class: 'mb-btn icon', type: 'button', title: '선택 해제', 'aria-label': '선택 해제', html: icon('close', 16) });
+    selClose.addEventListener('click', () => this.applySelection(null, false));
+    const selBar = h('div', { class: 'measure-bar sel-bar', role: 'status', hidden: true }, selText, h('div', { class: 'mb-acts' }, selMore, selClose));
+    const stage = h('div', { class: 'stage' }, viewHost, sceneTabs, measureBar, selBar, start, notice, busy);
     const resizer = h('div', {
       class: 'resizer',
       role: 'separator',
@@ -449,6 +460,8 @@ export class SkpViewerApp implements PanelHost {
       measureBar,
       measureText,
       measureClear,
+      selBar,
+      selText,
     };
 
     this.bindWindow();
@@ -1337,6 +1350,19 @@ export class SkpViewerApp implements PanelHost {
     this.setPanelOpen(false);
   }
 
+  /**
+   * 패널을 선택 탭으로 연다(고른 것 카드의 "자세히"). 좁은 화면은 아래 시트가 3D 보기를 줄이므로,
+   * 바뀐 높이에서 고른 것이 가려지지 않게 그것에 맞춰 본다
+   */
+  private showEntityTab(): void {
+    const d = this.doc;
+    if (!d) return;
+    d.panelTab = 'entity';
+    this.panel.show(d);
+    this.setPanelOpen(true);
+    if (this.narrow) requestAnimationFrame(() => requestAnimationFrame(() => this.zoomToSelection()));
+  }
+
   private showInfoTab(): void {
     const d = this.doc;
     if (!d) return;
@@ -1933,6 +1959,22 @@ export class SkpViewerApp implements PanelHost {
     e.stSel.textContent = sel;
     e.stSel.title = sel;
     this.refreshMeasureBar();
+    this.refreshSelBar();
+  }
+
+  /** 고른 것 카드: 측정 중이 아니고 패널이 닫혀 있을 때, 고른 그룹·컴포넌트·재질의 이름과 크기·태그 */
+  private refreshSelBar(): void {
+    const e = this.els;
+    const d = this.doc;
+    const on = !!d && !!d.selection && !this.measuring && !this.panelOpen;
+    e.selBar.hidden = !on;
+    if (!on || !d) return;
+    const info = entityInfo(selectionEntity(d), d.units, mmPerSceneUnit(d.scene.units));
+    const name = cardName(info);
+    // 이름·태그 같은 파일 글은 번역하지 않는다
+    const head = h('b', { class: 'mb-value' }, info.title, name ? h('span', { class: 'mb-name', 'data-i18n-skip': '' }, name) : null);
+    const facts = cardRows(info).map((r) => h('span', { class: 'mb-fact' }, h('span', { class: 'mb-k' }, r.label), h('span', { 'data-i18n-skip': '' }, r.value)));
+    e.selText.replaceChildren(head, ...(facts.length ? [h('span', { class: 'mb-sub' }, ...facts)] : []));
   }
 
   /** 측정 띠: 결과(거리와 축별 길이·각도)나 다음에 누를 곳 안내 */
@@ -1949,7 +1991,8 @@ export class SkpViewerApp implements PanelHost {
       const mm = mmPerSceneUnit(d.scene.units);
       const axes = measureAxes(d.measure, d.units, mm);
       t.append(h('b', { class: 'mb-value' }, measureText(d.measure, d.units, mm)));
-      if (axes) t.append(h('span', { class: 'mb-sub' }, axes));
+      // 축마다 한 덩어리로 줄을 바꾼다("dz ~" / "-171 mm"로 갈리지 않게)
+      if (axes) t.append(h('span', { class: 'mb-sub' }, ...axes.split(' · ').map((x) => h('span', { class: 'mb-fact mb-axis' }, x))));
     } else t.append(h('span', { class: 'mb-hint' }, this.measureHint ?? ''));
     e.measureClear.disabled = !d.measure && !tool.pointCount;
   }

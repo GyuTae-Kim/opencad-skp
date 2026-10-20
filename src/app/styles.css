@@ -1401,10 +1401,31 @@ button.scene-card.sel {
   color: var(--text-dim);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+  /* 한글 낱말이 줄 끝에서 쪼개지지 않게 */
+  word-break: keep-all;
 }
 
 .mb-hint {
   font-size: 13.5px;
+}
+
+/* 고른 것 카드: 제목(종류 이름)과 크기·태그 같은 사실 */
+.mb-name {
+  margin-left: 6px;
+}
+
+.mb-k {
+  margin-right: 4px;
+  color: var(--text-faint);
+}
+
+.mb-fact + .mb-fact::before {
+  content: ' · ';
+  color: var(--text-faint);
+}
+
+.mb-axis {
+  white-space: nowrap;
 }
 
 .mb-acts {
