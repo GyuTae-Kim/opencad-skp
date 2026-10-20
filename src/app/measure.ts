@@ -11,6 +11,9 @@
  *
  * 입력: 캔버스 포인터 이벤트를 엿본다(막지 않는다). 왼쪽 단추·탭을 4화소 안에서 떼면 점 찍기, 끌기·오른쪽·가운데 단추·
  * 두 손가락은 코어 궤도·이동·확대 그대로. 터치는 추정 반경을 넓힌다(커서 표식은 탭한 점에 남긴다).
+ * 정밀 조준(터치): 한 손가락을 움직이지 않고 AIM_HOLD_MS 동안 누르면 손가락 위 AIM_OFFSET_PX에 십자선을 띄우고,
+ *   끌면 궤도 대신 십자선이 따라가며 마우스처럼 추정·고무줄·툴팁을 보인다. 떼면 십자선 자리에 점을 찍는다.
+ *   그동안의 움직임은 캔버스 부모의 캡처 단계에서 막아 코어가 돌리지 않게 한다(떼기는 코어에 넘겨 끌기 상태를 끝낸다).
  * 줄자: 두 점 → { kind: 'tape', a, b, distance, dx, dy, dz }(장면 단위).
  * 각도기: 중심 → 기준 방향 → 잴 방향 → { kind: 'protractor', center, a, b, angle(도, 0~180), normal }.
  *   평면은 중심을 찍을 때 커서 밑 면, 없으면 카메라를 가장 정면으로 보는 축 평면. Shift를 누르고 있으면 그 평면을 고정한다.
@@ -24,6 +27,7 @@ import type { V3 } from 'opencad-viewer3d/math';
 import { screenPoint, screenSegment, svgEl, type Overlay } from './overlay';
 import { formatAngle, formatLength, mmPerSceneUnit, type UnitsDisplay } from './units';
 import {
+  AIM_SNAP_RADIUS_PX,
   AXIS_COLORS,
   AXIS_DIRS,
   CORE_PICK_TOLERANCE_PX,
@@ -73,6 +77,8 @@ export interface MeasureToolOptions {
   onResult: (r: MeasureToolResult | null) => void;
   /** 상태 줄 안내(도구를 끄면 null) */
   onHint?: (text: string | null) => void;
+  /** 손가락이 주인 기기인지: 안내에서 키(Esc·Shift) 설명을 빼고 길게 누르기를 알린다 */
+  touch?: () => boolean;
 }
 
 /** 이 도구가 쓰는 뷰어 기능(시험에서 가짜로 바꿀 수 있게) */
@@ -82,6 +88,10 @@ export type MeasureOverlay = Pick<Overlay, 'svg' | 'labels' | 'set' | 'frame' | 
 
 /** 누르기로 볼 최대 움직임(화소, 코어 끌기 시작과 같다) */
 export const TAP_SLOP_PX = 4;
+/** 이만큼(ms) 움직이지 않고 누르고 있으면 정밀 조준 */
+export const AIM_HOLD_MS = 350;
+/** 정밀 조준 십자선을 손가락 위로 띄우는 거리(화소) — 손가락에 가리지 않게 */
+export const AIM_OFFSET_PX = 64;
 /** 둘레 고르기 시간 한도(ms): 마우스는 움직일 때마다, 터치는 탭할 때만 */
 const PROBE_BUDGET_MS = 6;
 const TOUCH_PROBE_BUDGET_MS = 24;
@@ -103,9 +113,14 @@ function unit(a: readonly number[]): V3 {
   return l > 1e-300 ? [a[0]! / l, a[1]! / l, a[2]! / l] : [0, 0, 0];
 }
 
-/** 추정 반경(화소): 터치는 넓게 */
+/** 추정 반경(화소): 터치는 넓게, 정밀 조준('aim')은 그 사이 */
 export function snapRadius(pointerType: string): number {
-  return pointerType === 'touch' ? TOUCH_SNAP_RADIUS_PX : SNAP_RADIUS_PX;
+  return pointerType === 'touch' ? TOUCH_SNAP_RADIUS_PX : pointerType === 'aim' ? AIM_SNAP_RADIUS_PX : SNAP_RADIUS_PX;
+}
+
+/** 정밀 조준 십자선 자리: 손가락 바로 위(보기 위 가장자리에서 멈춘다) */
+export function aimPoint(x: number, y: number): { x: number; y: number } {
+  return { x, y: Math.max(0, y - AIM_OFFSET_PX) };
 }
 
 /** 줄자 결과(장면 단위) */
@@ -163,12 +178,15 @@ export function protractorPoint(ray: Ray, snap: Pick<Snap, 'kind' | 'point'>, ce
   return projectToPlane(snap.point, center, n);
 }
 
-/** 툴팁 자리: 커서 오른쪽 아래, 보기 밖으로 나가면 왼쪽·위로 뒤집는다 */
-export function tooltipPosition(x: number, y: number, w: number, h: number, width: number, height: number): { left: number; top: number } {
+/**
+ * 툴팁 자리: 커서 오른쪽 아래, 보기 밖으로 나가면 왼쪽·위로 뒤집는다.
+ * above(정밀 조준)면 커서 오른쪽 위 — 아래에는 손가락이 있다. 위가 모자라면 아래로.
+ */
+export function tooltipPosition(x: number, y: number, w: number, h: number, width: number, height: number, above = false): { left: number; top: number } {
   let left = x + 14;
-  let top = y + 18;
+  let top = above ? y - 18 - h : y + 18;
   if (left + w > width - 2) left = x - 10 - w;
-  if (top + h > height - 2) top = y - 10 - h;
+  if (above ? top < 2 : top + h > height - 2) top = above ? y + 18 : y - 10 - h;
   left = Math.max(2, Math.min(left, width - w - 2));
   top = Math.max(2, Math.min(top, height - h - 2));
   return { left: Math.round(left), top: Math.round(top) };
@@ -179,16 +197,18 @@ export function joinTip(label: string, value?: string | null): string {
   return [label, value].filter((s) => !!s).join(' · ');
 }
 
-/** 상태 줄 안내 */
-export function measureHint(mode: MeasureMode | null, points: number, hasResult: boolean): string | null {
+/** 상태 줄 안내. touch면 키 설명 대신 길게 누르기(정밀 조준)를 알린다 */
+export function measureHint(mode: MeasureMode | null, points: number, hasResult: boolean, touch = false): string | null {
   if (mode === 'tape') {
-    if (points === 1) return '줄자: 끝점을 누르세요 · Esc 취소';
-    return hasResult ? '줄자: 다시 누르면 새로 잽니다 · Esc 지우기' : '줄자: 잴 시작점을 누르세요';
+    if (points === 1) return touch ? '줄자: 끝점을 누르세요' : '줄자: 끝점을 누르세요 · Esc 취소';
+    if (hasResult) return touch ? '줄자: 다시 누르면 새로 잽니다' : '줄자: 다시 누르면 새로 잽니다 · Esc 지우기';
+    return touch ? '줄자: 잴 시작점을 누르세요 · 길게 누르면 정밀 조준' : '줄자: 잴 시작점을 누르세요';
   }
   if (mode === 'protractor') {
-    if (points === 1) return '각도기: 기준 방향의 점을 누르세요 · Esc 취소';
-    if (points === 2) return '각도기: 잴 방향의 점을 누르세요 · Esc 취소';
-    return hasResult ? '각도기: 다시 누르면 새로 잽니다 · Esc 지우기' : '각도기: 중심점을 누르세요 · Shift를 누르고 있으면 평면 고정';
+    if (points === 1) return touch ? '각도기: 기준 방향의 점을 누르세요' : '각도기: 기준 방향의 점을 누르세요 · Esc 취소';
+    if (points === 2) return touch ? '각도기: 잴 방향의 점을 누르세요' : '각도기: 잴 방향의 점을 누르세요 · Esc 취소';
+    if (hasResult) return touch ? '각도기: 다시 누르면 새로 잽니다' : '각도기: 다시 누르면 새로 잽니다 · Esc 지우기';
+    return touch ? '각도기: 중심점을 누르세요 · 길게 누르면 정밀 조준' : '각도기: 중심점을 누르세요 · Shift를 누르고 있으면 평면 고정';
   }
   return null;
 }
@@ -235,6 +255,9 @@ export class MeasureTool {
   private dragging = false;
   private presses = new Map<number, Press>();
   private cancelTap = false;
+  /** 정밀 조준 중인 손가락(포인터 id)과 길게 누르기 타이머 */
+  private aimId: number | null = null;
+  private aimTimer: ReturnType<typeof setTimeout> | null = null;
   private lastHint: string | null = null;
   private readonly g: SVGGElement;
   private readonly layer: HTMLDivElement;
@@ -265,6 +288,11 @@ export class MeasureTool {
     on<PointerEvent>(cv, 'pointerup', (e) => this.onUp(e, false));
     on<PointerEvent>(cv, 'pointercancel', (e) => this.onUp(e, true));
     on<PointerEvent>(cv, 'pointerleave', () => this.onLeave());
+    // 정밀 조준: 캔버스보다 먼저(부모 캡처 단계) 받아, 조준 중인 손가락의 움직임이 코어 궤도로 가지 않게 막는다
+    const trap = cv.parentElement ?? cv;
+    this.off.push(capture(trap, 'pointermove', (e) => this.onAimMove(e)));
+    this.off.push(capture(trap, 'pointerup', (e) => this.onAimUp(e, false)));
+    this.off.push(capture(trap, 'pointercancel', (e) => this.onAimUp(e, true)));
     this.off.push(
       viewer.onCameraChange(() => {
         if (!this.modeValue) return;
@@ -282,6 +310,11 @@ export class MeasureTool {
 
   get mode(): MeasureMode | null {
     return this.modeValue;
+  }
+
+  /** 정밀 조준 중인지(길게 눌러 십자선을 옮기는 중) */
+  get aiming(): boolean {
+    return this.aimId !== null;
   }
 
   /** 진행 중 측정에 찍은 점 수(줄자 0~1, 각도기 0~2) */
@@ -423,8 +456,16 @@ export class MeasureTool {
     const p = this.local(e);
     const type = e.pointerType || 'mouse';
     // 둘째 손가락·다른 단추가 함께 눌리면 누르기가 아니다(코어가 확대·이동한다)
-    if (this.presses.size) this.cancelTap = true;
+    if (this.presses.size) {
+      this.cancelAim();
+      this.cancelTap = true;
+    }
     this.presses.set(e.pointerId, { x: p.x, y: p.y, button: e.button, type, moved: false });
+    // 한 손가락을 그대로 누르고 있으면 정밀 조준
+    if (type === 'touch' && this.presses.size === 1) {
+      const id = e.pointerId;
+      this.aimTimer = setTimeout(() => this.startAim(id), AIM_HOLD_MS);
+    }
   }
 
   private onMove(e: PointerEvent): void {
@@ -434,6 +475,7 @@ export class MeasureTool {
     if (pr) {
       if (!pr.moved && Math.hypot(p.x - pr.x, p.y - pr.y) >= TAP_SLOP_PX) {
         pr.moved = true;
+        this.stopAimTimer();
         // 궤도·이동 중에는 커서 표식을 숨긴다
         this.dragging = true;
         this.hover = null;
@@ -453,6 +495,7 @@ export class MeasureTool {
   private onUp(e: PointerEvent, cancel: boolean): void {
     const pr = this.presses.get(e.pointerId);
     this.presses.delete(e.pointerId);
+    this.stopAimTimer();
     if (!pr || !this.modeValue) return;
     const tap = !cancel && !pr.moved && !this.cancelTap && (pr.type === 'touch' || pr.button === 0);
     if (!this.presses.size) {
@@ -471,6 +514,69 @@ export class MeasureTool {
   private onLeave(): void {
     if (!this.modeValue || this.presses.size) return;
     if (this.cursor?.type === 'touch') return;
+    this.cursor = null;
+    this.hover = null;
+    this.hoverPoint = null;
+    this.overlay.invalidate();
+  }
+
+  // ───────────────────────── 정밀 조준(터치 길게 누르기) ─────────────────────────
+
+  private stopAimTimer(): void {
+    if (this.aimTimer === null) return;
+    clearTimeout(this.aimTimer);
+    this.aimTimer = null;
+  }
+
+  private startAim(id: number): void {
+    this.aimTimer = null;
+    const pr = this.presses.get(id);
+    if (!this.modeValue || !pr || pr.moved || this.cancelTap || this.presses.size !== 1) return;
+    this.aimId = id;
+    this.dragging = false;
+    this.cursor = { ...aimPoint(pr.x, pr.y), type: 'aim' };
+    this.hoverDirty = true;
+    // 짧은 떨림으로 조준이 시작됐음을 알린다(지원하는 기기만)
+    try {
+      navigator.vibrate?.(12);
+    } catch {
+      /* 진동을 막은 브라우저 */
+    }
+    this.overlay.invalidate();
+  }
+
+  /** 조준 중인 손가락 움직임: 코어로 보내지 않고 십자선을 옮긴다 */
+  private onAimMove(e: PointerEvent): void {
+    if (this.aimId === null || e.pointerId !== this.aimId) return;
+    e.stopPropagation();
+    const p = this.local(e);
+    this.cursor = { ...aimPoint(p.x, p.y), type: 'aim' };
+    this.hoverDirty = true;
+    this.overlay.invalidate();
+  }
+
+  /** 조준 중인 손가락을 떼면 십자선 자리에 점을 찍는다(떼기 이벤트는 코어에 넘겨 끌기 상태를 끝내게 한다) */
+  private onAimUp(e: PointerEvent, cancel: boolean): void {
+    if (this.aimId === null || e.pointerId !== this.aimId) return;
+    const c = this.cursor;
+    this.aimId = null;
+    this.presses.delete(e.pointerId);
+    if (!this.presses.size) this.cancelTap = false;
+    if (!cancel && c && this.modeValue) this.place(c.x, c.y, 'aim');
+    // 찍지 못했으면(빈 곳·취소) 십자선 자리의 추정 표시를 지운다
+    if (this.cursor?.type === 'aim') {
+      this.cursor = null;
+      this.hover = null;
+      this.hoverPoint = null;
+    }
+    this.overlay.invalidate();
+  }
+
+  /** 둘째 손가락이 닿으면 조준을 그만둔다(점은 찍지 않고, 두 손가락 확대·이동은 코어가 한다) */
+  private cancelAim(): void {
+    this.stopAimTimer();
+    if (this.aimId === null) return;
+    this.aimId = null;
     this.cursor = null;
     this.hover = null;
     this.hoverPoint = null;
@@ -531,9 +637,9 @@ export class MeasureTool {
         }
       }
     }
-    // 터치는 커서가 없으니 탭한 자리의 추정을 표식으로 남긴다
-    if (type === 'touch') {
-      this.cursor = { x, y, type };
+    // 터치(정밀 조준 포함)는 커서가 없으니 찍은 자리의 추정을 표식으로 남긴다
+    if (type === 'touch' || type === 'aim') {
+      this.cursor = { x, y, type: 'touch' };
       this.hover = snap;
       this.hoverPoint = null;
       this.hoverDirty = false;
@@ -567,11 +673,13 @@ export class MeasureTool {
     this.dragging = false;
     this.presses.clear();
     this.cancelTap = false;
+    this.stopAimTimer();
+    this.aimId = null;
     this.dropResult();
   }
 
   private refreshHint(): void {
-    const h = measureHint(this.modeValue, this.pts.length, !!this.resultValue);
+    const h = measureHint(this.modeValue, this.pts.length, !!this.resultValue, this.opts.touch?.() ?? false);
     if (h === this.lastHint) return;
     this.lastHint = h;
     this.opts.onHint?.(h);
@@ -655,7 +763,23 @@ export class MeasureTool {
       }
     }
     if (snap && snap.kind !== 'free') this.marker(f, snap);
+    if (this.aimId !== null && this.cursor) this.reticle(this.cursor.x, this.cursor.y);
     this.tooltip(f, tip);
+  }
+
+  /** 정밀 조준 십자선(가운데는 비워 추정 표식이 보이게, 흰 테두리로 어느 바탕에서도 보이게) */
+  private reticle(x: number, y: number): void {
+    const r = 16;
+    const gap = 6;
+    const d = `M${x - r - 6} ${y}H${x - gap}M${x + gap} ${y}H${x + r + 6}M${x} ${y - r - 6}V${y - gap}M${x} ${y + gap}V${y + r + 6}`;
+    const g = svgEl('g', { class: 'measure-aim' });
+    g.append(
+      svgEl('circle', { cx: x, cy: y, r, fill: 'none', stroke: '#ffffff', 'stroke-width': 3.5, 'stroke-opacity': 0.85 }),
+      svgEl('path', { d, fill: 'none', stroke: '#ffffff', 'stroke-width': 3.5, 'stroke-opacity': 0.85 }),
+      svgEl('circle', { cx: x, cy: y, r, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5 }),
+      svgEl('path', { d, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5 }),
+    );
+    this.g.append(g);
   }
 
   private tooltip(f: ViewFrame, text: string | null): void {
@@ -668,7 +792,7 @@ export class MeasureTool {
     el.textContent = text;
     el.style.display = 'block';
     this.layer.append(el);
-    const pos = tooltipPosition(c.x, c.y, el.offsetWidth || 0, el.offsetHeight || 0, f.width, f.height);
+    const pos = tooltipPosition(c.x, c.y, el.offsetWidth || 0, el.offsetHeight || 0, f.width, f.height, c.type === 'aim');
     el.style.left = `${pos.left}px`;
     el.style.top = `${pos.top}px`;
   }
@@ -795,6 +919,13 @@ export class MeasureTool {
     const s = screenSegment(f, r.a, r.b);
     if (s) this.label((s[0] + s[2]) / 2, (s[1] + s[3]) / 2, text, 'measure-label-length');
   }
+}
+
+/** 캡처 단계 듣기(끄는 함수를 돌려준다) */
+function capture(el: EventTarget, type: string, fn: (e: PointerEvent) => void): () => void {
+  const h = fn as EventListener;
+  el.addEventListener(type, h, true);
+  return () => el.removeEventListener(type, h, true);
 }
 
 function now(): number {
