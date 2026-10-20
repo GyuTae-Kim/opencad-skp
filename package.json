@@ -14,14 +14,16 @@
   ],
   "scripts": {
     "dev": "vite --port 4403",
-    "build": "tsc --noEmit && vite build && npm run check:seo",
+    "build": "tsc --noEmit && vite build && npm run check:seo && npm run check:i18n",
     "preview": "vite preview --port 4403",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "check:seo": "node tools/check-seo.mjs",
     "test:seo": "node --test tools/seo.test.mjs",
-    "update:content-dates": "vite build && node tools/update-content-dates.mjs"
+    "update:content-dates": "vite build && node tools/update-content-dates.mjs",
+    "check:i18n": "node tools/check-i18n.mjs",
+    "test:i18n": "vitest run tests/i18n.test.ts"
   },
   "dependencies": {
     "earcut": "^3.2.4",

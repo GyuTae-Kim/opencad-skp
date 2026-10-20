@@ -1,3 +1,4 @@
+import { installLocalization } from './i18n';
 /**
  * 앱 입구: 스타일을 불러오고, 앱을 붙이고, 주소 인자(?sample, ?open=)를 처리한다.
  * 자동 확인용으로 window.opencadApp을 둔다.
@@ -52,3 +53,5 @@ if (root) {
   };
   void app.launch(parseLaunch(location.search, location.href));
 }
+
+if (root) void installLocalization(root);

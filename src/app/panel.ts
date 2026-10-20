@@ -269,7 +269,7 @@ export class Panel {
         },
         cb,
         t.color ? h('span', { class: 'swatch tag', style: `background:${rgbCss(t.color)}`, title: '태그 색' }) : null,
-        h('span', { class: 'name' }, t.name),
+        h('span', { class: 'name', translate: 'no' }, t.name),
         t.default ? h('span', { class: 'chip' }, '기본') : null,
         t.lineStyle ? h('span', { class: 'chip', title: `선 종류: ${t.lineStyle} — 이 태그의 모서리를 점선으로 그립니다` }, '점선') : null,
         !t.visible ? h('span', { class: 'chip', title: '파일에서 숨긴 태그' }, '숨김') : null,
@@ -293,7 +293,7 @@ export class Panel {
           { class: 'prow folder', 'data-folderrow': String(i), style: depth ? `padding-left:${8 + depth * 14}px` : undefined, title: `태그 폴더 ${f.name} — 숨기면 안의 태그가 모두 숨습니다` },
           cb,
           h('span', { class: 'fold-ico', html: icon('folder', 14) }),
-          h('span', { class: 'name' }, f.name || '(이름 없는 폴더)'),
+          h('span', { class: 'name', translate: 'no' }, f.name || '(이름 없는 폴더)'),
           h('span', { class: 'count' }, `태그 ${fmtCount(folderTags(d, i).length)}`),
         ),
       );
@@ -315,7 +315,7 @@ export class Panel {
         'button',
         { class: 'prow pick', type: 'button', 'data-sel': selKey(sel), title: `${m.name} — 누르면 이 재질의 면을 강조합니다` },
         swatch,
-        h('span', { class: 'name' }, m.name),
+        h('span', { class: 'name', translate: 'no' }, m.name),
         m.textured
           ? h(
               'span',
@@ -388,7 +388,7 @@ export class Panel {
       d.tree ? h('span', { class: 'twisty-space' }) : null,
       cb,
       h('span', { class: `kind k-${r.kind}` }, KIND_LABEL[r.kind]),
-      h('span', { class: 'name' }, r.name, sub ? h('small', {}, ` ${sub}`) : null),
+      h('span', { class: 'name', translate: 'no' }, r.name, sub ? h('small', {}, ` ${sub}`) : null),
       h('span', { class: 'count' }, `면 ${fmtCount(r.faces)}`),
     );
     this.bindPick(item, d, sel);
@@ -657,7 +657,7 @@ export class Panel {
     } else if (scenes.length) {
       const grid = h('div', { class: 'scene-grid' });
       for (const sc of scenes.slice(0, 100))
-        grid.append(h('figure', { class: 'scene-card', title: sc.name }, h('img', { src: sc.url, alt: '', loading: 'lazy', decoding: 'async' }), h('figcaption', {}, sc.name)));
+        grid.append(h('figure', { class: 'scene-card', title: sc.name }, h('img', { src: sc.url, alt: '', loading: 'lazy', decoding: 'async' }), h('figcaption', { translate: 'no' }, sc.name)));
       this.body.append(section(`장면 그림 ${scenes.length}개`, h('p', { class: 'hint' }, '파일 안의 장면 미리보기 그림입니다(장면 목록을 읽지 못한 파일).'), grid));
     }
     const warns = s.warnings ?? [];
