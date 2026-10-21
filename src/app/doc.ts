@@ -785,7 +785,8 @@ export function selectedNode(d: SkpDoc, sel: Selection | null): number | null {
 /** 3D에서 고른 것 → 그것을 낸 가장 안쪽 나무 노드(-1 = 바로 놓인 형상, null = 모름) */
 export function pickDeepest(d: SkpDoc, p: Pick3d | null): number | null {
   if (!p || !d.tree) return null;
-  return deepestNodeAt(d.tree, d.scene, p.id, p.raw ?? p.index);
+  // 그물 윤곽선(kind 'edge')의 번호는 삼각형 번호가 아니다 — 윤곽선을 가진 그물(카메라를 보는 배치 하나)의 첫 삼각형으로
+  return deepestNodeAt(d.tree, d.scene, p.id, p.kind === 'edge' ? 0 : (p.raw ?? p.index));
 }
 
 /**

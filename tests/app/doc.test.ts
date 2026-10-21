@@ -182,6 +182,8 @@ describe('문서·고르기', () => {
     expect(selectionText(d, sel, pick)).toBe('컴포넌트 의자 동 (의자) · 태그 가구 · 재질 파란 천 · 면 31');
     expect(selectionForPick(d, null)).toBeNull();
     expect(selectionForPick(d, { ...pick, id: 'unknown' })).toEqual({ kind: 'item', id: 'unknown' });
+    // 그물 윤곽선 고르기(kind 'edge')는 그 그물의 첫 삼각형 노드로(윤곽선 번호를 삼각형 번호로 읽지 않는다)
+    expect(selectionForPick(d, { ...pick, kind: 'edge', index: 99999, raw: 99999 })).toEqual(sel);
   });
 
   it('재질 고르기', () => {

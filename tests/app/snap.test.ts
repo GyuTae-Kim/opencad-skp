@@ -168,6 +168,16 @@ describe('추정: 면', () => {
     expect(triangleOfPick({ meshes: [m], lines: [] }, { kind: 'mesh', id: 'm', index: -1, raw: -1, point: [0, 0, 0], section: true })).toBeNull();
   });
 
+  it('카메라를 보는 그물(billboard)은 저장된 꼭짓점에 붙지 않고 면 위, 그물 윤곽선 고르기(edge)는 모서리 위', () => {
+    const m: Mesh3d = { id: 'b', positions: Float32Array.from([0, 0, 0, 1, 0, 0, 0, 1, 0]), color: [1, 1, 1, 1], billboard: { origin: [0, 0, 0], axis: 'z' } };
+    const sc = { meshes: [m], lines: [] };
+    expect(triangleOfPick(sc, { kind: 'mesh', id: 'b', index: 0, raw: 0, point: [0.2, 0.2, 0] })).toBeNull();
+    const s = chooseSnap({ frame: topFrame, x: 100, y: 100, pick: { kind: 'mesh', id: 'b', index: 0, raw: 0, point: [0, 0, 0], normal: [0, 0, 1] }, scene: sc });
+    expect(s.kind).toBe('onFace');
+    const e = chooseSnap({ frame: topFrame, x: 100, y: 100, pick: { kind: 'edge', id: 'b', index: 0, raw: 0, point: [0, 0, 0] }, scene: sc });
+    expect(e).toMatchObject({ kind: 'onEdge', point: [0, 0, 0] });
+  });
+
   it('단면 채운 면은 면 위(단면에)', () => {
     const p: Pick3d = { kind: 'mesh', id: 'm', index: -1, raw: -1, point: [1, 2, 3], normal: [0, 0, 1], section: true };
     const s = chooseSnap({ frame: topFrame, x: 101, y: 98, pick: p, scene: { meshes: [], lines: [] } });

@@ -95,6 +95,13 @@ export const MAX_UV_VERTICES = 6_000_000;
 /** 장면이 다시 보이는 모형 숨김 인스턴스(revealItems): 노드 수·정점 수 한도(한 번 더 그리는 형상이라 작게) */
 export const MAX_REVEAL_NODES = 200;
 export const MAX_REVEAL_VERTICES = 2_000_000;
+/** "항상 카메라 보기" 컴포넌트를 따로 돌릴 그물로 낼 배치 수 한도(넘는 배치는 저장된 방향 그대로 다른 형상과 함께) */
+export const MAX_BILLBOARDS = 500;
+/**
+ * 나누는 단계보다 깊어도 따로 나눌 나무 노드 수 한도: 단면 평면이 든 그룹·컴포넌트(그 그룹만 자르는 단면 — 코어 setSections의 items)와
+ * "항상 카메라 보기" 컴포넌트(돌리는 그물·윤곽선을 항목째 숨기기)
+ */
+export const MAX_FORCED_SPLITS = 256;
 
 /**
  * 큰 좌표 기준(인치): 덧붙이는 형상(배치 하나의 한 묶음)의 첫 정점이 원점에서 이보다 멀면(어느 축이든),
@@ -1079,6 +1086,15 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     } else if (visibleTop > 0) outlineSkipped = visibleTop;
   }
 
+  // ── 단계보다 깊어도 따로 나눌 노드: 단면 평면이 든 그룹·컴포넌트, "항상 카메라 보기" 컴포넌트(한도 안에서 넓이 우선 차례) ──
+  const forced = new Set<number>();
+  if (tb && splitDepth >= 1)
+    for (let i = 0; i < tb.n && forced.size < MAX_FORCED_SPLITS; i++) {
+      if (tb.depth[i]! <= splitDepth || tb.hidden[i]) continue;
+      const ents = tb.ents[i]!;
+      if (ents.sections?.length || model.definitions.get(tb.inst[i]!.definition)?.behavior?.alwaysFaceCamera) forced.add(i);
+    }
+
   /** 무늬 좌표를 쌓는 곳(앞면은 묶음 자신, 뒷면은 bk.back) */
   interface UvSink {
     /** 무늬 재질이면 무늬 좌표(정점마다 uvStride값). 한도에 걸리면 null로 버린다 */
@@ -1111,6 +1127,16 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     closed: boolean;
     /** 앞과 다른 뒷면(없으면 양면이 앞면 재질) */
     back: BackSide | null;
+    /** "항상 카메라 보기" 배치(그 배치만 모은 묶음 — 코어 billboard) */
+    bb: Billboard | null;
+  }
+  /** 카메라를 보는 컴포넌트 배치: 묶음 열쇠 꼬리, 세계 원점(Z축 둘레로 돈다)과 저장된 앞 방향(컴포넌트 −Y) */
+  interface Billboard {
+    key: string;
+    origin: [number, number, number];
+    front: [number, number, number];
+    /** 그 배치의 보통 모서리(세계 좌표 — 첫 그물의 윤곽선으로 함께 돌린다) */
+    edges: number[];
   }
   interface LineBucket {
     serial: number;
@@ -1152,6 +1178,19 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   const ownFaces = T ? new Float64Array(T.n) : null;
   const ownEdges = T ? new Float64Array(T.n) : null;
   const ownArea = T ? new Float64Array(T.n) : null;
+  // "항상 카메라 보기" 배치
+  let billboards = 0;
+  let billboardsSkipped = 0;
+  const billboardList: Billboard[] = [];
+  /** 그물 윤곽선으로 옮긴 모서리 수(태그마다 — 태그 통계) */
+  const bbEdgeCount = new Map<string, number>();
+  /** 배치의 앞 방향: 컴포넌트 −Y(SketchUp 앞 뷰에서 보이는 쪽)를 세계로 옮겨 수평으로 */
+  const frontOf = (m: Float64Array): [number, number, number] => {
+    const x = -m[4]!;
+    const y = -m[5]!;
+    const l = Math.hypot(x, y);
+    return l > 1e-12 ? [x / l, y / l, 0] : [0, -1, 0];
+  };
   /** 노드마다 SketchUp 입체면 부피(장면 단위³ — 정의 부피 × 배치 변환 행렬식), 아니면 NaN */
   const nodeVolume = T ? new Float64Array(T.n).fill(NaN) : null;
   const runItem = new U32(T ? 4096 : 1);
@@ -1250,10 +1289,16 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     closed: boolean,
     // 기본값을 두지 않는다: undefined(스타일 뒷면 색)를 넘기면 기본값 null로 바뀌기 때문
     back: number | undefined | null,
+    bb: Billboard | null = null,
   ): Bucket => {
-    // 보통(가까운) 형상의 열쇠는 예전과 같다(기본 호출 출력이 바뀌지 않게). 닫힌 입체는 따로(|c), 앞과 다른 뒷면은 그 재질(|b), 먼 형상은 칸 열쇠를 붙인다
+    // 보통(가까운) 형상의 열쇠는 예전과 같다(기본 호출 출력이 바뀌지 않게). 닫힌 입체는 따로(|c), 앞과 다른 뒷면은 그 재질(|b),
+    // 카메라를 보는 배치는 배치마다(|bb), 먼 형상은 칸 열쇠를 붙인다
     const key =
-      (cls ? `${slot}|h|${layer}|${mat ?? 'd'}` : `${slot}|${layer}|${mat ?? 'd'}`) + (closed ? '|c' : '') + (back !== null ? `|b${back ?? 'd'}` : '') + (far ? far.key : '');
+      (cls ? `${slot}|h|${layer}|${mat ?? 'd'}` : `${slot}|${layer}|${mat ?? 'd'}`) +
+      (closed ? '|c' : '') +
+      (back !== null ? `|b${back ?? 'd'}` : '') +
+      (bb ? bb.key : '') +
+      (far ? far.key : '');
     let bk = buckets.get(key);
     if (!bk)
       buckets.set(
@@ -1274,6 +1319,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
           fs: new U32(64),
           closed,
           back: newBack(back),
+          bb,
         }),
       );
     return bk;
@@ -1817,6 +1863,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
             fs: new U32(64),
             closed: false,
             back: newBack(back),
+            bb: null,
             node,
           }),
         );
@@ -1858,6 +1905,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     slot: number,
     node: number,
     hiddenSub: boolean,
+    bb: Billboard | null = null,
   ): void => {
     if (truncated || placementsStopped) return;
     if (placements >= maxPlacements) {
@@ -1873,7 +1921,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     const backOf = (b: Batch): number | undefined | null => sideBack(b, inhMat);
     const L = linearOf(m);
     // 닫힌 입체는 따로 모은다(단면 채우기). 반투명 재질이 든 배치는 코어가 채우기에서 빼므로 홀짝이 어긋나지 않게 보통 묶음으로
-    const closedHere = p.closed && !hiddenSub && p.batches.every((b) => colorOf(matOf(b))[3] >= 0.999);
+    const closedHere = !bb && p.closed && !hiddenSub && p.batches.every((b) => colorOf(matOf(b))[3] >= 0.999);
     // 보통 면(숨긴 인스턴스 안쪽이면 숨긴 면으로)
     for (const b of p.batches) {
       const nv = b.pos.length / 3;
@@ -1891,7 +1939,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
         truncated = true;
         return;
       }
-      const area = appendFaces(faceBucket(slot, 0, layer, matOf(b), farCell(b.pos, m), closedHere, backOf(b)), b, m, node, L);
+      const area = appendFaces(faceBucket(slot, 0, layer, matOf(b), farCell(b.pos, m), closedHere, backOf(b), bb), b, m, node, L);
       outVerts += nv;
       if (node >= 0) {
         ownFaces![node]! += b.faces;
@@ -1926,12 +1974,20 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
         break;
       }
       outSegs += ns;
-      appendLines(lineBucket(slot, 0, layer, farCell(l.pos, m)), l, m, node, ents, placements);
       if (node >= 0) ownEdges![node]! += ns;
+      // 카메라를 보는 배치의 모서리는 그물 윤곽선으로 함께 돌린다(선분 묶음은 돌지 않는다)
+      if (bb) {
+        const tmp = new F32();
+        put(tmp, l.pos, m, true, null);
+        for (let i = 0; i < tmp.n; i++) bb.edges.push(tmp.a[i]!);
+        bbEdgeCount.set(layerName(layer), (bbEdgeCount.get(layerName(layer)) ?? 0) + ns);
+        continue;
+      }
+      appendLines(lineBucket(slot, 0, layer, farCell(l.pos, m)), l, m, node, ents, placements);
     }
-    // 부드러운·숨긴 모서리(숨긴 인스턴스 안의 부드러운 모서리는 그리지 않는다)
+    // 부드러운·숨긴 모서리(숨긴 인스턴스 안의 부드러운 모서리는 그리지 않는다. 카메라를 보는 배치는 돌릴 수 없어 뺀다)
     for (const l of p.extraLines) {
-      if (hiddenSub && l.cls === 1) continue;
+      if ((hiddenSub && l.cls === 1) || bb) continue;
       const ns = l.pos.length / 6;
       if (extraSegs + ns > MAX_EXTRA_SEGMENTS) {
         extrasTruncated = true;
@@ -1966,7 +2022,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       const own = T !== null && child !== node && child >= 0;
       let childSlot = slot;
       if (own) {
-        if (T.depth[child]! <= splitDepth) {
+        if (T.depth[child]! <= splitDepth || forced.has(child)) {
           childSlot = slotNode.length;
           slotNode.push(child);
           nodeSlot![child] = childSlot;
@@ -1979,7 +2035,14 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
         const vol = prep(def.entities).volume;
         if (vol !== undefined) nodeVolume![child] = vol * Math.abs(linearOf(placed).det);
       }
-      emit(def.entities, placed, inst.material ?? inhMat, layer, depth + 1, stack, childSlot, child, hiddenSub || hiddenInst);
+      // "항상 카메라 보기" 컴포넌트: 그 배치(안쪽 포함)를 따로 모아 코어가 Z축 둘레로 돌리게(안쪽의 같은 깃발은 바깥 배치를 따른다)
+      let childBb = bb;
+      if (!bb && !hiddenSub && !hiddenInst && def.behavior?.alwaysFaceCamera) {
+        if (billboards < MAX_BILLBOARDS) childBb = { key: `|bb${billboards++}`, origin: A.xfPoint(placed, [0, 0, 0]), front: frontOf(placed), edges: [] };
+        else billboardsSkipped++;
+        if (childBb) billboardList.push(childBb);
+      }
+      emit(def.entities, placed, inst.material ?? inhMat, layer, depth + 1, stack, childSlot, child, hiddenSub || hiddenInst, childBb);
       // 모형에서 숨겼지만 어떤 장면에서는 보이는 인스턴스: 그 노드 몫으로 보통 색 그림을 하나 더(숨긴 안쪽의 안쪽은 이미 숨김 그대로)
       if (hiddenInst && !hiddenSub && own && inst.pid !== undefined && revealPids.has(inst.pid) && !revealLimited) {
         if (revealNodes.size >= MAX_REVEAL_NODES && !revealNodes.has(child)) revealLimited = true;
@@ -1999,6 +2062,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
 
   const rootM = new Float64Array([scale, 0, 0, 0, 0, scale, 0, 0, 0, 0, scale, 0, 0, 0, 0, 1]);
   emit(model.root, rootM, undefined, undefined, 0, new Set(), 0, -1, false);
+  if (billboardsSkipped)
+    warnings.push(`"항상 카메라 보기" 컴포넌트가 너무 많아(${MAX_BILLBOARDS}개 한도) ${billboardsSkipped}개는 저장된 방향 그대로 둡니다`);
   report(placementsTotal);
 
   // 통계: 태그는 모형 차례로 미리 넣는다(그릴 것이 없는 태그도 목록에 보이게)
@@ -2027,6 +2092,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     return t;
   };
   for (const name of model.layers.values()) tagStat(name);
+  for (const [tag, n] of bbEdgeCount) tagStat(tag).edges += n;
   const matStats = new Map<string, SkpMaterialStat>();
   const matStatOf = (name: string, stored: string | undefined, color: Rgba): SkpMaterialStat => {
     let ms = matStats.get(name);
@@ -2074,6 +2140,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   };
   /** 같은 칸·재질 묶음의 차례: 뒷면 없음 → 스타일 뒷면 색 → 뒷면 재질 번호 */
   const backRank = (bk: Bucket): number => (!bk.back ? -2 : (bk.back.mat ?? -1));
+  const bbDone = new Set<Billboard>();
   const sorted = [...buckets.values()].sort(
     (a, b) => a.slot - b.slot || a.cls - b.cls || a.layer - b.layer || (a.mat ?? -1) - (b.mat ?? -1) || Number(a.closed) - Number(b.closed) || backRank(a) - backRank(b),
   );
@@ -2120,6 +2187,17 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     if (bk.nrm) mesh.normals = bk.nrm.done();
     if (bk.origin) mesh.origin = bk.origin;
     if (bk.closed) mesh.capGroup = `skp-solid-${bk.slot}`;
+    if (bk.bb) {
+      mesh.billboard = { origin: bk.bb.origin, axis: 'z', front: bk.bb.front };
+      // 그 배치의 모서리는 첫 그물의 윤곽선으로(함께 돈다)
+      if (!bbDone.has(bk.bb) && bk.bb.edges.length) {
+        bbDone.add(bk.bb);
+        const e = Float32Array.from(bk.bb.edges);
+        if (bk.origin) for (let i = 0; i < e.length; i += 3) for (let c = 0; c < 3; c++) e[i + c]! -= bk.origin[c]!;
+        mesh.edges = e;
+        slotStat(bk.slot).edges += e.length / 6;
+      }
+    }
     withTexture(mesh, bk);
     triangles += mesh.indices!.length / 3;
     meshes.push(mesh);

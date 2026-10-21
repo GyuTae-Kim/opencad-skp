@@ -148,11 +148,14 @@ export function segmentOfPick(scene: SnapScene, pick: Pick3d): [V3, V3] | null {
   ];
 }
 
-/** 그물 고르기 → 맞은 삼각형의 세 꼭짓점(세계). 단면 채운 면이거나 못 찾으면 null */
+/**
+ * 그물 고르기 → 맞은 삼각형의 세 꼭짓점(세계). 단면 채운 면이거나 못 찾으면 null.
+ * 카메라를 마주 보는 그물(billboard)은 코어가 프레임마다 돌려 그리므로 저장된 꼭짓점이 화면 자리와 달라 null(면 위로만 붙는다)
+ */
 export function triangleOfPick(scene: SnapScene, pick: Pick3d): [V3, V3, V3] | null {
   if (pick.kind !== 'mesh' || pick.section) return null;
   const m = itemOf(scene, 'm', pick.id) as Mesh3d | undefined;
-  if (!m) return null;
+  if (!m || m.billboard) return null;
   const t = pick.raw ?? pick.index;
   const I = m.indices;
   const P = m.positions;
@@ -378,6 +381,8 @@ export function chooseSnap(o: SnapInput): Snap {
   for (const c of o.centers ?? []) push({ kind: 'center', point: [c[0], c[1], c[2]], rank: 0, id: '', trusted: false });
   // 점 묶음(있으면 끝점처럼)
   if (pick && pick.kind === 'point') push({ kind: 'endpoint', point: [...pick.point], rank: 0, id: pick.id, trusted: true });
+  // 그물 윤곽선(코어 윤곽선 고르기 — 카메라를 보는 그물의 모서리): 고른 점을 모서리 위로
+  if (pick && pick.kind === 'edge') push({ kind: 'onEdge', point: [...pick.point], rank: 2, id: pick.id, trusted: true });
   // 커서 밑 면의 삼각형 꼭짓점(삼각형 변은 SketchUp 모서리가 아니라 중간점·모서리 위로 쓰지 않는다)
   if (pick && pick.kind === 'mesh' && scene) {
     const tri = triangleOfPick(scene, pick);
