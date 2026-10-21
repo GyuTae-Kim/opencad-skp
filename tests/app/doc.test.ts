@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Scene3d } from 'opencad-viewer3d/types';
+import { translate } from '../../site/i18n.mjs';
 import {
   EDGE_STUB,
   addEdgeStubs,
@@ -134,6 +135,9 @@ describe('패널 목록', () => {
       ['파랑', '뒷면 3'],
     ]);
     expect(materialCount({ faces: null, backFaces: 0 })).toBe('');
+    // 다른 언어에서 "Face 2 · 뒷면 1"처럼 섞이지 않는다
+    expect(translate(materialCount({ faces: 2, backFaces: 1 }), 'en')).toBe('Face 2 · Back 1');
+    expect(translate(materialCount({ faces: 1200, backFaces: 3 }), 'de')).toBe('Fläche 1,200 · Rückseite 3');
   });
 
   it('재질: meta가 없으면 그물 이름에서', () => {
@@ -274,6 +278,12 @@ describe('문서·고르기', () => {
     const sel = { kind: 'material' as const, name: '원목' };
     expect(selectionIds(d, sel)).toEqual(d.materials.find((m) => m.name === '원목')!.meshIds);
     expect(selectionText(d, sel)).toBe('재질 원목 · 면 88');
+    // 재질 이름(문서 자료)은 그대로, 뒤의 "면"까지 그 언어로
+    expect(translate(selectionText(d, sel), 'en')).toBe('Material 원목 · Face 88');
+    // 모형에 바로 놓인 형상: 이름이 곧 설명("형상 모형에 바로 놓인 형상"으로 겹치지 않게)
+    const loose = d.outline.find((r) => r.kind === 'loose')!;
+    expect(selectionText(d, { kind: 'outline', index: loose.index })).toMatch(/^모형에 바로 놓인 형상 · 면 \d/);
+    expect(translate(selectionText(d, { kind: 'outline', index: loose.index }), 'en')).toMatch(/^Geometry placed directly on the model · Face \d/);
     expect(selectionIds(d, null)).toEqual([]);
     expect(selectionText(d, null)).toBe('');
   });

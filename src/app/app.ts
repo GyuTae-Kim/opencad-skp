@@ -2904,13 +2904,16 @@ export class SkpViewerApp implements PanelHost {
     e.stWarn.hidden = !w;
     e.stWarn.textContent = `경고 ${w}`;
     let sel = '';
+    let picked = false;
     if (d.measure) sel = measureText(d.measure, d.units, mmPerSceneUnit(d.scene.units));
     else if (this.measuring) sel = this.measureHint ?? '측정: 점을 누르세요';
     else {
-      const t = selectionText(d, d.selection, d.pick);
-      if (t) sel = `고른 것: ${t}`;
+      sel = selectionText(d, d.selection, d.pick);
+      picked = !!sel;
     }
-    e.stSel.textContent = sel;
+    // "고른 것"과 설명은 따로 둔다: 한 글로 두면 다른 언어에서 "고른 것: {0}"이 설명 전체를 그대로 잡아 한국어로 남는다
+    if (picked) e.stSel.replaceChildren(h('span', {}, '고른 것'), ': ', h('span', {}, sel));
+    else e.stSel.textContent = sel;
     e.stSel.title = sel;
     this.refreshMeasureBar();
     this.refreshSelBar();

@@ -3,6 +3,7 @@ import type { LineSet3d, Mesh3d } from 'opencad-viewer3d/types';
 import { circumcircle, edgeGeometry, faceBox, faceGeometry, faceOfTriangle, readFaceIndex, segmentsBox } from '../../src/app/faces';
 import { createDoc, faceOrEdgeSelection, partBox, partOfPick, selectionEntity, selectionForPick, selectionIds, selectionRanges, selectionText } from '../../src/app/doc';
 import { skpToScene } from '../../src/index';
+import { translate } from '../../site/i18n.mjs';
 import { ID13, mfcFile, move13, squareEntities, type MfcEntitiesSpec } from '../mfcwrite';
 
 /** 정사각형 면 둘(10×10, 5×5 인치)과 원(반지름 2, 12분할) 하나, 그 정의를 놓은 인스턴스 둘 */
@@ -165,6 +166,15 @@ describe('면·모서리 고르기(문서)', () => {
     expect(e).toMatchObject({ kind: 'edge', segments: 12 });
     expect(e.radius).toBeCloseTo(2, 4);
     expect(selectionText(d, es)).toMatch(/^곡선 · 길이 .* · 반지름 /);
+    // 다른 언어: 문장 전체가 그 언어로(앞 낱말만 바뀌고 "넓이"·"길이"가 남지 않게)
+    for (const lang of ['en', 'ja', 'zh-CN', 'de']) {
+      for (const s of [sel, es]) {
+        d.selection = s;
+        expect(translate(selectionText(d, s), lang), lang).not.toMatch(/[가-힣]/);
+      }
+    }
+    d.selection = sel;
+    expect(translate(selectionText(d, sel), 'en')).toMatch(/^Face · Area /);
     expect(selectionRanges(d, es)!.get(line.id)!.reduce((n, r) => n + r.count, 0)).toBe(12);
   });
 

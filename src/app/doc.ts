@@ -1132,6 +1132,9 @@ export function nodePathText(d: SkpDoc, node: number): string {
     .join(' › ');
 }
 
+/** 고른 것 설명의 재질 조각: 재질이 없는 면(앱이 붙인 이름 "기본 재질")은 그 이름만("재질 기본 재질"로 겹치지 않고, 다른 언어에서도 바뀌게) */
+const materialPart = (name: string): string => (name === '기본 재질' ? name : `재질 ${name}`);
+
 /** 고른 것 한 줄 설명(상태 막대·패널 아래) */
 export function selectionText(d: SkpDoc, sel: Selection | null, pick: Pick3d | null = null): string {
   if (!sel) return '';
@@ -1139,9 +1142,10 @@ export function selectionText(d: SkpDoc, sel: Selection | null, pick: Pick3d | n
   if (sel.kind === 'outline') {
     const r = d.outline[sel.index];
     if (!r) return '';
-    const parts = [`${KIND_LABEL[r.kind]} ${r.name}${r.definition && r.definition !== r.name ? ` (${r.definition})` : ''}`];
+    // 모형에 바로 놓인 형상은 이름이 곧 설명이다("형상 모형에 바로 놓인 형상"처럼 겹치지 않게)
+    const parts = [r.kind === 'loose' ? r.name : `${KIND_LABEL[r.kind]} ${r.name}${r.definition && r.definition !== r.name ? ` (${r.definition})` : ''}`];
     if (r.kind !== 'loose' && r.tag) parts.push(`태그 ${r.tag}`);
-    if (pickedMat) parts.push(`재질 ${pickedMat}`);
+    if (pickedMat) parts.push(materialPart(pickedMat));
     parts.push(`면 ${r.faces.toLocaleString('ko-KR')}`);
     return parts.join(' · ');
   }
@@ -1155,7 +1159,7 @@ export function selectionText(d: SkpDoc, sel: Selection | null, pick: Pick3d | n
     if (t.parent[i]! >= 0) parts.push(`위치 ${nodePathText(d, t.parent[i]!)}`);
     const tag = nodeTag(t, i);
     if (tag) parts.push(`태그 ${tag}`);
-    if (pickedMat) parts.push(`재질 ${pickedMat}`);
+    if (pickedMat) parts.push(materialPart(pickedMat));
     parts.push(`면 ${t.faces[i]!.toLocaleString('ko-KR')}`);
     return parts.join(' · ');
   }
@@ -1176,7 +1180,7 @@ export function selectionText(d: SkpDoc, sel: Selection | null, pick: Pick3d | n
       parts.push(`${e.segments && e.segments > 1 ? '곡선' : '모서리'} · 길이 ${formatLength((e.length ?? 0) * k, d.units)}`);
       if (e.radius) parts.push(`반지름 ${formatLength(e.radius * k, d.units)}`);
     }
-    if (e.material) parts.push(`재질 ${e.material}`);
+    if (e.material) parts.push(materialPart(e.material));
     if (e.tag) parts.push(`태그 ${e.tag}`);
     return parts.join(' · ');
   }
