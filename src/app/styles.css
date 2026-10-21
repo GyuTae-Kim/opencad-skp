@@ -76,6 +76,8 @@ body {
   font: 13px/1.45 var(--font);
   -webkit-font-smoothing: antialiased;
   -webkit-text-size-adjust: 100%;
+  /* 제목 막대·상태 막대를 아래로 끌어도 새로 고침(당겨서 새로 고침)되지 않게 — 패널·시트 목록은 그 안에서 그대로 스크롤된다 */
+  overscroll-behavior-y: none;
 }
 
 button,
@@ -1903,4 +1905,22 @@ html:lang(zh-CN) { --font: -apple-system, "PingFang SC", "Microsoft YaHei", sans
 }
 @media (max-width: 767px) {
   .titlebar .docname, .titlebar .tbtn .lbl { display: none; }
+}
+
+/*
+ * 홈 화면 앱(standalone): 상태 표시줄 밑까지 그리므로(apple-mobile-web-app-status-bar-style black-translucent)
+ * 제목 막대가 노치·상태 표시줄 밑에 깔리지 않게 위 안전 영역만큼 내린다(휴대폰 제목 막대는 padding을 0으로 덮어쓰므로 맨 끝에 둔다).
+ * 상태 표시줄 글은 흰색이라, 밝은 테마에서는 그 띠만 어둡게 칠한다.
+ */
+@media (display-mode: standalone) {
+  .titlebar {
+    padding-top: env(safe-area-inset-top, 0px);
+    background:
+      linear-gradient(var(--statusbar-bg, var(--bg-bar)) 0 0) top / 100% env(safe-area-inset-top, 0px) no-repeat,
+      var(--bg-bar);
+  }
+
+  :root[data-theme='light'] {
+    --statusbar-bg: #1b2027;
+  }
 }
