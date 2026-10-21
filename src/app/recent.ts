@@ -41,6 +41,13 @@ export const RECENT_DATA_STORE = 'recent-data';
 
 export const recentId = (name: string, size: number): string => `${name}:${size}`;
 
+/** 최근 문서 id(이름:크기) → 이름. 한 번 쓸 자리(shared:시각:이름)도 이름을 꺼낸다 */
+export function nameOfRecentId(id: string): string {
+  if (id.startsWith('shared:')) return id.replace(/^shared:\d+:/, '') || 'shared.skp';
+  const i = id.lastIndexOf(':');
+  return (i > 0 && /^\d+$/.test(id.slice(i + 1)) ? id.slice(0, i) : id) || 'shared.skp';
+}
+
 /** 저장할 수 있는 크기인지(빈 파일·60 MB 초과는 아님) */
 export const canKeepRecent = (size: number): boolean => Number.isFinite(size) && size > 0 && size <= RECENT_MAX_BYTES;
 
@@ -109,6 +116,18 @@ export class RecentStore {
       const fresh = { ...entry, time: now };
       await this.backend.touch(fresh).catch(() => undefined);
       return { entry: fresh, data };
+    } catch {
+      return null;
+    }
+  }
+
+  /** 한 번 쓸 자리(공유 받은 큰 파일, shared:…)의 바이트를 꺼내고 지운다. 없으면 null */
+  async take(key: string): Promise<ArrayBuffer | null> {
+    if (!this.backend) return null;
+    try {
+      const data = await this.backend.data(key);
+      await this.backend.remove([key]).catch(() => undefined);
+      return data;
     } catch {
       return null;
     }

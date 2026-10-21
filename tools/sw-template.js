@@ -1,0 +1,149 @@
+/*
+ * OpenCAD SketchUp 뷰어 서비스 워커(빌드가 tools/sw-plugin.mjs로 dist/sw.js를 만든다 — VERSION·ASSETS는 빌드 때 채운다).
+ *
+ * - 오프라인: 설치할 때 앱 파일(쪽·스크립트·스타일·아이콘·앱 정보)을 이 판의 캐시에 담는다.
+ *   쪽(HTML)은 네트워크 먼저(새 배포가 곧바로 보이고 막히지 않게 — 안 되면 캐시), 이름에 해시가 든 파일은 캐시 먼저.
+ * - 새 판: 새 워커는 설치만 하고 기다린다. 앱이 "새 버전" 알림에서 새로 고침을 고르면 SKIP_WAITING을 보내 바꾼다(처음 설치는 바로).
+ * - 공유 받기(Android share_target): POST …/share-target의 파일을 이 브라우저의 최근 문서 IndexedDB(opencad-skp)에 넣고
+ *   그 언어 쪽 ?shared=<id>로 보낸다(파일은 서버로 가지 않는다). 60 MB보다 크면 최근 목록에 넣지 않고 한 번 쓸 자리(shared:…)에 둔다.
+ */
+const VERSION = '__VERSION__';
+const ASSETS = __ASSETS__;
+const PREFIX = 'opencad-skp-';
+const CACHE = PREFIX + VERSION;
+const DB = 'opencad-skp';
+const STORE = 'recent';
+const DATA = 'recent-data';
+const RECENT_MAX = 8;
+const RECENT_MAX_BYTES = 60 * 1024 * 1024;
+
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    (async () => {
+      const cache = await caches.open(CACHE);
+      await cache.addAll(ASSETS.map((a) => new Request(a, { cache: 'reload' })));
+      // 처음 설치(앞 판이 없음)면 바로 쓴다 — 새 판은 앱의 "새 버전" 알림을 기다린다
+      if (!self.registration.active) await self.skipWaiting();
+    })(),
+  );
+});
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    (async () => {
+      for (const key of await caches.keys()) if (key.startsWith(PREFIX) && key !== CACHE) await caches.delete(key);
+      await self.clients.claim();
+    })(),
+  );
+});
+
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;
+  if (req.method === 'POST' && url.pathname.endsWith('/share-target')) {
+    event.respondWith(receiveShare(req));
+    return;
+  }
+  if (req.method !== 'GET') return;
+  if (req.mode === 'navigate') {
+    event.respondWith(page(req));
+    return;
+  }
+  event.respondWith(asset(req));
+});
+
+/** 쪽: 네트워크 먼저(받으면 캐시를 새로), 안 되면 같은 경로(주소 인자 무시)의 캐시, 그것도 없으면 앱 첫 쪽 */
+async function page(req) {
+  const url = new URL(req.url);
+  const key = url.origin + url.pathname;
+  const cache = await caches.open(CACHE);
+  try {
+    const res = await fetch(req);
+    if (res.ok) await cache.put(key, res.clone());
+    return res;
+  } catch (e) {
+    const hit = (await cache.match(key)) || (await cache.match(key + 'index.html')) || (await cache.match(new URL('./', self.registration.scope).href));
+    if (hit) return hit;
+    throw e;
+  }
+}
+
+/** 그 밖 파일: 캐시 먼저, 없으면 네트워크(이 판의 캐시에 더한다) */
+async function asset(req) {
+  const cache = await caches.open(CACHE);
+  const hit = await cache.match(req);
+  if (hit) return hit;
+  const res = await fetch(req);
+  if (res.ok && res.type === 'basic') cache.put(req, res.clone()).catch(() => {});
+  return res;
+}
+
+function openDb() {
+  return new Promise((resolve, reject) => {
+    const r = indexedDB.open(DB, 1);
+    r.onupgradeneeded = () => {
+      const d = r.result;
+      if (!d.objectStoreNames.contains(STORE)) d.createObjectStore(STORE, { keyPath: 'id' });
+      if (!d.objectStoreNames.contains(DATA)) d.createObjectStore(DATA);
+    };
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+  });
+}
+
+function done(t) {
+  return new Promise((resolve, reject) => {
+    t.oncomplete = () => resolve();
+    t.onerror = () => reject(t.error);
+    t.onabort = () => reject(t.error);
+  });
+}
+
+/** 공유 받은 파일 → 최근 문서(새것부터 8개까지) 또는 한 번 쓸 자리 → 그 언어 쪽으로 */
+async function receiveShare(req) {
+  const back = new URL('./', req.url);
+  const go = (q) => Response.redirect(`${back.href}?shared=${encodeURIComponent(q)}`, 303);
+  try {
+    const form = await req.formData();
+    const file = form.getAll('file').find((f) => f && typeof f === 'object' && typeof f.arrayBuffer === 'function');
+    if (!file) return go(':none');
+    const data = await file.arrayBuffer();
+    const name = (file.name || 'shared.skp').replace(/^.*[\\/]/, '');
+    const db = await openDb();
+    if (data.byteLength > RECENT_MAX_BYTES) {
+      const key = `shared:${Date.now()}:${name}`;
+      const t = db.transaction(DATA, 'readwrite');
+      t.objectStore(DATA).put(data, key);
+      await done(t);
+      return go(key);
+    }
+    const id = `${name}:${data.byteLength}`;
+    const t = db.transaction([STORE, DATA], 'readwrite');
+    t.objectStore(STORE).put({ id, name, size: data.byteLength, time: Date.now() });
+    t.objectStore(DATA).put(data, id);
+    await done(t);
+    // 개수 한도: 오래된 것부터 지운다
+    const all = await new Promise((resolve, reject) => {
+      const r = db.transaction(STORE, 'readonly').objectStore(STORE).getAll();
+      r.onsuccess = () => resolve(r.result || []);
+      r.onerror = () => reject(r.error);
+    });
+    const extra = all.sort((a, b) => b.time - a.time).slice(RECENT_MAX);
+    if (extra.length) {
+      const d = db.transaction([STORE, DATA], 'readwrite');
+      for (const e of extra) {
+        d.objectStore(STORE).delete(e.id);
+        d.objectStore(DATA).delete(e.id);
+      }
+      await done(d);
+    }
+    return go(id);
+  } catch (e) {
+    return go(':error');
+  }
+}

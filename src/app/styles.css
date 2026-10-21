@@ -2259,3 +2259,38 @@ html:lang(zh-CN) { --font: -apple-system, "PingFang SC", "Microsoft YaHei", sans
   padding: 0 6px;
 }
 
+/* 새 판 알림(서비스 워커) */
+.update-bar {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  z-index: 7;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  max-width: calc(100% - 24px);
+  padding: 8px 10px 8px 14px;
+  font-size: 13px;
+  background: var(--bg-elev);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  transform: translateX(-50%);
+}
+
+.update-bar[hidden] {
+  display: none;
+}
+
+.mini-btn.primary {
+  color: var(--on-accent);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+@media (pointer: coarse) {
+  .update-bar .mini-btn {
+    height: 36px;
+  }
+}

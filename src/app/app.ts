@@ -92,7 +92,7 @@ import { VIEW_KEY_OF, VIEW_MENU, isEditableTarget, isViewKey, keyAction } from '
 import type { LaunchRequest } from './launch';
 import { PANEL_WIDTH_DEFAULT, SHEET_DEFAULT, clampPanelWidth, clampSheetFraction, readLayout, storeLayout, type StoredLayout } from './layout';
 import { Panel, type PanelHost } from './panel';
-import { RecentStore, canKeepRecent, recentTimeText, type RecentEntry } from './recent';
+import { RecentStore, canKeepRecent, nameOfRecentId, recentTimeText, type RecentEntry } from './recent';
 import { errorText, sceneHasGeometry } from './protocol';
 import { deviceHints, textureLimitsFor, type TextureLimits } from './texlimits';
 import { THEME_CHOICES, applyThemeChoice, readStoredTheme, resolveTheme, storeTheme, systemPrefersDark, themeChoiceOf, type ThemeChoice, type ThemeName } from './theme';
@@ -226,6 +226,7 @@ interface Els {
   measureLogBtn: HTMLButtonElement;
   measureLog: HTMLElement;
   measureFlash: HTMLElement;
+  updateBar: HTMLElement;
   selBar: HTMLElement;
   selText: HTMLElement;
   selPart: HTMLButtonElement;
@@ -489,7 +490,17 @@ export class SkpViewerApp implements PanelHost {
     const selClose = h('button', { class: 'mb-btn icon', type: 'button', title: '선택 해제', 'aria-label': '선택 해제', html: icon('close', 16) });
     selClose.addEventListener('click', () => this.applySelection(null, false));
     const selBar = h('div', { class: 'measure-bar sel-bar', role: 'status', hidden: true }, selText, h('div', { class: 'mb-acts' }, selPart, selMore, selClose));
-    const stage = h('div', { class: 'stage' }, viewHost, sceneTabs, measureBar, selBar, start, notice, busy);
+    // 새 판 알림(서비스 워커가 새 판을 받아 기다릴 때)
+    const updLater = h('button', { class: 'mini-btn', type: 'button' }, '나중에');
+    const updateBar = h(
+      'div',
+      { class: 'update-bar', role: 'status', hidden: true },
+      h('span', {}, '새 버전이 있습니다. 새로 고치면 열어 둔 파일은 최근 문서에서 다시 엽니다.'),
+      h('button', { class: 'mini-btn primary upd-apply', type: 'button' }, '새로 고침'),
+      updLater,
+    );
+    updLater.addEventListener('click', () => (updateBar.hidden = true));
+    const stage = h('div', { class: 'stage' }, viewHost, sceneTabs, measureBar, selBar, start, notice, busy, updateBar);
     this.exportDialog = new ExportDialog(
       {
         docName: () => this.doc?.name ?? 'model',
@@ -570,6 +581,7 @@ export class SkpViewerApp implements PanelHost {
       measureLogBtn,
       measureLog: measureLogEl,
       measureFlash,
+      updateBar,
       selBar,
       selText,
       selPart,
@@ -2617,7 +2629,56 @@ export class SkpViewerApp implements PanelHost {
   async launch(req: LaunchRequest): Promise<void> {
     if (req.kind === 'sample') await this.openSample();
     else if (req.kind === 'url') await this.openUrl(req.url, req.name);
+    else if (req.kind === 'shared') await this.openShared(req.key);
     else if (req.kind === 'error') this.showNotice('error', '주소의 파일을 열 수 없습니다', req.message);
+  }
+
+  /** 홈 화면 앱이 공유 받은 파일(서비스 워커가 이 브라우저의 최근 문서에 넣었다)을 연다. 주소의 ?shared는 지운다(다시 읽어도 또 열지 않게) */
+  async openShared(key: string): Promise<void> {
+    try {
+      const u = new URL(location.href);
+      u.searchParams.delete('shared');
+      history.replaceState(history.state, '', u.pathname + u.search + u.hash);
+    } catch {
+      /* 주소를 못 바꾸면 그대로 */
+    }
+    if (key === ':none' || key === ':error') {
+      this.showNotice(
+        'error',
+        '공유 받은 파일을 열지 못했습니다',
+        key === ':none' ? '공유에 파일이 없었습니다. .skp 파일을 공유해 주세요.' : '이 브라우저에 파일을 저장하지 못했습니다(저장 공간 부족·비공개 창 등). 파일을 저장한 뒤 "열기"로 골라 주세요.',
+      );
+      return;
+    }
+    const name = nameOfRecentId(key);
+    if (!key.startsWith('shared:')) {
+      await this.openRecent({ id: key, name });
+      return;
+    }
+    // 60 MB보다 커서 최근 목록에 넣지 않은 파일: 한 번 꺼내 열고 지운다
+    const attempt = beginOpen('local', 'skp');
+    const seq = ++this.openSeq;
+    this.setBusy(name, 0.005, '파일 읽는 중');
+    const data = await this.recent.take(key);
+    if (seq !== this.openSeq) return;
+    if (!data) {
+      this.setBusy(null);
+      attempt.error('read_error');
+      this.showNotice('error', `"${name}" 파일을 찾지 못했습니다`, '공유 받은 사본이 지워졌습니다. 다시 공유하거나 "열기"로 골라 주세요.');
+      return;
+    }
+    await this.openBuffer(name, data, seq, attempt);
+  }
+
+  /** 새 판 알림(서비스 워커): 새로 고치면 새 판으로 다시 읽는다(열어 둔 파일은 최근 문서에서 다시 연다) */
+  offerUpdate(apply: () => void): void {
+    const n = this.els.updateBar;
+    n.hidden = false;
+    const ok = n.querySelector<HTMLButtonElement>('.upd-apply')!;
+    ok.onclick = () => {
+      ok.disabled = true;
+      apply();
+    };
   }
 }
 
