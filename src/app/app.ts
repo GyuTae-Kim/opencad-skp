@@ -24,10 +24,23 @@ import { lerpCamera, type CameraState } from 'opencad-viewer3d/camera';
 import { dragStartPx } from 'opencad-viewer3d/pointer';
 import { ParseClient } from './client';
 import { AnnotationLabels } from './annotations';
-import { HISTORY_SETTLE_MS, ViewHistory } from './history';
+import { HISTORY_LIMIT, HISTORY_SETTLE_MS, ViewHistory } from './history';
 import { beginOpen, showAnalyticsSettings, trackExport, type OpenAttempt } from './analytics';
 import { MeasureTool, type MeasureMode, type MeasureToolResult } from './measure';
-import { initialSection, initialView, openingPage, pagePlan, refitSceneCamera, renderModeForStyle, sectionToViewer, stepPage, type SceneFit } from './pages';
+import {
+  initialSection,
+  initialView,
+  openingPage,
+  pagePlan,
+  refitSceneCamera,
+  renderModeForStyle,
+  restoreSceneCamera,
+  sameSceneFit,
+  sectionToViewer,
+  stepPage,
+  unwidenSceneCamera,
+  type SceneFit,
+} from './pages';
 import { DEFAULT_UNITS, mmPerSceneUnit } from './units';
 import { Overlay } from './overlay';
 import { cardName, cardRows, entityInfo } from './entity';
@@ -60,7 +73,7 @@ import {
   type SkpDoc,
 } from './doc';
 import { MAX_FILE_BYTES, SKP_ACCEPT, baseName, fmtCount, formatBytes, formatMs, stripExtension } from './format';
-import { VIEW_KEY_OF, VIEW_MENU, isEditableTarget, keyAction } from './keys';
+import { VIEW_KEY_OF, VIEW_MENU, isEditableTarget, isViewKey, keyAction } from './keys';
 import type { LaunchRequest } from './launch';
 import { PANEL_WIDTH_DEFAULT, SHEET_DEFAULT, clampPanelWidth, clampSheetFraction, readLayout, storeLayout, type StoredLayout } from './layout';
 import { Panel, type PanelHost } from './panel';
@@ -244,8 +257,8 @@ export class SkpViewerApp implements PanelHost {
   private measureTool: MeasureTool | null = null;
   /** 측정 도구 안내 글(상태 막대·패널 아래 띠) */
   measureHint: string | null = null;
-  /** 이전·다음 보기 기록 */
-  private readonly history = new ViewHistory();
+  /** 이전·다음 보기 기록(칸마다 그때의 장면 맞춤 — 되돌릴 때 지금 화면 방향에 다시 맞춘다) */
+  private readonly history = new ViewHistory<SceneFit>(HISTORY_LIMIT, sameSceneFit);
   private historyTimer = 0;
   /** 분리해서 보기 중인지(다시 누르면 모두 보이기) */
   private isolatedOn = false;
@@ -305,7 +318,10 @@ export class SkpViewerApp implements PanelHost {
 
     // 보기 도구 막대
     const sep = (): HTMLElement => h('span', { class: 'tsep', 'aria-hidden': 'true' });
-    const fitBtn = tbtn('전체 보기', 'fit', '전체 보기 (F)', () => this.viewer?.fit());
+    const fitBtn = tbtn('전체 보기', 'fit', '전체 보기 (F)', () => {
+      this.unwidenScene();
+      this.viewer?.fit();
+    });
     const backBtn = tbtn('이전 보기', 'back', '이전 보기(카메라 기록)', () => this.viewBack(), 'icon-only wide-only');
     const fwdBtn = tbtn('다음 보기', 'forward', '다음 보기(카메라 기록)', () => this.viewForward(), 'icon-only wide-only');
     const viewBtn = h('button', {
@@ -971,7 +987,37 @@ export class SkpViewerApp implements PanelHost {
     cv.addEventListener('pointerup', () => (down = null));
     cv.addEventListener('wheel', () => (this.userMoved = true), { passive: true });
     // 뷰 큐브를 누르면 표준 뷰 + 전체 보기
-    v.host.querySelector('.v3d-cube')?.addEventListener('pointerdown', () => (this.userMoved = false));
+    const cube = v.host.querySelector<HTMLElement>('.v3d-cube');
+    cube?.addEventListener('pointerdown', () => (this.userMoved = false));
+    // 뷰 큐브 누르기·가운데 단추 두 번 누르기(코어의 표준 뷰·전체 보기)도 넓힌 시야각을 먼저 되돌린다.
+    // 코어보다 먼저 받도록 보기 바탕의 캡처 단계에서 본다(코어와 같은 문턱: 큐브 끌기 3화소, 가운데 두 번 420 ms·8화소)
+    let cubeDown: { x: number; y: number } | null = null;
+    let middle = { t: -Infinity, x: 0, y: 0 };
+    v.host.addEventListener(
+      'pointerdown',
+      (e) => {
+        if (cube && cube.contains(e.target as Node)) {
+          cubeDown = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
+          return;
+        }
+        if (e.pointerType !== 'mouse' || e.button !== 1) return;
+        const t = performance.now();
+        if (t - middle.t < 420 && Math.hypot(e.clientX - middle.x, e.clientY - middle.y) < 8) {
+          middle.t = -Infinity;
+          this.unwidenScene();
+        } else middle = { t, x: e.clientX, y: e.clientY };
+      },
+      true,
+    );
+    v.host.addEventListener(
+      'pointerup',
+      (e) => {
+        const d = cubeDown;
+        cubeDown = null;
+        if (d && cube?.contains(e.target as Node) && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 3) this.unwidenScene();
+      },
+      true,
+    );
   }
 
   /** 3D 고르기: Alt = 가장 안쪽, 두 번째 누르기(e.clicks = 2) = 고른 그룹에 한 단계 들어가기 */
@@ -1058,6 +1104,7 @@ export class SkpViewerApp implements PanelHost {
     const d = this.doc;
     const v = this.viewer;
     if (!d || !v) return;
+    this.unwidenScene();
     const sel = d.selection;
     if (sel?.kind === 'node' && d.tree && !isSplit(d.tree, sel.index)) {
       const box = nodeBox(d.tree, d.scene, sel.index, (item) => v.isVisible(this.itemId(item)), this.hiddenRanges);
@@ -1080,6 +1127,32 @@ export class SkpViewerApp implements PanelHost {
     return f && f.projection === c.projection && Math.abs(c.fovY - f.fovY) < 1e-9 ? f.baseFovY : c.fovY;
   }
 
+  /** 이전·다음 보기로 갈 카메라: 장면 맞춤으로 적은 칸은 지금 화면 방향에 다시 맞추고, 그 맞춤을 이어 간다 */
+  private restoreView(c: CameraState): CameraState {
+    const v = this.viewer;
+    const r = restoreSceneCamera(c, this.history.tag, v ? this.viewAspect(v) : 1);
+    this.sceneFit = r.fit;
+    return r.camera;
+  }
+
+  /**
+   * 전체 보기·표준 뷰·맞춰 보기 전에: 장면이 세로 화면에서 넓힌 시야각을 원래대로(넓은 시야각의 전체 보기는 가장자리가 늘어난다).
+   * 이 보기들은 장면 보기가 아니므로 장면 맞춤도 끝낸다(돌려도 다시 넓히지 않는다)
+   */
+  private unwidenScene(): void {
+    const v = this.viewer;
+    const f = this.sceneFit;
+    if (!v || !f) return;
+    this.sceneFit = null;
+    // 장면 전환 중이면 그만 옮긴다(전체 보기가 그 위에서 시작한다)
+    cancelAnimationFrame(this.camAnim);
+    this.camAnim = 0;
+    this.refitLater = false;
+    const c = v.getCamera();
+    const u = unwidenSceneCamera(c, f);
+    if (u !== c) v.setCamera(u);
+  }
+
   /** 휴대폰을 돌린 뒤: 장면 맞춤을 새 종횡비로(보기를 돌리거나 옮긴 것은 그대로, 사용자가 투영을 바꿨으면 그만 따라간다) */
   private refitScene(): void {
     const v = this.viewer;
@@ -1092,7 +1165,11 @@ export class SkpViewerApp implements PanelHost {
     const cur = v.getCamera();
     const r = refitSceneCamera(cur, f, this.viewAspect(v));
     this.sceneFit = r?.fit ?? null;
-    if (r && r.camera !== cur) v.setCamera(r.camera);
+    if (r && r.camera !== cur) {
+      v.setCamera(r.camera);
+      // 시야각만 바뀌면 코어가 카메라 변화를 알리지 않는다 — 기록의 마지막 카메라·맞춤을 직접 새로 한다
+      this.onCamera(v.getCamera());
+    }
   }
 
   /** 카메라를 부드럽게 옮긴다(뷰어의 맞춰 보기 움직임과 비슷한 시간) */
@@ -1127,9 +1204,9 @@ export class SkpViewerApp implements PanelHost {
     this.camAnim = requestAnimationFrame(step);
   }
 
-  /** 카메라가 바뀔 때: 보기 기록(멈추면 한 칸) */
+  /** 카메라가 바뀔 때: 보기 기록(멈추면 한 칸, 그때의 장면 맞춤과 함께) */
   private onCamera(c: CameraState): void {
-    this.history.observe(c, performance.now());
+    this.history.observe(c, performance.now(), this.sceneFit);
     clearTimeout(this.historyTimer);
     this.historyTimer = window.setTimeout(() => {
       if (this.history.settle(performance.now())) this.refreshToolbar();
@@ -1141,7 +1218,7 @@ export class SkpViewerApp implements PanelHost {
     if (!c) return;
     this.userMoved = true;
     this.projection = c.projection;
-    this.animateCamera(c, 280, () => {
+    this.animateCamera(this.restoreView(c), 280, () => {
       this.history.done();
       this.refreshToolbar();
     });
@@ -1152,7 +1229,7 @@ export class SkpViewerApp implements PanelHost {
     if (!c) return;
     this.userMoved = true;
     this.projection = c.projection;
-    this.animateCamera(c, 280, () => {
+    this.animateCamera(this.restoreView(c), 280, () => {
       this.history.done();
       this.refreshToolbar();
     });
@@ -1853,6 +1930,7 @@ export class SkpViewerApp implements PanelHost {
 
   setView(v: ViewName): void {
     this.userMoved = false;
+    this.unwidenScene();
     this.viewer?.setView(v);
   }
 
@@ -1938,7 +2016,9 @@ export class SkpViewerApp implements PanelHost {
       this.toggleMeasure();
       return;
     }
-    // F·1~7·Esc(측정 지우기)는 뷰어 규칙대로. 캡처 단계에서 처리했으면 캔버스의 같은 키 처리까지 가지 않게 막는다
+    // F·1~7·Esc(측정 지우기)는 뷰어 규칙대로. 캡처 단계에서 처리했으면 캔버스의 같은 키 처리까지 가지 않게 막는다.
+    // 전체 보기·표준 뷰 키는 그 전에 넓힌 시야각을 되돌린다
+    if (isViewKey({ key: ev.key, ctrl: ev.ctrlKey, meta: ev.metaKey, alt: ev.altKey })) this.unwidenScene();
     if (v.handleKey(ev)) {
       ev.stopPropagation();
       if (ev.key !== 'Escape') this.userMoved = false;

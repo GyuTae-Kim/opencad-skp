@@ -205,6 +205,33 @@ export function refitSceneCamera(c: CameraState, fit: SceneFit, viewAspect: numb
   return { camera: { ...c, target: [...c.target], distance: (c.distance * scale) / fit.scale }, fit: { ...fit, scale } };
 }
 
+/**
+ * 전체 보기·표준 뷰·맞춰 보기 전에: 세로 화면 맞춤으로 넓힌 원근 시야각을 장면의 원래 시야각으로 되돌린다
+ * (넓은 시야각으로 전체 보기를 하면 가장자리가 늘어난다). 눈을 그만큼 뒤로 빼 대상점 깊이의 화면 크기는 그대로 둔다 —
+ * 바로 이어지는 맞춰 보기 움직임이 튀지 않게. 맞춤이 없거나 넓히지 않았으면 그대로.
+ */
+export function unwidenSceneCamera(c: CameraState, fit: SceneFit | null): CameraState {
+  if (!fit || fit.projection !== 'perspective' || c.projection !== 'perspective') return c;
+  const base = validFov(fit.baseFovY);
+  if (!(c.fovY > base + 1e-9)) return c;
+  return { ...c, target: [...c.target], fovY: base, distance: (c.distance * Math.tan(c.fovY / 2)) / Math.tan(base / 2) };
+}
+
+/**
+ * 이전·다음 보기로 되돌릴 카메라: 장면 맞춤 상태로 적어 둔 칸(tag)은 지금 화면 방향에 다시 맞춘다
+ * (휴대폰을 돌린 뒤 이전 보기를 해도 돌리기 전 방향의 넓은 시야각이 돌아오지 않게). 맞춤 없이 적은 칸은 그대로.
+ */
+export function restoreSceneCamera(c: CameraState, tag: SceneFit | null, viewAspect: number): { camera: CameraState; fit: SceneFit | null } {
+  const r = tag ? refitSceneCamera(c, tag, viewAspect) : null;
+  return r ?? { camera: c, fit: null };
+}
+
+/** 같은 장면 맞춤인지(배율·시야각만 다르면 같은 것 — 휴대폰을 돌려 다시 맞춘 것) */
+export function sameSceneFit(a: SceneFit | null, b: SceneFit | null): boolean {
+  if (!a || !b) return a === b;
+  return a.projection === b.projection && Math.abs(a.baseFovY - b.baseFovY) < 1e-12 && Math.abs(a.ref - b.ref) < 1e-12;
+}
+
 /** 범위가 비었는지(min > max) */
 function emptyBox(b: Box3 | null | undefined): boolean {
   return !b || !(b.min[0] <= b.max[0] && b.min[1] <= b.max[1] && b.min[2] <= b.max[2]);

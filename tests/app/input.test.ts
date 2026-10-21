@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { VIEW_KEYS } from 'opencad-viewer3d';
-import { VIEW_KEY_OF, VIEW_MENU, isEditableTarget, keyAction } from '../../src/app/keys';
+import { VIEW_KEY_OF, VIEW_MENU, isEditableTarget, isViewKey, keyAction } from '../../src/app/keys';
 import { parseLaunch } from '../../src/app/launch';
 import { THEME_KEY, readStoredTheme, resolveTheme, storeTheme } from '../../src/app/theme';
 
 describe('키 → 할 일', () => {
+  it('전체 보기·표준 뷰 키(넓힌 시야각을 먼저 되돌릴 키)', () => {
+    for (const key of ['f', 'F', ...Object.keys(VIEW_KEYS)]) expect(isViewKey({ key })).toBe(true);
+    for (const key of ['F7', 'Escape', 't', 'toString', 'constructor', '9']) expect(isViewKey({ key })).toBe(false);
+    expect(isViewKey({ key: 'f', ctrl: true })).toBe(false);
+    expect(isViewKey({ key: '1', alt: true })).toBe(false);
+  });
+
   const base = { hasDoc: true };
   it('F·1~7은 뷰어 규칙(handleKey)으로, F7은 격자', () => {
     expect(keyAction({ ...base, key: 'f' })).toEqual({ kind: 'viewer' });

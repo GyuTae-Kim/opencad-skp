@@ -54,4 +54,25 @@ describe('보기 기록', () => {
     expect(h.canBack()).toBe(true);
     expect(h.back(10)?.yaw).toBe(0);
   });
+
+  it('칸마다 꼬리표를 두고, 같은 꼬리표면 시야각만 바뀐 카메라는 새 칸으로 적지 않는다', () => {
+    type Tag = { base: number; scale: number };
+    const h = new ViewHistory<Tag>(50, (a, b) => !!a && !!b && a.base === b.base);
+    const portrait: Tag = { base: 35, scale: 3 };
+    h.reset(cam(0), null);
+    h.observe({ ...cam(1), fovY: 1.5 }, 0, portrait);
+    h.settle(HISTORY_SETTLE_MS);
+    // 휴대폰을 돌려 시야각만 다시 맞춤(같은 장면 맞춤)
+    h.observe({ ...cam(1), fovY: 0.6 }, 1000, { base: 35, scale: 1 });
+    expect(h.settle(1000 + HISTORY_SETTLE_MS)).toBe(false);
+    expect(h.size).toBe(2);
+    // 꼬리표가 없으면(맞춤 아님) 시야각이 다르면 다른 칸
+    h.observe({ ...cam(1), fovY: 0.6 }, 2000, null);
+    expect(h.settle(2000 + HISTORY_SETTLE_MS)).toBe(true);
+    expect(h.back(3000)?.fovY).toBe(1.5);
+    expect(h.tag).toEqual(portrait);
+    h.done();
+    expect(h.back(4000)?.yaw).toBe(0);
+    expect(h.tag).toBeNull();
+  });
 });

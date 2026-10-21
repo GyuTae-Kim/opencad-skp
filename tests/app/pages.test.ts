@@ -22,6 +22,8 @@ import {
   readPages,
   refitSceneCamera,
   renderModeForStyle,
+  restoreSceneCamera,
+  sameSceneFit,
   sameSkpCamera,
   sceneCoverageScale,
   sectionToViewer,
@@ -29,6 +31,7 @@ import {
   transitionCamera,
   transitionProgress,
   transitionSeconds,
+  unwidenSceneCamera,
   widenFov,
 } from '../../src/app/pages';
 
@@ -454,5 +457,42 @@ describe('세로 화면에서 장면이 만든 가로 범위 지키기', () => {
     expect(tall.camera!.fovY).toBeCloseTo(tall.fit!.fovY, 12);
     const top = pagePlan({ name: '위에서', camera: cam({ eye: [0, 0, 100], up: [0, 1, 0], perspective: false, height: 40 }) }, { viewAspect: 0.5, viewerFovY: DEFAULT_FOV });
     expect(2 * top.camera!.distance * Math.tan(top.camera!.fovY / 2)).toBeCloseTo(40 * (SCENE_REF_ASPECT / 0.5), 6);
+  });
+
+  it('전체 보기·표준 뷰 전에는 넓힌 시야각을 원래대로(대상점 깊이 화면 크기는 그대로)', () => {
+    const p = fitSceneCamera(persp, 390 / 725);
+    expect(deg(p.camera.fovY)).toBeGreaterThan(80);
+    const u = unwidenSceneCamera({ ...p.camera, yaw: 1.2 }, p.fit);
+    expect(u.fovY).toBeCloseTo(persp.fovY, 12);
+    expect(u.yaw).toBe(1.2);
+    close(u.target, p.camera.target);
+    // 대상점 깊이의 화면 반높이(거리·tan)는 같다 — 이어지는 맞춰 보기가 튀지 않는다
+    expect(u.distance * Math.tan(u.fovY / 2)).toBeCloseTo(p.camera.distance * Math.tan(p.camera.fovY / 2), 9);
+    // 넓히지 않았거나(가로 화면), 맞춤이 없거나, 평행이면 그대로
+    const land = fitSceneCamera(persp, 2);
+    expect(unwidenSceneCamera(land.camera, land.fit)).toBe(land.camera);
+    expect(unwidenSceneCamera(p.camera, null)).toBe(p.camera);
+    const o = fitSceneCamera({ ...persp, projection: 'orthographic' }, 0.5);
+    expect(unwidenSceneCamera(o.camera, o.fit)).toBe(o.camera);
+  });
+
+  it('돌린 뒤 이전 보기: 맞춤으로 적은 칸은 지금 방향의 시야각으로, 맞춤 없이 적은 칸은 그대로', () => {
+    const p = fitSceneCamera(persp, 390 / 725);
+    // 세로에서 적은 칸을 가로에서 되돌린다
+    const back = restoreSceneCamera({ ...p.camera, yaw: 0.9 }, p.fit, 844 / 269);
+    expect(back.camera.fovY).toBeCloseTo(persp.fovY, 12);
+    expect(back.camera.yaw).toBe(0.9);
+    expect(back.fit!.scale).toBe(1);
+    // 가로에서 적은 칸을 세로에서 되돌리면 다시 넓힌다
+    const l = fitSceneCamera(persp, 844 / 269);
+    expect(restoreSceneCamera(l.camera, l.fit, 390 / 725).camera.fovY).toBeCloseTo(p.camera.fovY, 12);
+    // 맞춤 없이 적은 칸(전체 보기 뒤)은 그대로, 맞춤도 없음
+    const plain = restoreSceneCamera(persp, null, 0.5);
+    expect(plain.camera).toBe(persp);
+    expect(plain.fit).toBeNull();
+    expect(sameSceneFit(p.fit, l.fit)).toBe(true);
+    expect(sameSceneFit(p.fit, fitSceneCamera({ ...persp, fovY: rad(50) }, 0.5).fit)).toBe(false);
+    expect(sameSceneFit(null, null)).toBe(true);
+    expect(sameSceneFit(p.fit, null)).toBe(false);
   });
 });
