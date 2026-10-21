@@ -21,6 +21,7 @@ import {
   type ViewName,
 } from 'opencad-viewer3d';
 import { lerpCamera, type CameraState } from 'opencad-viewer3d/camera';
+import { dragStartPx } from 'opencad-viewer3d/pointer';
 import { ParseClient } from './client';
 import { AnnotationLabels } from './annotations';
 import { HISTORY_SETTLE_MS, ViewHistory } from './history';
@@ -964,7 +965,8 @@ export class SkpViewerApp implements PanelHost {
       down = { x: e.clientX, y: e.clientY };
     });
     cv.addEventListener('pointermove', (e) => {
-      if (down && e.buttons && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) this.userMoved = true;
+      // 코어와 같은 끌기 시작 거리(터치 10화소): 그 안의 손가락 떨림은 누르기라 보기를 움직이지 않는다
+      if (down && e.buttons && Math.hypot(e.clientX - down.x, e.clientY - down.y) >= dragStartPx(e.pointerType)) this.userMoved = true;
     });
     cv.addEventListener('pointerup', () => (down = null));
     cv.addEventListener('wheel', () => (this.userMoved = true), { passive: true });

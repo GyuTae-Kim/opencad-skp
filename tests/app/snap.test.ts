@@ -3,7 +3,9 @@ import { computeFrame, dirToAngles, projectToScreen, type CameraState, type View
 import { buildBvh } from 'opencad-viewer3d/bvh';
 import { pickScene } from 'opencad-viewer3d/scenepick';
 import type { LineSet3d, Mesh3d, Pick3d } from 'opencad-viewer3d/types';
+import { PICK_TOLERANCE_PX, SNAP_PX, TOUCH_PICK_TOLERANCE_PX, pickTolerance } from 'opencad-viewer3d/pointer';
 import {
+  AIM_SNAP_RADIUS_PX,
   CORE_PICK_TOLERANCE_PX,
   SNAP_RADIUS_PX,
   TOUCH_SNAP_RADIUS_PX,
@@ -226,6 +228,27 @@ describe('추정: 축 고정·빈 곳', () => {
 });
 
 describe('추정 도움 함수', () => {
+  it('추정 반경은 코어 허용 거리에 맞춘다: 마우스 = 코어 붙잡기, 터치·정밀 조준 ≥ 코어 터치 허용 거리', () => {
+    expect(CORE_PICK_TOLERANCE_PX).toBe(PICK_TOLERANCE_PX);
+    expect(SNAP_RADIUS_PX).toBe(SNAP_PX);
+    const touch = pickTolerance('touch', PICK_TOLERANCE_PX, TOUCH_PICK_TOLERANCE_PX);
+    expect(TOUCH_SNAP_RADIUS_PX).toBeGreaterThanOrEqual(Math.max(touch.tol, touch.snap));
+    expect(AIM_SNAP_RADIUS_PX).toBeGreaterThanOrEqual(touch.tol);
+  });
+
+  it('터치 반경의 둘레 고르기는 코어 터치 허용 거리(14화소) 안의 선을 빠짐없이 찾는다', () => {
+    // 가운데(허용 6)와 둘레(반지름 19 ± 6)로, 커서에서 0~14화소 떨어진 긴 선을 어느 방향이든 하나는 맞힌다
+    const probes = probeOffsets(TOUCH_SNAP_RADIUS_PX, CORE_PICK_TOLERANCE_PX);
+    for (let d = 0; d <= TOUCH_PICK_TOLERANCE_PX; d += 0.5)
+      for (let a = 0; a < 180; a += 7.5) {
+        const t = (a * Math.PI) / 180;
+        // 방향 (cos t, sin t)로 지나고 커서에서 d만큼 떨어진 직선까지의 거리
+        const dist = (x: number, y: number): number => Math.abs(-Math.sin(t) * x + Math.cos(t) * y - d);
+        const hit = dist(0, 0) <= CORE_PICK_TOLERANCE_PX || probes.some(([x, y]) => dist(x, y) <= CORE_PICK_TOLERANCE_PX);
+        expect(hit).toBe(true);
+      }
+  });
+
   it('둘레 고르기 점: 반경 − 허용/2 둘레에 허용 간격쯤, 최대 12개', () => {
     const p = probeOffsets(SNAP_RADIUS_PX, CORE_PICK_TOLERANCE_PX);
     expect(p.length).toBe(8);

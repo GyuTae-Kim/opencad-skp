@@ -18,11 +18,13 @@ import {
   protractorResult,
   snapRadius,
   tapeResult,
+  tapSlopPx,
   tooltipPosition,
   type MeasureToolResult,
   type MeasureViewer,
 } from '../../src/app/measure';
 import { Overlay, frameFor } from '../../src/app/overlay';
+import { DRAG_START_PX, TOUCH_DRAG_START_PX } from 'opencad-viewer3d';
 import { DEFAULT_UNITS, type UnitsDisplay } from '../../src/app/units';
 
 describe('줄자·각도기 계산', () => {
@@ -466,6 +468,62 @@ describe('측정 도구: 정밀 조준(터치 길게 누르기)', () => {
     r.overlay.paintNow();
     expect(r.tool.pointCount).toBe(0);
     expect(r.q('.measure-aim')).toBeNull();
+  });
+
+  it('누르기 문턱은 코어 끌기 시작 거리와 같다(터치 10화소, 마우스 4화소)', () => {
+    expect(tapSlopPx('touch')).toBe(TOUCH_DRAG_START_PX);
+    expect(TOUCH_DRAG_START_PX).toBe(10);
+    expect(tapSlopPx('mouse')).toBe(DRAG_START_PX);
+    expect(tapSlopPx('pen')).toBe(DRAG_START_PX);
+  });
+
+  it('손가락이 6·9화소 떨려도 점을 찍고(코어도 돌리지 않는다), 10화소 넘게 끌면 궤도라 찍지 않는다', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    // 원점 끝점(화면 100,100) 옆을 6화소 떨며 탭
+    down(r, 101, 101);
+    r.ptr('pointermove', 107, 101, { ...touch, buttons: 1 });
+    r.ptr('pointerup', 107, 101, touch);
+    expect(r.tool.pointCount).toBe(1);
+    // +X 끝점(화면 200,100) 옆을 9화소 떨며 탭: 줄자가 끝난다(두 점 모두 끝점에 붙는다)
+    down(r, 199, 101);
+    r.ptr('pointermove', 190, 101, { ...touch, buttons: 1 });
+    r.ptr('pointerup', 190, 101, touch);
+    expect(r.tool.pointCount).toBe(0);
+    expect(r.results.at(-1)).toMatchObject({ kind: 'tape', a: [0, 0, 0], b: [100, 0, 0], distance: 100 });
+    down(r, 101, 101);
+    r.ptr('pointermove', 113, 101, { ...touch, buttons: 1 });
+    r.ptr('pointerup', 113, 101, touch);
+    expect(r.tool.pointCount).toBe(0);
+    expect(r.results.filter(Boolean)).toHaveLength(1);
+  });
+
+  it('마우스는 그대로 4화소부터 끌기', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    r.ptr('pointerdown', 101, 101, { buttons: 1 });
+    r.ptr('pointermove', 106, 101, { buttons: 1 });
+    r.ptr('pointerup', 106, 101);
+    expect(r.tool.pointCount).toBe(0);
+    r.ptr('pointerdown', 101, 101, { buttons: 1 });
+    r.ptr('pointermove', 104, 101, { buttons: 1 });
+    r.ptr('pointerup', 104, 101);
+    expect(r.tool.pointCount).toBe(1);
+  });
+
+  it('길게 누르는 동안 6~8화소 떨려도 정밀 조준을 시작하고, 십자선은 지금 손가락 위에 뜬다', () => {
+    vi.useFakeTimers();
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    down(r, 101, 100 + AIM_OFFSET_PX);
+    r.ptr('pointermove', 107, 100 + AIM_OFFSET_PX + 3, { ...touch, buttons: 1 });
+    vi.advanceTimersByTime(AIM_HOLD_MS);
+    expect(r.tool.aiming).toBe(true);
+    r.overlay.paintNow();
+    const aim = r.q('.measure-aim');
+    expect(aim).not.toBeNull();
+    r.ptr('pointerup', 107, 100 + AIM_OFFSET_PX + 3, touch);
+    expect(r.tool.pointCount).toBe(1);
   });
 
   it('빈 곳에서 떼면 찍지 않고 십자선 자리 표시를 지운다', () => {
