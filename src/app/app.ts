@@ -246,6 +246,8 @@ export class SkpViewerApp implements PanelHost {
   /** 나눠 올리기가 끝나면 부를 것(새 문서로 바뀌면 바로 부른다) */
   private uploadDone: (() => void) | null = null;
   private camAnim = 0;
+  /** 옮기는 중인 카메라 움직임이 끝나면 부를 것(그만둘 때도 부른다 — 보기 기록이 '옮기는 중'에 머물지 않게) */
+  private camAnimDone: (() => void) | null = null;
   /** 장면 카메라를 지금 3D 보기 종횡비에 맞춘 상태(세로 화면이면 장면의 가로 범위를 지키게 넓힘 — 휴대폰을 돌리면 다시 맞춘다) */
   private sceneFit: SceneFit | null = null;
   /** 장면 전환 중에 화면을 돌렸으면 전환이 끝난 뒤 다시 맞춘다 */
@@ -1143,10 +1145,9 @@ export class SkpViewerApp implements PanelHost {
     const f = this.sceneFit;
     if (!v || !f) return;
     this.sceneFit = null;
-    // 장면 전환 중이면 그만 옮긴다(전체 보기가 그 위에서 시작한다)
-    cancelAnimationFrame(this.camAnim);
-    this.camAnim = 0;
+    // 장면 전환·이전 보기 중이면 그만 옮긴다(전체 보기가 그 위에서 시작한다)
     this.refitLater = false;
+    this.stopCameraAnim();
     const c = v.getCamera();
     const u = unwidenSceneCamera(c, f);
     if (u !== c) v.setCamera(u);
@@ -1173,18 +1174,27 @@ export class SkpViewerApp implements PanelHost {
     }
   }
 
-  /** 카메라를 부드럽게 옮긴다(뷰어의 맞춰 보기 움직임과 비슷한 시간) */
+  /** 옮기는 중인 카메라 움직임을 그만둔다(끝났을 때 부를 것도 부른다 — 이전·다음 보기면 보기 기록의 '옮기는 중'을 푼다) */
+  private stopCameraAnim(): void {
+    cancelAnimationFrame(this.camAnim);
+    this.camAnim = 0;
+    const done = this.camAnimDone;
+    this.camAnimDone = null;
+    done?.();
+  }
+
+  /** 카메라를 부드럽게 옮긴다(뷰어의 맞춰 보기 움직임과 비슷한 시간). 앞의 움직임은 그만두고 그 done을 먼저 부른다 */
   private animateCamera(to: CameraState, ms = 320, done?: () => void): void {
     const v = this.viewer;
     if (!v) return;
-    cancelAnimationFrame(this.camAnim);
-    this.camAnim = 0;
+    this.stopCameraAnim();
     const from = v.getCamera();
     if (!(ms > 0)) {
       v.setCamera(to);
       done?.();
       return;
     }
+    this.camAnimDone = done ?? null;
     const t0 = performance.now();
     const step = (now: number): void => {
       const k = Math.min(1, (now - t0) / ms);
@@ -1195,6 +1205,7 @@ export class SkpViewerApp implements PanelHost {
         return;
       }
       this.camAnim = 0;
+      this.camAnimDone = null;
       done?.();
       // 옮기는 동안 휴대폰을 돌렸으면 다 옮긴 뒤 다시 맞춘다
       if (this.refitLater) {
@@ -1215,6 +1226,8 @@ export class SkpViewerApp implements PanelHost {
   }
 
   viewBack(): void {
+    // 앞의 이전·다음 보기 움직임을 먼저 끝낸다(그 done이 기록의 '옮기는 중'을 풀므로 새로 옮기기 전에)
+    this.stopCameraAnim();
     const c = this.history.back(performance.now());
     if (!c) return;
     this.userMoved = true;
@@ -1226,6 +1239,7 @@ export class SkpViewerApp implements PanelHost {
   }
 
   viewForward(): void {
+    this.stopCameraAnim();
     const c = this.history.forward();
     if (!c) return;
     this.userMoved = true;
