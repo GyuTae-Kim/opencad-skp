@@ -1221,7 +1221,8 @@ export function selectionEntity(d: SkpDoc): EntityInput {
         extra: [
           { label: '색', value: `RGB ${m.color.slice(0, 3).map((c) => Math.round(c * 255)).join(', ')}` },
           ...(m.color[3] < 0.999 ? [{ label: '불투명도', value: `${Math.round(m.color[3] * 100)} %` }] : []),
-          ...(m.textured ? [{ label: '무늬', value: '그림 재질(3D는 평균색)' }] : []),
+          // 무늬를 3D에 입혔는지는 목록 칩(무늬 · 무늬 · 평균색)과 같은 기준(입힌 무늬 id가 장면에 있는지)으로 적는다
+          ...(m.textured ? [{ label: '무늬', value: m.texture ? '그림 재질(3D에 무늬를 입힘)' : '그림 재질(3D는 평균색)' }] : []),
         ],
       };
   }

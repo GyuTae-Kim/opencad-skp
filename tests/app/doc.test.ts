@@ -11,6 +11,7 @@ import {
   readInfo,
   releaseName,
   sceneCounts,
+  selectionEntity,
   selectionForPick,
   selectionIds,
   selectionText,
@@ -18,7 +19,7 @@ import {
   unitSummary,
   unsupportedVersion,
 } from '../../src/app/doc';
-import { skpToScene } from '../../src/index';
+import { readSkpImages, skpToScene } from '../../src/index';
 import { oldSkpHeader } from '../build';
 import { mfcFile, squareEntities } from '../mfcwrite';
 import { sampleSkpBytes } from '../../src/app/sample';
@@ -164,6 +165,21 @@ describe('문서·고르기', () => {
     expect(selectionText(d, sel)).toBe('재질 원목 · 면 88');
     expect(selectionIds(d, null)).toEqual([]);
     expect(selectionText(d, null)).toBe('');
+  });
+
+  it('무늬 재질의 엔티티 정보는 3D에 무늬를 입혔는지를 목록 칩과 같은 기준으로 적는다', () => {
+    const bytes = sampleSkpBytes();
+    const withTex = createDoc('예제.skp', 1, { scene: skpToScene(bytes, { name: '예제', outline: true, textures: readSkpImages(bytes).materials }), ms: 1 });
+    const tile = withTex.materials.find((m) => m.name === '기와')!;
+    expect(tile.textured).toBe(true);
+    expect(tile.texture).not.toBeNull();
+    withTex.selection = { kind: 'material', name: '기와' };
+    expect(selectionEntity(withTex).extra).toContainEqual({ label: '무늬', value: '그림 재질(3D에 무늬를 입힘)' });
+    // 무늬 그림을 넘기지 않으면(옛 판·한도 초과) 평균색
+    const plain = createDoc('예제.skp', 1, { scene: sampleScene(), ms: 1 });
+    expect(plain.materials.find((m) => m.name === '기와')!.texture).toBeNull();
+    plain.selection = { kind: 'material', name: '기와' };
+    expect(selectionEntity(plain).extra).toContainEqual({ label: '무늬', value: '그림 재질(3D는 평균색)' });
   });
 
   it('outline이 없는 장면은 구성 탭을 숨긴다', () => {
