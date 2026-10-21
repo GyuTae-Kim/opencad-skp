@@ -1,0 +1,66 @@
+{
+  "name": "OpenCAD SketchUp Viewer",
+  "short_name": "SKP-Viewer",
+  "description": "Dies ist ein kostenloser Viewer, der in SketchUp 6~2026 gespeicherte SKP-Dateien ohne Installation öffnet. Unterstützt Tag-, Material-, Gruppen- und Komponentenbestätigung, Zweipunkt-Abstandsmessung und PNG-Speicherung. Dateien werden in Ihrem Browser verarbeitet, ohne auf einen Server hochgeladen zu werden.",
+  "lang": "de",
+  "dir": "ltr",
+  "start_url": "./",
+  "scope": "../",
+  "display": "standalone",
+  "background_color": "#1b2027",
+  "theme_color": "#1b2027",
+  "icons": [
+    {
+      "src": "../icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "../icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "../icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "share_target": {
+    "action": "./share-target",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "files": [
+        {
+          "name": "file",
+          "accept": [
+            "application/vnd.sketchup.skp",
+            "application/octet-stream",
+            ".skp"
+          ]
+        }
+      ]
+    }
+  },
+  "file_handlers": [
+    {
+      "action": "./",
+      "accept": {
+        "application/vnd.sketchup.skp": [
+          ".skp"
+        ]
+      }
+    }
+  ],
+  "launch_handler": {
+    "client_mode": [
+      "focus-existing",
+      "auto"
+    ]
+  }
+}
