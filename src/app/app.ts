@@ -1048,6 +1048,11 @@ export class SkpViewerApp implements PanelHost {
         },
         touch: () => !!this.coarseQuery?.matches,
         curveCenter: (id, seg) => this.curveCenter(id, seg),
+        // 모형의 그리기 축을 옮겼으면 줄자·각도기의 축 고정·기본 평면이 그 축을 따른다
+        getAxes: () => {
+          const a = this.doc?.axes;
+          return a ? { x: a.x, y: a.y, z: a.z } : null;
+        },
       });
       return v;
     } catch (e) {

@@ -225,7 +225,10 @@ export interface AxisLock {
  * 시작점 from에서 커서가 축 방향(화면에 비친 축 선과 각 maxDeg 안)이면 그 축 위에서 커서 광선에 가장 가까운 점.
  * 여러 축이 맞으면 화면에서 축 선에 가장 가까운 것. 커서가 시작점에서 minPx보다 가까우면 null.
  */
-export function axisLock(f: ViewFrame, from: readonly number[], x: number, y: number, o: { maxDeg?: number; minPx?: number } = {}): AxisLock | null {
+/** 축 방향 모음(모형의 그리기 축을 옮겼으면 그 축, 아니면 AXIS_DIRS) */
+export type AxisDirs = Readonly<Record<Axis, V3>>;
+
+export function axisLock(f: ViewFrame, from: readonly number[], x: number, y: number, o: { maxDeg?: number; minPx?: number; axes?: AxisDirs | null } = {}): AxisLock | null {
   const s0 = projectToScreen(f, from);
   if (!s0) return null;
   const cx = x - s0[0], cy = y - s0[1];
@@ -237,7 +240,7 @@ export function axisLock(f: ViewFrame, from: readonly number[], x: number, y: nu
   const ray = screenRay(f, x, y);
   let best: AxisLock | null = null;
   for (const axis of AXES) {
-    const u = AXIS_DIRS[axis];
+    const u = (o.axes ?? AXIS_DIRS)[axis];
     const s1 = projectToScreen(f, along(from, u, len));
     if (!s1) continue;
     const ax = s1[0] - s0[0], ay = s1[1] - s0[1];
@@ -300,6 +303,8 @@ export interface SnapInput {
   curveCenter?: ((pick: Pick3d) => V3 | null) | null;
   /** 앞서 지나간 곡선의 중심(세계) — 커서가 그 가까이 오면 붙는다 */
   centers?: readonly V3[];
+  /** 축 고정에 쓸 축(모형의 그리기 축, 없으면 세계 축) */
+  axisDirs?: AxisDirs | null;
 }
 
 interface Cand {
@@ -400,7 +405,7 @@ export function chooseSnap(o: SnapInput): Snap {
   }
   // 축 고정: 면 위·빈 곳보다 앞선다(점·선 추정·면에 수직보다는 뒤)
   if (o.from && o.axes !== false && (!snap || snap.kind === 'onFace')) {
-    const lock = axisLock(f, o.from, o.x, o.y);
+    const lock = axisLock(f, o.from, o.x, o.y, { axes: o.axisDirs ?? null });
     if (lock) snap = { kind: 'axis', point: lock.point, axis: lock.axis, label: AXIS_LABELS[lock.axis] };
   }
   if (!snap) snap = { kind: 'free', point: freePoint(f, ray, o.from ?? o.anchor), label: SNAP_LABELS.free };
@@ -408,10 +413,10 @@ export function chooseSnap(o: SnapInput): Snap {
   return snap;
 }
 
-/** 축이 맞으면 그 축(단위 벡터가 축과 거의 같을 때) */
-export function axisOf(n: readonly number[]): Axis | null {
+/** 축이 맞으면 그 축(단위 벡터가 축과 거의 같을 때). axes를 주면 그 축(모형의 그리기 축)과 견준다 */
+export function axisOf(n: readonly number[], axes: AxisDirs = AXIS_DIRS): Axis | null {
   const l = Math.hypot(n[0]!, n[1]!, n[2]!);
   if (!(l > 0)) return null;
-  for (const a of AXES) if (Math.abs(dot(n, AXIS_DIRS[a])) / l > 0.9999) return a;
+  for (const a of AXES) if (Math.abs(dot(n, axes[a])) / l > 0.9999) return a;
   return null;
 }

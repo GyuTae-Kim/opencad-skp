@@ -71,6 +71,46 @@ export interface SkpStyleMeta {
   colorByTag?: boolean;
 }
 
+/**
+ * 위치·그림자 설정(Model Info > 위치, 그림자 창 — 엔진 SkpShadowInfo). time은 그곳 시각을 UTC 초처럼 적은 것(시간대 tz를 빼면 실제 UTC).
+ * north는 모형 축에서 북쪽 방향((0, 1, 0) = 북쪽 각 0). 읽지 못한 칸은 빠진다(2020 이하는 켜고 끄기 깃발이 없다)
+ */
+export interface SkpShadowMeta {
+  time?: number;
+  city?: string;
+  country?: string;
+  latitude?: number;
+  longitude?: number;
+  tz?: number;
+  north?: Vec3;
+  light?: number;
+  dark?: number;
+  display?: boolean;
+  onFaces?: boolean;
+  onGround?: boolean;
+  useSun?: boolean;
+}
+
+/** 모형 위치(정보 탭): 그림자 설정의 도시·나라·위경도·시간대·북쪽과, 모형이 지리 참조를 쓰는지(GeoReference.UsesGeoReferencing) */
+export interface SkpLocationMeta {
+  city?: string;
+  country?: string;
+  latitude?: number;
+  longitude?: number;
+  tz?: number;
+  /** 북쪽 각(도, 초록 축에서 빨강 축 쪽으로) */
+  northAngle?: number;
+  georeferenced: boolean;
+}
+
+/** 그리기 축(원점은 장면 단위, 축은 단위 벡터). 기본 축이면 없다 */
+export interface SkpAxesMeta {
+  origin: Vec3;
+  x: Vec3;
+  y: Vec3;
+  z: Vec3;
+}
+
 /** 장면(페이지). 각 칸은 그 장면이 그 속성을 기억할 때만 있다(use 깃발) */
 export interface SkpPageMeta {
   name: string;
@@ -90,6 +130,8 @@ export interface SkpPageMeta {
   thumbnail?: string;
   /** 장면 재생(슬라이드 쇼)에서 뺀 장면이면 false(넣는 장면은 칸이 없다) */
   includeInAnimation?: boolean;
+  /** 이 장면이 기억하는 그림자 설정 */
+  shadow?: SkpShadowMeta;
 }
 
 /** 태그 폴더 */
@@ -229,6 +271,10 @@ export interface SkpMetaExtras {
   faceRuns?: Uint32Array[];
   /** 모서리 묶음마다(scene.lines 차례) 선분의 놓인 곡선 번호(-1 = 곡선 아님, 같은 수 = 같은 곡선의 한 배치). 곡선이 없는 묶음·주석은 null */
   segmentCurves?: (Int32Array | null)[];
+  /** 위치(정보 탭)·그림자 설정·그리기 축 */
+  location?: SkpLocationMeta;
+  shadow?: SkpShadowMeta;
+  axes?: SkpAxesMeta;
   /** Model Info > Animation: 장면 재생을 되풀이할지(loop) */
   animation?: { loop?: boolean };
   /**

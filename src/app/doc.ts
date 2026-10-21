@@ -8,6 +8,9 @@ import type { SkpImages } from '../images';
 import type {
   SkpAnnotationItems,
   SkpAttrDictsMeta,
+  SkpAxesMeta,
+  SkpLocationMeta,
+  SkpShadowMeta,
   SkpCameraMeta,
   SkpDimensionMeta,
   SkpPageMeta,
@@ -234,6 +237,10 @@ export interface SkpDoc {
   attributes: SkpAttrDictsMeta[];
   modelAttrs: number | null;
   treeInfo: SkpTreeInfo | null;
+  /** 위치·그림자 설정·그리기 축(없으면 null) */
+  location: SkpLocationMeta | null;
+  shadow: SkpShadowMeta | null;
+  axes: SkpAxesMeta | null;
   // ── 보기 상태(더한 것) ──
   /** 마지막으로 고른 장면(사용자가 장면 탭을 누른 것, 처음엔 null) */
   page: number | null;
@@ -634,6 +641,9 @@ export function readMetaExtras(scene: Scene3d): Pick<
   | 'attributes'
   | 'modelAttrs'
   | 'treeInfo'
+  | 'location'
+  | 'shadow'
+  | 'axes'
   | 'page'
   | 'showTexts'
   | 'showDimensions'
@@ -680,6 +690,9 @@ export function readMetaExtras(scene: Scene3d): Pick<
     attributes: objects<SkpAttrDictsMeta>(m.attributes),
     modelAttrs: num(m.modelAttrs),
     treeInfo: infoOk ? info : null,
+    location: readLocation(m.location),
+    shadow: m.shadow && typeof m.shadow === 'object' ? (m.shadow as SkpShadowMeta) : null,
+    axes: readAxes(m.axes),
     page: null,
     showTexts: style?.texts !== false,
     showDimensions: style?.dimensions !== false,
@@ -687,6 +700,49 @@ export function readMetaExtras(scene: Scene3d): Pick<
     showSectionPlanes: style?.sectionPlanes !== false,
     fileSection: null,
   };
+}
+
+const isVec3 = (v: unknown): v is [number, number, number] => Array.isArray(v) && v.length === 3 && v.every((x) => typeof x === 'number' && Number.isFinite(x));
+
+/** meta.location(꼴이 다르면 null) */
+export function readLocation(v: unknown): SkpLocationMeta | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  const out: SkpLocationMeta = { georeferenced: o.georeferenced === true };
+  for (const k of ['city', 'country'] as const) if (typeof o[k] === 'string') out[k] = o[k] as string;
+  for (const k of ['latitude', 'longitude', 'tz', 'northAngle'] as const) if (typeof o[k] === 'number' && Number.isFinite(o[k])) out[k] = o[k] as number;
+  return out;
+}
+
+/** meta.axes(꼴이 다르면 null) */
+export function readAxes(v: unknown): SkpAxesMeta | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  return isVec3(o.origin) && isVec3(o.x) && isVec3(o.y) && isVec3(o.z) ? { origin: o.origin, x: o.x, y: o.y, z: o.z } : null;
+}
+
+/** 위도·경도 글("37.5665° N, 126.9780° E") */
+export function latLonText(lat: number, lon: number): string {
+  const ns = lat >= 0 ? 'N' : 'S';
+  const ew = lon >= 0 ? 'E' : 'W';
+  return `${Math.abs(lat).toFixed(4)}° ${ns}, ${Math.abs(lon).toFixed(4)}° ${ew}`;
+}
+
+/** 시간대 글(UTC+9, UTC−3:30) */
+export function tzText(tz: number): string {
+  const sign = tz < 0 ? '−' : '+';
+  const a = Math.abs(tz);
+  const h = Math.floor(a);
+  const m = Math.round((a - h) * 60);
+  return `UTC${sign}${h}${m ? `:${String(m).padStart(2, '0')}` : ''}`;
+}
+
+/** 그림자 시각(그곳 시각을 UTC 초처럼 적은 값) → "2026-06-21 13:30" */
+export function shadowTimeText(time: number): string {
+  const d = new Date(time * 1000);
+  if (!Number.isFinite(d.getTime())) return '';
+  const p = (n: number): string => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
 }
 
 /** 패널 탭 목록 */

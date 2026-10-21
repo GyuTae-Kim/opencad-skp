@@ -22,6 +22,9 @@ import {
   materialImage,
   panelTabs,
   partOfPick,
+  latLonText,
+  shadowTimeText,
+  tzText,
   selectionDefinition,
   selectionEntity,
   releaseName,
@@ -784,6 +787,30 @@ export class Panel {
     if (size) rows.push(row('범위 크기', `${fmtNum(size[0], 1)} × ${fmtNum(size[1], 1)} × ${fmtNum(size[2], 1)} ${u}`));
     if (s.bounds) rows.push(row('최소', fmtPt(s.bounds.min, 1)), row('최대', fmtPt(s.bounds.max, 1)));
     this.body.append(section('모형 통계', ...rows));
+    // 위치(Model Info > 위치)·그림자 설정·옮긴 그리기 축
+    const loc = d.location;
+    const sh = d.shadow;
+    const place: HTMLElement[] = [];
+    if (loc) {
+      const name = [loc.city, loc.country].filter((x) => x && x !== 'N/A').join(', ');
+      if (name) place.push(row('장소', name));
+      if (loc.latitude !== undefined && loc.longitude !== undefined) place.push(row('위도·경도', latLonText(loc.latitude, loc.longitude)));
+      place.push(row('지리 참조', loc.georeferenced ? '있음(지도 위치에 맞춤)' : '없음'));
+      if (loc.northAngle !== undefined && loc.northAngle !== 0) place.push(row('북쪽 각', `${fmtNum(loc.northAngle, 2)}°`));
+      if (loc.tz !== undefined) place.push(row('시간대', tzText(loc.tz)));
+    }
+    if (sh?.time !== undefined) {
+      const t = shadowTimeText(sh.time);
+      if (t) place.push(row('그림자 날짜·시각', t));
+    }
+    if (sh && (sh.light !== undefined || sh.dark !== undefined)) place.push(row('밝음·어둠', `${sh.light ?? '?'} · ${sh.dark ?? '?'}`));
+    if (sh?.display !== undefined) place.push(row('그림자 보이기', sh.display ? '켬(이 뷰어는 아직 그림자를 그리지 않음)' : '끔'));
+    if (d.axes) {
+      const u2 = unitLabel(s.units);
+      place.push(row('그리기 축 원점', `${fmtPt(d.axes.origin, 1)}${u2 ? ` ${u2}` : ''}`));
+      place.push(row('빨강·초록·파랑 축', [d.axes.x, d.axes.y, d.axes.z].map((a) => fmtPt(a, 3)).join(' · ')));
+    }
+    if (place.length) this.body.append(section('위치·그림자', ...place, d.axes ? h('p', { class: 'hint' }, '줄자·각도기의 축 고정과 기본 평면은 옮긴 그리기 축을 따릅니다.') : null));
     const scenes = d.images?.scenes ?? [];
     if (d.pages.length) {
       // 장면(페이지): 누르면 그 장면의 카메라·숨긴 태그·숨긴 개체·단면·스타일을 적용한다

@@ -20,7 +20,7 @@ import type { SkpMetaExtras } from './meta';
 import { MfcRefused, readMfcModel, rememberMfcImages, takeMfcResult } from './mfcmodel';
 import { readModelDat, type SkpModel } from './model';
 import { buildSceneParts, type SceneTexture } from './scene';
-import { cameraMeta, pagesMeta, styleFor, unitsFor } from './scene-meta';
+import { axesMeta, cameraMeta, locationMeta, pagesMeta, shadowMeta, styleFor, unitsFor } from './scene-meta';
 import { parseStyleXml } from './styles';
 import { findSkpZipItems, readZipItem, readZipItemPartial } from './zip';
 
@@ -396,6 +396,15 @@ function extrasMeta(
     warnings.push(`장면 목록을 풀지 못했습니다(${e instanceof Error ? e.message : String(e)})`);
   }
   if (model.animation?.loop !== undefined) out.animation = { loop: model.animation.loop };
+  try {
+    const loc = locationMeta(model);
+    if (loc) out.location = loc;
+    if (model.shadowInfo) out.shadow = shadowMeta(model.shadowInfo);
+    const ax = axesMeta(model.axes, scale);
+    if (ax) out.axes = ax;
+  } catch {
+    warnings.push('위치·그림자·그리기 축을 풀지 못했습니다');
+  }
   if (parts.revealItems?.length) out.revealItems = parts.revealItems;
   if (model.tagFolders?.length) out.tagFolders = model.tagFolders.map((f) => ({ name: f.name, visible: f.visible !== false, parent: f.parent }));
   if (model.name) out.modelName = model.name;

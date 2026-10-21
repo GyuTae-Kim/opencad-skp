@@ -578,6 +578,10 @@ export interface MfcSpec {
   activeStyle?: number;
   /** 모형 작업 사본(없으면 null을 써서 스타일 목록 끝을 쓰게 한다) */
   currentStyle?: MfcStyleSpec;
+  /** 모형 꼬리 CShadowInfo(기본: Boulder, USA) */
+  shadow?: { time?: number; city?: string; country?: string; lon?: number; lat?: number; tz?: number; north?: Vec3; light?: number; dark?: number };
+  /** 모형 꼬리 CSketchCS: 원점·x·y·z(f64 12개, 기본 단위 축) */
+  axes?: number[];
 }
 
 // ── 쓰기 ──────────────────────────────────────────────────────
@@ -851,21 +855,22 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
     else styleSlots[i] = styleObj(spec.styles![i]!);
   };
   const shadow = (): void => {
+    const o = spec.shadow ?? {};
     pre();
-    w.u32(0);
+    w.u32(o.time ?? 0);
     w.u8(0);
-    w.str('Boulder');
-    w.str('USA');
-    w.f64(-105.27, 40.01, -7, 0, 1, 0);
+    w.str(o.city ?? 'Boulder');
+    w.str(o.country ?? 'USA');
+    w.f64(o.lon ?? -105.27, o.lat ?? 40.01, o.tz ?? -7, ...(o.north ?? [0, 1, 0]));
     w.raw([0, 1, 1, 0]);
-    w.i32(80);
-    w.i32(20);
+    w.i32(o.light ?? 80);
+    w.i32(o.dark ?? 20);
     w.raw([0, 0]);
   };
   const axes = (): void => {
     pre();
     w.zeros(10);
-    w.f64(0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1);
+    w.f64(...(spec.axes ?? [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]));
     w.u8(0);
   };
   const folderBody = (f: MfcFolderSpec): void => {

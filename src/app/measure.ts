@@ -41,6 +41,7 @@ import {
   probeOffsets,
   rayPlane,
   type Axis,
+  type AxisDirs,
   type Ray,
   type Snap,
 } from './snap';
@@ -83,6 +84,8 @@ export interface MeasureToolOptions {
   touch?: () => boolean;
   /** 선분(묶음 id, 선분 번호)이 든 호·원의 중심(세계, 곡선이 아니면 null) — "중심" 추정 */
   curveCenter?: (id: string, seg: number) => V3 | null;
+  /** 모형의 그리기 축(옮겼으면 — 축 고정·각도기 기본 평면이 그 축을 따른다, 없으면 세계 축) */
+  getAxes?: () => AxisDirs | null;
 }
 
 /** 기억해 두는 지나간 곡선 중심 수 */
@@ -159,14 +162,14 @@ export function protractorResult(center: readonly number[], a: readonly number[]
  * 각도기 평면: 추정에 면 법선이 있으면 그 면, 없으면 카메라를 가장 정면으로 보는 축 평면(SketchUp 파랑·빨강·초록 각도기).
  * forward는 눈이 보는 방향.
  */
-export function protractorPlane(snap: Pick<Snap, 'normal'> | null, forward: readonly number[]): { normal: V3; axis: Axis | null } {
+export function protractorPlane(snap: Pick<Snap, 'normal'> | null, forward: readonly number[], axes: AxisDirs = AXIS_DIRS): { normal: V3; axis: Axis | null } {
   if (snap?.normal) {
     const n = unit(snap.normal);
-    if (dot(n, n) > 0) return { normal: n, axis: axisOf(n) };
+    if (dot(n, n) > 0) return { normal: n, axis: axisOf(n, axes) };
   }
   let best: Axis = 'z';
-  for (const a of ['z', 'x', 'y'] as const) if (Math.abs(dot(AXIS_DIRS[a], forward)) > Math.abs(dot(AXIS_DIRS[best], forward)) + 1e-12) best = a;
-  return { normal: [...AXIS_DIRS[best]], axis: best };
+  for (const a of ['z', 'x', 'y'] as const) if (Math.abs(dot(axes[a], forward)) > Math.abs(dot(axes[best], forward)) + 1e-12) best = a;
+  return { normal: [...axes[best]], axis: best };
 }
 
 /** 점을 평면(지나는 점 c, 법선 n)에 내린 점 */
@@ -460,7 +463,13 @@ export class MeasureTool {
       visible,
       curveCenter,
       centers: this.centers,
+      axisDirs: this.opts.getAxes?.() ?? null,
     });
+  }
+
+  /** 축 고정·각도기 평면의 축(모형의 그리기 축 또는 세계 축) */
+  private get axes(): AxisDirs {
+    return this.opts.getAxes?.() ?? AXIS_DIRS;
   }
 
   /** 지나간 곡선 중심 기억(같은 점은 앞으로 옮기고, RECENT_CENTERS개까지) */
@@ -654,13 +663,13 @@ export class MeasureTool {
     } else if (this.modeValue === 'protractor') {
       if (!this.pts.length) {
         if (snap.kind === 'free') return;
-        if (shift && !this.planeLock) this.planeLock = protractorPlane(snap, forwardOf(f)).normal;
+        if (shift && !this.planeLock) this.planeLock = protractorPlane(snap, forwardOf(f), this.axes).normal;
         this.dropResult();
-        this.normal = this.planeLock ?? protractorPlane(snap, forwardOf(f)).normal;
+        this.normal = this.planeLock ?? protractorPlane(snap, forwardOf(f), this.axes).normal;
         this.pts = [snap.point];
       } else {
         const c = this.pts[0]!;
-        const n = this.normal ?? protractorPlane(null, forwardOf(f)).normal;
+        const n = this.normal ?? protractorPlane(null, forwardOf(f), this.axes).normal;
         const p = protractorPoint(ray, snap, c, n);
         if (samePoint(c, p)) return;
         if (this.pts.length === 1) this.pts.push(p);
@@ -738,8 +747,8 @@ export class MeasureTool {
     this.hoverPoint = null;
     if (!snap) return;
     if (this.modeValue === 'protractor') {
-      if (!this.pts.length) this.hoverPlane = protractorPlane(snap, forwardOf(f)).normal;
-      else this.hoverPoint = protractorPoint(screenRay(f, c.x, c.y), snap, this.pts[0]!, this.normal ?? AXIS_DIRS.z);
+      if (!this.pts.length) this.hoverPlane = protractorPlane(snap, forwardOf(f), this.axes).normal;
+      else this.hoverPoint = protractorPoint(screenRay(f, c.x, c.y), snap, this.pts[0]!, this.normal ?? this.axes.z);
     }
   }
 
@@ -779,7 +788,7 @@ export class MeasureTool {
       const [c, base] = this.pts;
       const n = this.normal;
       if (!c) {
-        if (snap && snap.kind !== 'free') this.disk(f, snap.point, this.planeLock ?? this.hoverPlane ?? protractorPlane(snap, forwardOf(f)).normal, !!this.planeLock);
+        if (snap && snap.kind !== 'free') this.disk(f, snap.point, this.planeLock ?? this.hoverPlane ?? protractorPlane(snap, forwardOf(f), this.axes).normal, !!this.planeLock);
       } else if (n) {
         this.disk(f, c, n, false);
         this.dot(f, c);
@@ -894,7 +903,7 @@ export class MeasureTool {
     if (f.projection === 'perspective' && !(depth > 0)) return;
     const R = worldPerPixel(f, depth) * PROTRACTOR_PX;
     const [u, v] = planeBasis(normal);
-    const axis = axisOf(normal);
+    const axis = axisOf(normal, this.axes);
     const color = axis ? AXIS_COLORS[axis] : 'currentColor';
     const at = (t: number, r: number): [number, number] | null => {
       const p = addScaled(addScaled(center, u, Math.cos(t) * r), v, Math.sin(t) * r);

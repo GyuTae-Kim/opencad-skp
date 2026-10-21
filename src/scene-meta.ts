@@ -3,15 +3,16 @@
  *
  * - 단위: UnitsOptions/LengthUnit → 장면 단위와 인치에서의 배율(unitsFor).
  * - 카메라: 위치·평행 투영 높이는 인치 → 장면 단위(× scale), 위 벡터·시야각(도)·종횡비는 그대로(cameraMeta).
- * - 장면: use 깃발(0x1 카메라, 0x2 스타일, 0x20 숨긴 태그, 0x40 단면, 0x100 숨긴 개체)이 켜진 것만 그 칸을 적는다(pagesMeta).
+ * - 장면: use 깃발(0x1 카메라, 0x2 스타일, 0x4 그림자, 0x20 숨긴 태그, 0x40 단면, 0x100 숨긴 개체)이 켜진 것만 그 칸을 적는다(pagesMeta).
+ * - 위치·그림자·그리기 축: 그림자 설정(0204·CShadowInfo)과 모형 속성 GeoReference → 위치(locationMeta), 축 원점은 장면 단위(axesMeta).
  *   숨긴 개체 목록은 영구 번호라 나무 노드로 바꾼다: 정의 안 인스턴스 하나의 번호는 그 정의가 놓인 모든 자리의 노드가 된다.
  *   활성 단면 번호는 meta.sectionPlanes 차례(배치마다 하나)로 바꾼다.
  * - 속성 사전: 형 있는 값을 화면에 보일 글·수로 푼다(attrDictsMeta).
  * 형식 지식은 PRISME 엔진(SketchUp C API를 비교 기준으로 맞춘 해석기)의 뿌리 절 해석에서 옮겼다.
  */
 import type { Scene3d } from 'opencad-viewer3d/types';
-import type { SkpAttrDictsMeta, SkpAttrValueMeta, SkpCameraMeta, SkpPageMeta, SkpStyleMeta, Vec3 } from './meta';
-import type { SkpAttr, SkpAttrDicts, SkpCamera, SkpModel, SkpRenderingRaw } from './model';
+import type { SkpAttrDictsMeta, SkpAttrValueMeta, SkpAxesMeta, SkpCameraMeta, SkpLocationMeta, SkpPageMeta, SkpShadowMeta, SkpStyleMeta, Vec3 } from './meta';
+import type { SkpAttr, SkpAttrDicts, SkpAxes, SkpCamera, SkpModel, SkpRenderingRaw, SkpShadowInfo } from './model';
 import { resolveStyle } from './styles';
 
 /** 장면 use 깃발 */
@@ -20,6 +21,51 @@ export const PAGE_USE_STYLE = 0x002;
 export const PAGE_USE_HIDDEN_TAGS = 0x020;
 export const PAGE_USE_SECTIONS = 0x040;
 export const PAGE_USE_HIDDEN_OBJECTS = 0x100;
+export const PAGE_USE_SHADOW = 0x004;
+
+/** 위치·그림자 설정 → meta(그대로 옮기고 북쪽은 사본) */
+export function shadowMeta(s: SkpShadowInfo): SkpShadowMeta {
+  const out: SkpShadowMeta = { ...s };
+  if (s.north) out.north = [s.north[0], s.north[1], s.north[2]];
+  return out;
+}
+
+/** 북쪽 방향 → 북쪽 각(도, +Y에서 +X 쪽으로 0~360). 수평 성분이 없으면 undefined */
+export function northAngleOf(north: readonly number[] | undefined): number | undefined {
+  if (!north || !(Math.hypot(north[0]!, north[1]!) > 1e-12)) return undefined;
+  const a = (Math.atan2(north[0]!, north[1]!) * 180) / Math.PI;
+  return Math.round(((a % 360) + 360) % 360 * 1e6) / 1e6;
+}
+
+/**
+ * 모형 위치: 그림자 설정의 도시·나라·위경도·시간대·북쪽 각과 지리 참조 여부(모형 속성 GeoReference.UsesGeoReferencing).
+ * 2020 이하는 GeoReference 사전에 위경도가 있으면 그 값(엔진 legacy와 같다). 아무 칸도 없으면 undefined
+ */
+export function locationMeta(model: Pick<SkpModel, 'shadowInfo' | 'properties'> & { root?: Pick<SkpModel['root'], 'attrs'> }): SkpLocationMeta | undefined {
+  const s = model.shadowInfo;
+  // GeoReference 사전은 모형 속성 절에 있거나(2021+) 뿌리 요소 묶음 머리 사전에 있다(meta.attributes의 모형 속성은 둘을 합친 것)
+  const geo = model.properties?.['GeoReference'] ?? model.root?.attrs?.['GeoReference'];
+  const uses = geo?.['UsesGeoReferencing'] === true;
+  if (!s && !uses) return undefined;
+  const out: SkpLocationMeta = { georeferenced: uses };
+  if (s?.city) out.city = s.city;
+  if (s?.country) out.country = s.country;
+  // 지리 참조를 쓰는 모형이면 GeoReference의 위경도(2020 이하 엔진과 같다), 아니면 그림자 설정의 위경도(GeoReference에는 기본값이 남아 있을 수 있다)
+  const lat = uses && typeof geo?.['Latitude'] === 'number' ? (geo['Latitude'] as number) : s?.latitude;
+  const lon = uses && typeof geo?.['Longitude'] === 'number' ? (geo['Longitude'] as number) : s?.longitude;
+  if (lat !== undefined && Number.isFinite(lat) && Math.abs(lat) <= 90) out.latitude = lat;
+  if (lon !== undefined && Number.isFinite(lon) && Math.abs(lon) <= 360) out.longitude = lon;
+  if (s?.tz !== undefined && Number.isFinite(s.tz)) out.tz = s.tz;
+  const na = northAngleOf(s?.north);
+  if (na !== undefined) out.northAngle = na;
+  return out;
+}
+
+/** 그리기 축 → meta(원점은 장면 단위) */
+export function axesMeta(a: SkpAxes | undefined, scale: number): SkpAxesMeta | undefined {
+  if (!a) return undefined;
+  return { origin: [a.origin[0] * scale, a.origin[1] * scale, a.origin[2] * scale], x: [...a.x], y: [...a.y], z: [...a.z] };
+}
 /** 장면 전환·지연 시간 상한(초) — 엔진 뷰어와 같게 */
 export const MAX_TRANSITION_S = 60;
 export const MAX_DELAY_S = 3600;
@@ -140,6 +186,7 @@ export function pagesMeta(model: SkpModel, scale: number, ctx: PagesContext = {}
     if (p.thumbnail) out.thumbnail = p.thumbnail;
     // 장면 재생(슬라이드 쇼)에서 뺀 장면만 적는다
     if (p.includeInAnimation === false) out.includeInAnimation = false;
+    if (flags & PAGE_USE_SHADOW && p.shadowInfo) out.shadow = shadowMeta(p.shadowInfo);
     pages.push(out);
   }
   const res: { pages: SkpPageMeta[]; activePage?: number } = { pages };

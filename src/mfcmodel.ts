@@ -1073,6 +1073,8 @@ function assemble(dec: Decoder, head: ReturnType<Decoder['readModelHead']>): { m
     model.rendering = rendering;
   }
   if (view.defaults) model.annotationDefaults = view.defaults;
+  if (view.shadow) model.shadowInfo = view.shadow;
+  if (view.axesValue) model.axes = view.axesValue;
   if (view.pages.length) {
     model.pages = finishPages(dec, view.pages, final, animation);
     if (view.activePage !== undefined) model.activePage = view.activePage;

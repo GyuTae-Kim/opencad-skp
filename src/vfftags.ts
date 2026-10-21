@@ -19,6 +19,35 @@ export const TAG = {
   PAGE_SECTION: 0x0207,
   LINESTYLE_SECTION: 0x0208,
   PROPS_SECTION: 0x0209,
+  AXES_SECTION: 0x01fc,
+  SHADOW_SECTION: 0x0204,
+
+  // ── 그리기 축(01fc → 4650, 장면 714f → 4650): 원점, x·y·z 축(f64×3씩, 엔진 records AXES_*) ──
+  AXES: 0x4650,
+  AXES_ORIGIN: 0x4651,
+  AXES_X: 0x4652,
+  AXES_Y: 0x4653,
+  AXES_Z: 0x4654,
+
+  // ── 그림자·위치(0204 → 6590, 장면 714e → 6590, 엔진 records SHADOW_INFO_*) ──
+  SHADOW_INFO: 0x6590,
+  /** u32 ShadowTime_time_t: 지역 시각을 UTC 초처럼 적은 것 */
+  SHADOW_TIME: 0x6591,
+  SHADOW_CITY: 0x6593,
+  SHADOW_COUNTRY: 0x6594,
+  SHADOW_LONGITUDE: 0x6595,
+  SHADOW_LATITUDE: 0x6596,
+  /** f64 TZOffset(시간) */
+  SHADOW_TZ: 0x6597,
+  /** f64×3 북쪽 방향(0, 1, 0) = NorthAngle 0 */
+  SHADOW_NORTH: 0x6598,
+  SHADOW_DISPLAY: 0x6599,
+  SHADOW_ON_FACES: 0x659b,
+  SHADOW_ON_GROUND: 0x659c,
+  /** i32 밝음·어둠 0~100 */
+  SHADOW_LIGHT: 0x659e,
+  SHADOW_DARK: 0x659f,
+  SHADOW_USE_SUN: 0x65a0,
 
   // ── 객체 머리·요소 바탕 ──
   ID_BOX: 0x05dc,
@@ -193,6 +222,8 @@ export const TAG = {
   PAGE_RENDERING: 0x714d,
   PAGE_LAYERS: 0x7150,
   PAGE_SECTIONS: 0x7151,
+  PAGE_SHADOW: 0x714e,
+  PAGE_AXES: 0x714f,
   PAGE_IN_ANIMATION: 0x7152,
   PAGE_TRANSITION: 0x7154,
   PAGE_DELAY: 0x7155,
