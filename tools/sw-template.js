@@ -2,7 +2,9 @@
  * OpenCAD SketchUp 뷰어 서비스 워커(빌드가 tools/sw-plugin.mjs로 dist/sw.js를 만든다 — VERSION·ASSETS는 빌드 때 채운다).
  *
  * - 오프라인: 설치할 때 앱 파일(쪽·스크립트·스타일·아이콘·앱 정보)을 이 판의 캐시에 담는다.
- *   쪽(HTML)은 네트워크 먼저(새 배포가 곧바로 보이고 막히지 않게 — 안 되면 캐시), 이름에 해시가 든 파일은 캐시 먼저.
+ *   쪽(HTML)은 네트워크 먼저(새 배포가 곧바로 보이고 막히지 않게 — 안 되면 캐시, 담는 것은 미리 담을 목록의 쪽만),
+ *   캐시 먼저는 미리 담을 목록과 빌드 결과(assets/)뿐이다. 그 밖(?open=으로 받는 같은 출처 모형 파일 등)과 앱 범위 밖 주소는
+ *   손대지 않고 네트워크로 보낸다(바뀐 파일이 옛것으로 열리거나 연 모형이 캐시에 쌓이지 않게).
  * - 새 판: 새 워커는 설치만 하고 기다린다. 앱이 "새 버전" 알림에서 새로 고침을 고르면 SKIP_WAITING을 보내 바꾼다(처음 설치는 바로).
  * - 공유 받기(Android share_target): POST …/share-target의 파일을 이 브라우저의 최근 문서 IndexedDB(opencad-skp)에 넣고
  *   그 언어 쪽 ?shared=<id>로 보낸다(파일은 서버로 가지 않는다). 60 MB보다 크면 최근 목록에 넣지 않고 한 번 쓸 자리(shared:…)에 둔다.
@@ -11,6 +13,9 @@ const VERSION = '__VERSION__';
 const ASSETS = __ASSETS__;
 const PREFIX = 'opencad-skp-';
 const CACHE = PREFIX + VERSION;
+const SCOPE = self.registration.scope;
+/** 캐시 먼저·쪽 담기를 하는 경로(미리 담을 목록) */
+const PRECACHE_PATHS = new Set(ASSETS.map((a) => new URL(a, SCOPE).pathname));
 const DB = 'opencad-skp';
 const STORE = 'recent';
 const DATA = 'recent-data';
@@ -45,6 +50,8 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
+  // 앱 범위 밖(같은 출처의 다른 앱·파일 — GitHub Pages 프로젝트 사이트는 출처 하나를 함께 쓴다)은 손대지 않는다
+  if (!url.href.startsWith(SCOPE)) return;
   if (req.method === 'POST' && url.pathname.endsWith('/share-target')) {
     event.respondWith(receiveShare(req));
     return;
@@ -54,17 +61,21 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(page(req));
     return;
   }
-  event.respondWith(asset(req));
+  // 캐시 먼저는 미리 담을 목록(아이콘·앱 정보 등)과 내용 해시 이름의 빌드 결과(assets/)만.
+  // 그 밖(?open=으로 받는 모형 파일 등)은 가로채지 않는다 — 브라우저가 네트워크로 받고, 캐시에 담지 않는다
+  const rel = url.pathname.slice(new URL(SCOPE).pathname.length);
+  if (!PRECACHE_PATHS.has(url.pathname) && !rel.startsWith('assets/')) return;
+  event.respondWith(asset(req, url));
 });
 
-/** 쪽: 네트워크 먼저(받으면 캐시를 새로), 안 되면 같은 경로(주소 인자 무시)의 캐시, 그것도 없으면 앱 첫 쪽 */
+/** 쪽: 네트워크 먼저(미리 담을 목록의 쪽이면 받은 것으로 캐시를 새로), 안 되면 같은 경로(주소 인자 무시)의 캐시, 그것도 없으면 앱 첫 쪽 */
 async function page(req) {
   const url = new URL(req.url);
   const key = url.origin + url.pathname;
   const cache = await caches.open(CACHE);
   try {
     const res = await fetch(req);
-    if (res.ok) await cache.put(key, res.clone());
+    if (res.ok && PRECACHE_PATHS.has(url.pathname)) await cache.put(key, res.clone());
     return res;
   } catch (e) {
     const hit = (await cache.match(key)) || (await cache.match(key + 'index.html')) || (await cache.match(new URL('./', self.registration.scope).href));
@@ -73,10 +84,10 @@ async function page(req) {
   }
 }
 
-/** 그 밖 파일: 캐시 먼저, 없으면 네트워크(이 판의 캐시에 더한다) */
-async function asset(req) {
+/** 미리 담을 목록·빌드 결과: 캐시 먼저, 없으면 네트워크(이 판의 캐시에 더한다). 앱 정보(.webmanifest)는 주소 인자를 무시하고 찾는다 */
+async function asset(req, url) {
   const cache = await caches.open(CACHE);
-  const hit = await cache.match(req);
+  const hit = await cache.match(req, { ignoreSearch: url.pathname.endsWith('.webmanifest') });
   if (hit) return hit;
   const res = await fetch(req);
   if (res.ok && res.type === 'basic') cache.put(req, res.clone()).catch(() => {});
