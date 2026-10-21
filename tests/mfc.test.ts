@@ -14,7 +14,7 @@ const read = (spec: MfcSpec): ReturnType<typeof readMfcModel> => {
 };
 const model = (spec: MfcSpec): SkpModel => read(spec).model;
 const tiny = pngRgb(2, 2, (x, y) => [x * 255, y * 255, 0]);
-const ALL = ['v7', 'v8', 'v15', 'v17', 'v18', 'v19', 'v20'] as const;
+const ALL = ['v6', 'v7', 'v8', 'v15', 'v17', 'v18', 'v19', 'v20'] as const;
 
 /** 가운데에 구멍이 난 정사각형(구멍 고리를 먼저 쓰고 바깥 고리를 둘째로 쓴다) */
 const holed = (): MfcEntitiesSpec => ({
@@ -147,19 +147,19 @@ describe('MFC 바이트 커서', () => {
 });
 
 describe('판 거르기', () => {
-  it('SketchUp 3~6은 까닭을 적어 거절하고, 장면은 meta.unsupported', () => {
+  it('SketchUp 3~5는 까닭을 적어 거절하고, 장면은 meta.unsupported', () => {
     const bytes = mfcFile({ schemas: 'v4', root: squareEntities() });
     expect(() => readMfcModel(bytes, readSkpHeader(bytes)!)).toThrow(MfcRefused);
     const s = skpToScene(bytes);
     expect(s.meshes.length).toBe(0);
-    expect(s.warnings![0]).toContain('SketchUp 3~6');
+    expect(s.warnings![0]).toContain('SketchUp 3~5');
     expect(s.meta?.unsupported).toBe(true);
     expect(s.meta?.container).toBe('mfc');
   });
 
   it('모르는 스키마(2020 뒤 같은 값)도 거절한다', () => {
     const bytes = mfcFile({ schemas: { ...MFC_SCHEMAS.v20, CSketchUpModel: 30 }, root: squareEntities() });
-    expect(() => readMfcModel(bytes, readSkpHeader(bytes)!)).toThrow(/확인한 SketchUp 7~2020 형식과 달라/);
+    expect(() => readMfcModel(bytes, readSkpHeader(bytes)!)).toThrow(/확인한 SketchUp 6~2020 형식과 달라/);
   });
 
   it.each(ALL)('%s: 면·모서리·고리·재질·태그를 같은 중간 모형으로', (v) => {
@@ -465,7 +465,7 @@ describe('주석', () => {
 });
 
 describe('장면·스타일·설정', () => {
-  const pageSpec = (schemas: 'v15' | 'v17' | 'v20'): MfcSpec => ({
+  const pageSpec = (schemas: 'v6' | 'v15' | 'v17' | 'v20'): MfcSpec => ({
     schemas,
     layers: [{ name: 'Layer0' }, { name: '지붕' }],
     definitions: [{ name: '상자', entities: squareEntities({ sections: [{ plane: [0, 0, 1, -1], pid: 51 }] }) }],
@@ -517,6 +517,27 @@ describe('장면·스타일·설정', () => {
     expect(b!.sectionIds).toEqual([51]);
     expect(m.activePage).toBe(1);
     expect(m.animation).toEqual({ showTransition: true, transitionTime: 1.5, sceneDelay: 2, loop: true });
+  });
+
+  it('SketchUp 6: 설정 묶음(단위·장면 넘기기)은 꼬리에서, 속성 사전 끝 u32·늘이지 않음 마스크는 없다', () => {
+    const base = pageSpec('v6');
+    const m = model({
+      ...base,
+      rootAttrs: [['모형', [['수', mv.i32(3)]]]],
+      definitions: [{ ...base.definitions![0]!, behavior: { glue: true, snap: 1, faceCamera: true, noScale: 5 } }],
+    });
+    expect(m.warnings).toEqual([]);
+    expect(m.lengthUnit).toBe(2);
+    expect(m.units).toMatchObject({ lengthUnit: 'mm' });
+    expect(m.animation).toEqual({ showTransition: true, transitionTime: 1.5, sceneDelay: 2, loop: true });
+    expect(m.camera).toMatchObject({ eye: [100, -100, 80], fov: 35 });
+    expect(m.pages!.map((p) => p.name)).toEqual(['원근', '평행']);
+    expect(m.activePage).toBe(1);
+    expect(m.root.attrs).toEqual({ 모형: { 수: 3 } });
+    // 동작 덩어리가 38바이트라 늘이지 않음 마스크 칸이 없다
+    expect(m.definitions.get(0)!.behavior).toEqual({ alwaysFaceCamera: true, cutsOpening: false, shadowsFaceSun: false, snapTo: 'horizontal' });
+    expect(m.root.instances).toHaveLength(2);
+    expect(m.annotationDefaults).toMatchObject({ dimColor: [7, 8, 9], textColor: [1, 2, 3] });
   });
 
   it('영구 번호가 없는 파일(2016 이하)은 숨긴 대상에 음수 임시 번호를 붙여 잇는다', () => {

@@ -2,7 +2,7 @@
   "name": "opencad-skp",
   "version": "0.1.0",
   "private": true,
-  "description": "OpenCAD SketchUp 뷰어: SketchUp 7~2026(.skp) 모형을 브라우저에서 읽어 3D로 보는 앱과 해석기",
+  "description": "OpenCAD SketchUp 뷰어: SketchUp 6~2026(.skp) 모형을 브라우저에서 읽어 3D로 보는 앱과 해석기",
   "license": "MIT",
   "type": "module",
   "exports": {

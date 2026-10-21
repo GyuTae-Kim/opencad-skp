@@ -635,8 +635,8 @@ export class SkpViewerApp implements PanelHost {
         h(
           'ul',
           { class: 'facts' },
-          h('li', {}, h('b', {}, '지원 형식 '), 'SketchUp 7·8·2013~2026에서 저장한 파일 (확장자 .skp)'),
-          h('li', { class: 'muted' }, h('b', {}, '아직 못 읽음 '), 'SketchUp 3~6에서 저장한 아주 옛 파일(형식이 달라 판만 알려 드립니다)'),
+          h('li', {}, h('b', {}, '지원 형식 '), 'SketchUp 6·7·8·2013~2026에서 저장한 파일 (확장자 .skp)'),
+          h('li', { class: 'muted' }, h('b', {}, '아직 못 읽음 '), 'SketchUp 3~5에서 저장한 아주 옛 파일(형식이 달라 판만 알려 드립니다)'),
           h('li', {}, h('span', { class: 'lock', html: icon('lock', 15) }), h('b', {}, '파일은 이 브라우저 밖으로 나가지 않습니다. '), '서버로 올리지 않고 이 컴퓨터에서 읽습니다.'),
         ),
         h('p', { class: 'keys fine-only' }, '왼쪽 끌기 돌리기 · 오른쪽 끌기 옮기기 · 휠 확대 · F 전체 보기 · 1~7 표준 뷰 · F7 격자'),
@@ -889,7 +889,7 @@ export class SkpViewerApp implements PanelHost {
         this.showNotice(
           'warn',
           `아직 읽지 못하는 판입니다: ${releaseName(old)} (${old})`,
-          `"${name}" 파일은 SketchUp 3~6의 아주 옛 형식으로 저장되어 있습니다. 이 뷰어는 SketchUp 7·8·2013~2026 파일을 읽습니다. SketchUp 7 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.`,
+          `"${name}" 파일은 SketchUp 3~5의 아주 옛 형식으로 저장되어 있습니다. 이 뷰어는 SketchUp 6·7·8·2013~2026 파일을 읽습니다. SketchUp 6 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.`,
         );
         return false;
       }
@@ -2491,7 +2491,7 @@ export class SkpViewerApp implements PanelHost {
     if (!e) return;
     const d = this.doc;
     if (!d) {
-      e.stMain.textContent = '파일을 열면 여기에 모형 정보가 보입니다 · SketchUp 7~2026(.skp)';
+      e.stMain.textContent = '파일을 열면 여기에 모형 정보가 보입니다 · SketchUp 6~2026(.skp)';
       e.stWarn.hidden = true;
       e.stSel.textContent = '';
       return;

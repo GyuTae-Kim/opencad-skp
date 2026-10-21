@@ -16,7 +16,7 @@ import { C, type MfcState } from './mfcstate';
 import { arrowName, leaderName, textAlignmentName } from './vffcommon';
 
 /** CRenderingOptions 스키마 → 모형 카메라 뒤 덩어리 길이(장면 안은 8 짧다) */
-export const RENDERING_BLOCK: Readonly<Record<number, number>> = { 33: 190, 35: 197, 36: 216, 37: 221, 38: 222, 39: 223 };
+export const RENDERING_BLOCK: Readonly<Record<number, number>> = { 32: 189, 33: 190, 35: 197, 36: 216, 37: 221, 38: 222, 39: 223 };
 
 type Field = 'xray' | 'background' | 'foreground' | 'texture' | 'profiles' | 'hiddenGeometry' | 'front' | 'back' | 'sky' | 'ground' | 'drawSky' | 'drawGround' | 'sectionFill';
 
@@ -51,6 +51,7 @@ const RO_38: Partial<Record<Field, number>> = {
   sectionFill: 167,
 };
 const RO_FIELDS: Readonly<Record<number, Partial<Record<Field, number>>>> = {
+  32: RO_36,
   33: RO_36,
   35: RO_36,
   36: RO_36,
@@ -410,7 +411,7 @@ export class MfcView {
    * 모형 꼬리(뿌리 요소 뒤): 위치, 장면 목록과 활성 장면, 축, 문자·치수 기본값과 글꼴, 글꼴 목록, (2019+) 선 종류, 스타일 목록·활성·작업 사본.
    * 그 뒤(워터마크·분류 체계 …)는 읽지 않는다.
    */
-  readTail(): void {
+  readTail(options?: () => void): void {
     const st = this.st;
     const s = st.s;
     const pids = st.entityPids;
@@ -431,7 +432,12 @@ export class MfcView {
     if (ai >= 0) this.activePage = ai;
     this.axesValue = this.axes();
     // Model Info 기본값: 치수 글꼴 + 58바이트(2021+ 24502..24518과 같은 차례), 문자 글꼴 + 22바이트, 지시선 글꼴
-    s.skip(pids ? 70 : 69);
+    if (options) {
+      // SketchUp 6: 69바이트 사이(63 뒤)에 설정 묶음이 끼어 있다
+      s.skip(63);
+      options();
+      s.skip(6);
+    } else s.skip(pids ? 70 : 69);
     const dimFont = s.readObject(C.FONT);
     const dim = s.bytes(58);
     s.skip((pids ? 61 : 60) - 58);

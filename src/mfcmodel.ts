@@ -1,6 +1,6 @@
 /**
  * SketchUp 2020 이하(머리 뒤 MFC CArchive 객체 직렬화) → 중간 모형(SkpModel, 2021+ 해석기와 같은 꼴).
- * SketchUp 7·8·2013~2020(CSketchUpModel 스키마 21~29)을 읽고, SketchUp 3~6은 분명한 까닭과 함께 거절한다(MfcRefused).
+ * SketchUp 6(CSketchUpModel 스키마 18)·7·8·2013~2020(21~29)을 읽고, SketchUp 3~5는 분명한 까닭과 함께 거절한다(MfcRefused).
  * 형식 지식은 MFC 직렬화 규칙(Microsoft TN002)과, 사용자가 허락한 2026-10 PRISME 엔진(SketchUp C API를 비교 기준으로 맞춘 해석기)의
  * legacy 해석기·문서에서 옮긴 것이다(docs/formats/skp.md). 코드는 opencad-skp 꼴로 새로 썼다.
  *
@@ -60,6 +60,8 @@ import { animationFromOptions, ifcGuid, lengthUnitCode, unitsFromOptions, type S
 /** 읽는 CSketchUpModel 스키마: SketchUp 7(21) ~ 2020(29) */
 const MIN_MODEL_SCHEMA = 21;
 const MAX_MODEL_SCHEMA = 29;
+/** SketchUp 6(CSketchUpModel 18): 머리에 설정 묶음·모형 속성이 없고 설정 묶음은 뿌리 요소 뒤에 온다 */
+const SU6_MODEL_SCHEMA = 18;
 /** 칸(클래스·객체) 수 한도 — 브라우저 메모리 보호 */
 export const MFC_MAX_RECORDS = 60_000_000;
 const MAX_DEFINITIONS = 1_000_000;
@@ -70,7 +72,7 @@ const DEFAULT_LAYER_NAMES = new Set(['Layer0', 'Untagged']);
 const UNSET_LAYER_COLOR: [number, number, number] = [64, 64, 64];
 const SNAP_TO = ['any', 'horizontal', 'vertical', 'sloped'] as const;
 
-/** SketchUp 3~6처럼 읽지 않는 옛 판 */
+/** SketchUp 3~5처럼 읽지 않는 옛 판 */
 export class MfcRefused extends Error {
   readonly modelSchema: number;
   readonly renderingSchema: number;
@@ -204,12 +206,13 @@ class Decoder {
     s.readObject(C.VERSION_MAP);
     const model = this.st.schemas.get('CSketchUpModel') ?? -1;
     const rendering = this.st.schemas.get('CRenderingOptions') ?? -1;
-    if (!(model >= MIN_MODEL_SCHEMA && model <= MAX_MODEL_SCHEMA) || !(rendering in RENDERING_BLOCK)) {
-      const old = model >= 0 && model < MIN_MODEL_SCHEMA;
+    const known = (model >= MIN_MODEL_SCHEMA && model <= MAX_MODEL_SCHEMA) || model === SU6_MODEL_SCHEMA;
+    if (!known || !(rendering in RENDERING_BLOCK)) {
+      const old = model >= 0 && model < SU6_MODEL_SCHEMA;
       throw new MfcRefused(
         old
-          ? `SketchUp ${this.header.version} 파일은 SketchUp 3~6의 아주 옛 형식(모형 스키마 ${model})이라 아직 읽지 못합니다. SketchUp 7 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.`
-          : `SketchUp ${this.header.version} 파일의 형식(모형 스키마 ${model}, 렌더링 스키마 ${rendering})은 확인한 SketchUp 7~2020 형식과 달라 읽지 못합니다.`,
+          ? `SketchUp ${this.header.version} 파일은 SketchUp 3~5의 아주 옛 형식(모형 스키마 ${model})이라 아직 읽지 못합니다. SketchUp 6 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.`
+          : `SketchUp ${this.header.version} 파일의 형식(모형 스키마 ${model}, 렌더링 스키마 ${rendering})은 확인한 SketchUp 6~2020 형식과 달라 읽지 못합니다.`,
         model,
         rendering,
       );
@@ -241,8 +244,15 @@ class Decoder {
     if (schema >= 26) s.skip(8); // 다음 영구 번호
     const thumb = s.readObject(C.DIB);
     if (isDib(thumb)) this.image('model', '모형 미리보기', thumb);
-    s.skip(schema >= 26 ? 15 : 14);
+    s.skip(schema >= 26 ? 15 : schema >= MIN_MODEL_SCHEMA ? 14 : 10);
     const description = s.cstr();
+    if (schema < MIN_MODEL_SCHEMA) {
+      const camera = s.readObject(C.CAMERA) as SkpCamera | null;
+      const block = this.view.renderingBlock(false);
+      const out: ReturnType<Decoder['readModelHead']> = { description, options: new Map(), block };
+      if (camera) out.camera = camera;
+      return out;
+    }
     const options = this.options();
     // SketchUp 자신의 기록 사전(ModelProperties 등) — 2021+의 모형 속성 절(0x0209)과 같다
     const props = s.readObject(C.ATTRIBUTE_CONTAINER) as AttrContainer | null;
@@ -270,7 +280,7 @@ class Decoder {
   }
 
   /** 설정 묶음: u32, 묶음 수 × (이름, 열쇠 + 형 있는 값 … 빈 열쇠) */
-  private options(): SkpOptions {
+  options(): SkpOptions {
     const s = this.s;
     s.u32();
     const out: SkpOptions = new Map();
@@ -378,7 +388,8 @@ class Decoder {
       if (!key) break;
       put(entries, key, this.st.typedValue());
     }
-    s.u32();
+    // SketchUp 6(CAttributeNamed 0)은 끝 u32가 없다
+    if ((this.st.schemas.get('CAttributeNamed') ?? 1) >= 1) s.u32();
     return { name, entries };
   }
 
@@ -583,8 +594,10 @@ class Decoder {
     rec.description = s.cstr();
     s.cstr();
     s.u32();
-    const block = s.bytes(st.entityPids ? 43 : 42);
-    rec.behavior = behavior(block, st.entityPids ? 1 : 0);
+    // 동작 덩어리: CComponentBehavior 5(SketchUp 7+) 42바이트, 4(SketchUp 6) 38바이트(늘이지 않음 마스크가 없다)
+    const old = (st.schemas.get('CComponentBehavior') ?? 5) < 5;
+    const block = s.bytes((old ? 38 : 42) + (st.entityPids ? 1 : 0));
+    rec.behavior = behavior(block, st.entityPids ? 1 : 0, old);
     const thumb = s.readObject(C.THUMBNAIL);
     if (isDib(thumb)) this.image('component', rec.name || `정의 ${index + 1}`, thumb);
     return index;
@@ -778,17 +791,18 @@ class Decoder {
 }
 
 /** 정의 동작 덩어리: 붙기 27, 구멍 뚫기 28, 붙는 면 29, 카메라 보기·해 그림자 33(비트 0·1), 늘이지 않음 34(+1: 2017+) */
-function behavior(block: Uint8Array, shift: number): SkpBehavior {
+function behavior(block: Uint8Array, shift: number, noMask = false): SkpBehavior {
   const glue = block[27 + shift]!;
   const snap = block[29 + shift]!;
   const cam = block[33 + shift]!;
-  return {
+  const out: SkpBehavior = {
     alwaysFaceCamera: (cam & 1) !== 0,
     cutsOpening: block[28 + shift] !== 0,
     shadowsFaceSun: (cam & 2) !== 0,
     snapTo: glue ? (SNAP_TO[snap] ?? 'any') : 'none',
-    noScaleMask: block[34 + shift]!,
   };
+  if (!noMask) out.noScaleMask = block[34 + shift]!;
+  return out;
 }
 
 // ── 맞추기(모형 전체를 읽은 뒤) ───────────────────────────────────────
@@ -1163,7 +1177,7 @@ const isDamage = (e: unknown): boolean => !(e instanceof MfcError) || e.kind ===
 
 /**
  * 2020 이하 SKP 바이트 → 중간 모형. 머리가 MFC 꼴이어야 한다(readSkpHeader의 container = 'mfc').
- * SketchUp 3~6이나 모르는 스키마는 MfcRefused, 형상 앞에서 멈추면 그 까닭의 Error를 던진다.
+ * SketchUp 3~5나 모르는 스키마는 MfcRefused, 형상 앞에서 멈추면 그 까닭의 Error를 던진다.
  * onProgress는 읽은 바이트 위치로 진행(0~1)을 알린다.
  */
 export function readMfcModel(bytes: Uint8Array, header: SkpHeader, onProgress?: (fraction: number) => void): MfcResult {
@@ -1201,7 +1215,8 @@ export function readMfcModel(bytes: Uint8Array, header: SkpHeader, onProgress?: 
   }
   if (geometry)
     try {
-      dec.view.readTail();
+      // SketchUp 6은 설정 묶음(단위·장면 넘기기)을 머리가 아니라 꼬리(축 뒤)에 쓴다
+      dec.view.readTail(dec.st.schema('CSketchUpModel') < MIN_MODEL_SCHEMA ? () => (head.options = dec.options()) : undefined);
     } catch (e) {
       // 뿌리 요소 뒤는 보기 자료(위치·장면·스타일)뿐이다 — 형상은 다 읽었다
       dec.view.pages.length = 0;

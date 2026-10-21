@@ -3,12 +3,12 @@
  * 형식 지식을 옮겨 더했다(docs/formats/skp.md).
  *
  * 지원: SketchUp 2021~2026(머리 뒤 "VFF" 블록 + ZIP 꾸러미, 안의 model.dat가 TLV)과
- * SketchUp 7·8·2013~2020(머리 뒤 MFC 객체 직렬화, src/mfcmodel.ts). 두 해석기가 같은 중간 모형(SkpModel)을 내서 장면 출력은 하나다.
+ * SketchUp 6·7·8·2013~2020(머리 뒤 MFC 객체 직렬화, src/mfcmodel.ts). 두 해석기가 같은 중간 모형(SkpModel)을 내서 장면 출력은 하나다.
  * 면(구멍 포함)·모서리·재질 색·그룹/컴포넌트/그림 인스턴스 변환·태그(보임·색·폴더·선 종류)·문자·치수·보조선·단면 평면·속성 사전·
  * 단위·카메라·장면(페이지)·스타일(style.xml 또는 옛 스타일 기록 + 렌더링 설정)을 읽는다. 부드러운 음영(매끈한 모서리)은 smooth 선택으로 낸다.
  * 무늬(텍스처)는 그림(readSkpImages)을 textures로 넘기면 면 무늬 좌표를 읽어 입힌다(2021+ 꾸러미의 무늬 그림·위치, 2020 이하의 CTexture·CFaceTextureCoords —
  *   넘기지 않으면 재질 색 = 무늬 평균색).
- * SketchUp 3~6(옛 MFC 스키마)은 읽지 않고 까닭을 적은 경고와 빈 장면(meta.unsupported)을 돌려준다.
+ * SketchUp 3~5(옛 MFC 스키마)는 읽지 않고 까닭을 적은 경고와 빈 장면(meta.unsupported)을 돌려준다.
  */
 
 import type { Scene3d, Texture3d } from 'opencad-viewer3d/types';
@@ -34,8 +34,8 @@ export { TREE_HIDDEN, TREE_MORE } from './scene';
 export type * from './meta';
 export { cameraMeta, pagesMeta, unitsFor } from './scene-meta';
 
-/** 읽는 가장 낮은 판(SketchUp 7). 3~6은 MFC 스키마가 달라 읽지 않는다 */
-export const SKP_MIN_SUPPORTED_MAJOR = 7;
+/** 읽는 가장 낮은 판(SketchUp 6). 3~5는 MFC 스키마가 달라 읽지 않는다 */
+export const SKP_MIN_SUPPORTED_MAJOR = 6;
 /** 2021+ 형식(VFF + ZIP)이 시작하는 판. 이보다 낮으면 MFC 객체 직렬화다 */
 export const SKP_ZIP_MIN_MAJOR = 21;
 /** 표본으로 확인한 가장 높은 판 */
