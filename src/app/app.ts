@@ -46,6 +46,10 @@ import {
   SHADED_MODES,
   restoreSceneCamera,
   sectionFillOf,
+  eyeHeightFor,
+  isTwoPoint,
+  twoPointCamera,
+  withFov,
   sameSceneFit,
   stepPage,
   unwidenSceneCamera,
@@ -110,6 +114,7 @@ import { cssHex, isLightBackground, loadFileBackground, safeStorage, skyBackgrou
 import type { BackgroundOptions } from 'opencad-viewer3d';
 import type { Rgb, SkpShadowMeta, SkpStyleMeta } from '../meta';
 import { fogFor, lightingForShadow, shadowOrDefault, sunForShadow, usesSun } from './sun';
+import { WalkStick } from './joystick';
 
 export const APP_TITLE = 'OpenCAD SketchUp 뷰어';
 const TOOLS_URL = 'https://gyutae-kim.github.io/opencad';
@@ -204,6 +209,13 @@ export interface AppSnapshot {
   shadows: boolean;
   fog: boolean;
   lit: boolean;
+  /** 걷는 중인지·코어 조작 방식·세로 시야각(도)·2점 투시·카메라 띠·조이스틱이 보이는지 */
+  walking: boolean;
+  navigation: 'orbit' | 'walk';
+  fov: number | null;
+  twoPoint: boolean;
+  camBar: boolean;
+  joystick: boolean;
   sun: { elevation: number; azimuth: number } | null;
   /** 외곽선·태그 색으로 칠하기 */
   profiles: boolean;
@@ -259,6 +271,12 @@ interface Els {
   selBar: HTMLElement;
   selText: HTMLElement;
   selPart: HTMLButtonElement;
+  camBar: HTMLElement;
+  camText: HTMLElement;
+  fovRange: HTMLInputElement;
+  fovValue: HTMLElement;
+  walkBtn: HTMLButtonElement;
+  twoPointBtn: HTMLButtonElement;
 }
 
 interface MenuItem {
@@ -524,6 +542,25 @@ export class SkpViewerApp implements PanelHost {
     const selClose = h('button', { class: 'mb-btn icon', type: 'button', title: '선택 해제', 'aria-label': '선택 해제', html: icon('close', 16) });
     selClose.addEventListener('click', () => this.applySelection(null, false));
     const selBar = h('div', { class: 'measure-bar sel-bar', role: 'status', hidden: true }, selText, h('div', { class: 'mb-acts' }, selPart, selMore, selClose));
+    // 카메라 띠: 걷기(1인칭)·시야각·2점 투시(보기 설정 메뉴로 연다, 걸으면 늘 보인다). 휴대폰은 걷는 동안 왼쪽 아래에 조이스틱
+    const camText = h('div', { class: 'mb-text cam-text' });
+    const fovRange = h('input', { class: 'fov-range', type: 'range', min: '10', max: '120', step: '1', value: '35', 'aria-label': '시야각(도)', title: '세로 시야각(도)' });
+    fovRange.addEventListener('input', () => this.setFov(Number(fovRange.value)));
+    const fovValue = h('span', { class: 'fov-value' });
+    const walkBtn = h('button', { class: 'mb-btn', type: 'button', title: '걷기(1인칭): 눈 자리에서 둘러보고 걷기', 'aria-pressed': 'false', html: `${icon('walk', 16)}<span>걷기</span>` });
+    walkBtn.addEventListener('click', () => this.setWalk(!this.walking));
+    const twoPointBtn = h('button', { class: 'mb-btn', type: 'button', title: '2점 투시: 세로선을 곧게(수평으로 보고 렌즈를 위아래로 옮김)', 'aria-pressed': 'false' }, '2점 투시');
+    twoPointBtn.addEventListener('click', () => this.setTwoPoint(!this.twoPointOn));
+    const camClose = h('button', { class: 'mb-btn icon', type: 'button', title: '카메라 띠 닫기(걷기 끝내기)', 'aria-label': '카메라 띠 닫기', html: icon('close', 16) });
+    camClose.addEventListener('click', () => this.closeCamBar());
+    const camBar = h(
+      'div',
+      { class: 'measure-bar cam-bar', role: 'group', 'aria-label': '카메라', hidden: true },
+      camText,
+      h('label', { class: 'fov' }, h('span', { class: 'fov-label' }, '시야각'), fovRange, fovValue),
+      h('div', { class: 'mb-acts' }, walkBtn, twoPointBtn, camClose),
+    );
+    this.stick = new WalkStick((i) => this.viewer?.setWalkInput(i));
     // 새 판 알림(서비스 워커가 새 판을 받아 기다릴 때)
     const updLater = h('button', { class: 'mini-btn', type: 'button' }, '나중에');
     const updateBar = h(
@@ -534,7 +571,7 @@ export class SkpViewerApp implements PanelHost {
       updLater,
     );
     updLater.addEventListener('click', () => (updateBar.hidden = true));
-    const stage = h('div', { class: 'stage' }, viewHost, sceneTabs, measureBar, selBar, start, notice, busy, updateBar);
+    const stage = h('div', { class: 'stage' }, viewHost, sceneTabs, measureBar, selBar, camBar, this.stick.el, start, notice, busy, updateBar);
     this.exportDialog = new ExportDialog(
       {
         docName: () => this.doc?.name ?? 'model',
@@ -620,6 +657,12 @@ export class SkpViewerApp implements PanelHost {
       selBar,
       selText,
       selPart,
+      camBar,
+      camText,
+      fovRange,
+      fovValue,
+      walkBtn,
+      twoPointBtn,
     };
 
     this.bindWindow();
@@ -971,6 +1014,12 @@ export class SkpViewerApp implements PanelHost {
     this.closeNotice();
     this.stopSlideshow();
     this.exportDialog?.close();
+    // 걷기·2점 투시는 새 문서에서 끈다(카메라 띠는 열려 있으면 그대로)
+    if (this.walking) {
+      this.walking = false;
+      v.setNavigation('orbit');
+    }
+    this.twoPointOn = false;
     this.curveCenters.clear();
     this.measureLog = [];
     // 앞 장면이 세로 화면에 맞춰 넓힌 시야각은 원래대로(새 문서의 전체 보기·카메라가 넓은 시야각을 물려받지 않게)
@@ -1183,6 +1232,8 @@ export class SkpViewerApp implements PanelHost {
     if (!d) return;
     // 줄자·각도기가 켜져 있으면 누르기는 측정 점이다(코어는 같은 누르기로 고르기를 따로 알린다)
     if (this.measureTool?.active) return;
+    // 걷는 중 누르기는 고르지 않는다(두 번 누르기는 코어가 그 자리에 서는 데 쓰고 두 번째는 알리지 않는다 — 그룹에 들어가지 않게)
+    if (this.walking) return;
     // 단면에서 잘린 면(채운 면)은 형상이 아니므로 고르기에서 무시한다
     if (p?.section) return;
     if (e?.clicks === 2 && this.enterLevel(p)) return;
@@ -1477,6 +1528,13 @@ export class SkpViewerApp implements PanelHost {
 
   /** 카메라가 바뀔 때: 보기 기록(멈추면 한 칸, 그때의 장면 맞춤과 함께) */
   private onCamera(c: CameraState): void {
+    // 2점 투시에서 돌려 앙각이 생기면(옮기는 중이 아닐 때) 2점 투시를 끝내고 렌즈 이동을 없앤다
+    if (this.twoPointOn && !this.camAnim && !isTwoPoint(c)) {
+      this.twoPointOn = false;
+      if (c.shiftX || c.shiftY) this.viewer?.setLensShift(0, 0);
+      this.refreshCamBar();
+    }
+    if (!this.els.camBar.hidden) this.refreshCamBar();
     this.history.observe(c, performance.now(), this.sceneFit);
     clearTimeout(this.historyTimer);
     this.historyTimer = window.setTimeout(() => {
@@ -1638,7 +1696,14 @@ export class SkpViewerApp implements PanelHost {
       this.userMoved = true;
       // 평행·원근도 장면을 따른다(도구 막대도 맞춘다)
       this.projection = to.projection;
-      this.animateCamera(to, Math.min(plan.seconds, 4) * 1000, () => this.refreshToolbar());
+      // 장면 카메라가 2점 투시면(앙각 0 + 렌즈 이동) 다 옮긴 뒤 2점 투시로 둔다
+      if (this.walking) this.setWalk(false);
+      this.twoPointOn = false;
+      this.animateCamera(to, Math.min(plan.seconds, 4) * 1000, () => {
+        this.twoPointOn = !!to.shiftY && isTwoPoint(to);
+        this.refreshToolbar();
+        this.refreshCamBar();
+      });
     }
     this.renderSceneTabs();
     this.panel.rerender();
@@ -1971,7 +2036,13 @@ export class SkpViewerApp implements PanelHost {
   setProjection(p: Projection): void {
     this.projection = p;
     this.viewer?.setProjection(p);
+    // 걷기·2점 투시는 원근에서만
+    if (p !== 'perspective') {
+      if (this.walking) this.setWalk(false);
+      if (this.twoPointOn) this.setTwoPoint(false);
+    }
     this.refreshToolbar();
+    this.refreshCamBar();
   }
 
   setRenderMode(m: RenderMode): void {
@@ -1980,6 +2051,120 @@ export class SkpViewerApp implements PanelHost {
     // X-ray·와이어프레임은 형상이 글을 가리지 않는다
     this.labels?.resetOcclusion();
     this.refreshToolbar();
+  }
+
+  // ───────────────────────── 걷기·시야각·2점 투시 ─────────────────────────
+
+  /** 걷는 중(코어 setNavigation('walk'))·2점 투시 켜짐·조이스틱 */
+  private walking = false;
+  private twoPointOn = false;
+  private stick!: WalkStick;
+
+  /**
+   * 걷기(SketchUp 걷기·둘러보기·카메라 위치 정하기): 끌기 = 제자리에서 둘러보기, 휠·W/S·↑/↓ = 앞뒤, A/D = 옆, ←/→ = 돌기, Q/E·PageUp/PageDown = 위아래,
+   * 두 번 누르기 = 그 자리에 눈높이(5′6″)로 서기. 원근으로 바꾸고 측정·2점 투시·장면 재생은 끈다. 휴대폰은 조이스틱으로 걷는다
+   */
+  setWalk(on: boolean): void {
+    const v = this.viewer;
+    const d = this.doc;
+    if (!v || !d) return;
+    if (on) {
+      if (this.measureTool?.active) this.setMeasureMode(null);
+      this.stopSlideshow();
+      this.unwidenScene();
+      if (this.twoPointOn) this.setTwoPoint(false);
+      if (this.projection !== 'perspective') this.setProjection('perspective');
+      const eye = eyeHeightFor(d.scene.units);
+      v.setNavigation('walk', eye !== undefined ? { eyeHeight: eye, tapToStand: true } : { tapToStand: true });
+      this.els.camBar.hidden = false;
+    } else v.setNavigation('orbit');
+    this.walking = on;
+    this.userMoved = true;
+    this.refreshCamBar();
+    this.refreshToolbar();
+    this.refreshStatus();
+  }
+
+  /** 세로 시야각(도, 10~120): 렌즈 이동(2점 투시)은 같은 자리에 남게 함께 맞춘다. 세로 화면 맞춤은 끝낸다 */
+  setFov(deg: number): void {
+    const v = this.viewer;
+    if (!v || !Number.isFinite(deg)) return;
+    const f = (Math.min(120, Math.max(10, deg)) * Math.PI) / 180;
+    this.sceneFit = null;
+    v.setCamera(withFov(v.getCamera(), f));
+    this.userMoved = true;
+    this.refreshCamBar();
+  }
+
+  /** 2점 투시(SketchUp 카메라 › 2점 투시): 수평으로 보고 렌즈를 위아래로 옮겨 세로선을 곧게. 돌려 앙각이 생기면 끝난다 */
+  setTwoPoint(on: boolean): void {
+    const v = this.viewer;
+    if (!v || !this.doc) return;
+    this.stopCameraAnim();
+    if (on) {
+      if (this.walking) this.setWalk(false);
+      if (this.projection !== 'perspective') this.setProjection('perspective');
+      const c = twoPointCamera(v.getCamera());
+      if (!c) {
+        this.showNotice('info', '2점 투시로 바꿀 수 없습니다', '곧장 위·아래를 보는 보기(앙각 80° 넘게)는 2점 투시가 되지 않습니다. 옆에서 보도록 돌린 뒤 다시 켜세요.');
+        return;
+      }
+      this.twoPointOn = true;
+      v.setCamera(c);
+    } else {
+      this.twoPointOn = false;
+      v.setLensShift(0, 0);
+    }
+    this.userMoved = true;
+    this.refreshCamBar();
+  }
+
+  /** 카메라 띠 열기(보기 설정 메뉴) */
+  openCamBar(): void {
+    this.els.camBar.hidden = false;
+    this.refreshCamBar();
+    this.refreshSelBar();
+  }
+
+  /** 카메라 띠 닫기: 걷기도 끝낸다 */
+  private closeCamBar(): void {
+    if (this.walking) this.setWalk(false);
+    this.els.camBar.hidden = true;
+    this.refreshCamBar();
+    this.refreshSelBar();
+  }
+
+  /** 카메라 띠(시야각 값·걷기·2점 투시 눌림·안내)와 조이스틱을 지금 상태로 */
+  private refreshCamBar(): void {
+    const e = this.els;
+    const v = this.viewer;
+    if (!e) return;
+    const touch = !!this.coarseQuery?.matches;
+    this.stick?.setVisible(this.walking && touch && !!this.doc);
+    if (e.camBar.hidden || !v) return;
+    const fov = v.fov;
+    e.fovRange.value = String(Math.round(fov));
+    e.fovValue.textContent = `${Math.round(fov)}°`;
+    const persp = v.getProjection() === 'perspective';
+    e.fovRange.disabled = !persp;
+    e.walkBtn.classList.toggle('on', this.walking);
+    e.walkBtn.setAttribute('aria-pressed', this.walking ? 'true' : 'false');
+    e.twoPointBtn.classList.toggle('on', this.twoPointOn);
+    e.twoPointBtn.setAttribute('aria-pressed', this.twoPointOn ? 'true' : 'false');
+    e.camText.replaceChildren(
+      h('b', { class: 'mb-value' }, this.walking ? '걷기' : '카메라'),
+      h(
+        'span',
+        { class: 'mb-sub' },
+        this.walking
+          ? touch
+            ? '한 손가락 끌기: 둘러보기 · 조이스틱: 걷기 · 두 손가락: 벌려 앞으로·끌어 옆/위아래 · 두 번 누르기: 그 자리에 서기'
+            : '끌기: 둘러보기 · W/S·↑/↓: 앞뒤 · A/D: 옆 · ←/→: 돌기 · Q/E: 위아래 · Shift: 빠르게 · 두 번 누르기: 그 자리에 서기 · Esc: 끝내기'
+          : persp
+            ? '시야각을 바꾸거나 걷기·2점 투시를 켭니다'
+            : '평행 투영에서는 시야각을 쓰지 않습니다',
+      ),
+    );
   }
 
   // ───────────────────────── 해 조명·그림자·안개 ─────────────────────────
@@ -2109,6 +2294,8 @@ export class SkpViewerApp implements PanelHost {
   private setMeasureMode(mode: MeasureMode | null): void {
     const t = this.measureTool;
     if (!t || !this.doc) return;
+    // 측정은 궤도 보기에서(걷기의 끌기는 둘러보기다)
+    if (mode && this.walking) this.setWalk(false);
     t.setMode(mode);
     if (!mode) this.doc.measure = null;
     this.panel.refreshSelection();
@@ -2367,6 +2554,9 @@ export class SkpViewerApp implements PanelHost {
       { label: '태그 색으로 칠하기', checked: this.colorByTag, toggle: true, run: () => this.setColorByTag(!this.colorByTag) },
       { label: '그림자(파일의 날짜·시각·위치)', checked: this.shadowsOn, toggle: true, sep: true, run: () => this.setShadows(!this.shadowsOn) },
       { label: '안개', checked: this.fogOn, toggle: true, run: () => this.setFogOn(!this.fogOn) },
+      { label: '걷기(1인칭)', icon: 'walk', checked: this.walking, toggle: true, sep: true, run: () => this.setWalk(!this.walking) },
+      { label: '2점 투시', checked: this.twoPointOn, toggle: true, run: () => this.setTwoPoint(!this.twoPointOn) },
+      { label: '시야각·카메라 띠…', icon: 'camera', run: () => this.openCamBar() },
       ...(phone ? [{ label: '그림 저장…', icon: 'image', sep: true, run: () => this.savePng() }] : []),
     ]);
   }
@@ -2495,6 +2685,8 @@ export class SkpViewerApp implements PanelHost {
       measureMode: !!tool?.active,
       busy: this.busy,
       hasPages: !!this.doc?.pages.length,
+      walking: this.walking,
+      inList: inList(ev.target),
     });
     if (!act) return;
     if (act.kind === 'open') {
@@ -2538,6 +2730,12 @@ export class SkpViewerApp implements PanelHost {
       ev.preventDefault();
       ev.stopPropagation();
       this.toggleMeasure();
+      return;
+    }
+    if (act.kind === 'walkOff') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.setWalk(false);
       return;
     }
     // F·1~7·Esc(측정 지우기)는 뷰어 규칙대로. 캡처 단계에서 처리했으면 캔버스의 같은 키 처리까지 가지 않게 막는다.
@@ -2719,7 +2917,8 @@ export class SkpViewerApp implements PanelHost {
   private refreshSelBar(): void {
     const e = this.els;
     const d = this.doc;
-    const on = !!d && !!d.selection && !this.measuring && !this.panelOpen;
+    // 카메라 띠가 열려 있으면 그 자리를 쓴다
+    const on = !!d && !!d.selection && !this.measuring && !this.panelOpen && e.camBar.hidden;
     e.selBar.hidden = !on;
     if (!on || !d) return;
     const info = entityInfo(selectionEntity(d), d.units, mmPerSceneUnit(d.scene.units));
@@ -2818,6 +3017,12 @@ export class SkpViewerApp implements PanelHost {
       shadows: this.shadowsOn,
       fog: this.fogOn,
       lit: !!this.viewer?.lighting,
+      walking: this.walking,
+      navigation: this.viewer?.navigation ?? 'orbit',
+      fov: this.viewer ? Math.round(this.viewer.fov * 10) / 10 : null,
+      twoPoint: this.twoPointOn,
+      camBar: !this.els.camBar.hidden,
+      joystick: !this.stick.el.hidden,
       sun: (() => {
         const sun = sunForShadow(shadowOrDefault(this.activeShadow));
         return sun ? { elevation: sun.elevation, azimuth: sun.azimuth } : null;
@@ -2889,6 +3094,12 @@ export class SkpViewerApp implements PanelHost {
 }
 
 /** 문서가 쓰던 그림 Blob 주소와 워커가 넘긴 무늬 ImageBitmap을 푼다(뷰어는 이미 다음 장면으로 바꿨다) */
+/** 키 대상이 화살표·PageUp·PageDown을 스스로 쓰는 곳(패널 목록·메뉴·장면 탭·패널 크기 손잡이·슬라이더 등 입력)인지 */
+function inList(t: EventTarget | null): boolean {
+  const el = t as Element | null;
+  return !!el && typeof el.closest === 'function' && !!el.closest('.panel, .menu, .scene-tabs, .resizer, .measure-log, input, select, [role="tree"], [role="listbox"]');
+}
+
 function revokeImages(d: SkpDoc): void {
   for (const u of d.images?.urls ?? [])
     try {

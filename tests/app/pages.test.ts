@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_FOV, cameraBasis, cameraEye, type CameraState } from 'opencad-viewer3d/camera';
+import { DEFAULT_FOV, cameraBasis, cameraEye, computeFrame, projectToScreen, type CameraState } from 'opencad-viewer3d/camera';
 import type { SkpCameraMeta, SkpPageMeta } from '../../src/meta';
 import {
   DEFAULT_TRANSITION_S,
@@ -10,6 +10,11 @@ import {
   cameraFromSkp,
   cameraShowsBox,
   delaySeconds,
+  eyeHeightFor,
+  isTwoPoint,
+  rollFromUp,
+  twoPointCamera,
+  withFov,
   fitSceneCamera,
   effectiveTagHidden,
   folderHiddenTags,
@@ -94,6 +99,53 @@ describe('SketchUp 카메라 → 코어 카메라', () => {
     const iso = cameraFromSkp(cam({ eye: [100, -100, 100], up: [0.3, 0.3, -0.9] }))!;
     close(cameraEye(iso), [100, -100, 100], 1e-6);
     expect(cameraBasis(iso).up[2]).toBeGreaterThan(0);
+  });
+
+  it('굴림: 위 벡터가 시선 둘레로 기운 카메라는 roll로(코어 틀의 화면 위가 그 위 벡터), 작거나 아래로 기운 것은 버린다', () => {
+    const up: [number, number, number] = [Math.sin(0.3), 0, Math.cos(0.3)];
+    const c = cameraFromSkp(cam({ eye: [0, -100, 0], target: [0, 0, 0], up }))!;
+    expect(c.roll).toBeCloseTo(-0.3, 9);
+    close(cameraBasis(c).up, up, 1e-9);
+    expect(rollFromUp(0, 0, [0, 0, 1])).toBe(0);
+    expect(rollFromUp(0, 0, [1e-6, 0, 1])).toBe(0);
+    expect(rollFromUp(0, 0, [0.2, 0, -1])).toBe(0);
+    expect(cameraFromSkp(cam({}))!.roll).toBeUndefined();
+  });
+
+  it('2점 투시: 앙각 0·눈 자리 그대로, 원래 대상점이 화면 가운데에 남게 렌즈를 위아래로 옮긴다(세로선이 곧다)', () => {
+    const c: CameraState = { target: [10, 20, 0], distance: 100, yaw: 0.3, pitch: 0.4, projection: 'perspective', fovY: 0.7, roll: 0.1 };
+    const t = twoPointCamera(c)!;
+    expect(t.pitch).toBe(0);
+    expect(t.roll).toBeUndefined();
+    close(cameraEye(t), cameraEye(c), 1e-9);
+    expect(isTwoPoint(t)).toBe(true);
+    const f = computeFrame(t, 800, 600, { center: [0, 0, 0], radius: 500 });
+    const p = projectToScreen(f, c.target)!;
+    expect(p[0]).toBeCloseTo(400, 6);
+    expect(p[1]).toBeCloseTo(300, 6);
+    // 세로선의 두 점은 화면 x가 같다
+    const a = projectToScreen(f, [30, 40, 0])!;
+    const b = projectToScreen(f, [30, 40, 50])!;
+    expect(a[0]).toBeCloseTo(b[0], 6);
+    expect(twoPointCamera({ ...c, projection: 'orthographic' })).toBeNull();
+    expect(twoPointCamera({ ...c, pitch: 1.5 })).toBeNull();
+    // 파일의 2점 투시 카메라
+    const fromFile = cameraFromSkp(cam({ eye: [0, -100, 60], target: [0, 0, 0], up: [0, 0.5, 0.86], twoPoint: true }))!;
+    expect(fromFile.pitch).toBe(0);
+    // 눈보다 아래의 대상점을 가운데에 두려고 렌즈를 올린다(+)
+    expect(fromFile.shiftY).toBeGreaterThan(0);
+  });
+
+  it('시야각만 바꾸면 렌즈 이동도 tan 비로 맞추고, 걷기 눈높이는 5′6″', () => {
+    const c: CameraState = { target: [0, 0, 0], distance: 10, yaw: 0, pitch: 0, projection: 'perspective', fovY: 0.6, shiftY: 0.2 };
+    const w = withFov(c, 1.2);
+    expect(w.fovY).toBe(1.2);
+    expect(w.shiftY).toBeCloseTo((0.2 * Math.tan(0.3)) / Math.tan(0.6), 12);
+    expect(withFov({ ...c, shiftY: undefined }, 1).shiftY).toBeUndefined();
+    expect(eyeHeightFor('mm')).toBeCloseTo(1676.4, 9);
+    expect(eyeHeightFor('inch')).toBeCloseTo(66, 9);
+    expect(eyeHeightFor('m')).toBeCloseTo(1.6764, 9);
+    expect(eyeHeightFor('unknown')).toBeUndefined();
   });
 
   it('눈과 목표가 같거나 값이 이상하면 null', () => {

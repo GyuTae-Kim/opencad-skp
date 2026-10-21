@@ -26,6 +26,22 @@ describe('키 → 할 일', () => {
     expect(keyAction({ ...base, key: 'Escape' })).toEqual({ kind: 'clearSelection' });
   });
 
+  it('걷는 중: PageUp·PageDown은 장면 넘기기 대신 뷰어(위·아래), 지울 것이 없는 Esc는 걷기 끝내기', () => {
+    expect(keyAction({ ...base, key: 'PageDown', hasPages: true })).toEqual({ kind: 'page', delta: 1 });
+    expect(keyAction({ ...base, key: 'PageDown', hasPages: true, walking: true })).toEqual({ kind: 'viewer' });
+    expect(keyAction({ ...base, key: 'w', walking: true })).toEqual({ kind: 'viewer' });
+    expect(keyAction({ ...base, key: 'Escape', walking: true })).toEqual({ kind: 'walkOff' });
+    expect(keyAction({ ...base, key: 'Escape', walking: true, measurePoints: 1 })).toEqual({ kind: 'viewer' });
+  });
+
+  it('패널 목록·메뉴·슬라이더에 초점이 있으면 화살표·PageUp·PageDown은 그쪽 것', () => {
+    for (const key of ['ArrowUp', 'ArrowLeft', 'PageDown', 'Home'])
+      expect(keyAction({ ...base, key, inList: true, walking: true, hasPages: true })).toBeNull();
+    // 글자 키(걷기 W 등)·F는 그대로 뷰어로
+    expect(keyAction({ ...base, key: 'w', inList: true, walking: true })).toEqual({ kind: 'viewer' });
+    expect(keyAction({ ...base, key: 'ArrowUp', walking: true })).toEqual({ kind: 'viewer' });
+  });
+
   it('입력 칸·보조키·문서 없음(해석 중)은 건드리지 않는다', () => {
     expect(keyAction({ ...base, key: 'f', editable: true })).toBeNull();
     expect(keyAction({ ...base, key: '1', ctrl: true })).toBeNull();

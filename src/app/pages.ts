@@ -2,7 +2,7 @@
  * 장면(페이지)·저장 카메라·스타일을 뷰어 코어(opencad-viewer3d)의 보기 상태로 바꾸기(순수 함수, DOM 없음).
  *
  * - 카메라: SketchUp 카메라(눈·목표·위, 원근이면 세로 시야각, 평행이면 화면 전체 높이) → 코어 CameraState
- *   (Z 위 턴테이블, 굴림 없음). 굴림·2점 투시·고정 종횡비는 코어가 나타낼 수 없어 버린다.
+ *   (Z 위 턴테이블). 위 벡터가 기운 카메라는 굴림(roll), 2점 투시 카메라는 앙각 0 + 렌즈 이동(shiftY)으로 나타낸다. 고정 종횡비는 세로 화면 맞춤에만 쓴다.
  * - 장면 적용: 장면이 기억하는 것(use 깃발이 켜진 칸)만 바꾼다 — 카메라, 숨긴 태그(기억하면 모든 태그를 그 값으로),
  *   숨긴 개체(기억하면 숨긴 노드 전체를 그 목록으로), 활성 단면, 스타일. 기억하지 않은 것은 지금 상태 그대로 둔다.
  * - 처음 카메라: 파일을 열면 SketchUp처럼 모형 카메라(저장 당시 보기)로 보되, 그 카메라가 모형을 실제로 보여 줄 때만 쓴다
@@ -88,7 +88,7 @@ const validFov = (f: number | undefined): number => (isNum(f) && f > 0 && f < Ma
  * - 방향: 시선이 수평 성분을 가지면 yaw·pitch를 시선에서, 곧장 위·아래면 yaw를 위 벡터에서 얻는다.
  *   수직을 살짝 넘은 카메라(시선 z > 0.99, 위 벡터가 수평 보기의 위와 반대쪽)는 SketchUp에서 그림이 뒤집혀 보이지 않으므로
  *   곧장 위·아래 보기로 바로잡고 yaw를 위 벡터에서 얻는다(코어 pitch는 ±90°를 넘을 수 없다).
- * - 굴림(위 벡터가 시선 둘레로 돈 것)·2점 투시·고정 종횡비는 버린다.
+ * - 굴림(위 벡터가 시선 둘레로 돈 것)은 roll로(0.05° 아래는 버린다), 2점 투시(twoPoint)는 twoPointCamera로. 고정 종횡비는 버린다.
  */
 export function cameraFromSkp(cam: SkpCameraMeta, viewerFovY: number = DEFAULT_FOV): CameraState | null {
   const c = readCamera(cam);
@@ -103,14 +103,83 @@ export function cameraFromSkp(cam: SkpCameraMeta, viewerFovY: number = DEFAULT_F
     pitch = n[2] >= 0 ? Math.PI / 2 : -Math.PI / 2;
   }
   const target: Vec3 = [c.target[0], c.target[1], c.target[2]];
+  const roll = rollFromUp(yaw, pitch, c.up);
+  const withRoll = (cam: CameraState): CameraState => (roll ? { ...cam, roll } : cam);
   if (c.perspective) {
     const deg = Math.min(MAX_FOV_DEG, Math.max(MIN_FOV_DEG, c.fovY ?? SKP_DEFAULT_FOV_DEG));
-    return { target, distance, yaw, pitch, projection: 'perspective', fovY: (deg * Math.PI) / 180 };
+    const cam: CameraState = { target, distance, yaw, pitch, projection: 'perspective', fovY: (deg * Math.PI) / 180 };
+    // 2점 투시: 세로선을 곧게(앙각 0 + 렌즈 이동) — 굴림은 쓰지 않는다
+    if (c.twoPoint) return twoPointCamera(cam) ?? withRoll(cam);
+    return withRoll(cam);
   }
   const fovY = validFov(viewerFovY);
   const tan = Math.tan(fovY / 2);
   const height = c.height ?? 2 * distance * tan;
-  return { target, distance: height / 2 / tan, yaw, pitch, projection: 'orthographic', fovY };
+  return withRoll({ target, distance: height / 2 / tan, yaw, pitch, projection: 'orthographic', fovY });
+}
+
+/** 이보다 작은 굴림(라디안 — 0.05°)은 없는 것으로 본다(저장된 위 벡터의 작은 오차) */
+const ROLL_EPS = (0.05 * Math.PI) / 180;
+
+/**
+ * SketchUp 위 벡터 → 코어 굴림(라디안). 코어는 굴림 r이면 화면 위 = cos r·up₀ − sin r·right₀(up₀·right₀는 yaw·pitch의 굴림 없는 틀)이라
+ * 위 벡터를 시선에 수직으로 만든 u에서 r = atan2(−u·right₀, u·up₀)(−90°~90°). 위 벡터가 시선과 나란하거나 아래로 기울었거나 굴림이 아주 작으면 0
+ */
+export function rollFromUp(yaw: number, pitch: number, up: readonly number[]): number {
+  const b = basisFromAngles(yaw, pitch);
+  const k = dot(up, b.back);
+  const u: Vec3 = [up[0]! - b.back[0] * k, up[1]! - b.back[1] * k, up[2]! - b.back[2] * k];
+  // 위 벡터가 화면 아래쪽을 가리키는(90° 넘게 기운) 카메라는 깨진 값으로 보고 굴리지 않는다(그림이 뒤집히지 않게)
+  if (!(Math.hypot(...u) > 1e-9) || !(dot(u, b.up) > 0)) return 0;
+  const r = Math.atan2(-dot(u, b.right), dot(u, b.up));
+  return Math.abs(r) < ROLL_EPS ? 0 : r;
+}
+
+/** 2점 투시로 볼 수 없을 만큼 위·아래를 보는 앙각(도) */
+export const TWO_POINT_MAX_PITCH_DEG = 80;
+
+/**
+ * 2점 투시(SketchUp 카메라 › 2점 투시): 눈 자리·방향(yaw)·시야각은 그대로 두고 앙각을 0으로(세로선이 곧다), 원래 대상점이 화면의 같은 높이에
+ * 오게 렌즈를 위아래로 옮긴다(코어 shiftY = −그 점의 정규 장치 y). 굴림은 없앤다. 원근만 — 평행이거나 곧장 위·아래(80° 넘게)를 보면 null
+ */
+export function twoPointCamera(c: CameraState): CameraState | null {
+  if (c.projection !== 'perspective' || !(Math.abs(c.pitch) <= (TWO_POINT_MAX_PITCH_DEG * Math.PI) / 180)) return null;
+  const eye = cameraEye(c);
+  const b = basisFromAngles(c.yaw, 0);
+  const d = Math.max(c.distance, 1e-9);
+  const target: Vec3 = [eye[0] - b.back[0] * d, eye[1] - b.back[1] * d, eye[2] - b.back[2] * d];
+  // 원래 대상점의 새 틀 안 높이(정규 장치 y)
+  const v = sub(c.target, eye);
+  const z = -dot(v, b.back);
+  const tan = Math.tan(validFov(c.fovY) / 2);
+  const y = z > 1e-12 ? dot(v, b.up) / (z * tan) : 0;
+  const { roll: _r, shiftX: _x, shiftY: _y, ...base } = c;
+  void _r, _x, _y;
+  const out: CameraState = { ...base, target, distance: d, pitch: 0 };
+  return Math.abs(y) > 1e-12 ? { ...out, shiftY: -y } : out;
+}
+
+/** 2점 투시 카메라인지(앙각 0, 렌즈를 위아래로만 옮김) */
+export function isTwoPoint(c: CameraState): boolean {
+  return c.projection === 'perspective' && Math.abs(c.pitch) < 1e-9 && !c.roll && !c.shiftX;
+}
+
+/**
+ * 시야각만 바꾸기: 렌즈 이동은 정규 장치 좌표라 시야각이 바뀌면 같은 점이 같은 자리에 남게 tan(시야/2) 비로 다시 맞춘다(2점 투시 프레임 지키기)
+ */
+export function withFov(c: CameraState, fovY: number): CameraState {
+  const f = validFov(fovY);
+  const k = Math.tan(validFov(c.fovY) / 2) / Math.tan(f / 2);
+  const out: CameraState = { ...c, target: [...c.target], fovY: f };
+  if (c.shiftX) out.shiftX = c.shiftX * k;
+  if (c.shiftY) out.shiftY = c.shiftY * k;
+  return out;
+}
+
+/** 걷기 눈높이: SketchUp 기본 5′6″(1.676 m)를 장면 단위로(단위를 모르면 undefined — 코어가 범위로 정한다) */
+export function eyeHeightFor(units: string): number | undefined {
+  const mm = units === 'mm' ? 1 : units === 'inch' ? 25.4 : units === 'm' ? 1000 : 0;
+  return mm ? 1676.4 / mm : undefined;
 }
 
 /** 두 SketchUp 카메라가 같은 보기인지(눈·목표가 눈-목표 거리의 tolerance배 안, 투영·시야각·높이가 같음) */
@@ -186,7 +255,7 @@ export function fitSceneCamera(c: CameraState, viewAspect: number, refAspect?: n
   const ref = validAspect(refAspect) ? refAspect : SCENE_REF_ASPECT;
   const scale = sceneCoverageScale(viewAspect, ref);
   const camera: CameraState =
-    c.projection === 'perspective' ? { ...c, target: [...c.target], fovY: widenFov(c.fovY, scale) } : { ...c, target: [...c.target], distance: c.distance * scale };
+    c.projection === 'perspective' ? withFov(c, widenFov(c.fovY, scale)) : { ...c, target: [...c.target], distance: c.distance * scale };
   return { camera, fit: { ref, scale, baseFovY: c.fovY, projection: c.projection, fovY: camera.fovY } };
 }
 
@@ -200,7 +269,7 @@ export function refitSceneCamera(c: CameraState, fit: SceneFit, viewAspect: numb
   if (Math.abs(scale - fit.scale) < 1e-9) return { camera: c, fit };
   if (c.projection === 'perspective') {
     const fovY = widenFov(fit.baseFovY, scale);
-    return { camera: { ...c, target: [...c.target], fovY }, fit: { ...fit, scale, fovY } };
+    return { camera: withFov(c, fovY), fit: { ...fit, scale, fovY } };
   }
   return { camera: { ...c, target: [...c.target], distance: (c.distance * scale) / fit.scale }, fit: { ...fit, scale } };
 }
@@ -215,7 +284,7 @@ export function unwidenSceneCamera(c: CameraState, fit: SceneFit | null): Camera
   if (!fit) return c;
   const base = validFov(fit.baseFovY);
   if (!(c.fovY > base + 1e-9)) return c;
-  return { ...c, target: [...c.target], fovY: base, distance: (c.distance * Math.tan(c.fovY / 2)) / Math.tan(base / 2) };
+  return { ...withFov(c, base), distance: (c.distance * Math.tan(c.fovY / 2)) / Math.tan(base / 2) };
 }
 
 /**

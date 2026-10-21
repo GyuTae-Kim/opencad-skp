@@ -1689,6 +1689,80 @@ button.scene-card.sel {
   }
 }
 
+/* 카메라 띠(걷기·시야각·2점 투시): 넓은 화면에서도 보인다. 글은 위 한 줄, 시야각·단추는 아래 줄 */
+.cam-bar:not([hidden]) {
+  display: flex;
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.cam-bar .cam-text {
+  flex-basis: 100%;
+}
+
+.cam-bar .fov {
+  display: flex;
+  flex: 1 1 160px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.cam-bar .fov-range {
+  flex: 1 1 auto;
+  min-width: 80px;
+  accent-color: var(--accent);
+}
+
+.cam-bar .fov-value {
+  min-width: 3.2em;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.mb-btn.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-input));
+  color: var(--accent);
+}
+
+/* 휴대폰 걷기 조이스틱: 왼쪽 아래(카메라 띠 위) */
+.walk-stick {
+  position: absolute;
+  left: 16px;
+  bottom: 118px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 112px;
+  height: 112px;
+  border: 1px solid var(--border-soft);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--bg-elev) 55%, transparent);
+  box-shadow: var(--shadow);
+  touch-action: none;
+}
+
+.walk-stick[hidden] {
+  display: none;
+}
+
+.stick-knob {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.85;
+  pointer-events: none;
+  transition: transform 0.08s;
+}
+
+.walk-stick.on .stick-knob {
+  transition: none;
+}
+
 /* 손가락 기기에서만(또는 마우스에서만) 보이는 안내 */
 .coarse-only {
   display: none;
