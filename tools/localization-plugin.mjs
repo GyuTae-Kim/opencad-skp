@@ -30,12 +30,17 @@ export function localizeHtml(html, language) {
   }
   return html;
 }
-/** 언어 페이지(<언어>/)의 앱 정보: 이름·설명을 옮기고, 시작 주소는 그 언어 페이지, 범위·아이콘은 앱 뿌리 */
+/**
+ * 언어 페이지(<언어>/)의 앱 정보: 이름·설명을 옮기고, 시작 주소는 그 언어 페이지, 범위·아이콘은 앱 뿌리.
+ * id는 두지 않는다 — id는 start_url의 출처(https://gyutae-kim.github.io/)를 기준으로 풀려 "./"이면 사이트 루트(포트폴리오·다른 앱과 같은
+ * 앱)가 된다. 없으면 start_url이 id라 언어마다 /opencad-skp/<언어>/ 아래의 따로 된 앱이다.
+ */
 export function localizeManifest(manifest, language) {
   if (language === 'ko') return manifest;
   const up = src => /^[a-z]+:|^\//i.test(src) ? src : '../' + src.replace(/^\.\//, '');
-  return { ...manifest, name: translate(manifest.name, language), short_name: translate(manifest.short_name, language),
-    description: translate(manifest.description, language), lang: language, id: './', start_url: './', scope: '../',
+  const { id: _id, ...rest } = manifest;
+  return { ...rest, name: translate(manifest.name, language), short_name: translate(manifest.short_name, language),
+    description: translate(manifest.description, language), lang: language, start_url: './', scope: '../',
     icons: manifest.icons.map(icon => ({ ...icon, src: up(icon.src) })) };
 }
 export function siteLocalization(){

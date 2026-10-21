@@ -21,6 +21,10 @@ for(const{code}of languages){
  assert.equal(manifest.lang,code);assert.equal(manifest.display,'standalone');
  assert.equal(new URL(manifest.start_url,manifestUrl).href,metadata.url,`${code}: manifest start_url`);
  assert.equal(new URL(manifest.scope,manifestUrl).href,metadataForLanguage('ko').url,`${code}: manifest scope`);
+ // 브라우저가 푸는 앱 id(W3C: id는 start_url의 출처 기준, 없으면 start_url)가 이 앱 경로 아래여야 포트폴리오·다른 앱과 겹치지 않는다
+ const startUrl=new URL(manifest.start_url,manifestUrl);
+ const appId=manifest.id===undefined?startUrl:new URL(manifest.id,startUrl.origin);
+ assert.ok(appId.pathname.startsWith(manifestPath),`${code}: manifest id ${appId.href} outside ${manifestPath}`);
  if(code!=='ko')assert.doesNotMatch(manifest.name+manifest.short_name+manifest.description,/[가-힣]/,`${code}: untranslated manifest`);
  for(const icon of manifest.icons){const src=new URL(icon.src,manifestUrl);assert.ok(existsSync('dist/'+src.pathname.slice(manifestPath.length)),`${code}: icon ${icon.src}`);}
  assert.ok(existsSync('dist/'+new URL(doc.querySelector('link[rel=apple-touch-icon]').href).pathname.slice(manifestPath.length)),`${code}: apple-touch-icon`);
