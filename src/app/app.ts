@@ -63,6 +63,7 @@ import { VIEW_KEY_OF, VIEW_MENU, isEditableTarget, keyAction } from './keys';
 import type { LaunchRequest } from './launch';
 import { PANEL_WIDTH_DEFAULT, SHEET_DEFAULT, clampPanelWidth, clampSheetFraction, readLayout, storeLayout, type StoredLayout } from './layout';
 import { Panel, type PanelHost } from './panel';
+import { RecentStore, canKeepRecent, recentTimeText, type RecentEntry } from './recent';
 import { errorText, sceneHasGeometry } from './protocol';
 import { deviceHints, textureLimitsFor, type TextureLimits } from './texlimits';
 import { THEME_CHOICES, applyThemeChoice, readStoredTheme, resolveTheme, storeTheme, systemPrefersDark, themeChoiceOf, type ThemeChoice, type ThemeName } from './theme';
@@ -249,6 +250,10 @@ export class SkpViewerApp implements PanelHost {
   private notice: AppSnapshot['notice'] = null;
   private menu: HTMLElement | null = null;
   private dragDepth = 0;
+  /** 최근 문서(이 브라우저의 IndexedDB에만) — 시작 화면 카드 */
+  private readonly recent = new RecentStore();
+  private readonly recentCard = h('section', { class: 'recent', 'aria-labelledby': 'recent-title', hidden: true });
+  private readonly recentList = h('ul', { class: 'recent-list' });
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -514,6 +519,7 @@ export class SkpViewerApp implements PanelHost {
         h('h1', {}, 'SketchUp 파일을 브라우저에서 3D로 보기'),
         h('p', { class: 'lead' }, '설치 없이 SketchUp(.skp) 모형을 열어 돌려 보고, 태그를 켜고 끄고, 재질과 그룹·컴포넌트를 살펴보세요.'),
         zone,
+        this.buildRecent(),
         h(
           'ul',
           { class: 'facts' },
@@ -535,6 +541,70 @@ export class SkpViewerApp implements PanelHost {
         ),
       ),
     );
+  }
+
+  /** 시작 화면의 최근 문서 카드(비었으면 숨김) */
+  private buildRecent(): HTMLElement {
+    const clear = h('button', { class: 'recent-clear', type: 'button', title: '최근 문서 목록을 모두 지웁니다(원래 파일은 그대로)' }, '모두 지우기');
+    clear.addEventListener('click', () => void this.recent.clear().then(() => this.refreshRecent()));
+    this.recentCard.append(
+      h('div', { class: 'recent-head' }, h('h2', { id: 'recent-title' }, '최근 문서'), clear),
+      this.recentList,
+      h('p', { class: 'recent-note' }, '파일은 이 기기의 이 브라우저에만 저장되고, 서버로 보내지 않습니다.'),
+    );
+    void this.refreshRecent();
+    return this.recentCard;
+  }
+
+  /** 최근 문서 목록을 다시 그린다 */
+  private async refreshRecent(): Promise<void> {
+    const list = await this.recent.list();
+    const now = Date.now();
+    this.recentList.replaceChildren(...list.map((e) => this.recentRow(e, now)));
+    this.recentCard.hidden = !list.length;
+  }
+
+  private recentRow(e: RecentEntry, now: number): HTMLElement {
+    const open = h(
+      'button',
+      { class: 'recent-open', type: 'button' },
+      h('span', { class: 'recent-icon', html: icon('open', 18) }),
+      h('span', { class: 'recent-name', translate: 'no' }, e.name),
+      // 크기와 시각은 따로 번역되게 나눈다(독일어 "vor 3 Min."이 크기 앞으로 가지 않게)
+      h('span', { class: 'recent-meta' }, formatBytes(e.size), ' · ', h('span', {}, recentTimeText(e.time, now))),
+    );
+    open.addEventListener('click', () => void this.openRecent(e));
+    const del = h('button', { class: 'recent-del', type: 'button', title: '목록에서 지우기', 'aria-label': `최근 문서에서 지우기: ${e.name}`, html: icon('close', 16) });
+    del.addEventListener('click', () => void this.recent.remove(e.id).then(() => this.refreshRecent()));
+    return h('li', { class: 'recent-row' }, open, del);
+  }
+
+  /** 최근 문서 다시 열기(저장한 바이트로) */
+  async openRecent(e: Pick<RecentEntry, 'id' | 'name'>): Promise<void> {
+    const attempt = beginOpen('local', 'skp');
+    const seq = ++this.openSeq;
+    this.setBusy(e.name, 0.005, '파일 읽는 중');
+    const got = await this.recent.open(e.id);
+    if (seq !== this.openSeq) return;
+    if (!got) {
+      this.setBusy(null);
+      attempt.error('read_error');
+      this.showNotice('error', `"${e.name}" 파일을 찾지 못했습니다`, '이 브라우저에 저장해 둔 사본이 지워졌습니다. 파일을 다시 골라 여세요.');
+      void this.refreshRecent();
+      return;
+    }
+    await this.openBuffer(got.entry.name, got.data, seq, attempt);
+    void this.refreshRecent();
+  }
+
+  /** 고르거나 끌어다 놓아 연 파일을 최근 문서에 저장(바이트는 워커로 넘어갔으므로 파일에서 다시 읽는다) */
+  private async keepRecent(file: File, name: string): Promise<void> {
+    if (!canKeepRecent(file.size)) return;
+    try {
+      if (await this.recent.add(name, await file.arrayBuffer())) await this.refreshRecent();
+    } catch {
+      /* 다시 못 읽으면 저장하지 않는다 */
+    }
   }
 
   private bindWindow(): void {
@@ -621,7 +691,8 @@ export class SkpViewerApp implements PanelHost {
       return;
     }
     if (seq !== this.openSeq) return;
-    await this.openBuffer(baseName(file.name), buf, seq, attempt);
+    const name = baseName(file.name);
+    if (await this.openBuffer(name, buf, seq, attempt)) void this.keepRecent(file, name);
   }
 
   /** 같은 출처 주소의 파일 열기(?open=) */
@@ -680,8 +751,8 @@ export class SkpViewerApp implements PanelHost {
 
   private parsingSeq = 0;
 
-  /** 바이트 해석(buf는 워커로 이전된다). seq가 더 새 요청에 밀리면 결과를 버린다 */
-  private async openBuffer(name: string, buf: ArrayBuffer, seq: number, attempt: OpenAttempt): Promise<void> {
+  /** 바이트 해석(buf는 워커로 이전된다). seq가 더 새 요청에 밀리면 결과를 버린다. 열어 보였으면 true */
+  private async openBuffer(name: string, buf: ArrayBuffer, seq: number, attempt: OpenAttempt): Promise<boolean> {
     const size = buf.byteLength;
     this.setBusy(name, 0.01, '해석 준비 중');
     // 앞 파일을 아직 해석 중이면 멈추고(동기 해석이라 기다리면 늦어진다) 새 파일을 읽는다
@@ -696,7 +767,7 @@ export class SkpViewerApp implements PanelHost {
         },
         { textureLimit: this.texLimits.limit },
       );
-      if (seq !== this.openSeq) return;
+      if (seq !== this.openSeq) return false;
       const old = unsupportedVersion(res.scene);
       if (old) {
         attempt.error('unsupported');
@@ -705,29 +776,32 @@ export class SkpViewerApp implements PanelHost {
           `아직 읽지 못하는 판입니다: ${releaseName(old)} (${old})`,
           `"${name}" 파일은 SketchUp 3~6의 아주 옛 형식으로 저장되어 있습니다. 이 뷰어는 SketchUp 7·8·2013~2026 파일을 읽습니다. SketchUp 7 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.`,
         );
-        return;
+        return false;
       }
       if (!sceneHasGeometry(res.scene)) {
         attempt.error('empty');
         const why = res.scene.warnings?.[0] ?? '그릴 면이나 모서리를 찾지 못했습니다.';
         this.showNotice('error', `"${name}" 파일을 열지 못했습니다`, why);
-        return;
+        return false;
       }
       // GPU에 올리기: 작은 모형은 한 번에(그 전에 단계 글을 한 번 그린다), 큰 모형은 프레임마다 나눠 올리며 실제 진행을 보인다
       this.setBusy(name, isBigScene(res) ? 0 : 0.99, '화면에 올리는 중');
       await new Promise<void>((r) => requestAnimationFrame(() => setTimeout(r, 0)));
-      if (seq !== this.openSeq) return;
+      if (seq !== this.openSeq) return false;
       const doc = createDoc(name, size, res, { makeUrl: (b, mime) => URL.createObjectURL(new Blob([b as BlobPart], { type: mime })) });
       const uploaded = this.setDoc(doc, (done, total) => {
         if (seq === this.openSeq) this.setBusy(name, total ? done / total : 1, `화면에 올리는 중 · 묶음 ${fmtCount(done)}/${fmtCount(total)}`);
       });
       this.noticeDamage(doc);
       await uploaded;
-      if (seq === this.openSeq) attempt.success();
+      if (seq !== this.openSeq || this.doc !== doc) return false;
+      attempt.success();
+      return true;
     } catch (e) {
-      if (seq !== this.openSeq) return;
+      if (seq !== this.openSeq) return false;
       this.showNotice('error', `"${name}" 파일을 열지 못했습니다`, errorText(e));
       attempt.error('parse_error');
+      return false;
     } finally {
       if (this.parsingSeq === seq) this.parsingSeq = 0;
       if (seq === this.openSeq) this.setBusy(null);

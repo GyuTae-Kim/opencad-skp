@@ -435,6 +435,142 @@ input[type='checkbox'] {
   background: var(--accent-strong);
 }
 
+/* 최근 문서(recent.ts — 이 브라우저에만 저장한 파일) */
+.recent {
+  margin: 14px 0 0;
+  padding: 10px 12px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: var(--bg-elev);
+}
+
+.recent-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.recent-head h2 {
+  flex: 1 1 auto;
+  margin: 0;
+  font-size: 14px;
+}
+
+.recent-clear {
+  flex: none;
+  min-height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.recent-clear:hover {
+  background: var(--bg-hover);
+}
+
+.recent-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.recent-row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  min-width: 0;
+}
+
+.recent-open {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 36px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.recent-open:hover,
+.recent-del:hover {
+  background: var(--bg-hover);
+}
+
+.recent-icon {
+  display: flex;
+  color: var(--accent);
+}
+
+.recent-name {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-meta {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.recent-del {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.recent-note {
+  margin: 6px 0 0;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+@media (pointer: coarse) {
+  .recent-open,
+  .recent-clear {
+    min-height: 44px;
+  }
+
+  .recent-del {
+    width: 44px;
+    min-height: 44px;
+  }
+}
+
+/* 아주 좁은 화면: 크기·시간을 이름 아래 줄로 */
+@media (max-width: 400px) {
+  .recent-open {
+    grid-template-columns: auto minmax(0, 1fr);
+    row-gap: 0;
+  }
+
+  .recent-meta {
+    grid-column: 2;
+  }
+}
+
 .facts {
   display: grid;
   gap: 8px;
