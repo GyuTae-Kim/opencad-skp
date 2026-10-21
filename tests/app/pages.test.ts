@@ -6,6 +6,7 @@ import {
   MAX_TRANSITION_S,
   PORTRAIT_MAX_FOV_DEG,
   SCENE_REF_ASPECT,
+  baseFovOf,
   cameraFromSkp,
   cameraShowsBox,
   delaySeconds,
@@ -494,5 +495,31 @@ describe('세로 화면에서 장면이 만든 가로 범위 지키기', () => {
     expect(sameSceneFit(p.fit, fitSceneCamera({ ...persp, fovY: rad(50) }, 0.5).fit)).toBe(false);
     expect(sameSceneFit(null, null)).toBe(true);
     expect(sameSceneFit(p.fit, null)).toBe(false);
+  });
+
+  it('넓힌 뒤 평행 투영으로 바꿔도 시야각을 되돌린다(평행 화면 높이는 그대로) — 다시 원근으로 와도 넓은 시야각이 남지 않게', () => {
+    const p = fitSceneCamera(persp, 390 / 725);
+    // 평행 투영 단추: 시야각·거리는 그대로 두고 투영만 바뀐다
+    const ortho: CameraState = { ...p.camera, projection: 'orthographic' };
+    const u = unwidenSceneCamera(ortho, p.fit);
+    expect(u.projection).toBe('orthographic');
+    expect(u.fovY).toBeCloseTo(persp.fovY, 12);
+    // 평행 화면 반높이 = 거리·tan(시야/2)가 그대로라 화면이 바뀌지 않는다
+    expect(u.distance * Math.tan(u.fovY / 2)).toBeCloseTo(ortho.distance * Math.tan(ortho.fovY / 2), 9);
+    // 평행에서 돌리면 맞춤을 따라갈 수 없다 → 앱은 이 되돌리기를 쓴다
+    expect(refitSceneCamera(ortho, p.fit, 2)).toBeNull();
+    // 그 평행 카메라를 기록에서 되돌려도(꼬리표는 원근 맞춤) 넓은 시야각은 돌아오지 않는다
+    const back = restoreSceneCamera(ortho, p.fit, 2);
+    expect(back.fit).toBeNull();
+    expect(back.camera.fovY).toBeCloseTo(persp.fovY, 12);
+  });
+
+  it('지금 시야각에서 맞춤을 뺀 원래 시야각(투영은 따지지 않는다): 새 문서·평행 장면 변환이 넓힌 시야각을 물려받지 않게', () => {
+    const p = fitSceneCamera(persp, 390 / 725);
+    expect(baseFovOf(p.camera, p.fit)).toBe(persp.fovY);
+    expect(baseFovOf({ ...p.camera, projection: 'orthographic' }, p.fit)).toBe(persp.fovY);
+    // 맞춘 뒤 시야각이 바뀌었으면(되돌림 등) 지금 시야각
+    expect(baseFovOf({ ...p.camera, fovY: rad(40) }, p.fit)).toBeCloseTo(rad(40), 12);
+    expect(baseFovOf(p.camera, null)).toBe(p.camera.fovY);
   });
 });

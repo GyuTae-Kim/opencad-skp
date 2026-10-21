@@ -206,12 +206,13 @@ export function refitSceneCamera(c: CameraState, fit: SceneFit, viewAspect: numb
 }
 
 /**
- * 전체 보기·표준 뷰·맞춰 보기 전에: 세로 화면 맞춤으로 넓힌 원근 시야각을 장면의 원래 시야각으로 되돌린다
- * (넓은 시야각으로 전체 보기를 하면 가장자리가 늘어난다). 눈을 그만큼 뒤로 빼 대상점 깊이의 화면 크기는 그대로 둔다 —
- * 바로 이어지는 맞춰 보기 움직임이 튀지 않게. 맞춤이 없거나 넓히지 않았으면 그대로.
+ * 전체 보기·표준 뷰·맞춰 보기 전에(그리고 장면 맞춤을 더 따라가지 않게 될 때): 세로 화면 맞춤으로 넓힌 시야각을 장면의 원래 시야각으로
+ * 되돌린다(넓은 시야각으로 전체 보기를 하면 가장자리가 늘어난다). 거리를 tan(시야/2) 비만큼 바꿔 대상점 깊이의 화면 크기는 그대로 둔다 —
+ * 원근은 이어지는 맞춰 보기가 튀지 않고, 평행(넓힌 뒤 평행 투영으로 바꾼 경우)은 화면이 그대로다. 투영과 상관없이 시야각만 본다:
+ * 평행으로 바꿔도 시야각은 남아, 다시 원근으로 돌아오면 넓은 시야각이 되살아나기 때문이다. 맞춤이 없거나 넓히지 않았으면 그대로.
  */
 export function unwidenSceneCamera(c: CameraState, fit: SceneFit | null): CameraState {
-  if (!fit || fit.projection !== 'perspective' || c.projection !== 'perspective') return c;
+  if (!fit) return c;
   const base = validFov(fit.baseFovY);
   if (!(c.fovY > base + 1e-9)) return c;
   return { ...c, target: [...c.target], fovY: base, distance: (c.distance * Math.tan(c.fovY / 2)) / Math.tan(base / 2) };
@@ -223,7 +224,16 @@ export function unwidenSceneCamera(c: CameraState, fit: SceneFit | null): Camera
  */
 export function restoreSceneCamera(c: CameraState, tag: SceneFit | null, viewAspect: number): { camera: CameraState; fit: SceneFit | null } {
   const r = tag ? refitSceneCamera(c, tag, viewAspect) : null;
-  return r ?? { camera: c, fit: null };
+  // 맞춤 그대로 되돌릴 수 없는 칸(그 사이 평행 투영으로 바꿈 등)은 넓힌 시야각만 원래대로
+  return r ?? { camera: unwidenSceneCamera(c, tag), fit: null };
+}
+
+/**
+ * 지금 시야각에서 세로 화면 맞춤을 뺀 것: 맞춘 뒤 시야각이 그대로면(투영은 바꿨어도) 장면의 원래 시야각, 아니면 지금 시야각.
+ * 새 문서·장면 변환이 넓힌 시야각을 물려받지 않게 쓴다.
+ */
+export function baseFovOf(c: CameraState, fit: SceneFit | null): number {
+  return fit && Math.abs(c.fovY - fit.fovY) < 1e-9 ? fit.baseFovY : c.fovY;
 }
 
 /** 같은 장면 맞춤인지(배율·시야각만 다르면 같은 것 — 휴대폰을 돌려 다시 맞춘 것) */

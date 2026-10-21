@@ -28,6 +28,7 @@ import { HISTORY_LIMIT, HISTORY_SETTLE_MS, ViewHistory } from './history';
 import { beginOpen, showAnalyticsSettings, trackExport, type OpenAttempt } from './analytics';
 import { MeasureTool, type MeasureMode, type MeasureToolResult } from './measure';
 import {
+  baseFovOf,
   initialSection,
   initialView,
   openingPage,
@@ -1122,9 +1123,7 @@ export class SkpViewerApp implements PanelHost {
 
   /** 지금 시야각에서 세로 화면 맞춤을 뺀 것(맞춘 뒤 사용자가 시야각을 바꾸지 않았을 때만 장면의 원래 시야각) */
   private sceneBaseFov(v: Viewer3d): number {
-    const c = v.getCamera();
-    const f = this.sceneFit;
-    return f && f.projection === c.projection && Math.abs(c.fovY - f.fovY) < 1e-9 ? f.baseFovY : c.fovY;
+    return baseFovOf(v.getCamera(), this.sceneFit);
   }
 
   /** 이전·다음 보기로 갈 카메라: 장면 맞춤으로 적은 칸은 지금 화면 방향에 다시 맞추고, 그 맞춤을 이어 간다 */
@@ -1165,8 +1164,10 @@ export class SkpViewerApp implements PanelHost {
     const cur = v.getCamera();
     const r = refitSceneCamera(cur, f, this.viewAspect(v));
     this.sceneFit = r?.fit ?? null;
-    if (r && r.camera !== cur) {
-      v.setCamera(r.camera);
+    // 더 따라갈 수 없으면(그 사이 평행 투영으로 바꿈 등) 넓힌 시야각을 원래대로 — 다시 원근으로 와도 넓은 시야각이 남지 않게
+    const next = r ? r.camera : unwidenSceneCamera(cur, f);
+    if (next !== cur) {
+      v.setCamera(next);
       // 시야각만 바뀌면 코어가 카메라 변화를 알리지 않는다 — 기록의 마지막 카메라·맞춤을 직접 새로 한다
       this.onCamera(v.getCamera());
     }
@@ -1679,7 +1680,13 @@ export class SkpViewerApp implements PanelHost {
     if (!v) return;
     const h1 = this.els.viewHost.clientHeight;
     if (!this.userMoved) {
-      requestAnimationFrame(() => requestAnimationFrame(() => this.viewer?.fit(false)));
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          // 뷰 큐브를 끌어 돌린 뒤 등(움직였다고 적지 않은 경우)에도 넓힌 시야각으로 전체 보기를 하지 않게
+          this.unwidenScene();
+          this.viewer?.fit(false);
+        }),
+      );
       return;
     }
     if (h0 > 0 && h1 > 0 && h0 !== h1) v.setCamera(keepViewOnHeightChange(v.getCamera(), h0, h1));
