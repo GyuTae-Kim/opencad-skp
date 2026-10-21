@@ -102,6 +102,97 @@ export const MAX_BILLBOARDS = 500;
  * "항상 카메라 보기" 컴포넌트(돌리는 그물·윤곽선을 항목째 숨기기)
  */
 export const MAX_FORCED_SPLITS = 256;
+/**
+ * 한 칸 안에서 단면 채우기 묶음(capGroup)을 나눌 수 한도: 코어는 묶음 안을 홀짝으로 채워(겹친 두 입체의 겹친 곳이 비고 고르기도 지나간다),
+ * 범위 상자가 겹치는 닫힌 입체 배치는 다른 묶음에 넣는다. 모두 겹치면 예전처럼 첫 묶음
+ */
+export const MAX_CAP_SPLITS = 4;
+/** 채우기 묶음을 나눌 때 상자 비교 수 한도(넘으면 그 뒤 배치는 예전처럼 첫 묶음 — 아주 큰 모형의 시간 보호) */
+export const MAX_CAP_TESTS = 4_000_000;
+
+/**
+ * 범위 상자(최소 xyz, 최대 xyz) 모음과 겹침 찾기: 크기 단계(상자보다 큰 2의 거듭제곱 칸)마다 격자에 넣어, 찾을 상자가 덮는 칸만 본다
+ * (덮는 칸이 너무 많은 작은 단계는 그 단계 상자를 모두 본다). 닿기만 한 상자(맞붙은 벽·쌓은 상자)는 겹치지 않은 것으로 본다
+ */
+export class BoxSet {
+  private readonly boxes: number[] = [];
+  private readonly seen: number[] = [];
+  private query = 0;
+  private readonly levels = new Map<number, { cells: Map<string, number[]>; members: number[] }>();
+
+  get size(): number {
+    return this.boxes.length / 6;
+  }
+
+  private static level(b: ArrayLike<number>): number {
+    const ext = Math.max(b[3]! - b[0]!, b[4]! - b[1]!, b[5]! - b[2]!, 1e-12);
+    return Math.ceil(Math.log2(ext));
+  }
+
+  add(b: ArrayLike<number>): void {
+    const id = this.boxes.length / 6;
+    for (let k = 0; k < 6; k++) this.boxes.push(b[k]!);
+    this.seen.push(0);
+    const L = BoxSet.level(b);
+    let lv = this.levels.get(L);
+    if (!lv) this.levels.set(L, (lv = { cells: new Map(), members: [] }));
+    lv.members.push(id);
+    const c = 2 ** L;
+    for (let x = Math.floor(b[0]! / c); x <= Math.floor(b[3]! / c); x++)
+      for (let y = Math.floor(b[1]! / c); y <= Math.floor(b[4]! / c); y++)
+        for (let z = Math.floor(b[2]! / c); z <= Math.floor(b[5]! / c); z++) {
+          const key = `${x},${y},${z}`;
+          const list = lv.cells.get(key);
+          if (list) list.push(id);
+          else lv.cells.set(key, [id]);
+        }
+  }
+
+  /** b와 부피가 겹치는 상자가 있는지. budget.left(비교 수)가 다 떨어지면 null(모른다) */
+  overlaps(b: ArrayLike<number>, budget: { left: number }): boolean | null {
+    const q = ++this.query;
+    const B = this.boxes;
+    const test = (id: number): boolean => {
+      if (this.seen[id] === q) return false;
+      this.seen[id] = q;
+      budget.left--;
+      const o = 6 * id;
+      for (let k = 0; k < 3; k++) {
+        const lo = Math.max(B[o + k]!, b[k]!);
+        const hi = Math.min(B[o + 3 + k]!, b[3 + k]!);
+        // 닿기만 한 것(겹친 길이가 작은 쪽 폭의 백만분의 1 또는 좌표 반올림 오차 안)은 겹치지 않은 것으로
+        const ext = Math.min(B[o + 3 + k]! - B[o + k]!, b[3 + k]! - b[k]!);
+        if (!(hi - lo > ext * 1e-6 + Math.max(Math.abs(lo), Math.abs(hi)) * 1e-13)) return false;
+      }
+      return true;
+    };
+    for (const [L, lv] of this.levels) {
+      const c = 2 ** L;
+      const x0 = Math.floor(b[0]! / c), x1 = Math.floor(b[3]! / c);
+      const y0 = Math.floor(b[1]! / c), y1 = Math.floor(b[4]! / c);
+      const z0 = Math.floor(b[2]! / c), z1 = Math.floor(b[5]! / c);
+      const cells = (x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1);
+      if (!(cells <= 64) || cells > lv.members.length) {
+        for (const id of lv.members) {
+          if (budget.left <= 0) return null;
+          if (test(id)) return true;
+        }
+        continue;
+      }
+      for (let x = x0; x <= x1; x++)
+        for (let y = y0; y <= y1; y++)
+          for (let z = z0; z <= z1; z++) {
+            const list = lv.cells.get(`${x},${y},${z}`);
+            if (!list) continue;
+            for (const id of list) {
+              if (budget.left <= 0) return null;
+              if (test(id)) return true;
+            }
+          }
+    }
+    return false;
+  }
+}
 
 /**
  * 큰 좌표 기준(인치): 덧붙이는 형상(배치 하나의 한 묶음)의 첫 정점이 원점에서 이보다 멀면(어느 축이든),
@@ -772,6 +863,8 @@ export interface BuildOptions {
   maxTreeNodes?: number;
   /** 구간 수 한도 */
   maxTreeRuns?: number;
+  /** 단면 채우기 묶음을 나눌 때 상자 비교 수 한도(기본 MAX_CAP_TESTS — 시험용) */
+  maxCapTests?: number;
   /** 부드러운 모서리·숨긴 형상을 따로 묶어 낸다(기본 false) */
   extras?: boolean;
   /** 인스턴스 배치 수 한도 */
@@ -1123,8 +1216,10 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     origin?: [number, number, number] | null;
     /** 면마다 첫 삼각형 차례(SketchUp 면 하나 = 이어진 삼각형 구간) */
     fs: U32;
-    /** 닫힌 입체 배치만 모은 묶음(단면 채우기 묶음 capGroup = 칸마다 하나) */
+    /** 닫힌 입체 배치만 모은 묶음(단면 채우기 묶음 capGroup = 칸마다 하나, 겹치는 입체는 cap번째 묶음) */
     closed: boolean;
+    /** 칸 안 채우기 묶음 번호(0 = 예전과 같은 skp-solid-<칸>) */
+    cap: number;
     /** 앞과 다른 뒷면(없으면 양면이 앞면 재질) */
     back: BackSide | null;
     /** "항상 카메라 보기" 배치(그 배치만 모은 묶음 — 코어 billboard) */
@@ -1228,6 +1323,57 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   let missingDefs = 0;
   let cycles = 0;
 
+  // ── 단면 채우기 묶음 나누기: 칸마다 묶음별 범위 상자 모음(겹치는 닫힌 입체 배치는 다른 묶음) ──
+  const localBoxes = new Map<Prepared, Float64Array>();
+  /** 배치의 세계 범위 상자(정의의 보통 면 범위 상자 여덟 구석을 옮긴 것 — 돌린 배치는 조금 넉넉하다) */
+  const placedBox = (p: Prepared, m: Float64Array): Float64Array => {
+    let lb = localBoxes.get(p);
+    if (!lb) {
+      lb = Float64Array.from([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]);
+      for (const b of p.batches)
+        for (let i = 0; i < b.pos.length; i += 3)
+          for (let k = 0; k < 3; k++) {
+            const v = b.pos[i + k]!;
+            if (v < lb[k]!) lb[k] = v;
+            if (v > lb[3 + k]!) lb[3 + k] = v;
+          }
+      localBoxes.set(p, lb);
+    }
+    const out = Float64Array.from([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]);
+    for (let c = 0; c < 8; c++) {
+      const x = lb[c & 1 ? 3 : 0]!, y = lb[c & 2 ? 4 : 1]!, z = lb[c & 4 ? 5 : 2]!;
+      let w = m[3]! * x + m[7]! * y + m[11]! * z + m[15]!;
+      if (!w) w = 1;
+      const X = (m[0]! * x + m[4]! * y + m[8]! * z + m[12]!) / w;
+      const Y = (m[1]! * x + m[5]! * y + m[9]! * z + m[13]!) / w;
+      const Z = (m[2]! * x + m[6]! * y + m[10]! * z + m[14]!) / w;
+      for (const [k, v] of [X, Y, Z].entries()) {
+        if (v < out[k]!) out[k] = v;
+        if (v > out[3 + k]!) out[3 + k] = v;
+      }
+    }
+    return out;
+  };
+  const capSets = new Map<number, BoxSet[]>();
+  const capBudget = { left: opts.maxCapTests ?? MAX_CAP_TESTS };
+  /** 닫힌 입체 배치의 채우기 묶음 번호: 범위 상자가 겹치지 않는 첫 묶음(없거나 비교 한도를 넘으면 0 — 예전과 같다) */
+  const capOf = (slot: number, box: Float64Array): number => {
+    if (!box.every(Number.isFinite)) return 0;
+    let sets = capSets.get(slot);
+    if (!sets) capSets.set(slot, (sets = []));
+    for (let g = 0; g < MAX_CAP_SPLITS; g++) {
+      const set = sets[g] ?? (sets[g] = new BoxSet());
+      const hit = set.size ? set.overlaps(box, capBudget) : false;
+      if (hit === null) return 0;
+      if (!hit) {
+        set.add(box);
+        return g;
+      }
+    }
+    sets[0]!.add(box);
+    return 0;
+  };
+
   const put = (dst: F32, src: Float64Array, m: Float64Array, bounds: boolean, origin?: [number, number, number] | null): void => {
     dst.reserve(src.length);
     const a = dst.a;
@@ -1290,12 +1436,13 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     // 기본값을 두지 않는다: undefined(스타일 뒷면 색)를 넘기면 기본값 null로 바뀌기 때문
     back: number | undefined | null,
     bb: Billboard | null = null,
+    cap = 0,
   ): Bucket => {
     // 보통(가까운) 형상의 열쇠는 예전과 같다(기본 호출 출력이 바뀌지 않게). 닫힌 입체는 따로(|c), 앞과 다른 뒷면은 그 재질(|b),
     // 카메라를 보는 배치는 배치마다(|bb), 먼 형상은 칸 열쇠를 붙인다
     const key =
       (cls ? `${slot}|h|${layer}|${mat ?? 'd'}` : `${slot}|${layer}|${mat ?? 'd'}`) +
-      (closed ? '|c' : '') +
+      (closed ? (cap ? `|c${cap}` : '|c') : '') +
       (back !== null ? `|b${back ?? 'd'}` : '') +
       (bb ? bb.key : '') +
       (far ? far.key : '');
@@ -1318,6 +1465,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
           uvStride: 2,
           fs: new U32(64),
           closed,
+          cap: closed ? cap : 0,
           back: newBack(back),
           bb,
         }),
@@ -1862,6 +2010,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
             uvStride: 2,
             fs: new U32(64),
             closed: false,
+            cap: 0,
             back: newBack(back),
             bb: null,
             node,
@@ -1922,6 +2071,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     const L = linearOf(m);
     // 닫힌 입체는 따로 모은다(단면 채우기). 반투명 재질이 든 배치는 코어가 채우기에서 빼므로 홀짝이 어긋나지 않게 보통 묶음으로
     const closedHere = !bb && p.closed && !hiddenSub && p.batches.every((b) => colorOf(matOf(b))[3] >= 0.999);
+    const cap = closedHere ? capOf(slot, placedBox(p, m)) : 0;
     // 보통 면(숨긴 인스턴스 안쪽이면 숨긴 면으로)
     for (const b of p.batches) {
       const nv = b.pos.length / 3;
@@ -1939,7 +2089,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
         truncated = true;
         return;
       }
-      const area = appendFaces(faceBucket(slot, 0, layer, matOf(b), farCell(b.pos, m), closedHere, backOf(b), bb), b, m, node, L);
+      const area = appendFaces(faceBucket(slot, 0, layer, matOf(b), farCell(b.pos, m), closedHere, backOf(b), bb, cap), b, m, node, L);
       outVerts += nv;
       if (node >= 0) {
         ownFaces![node]! += b.faces;
@@ -2143,7 +2293,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   /** 같은 칸·재질 묶음의 차례: 뒷면 없음 → 스타일 뒷면 색 → 뒷면 재질 번호 */
   const backRank = (bk: Bucket): number => (!bk.back ? -2 : (bk.back.mat ?? -1));
   const sorted = [...buckets.values()].sort(
-    (a, b) => a.slot - b.slot || a.cls - b.cls || a.layer - b.layer || (a.mat ?? -1) - (b.mat ?? -1) || Number(a.closed) - Number(b.closed) || backRank(a) - backRank(b),
+    (a, b) => a.slot - b.slot || a.cls - b.cls || a.layer - b.layer || (a.mat ?? -1) - (b.mat ?? -1) || Number(a.closed) - Number(b.closed) || a.cap - b.cap || backRank(a) - backRank(b),
   );
   // 카메라를 보는 배치의 모서리를 실을 그물: 태그마다 그 태그의 첫 그물(태그를 숨기면 모서리도 함께 숨게), 그 태그의 그물이 없으면 첫 그물
   const bbEdgeHost = new Map<Bucket, number[]>();
@@ -2195,6 +2345,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       continue;
     }
     // 닫힌 입체 배치만 모은 묶음은 칸마다 같은 채우기 묶음(capGroup): 재질·태그로 나뉜 그물이 함께 하나의 입체를 이룬다.
+    // 범위 상자가 겹치는 입체는 그 칸의 다른 묶음(skp-solid-<칸>-<번호>) — 홀짝 채우기에서 겹친 곳이 비지 않게
     // 나머지(열린 면·얇은 판)는 채우지 않고 단면 테두리만
     const mesh: Mesh3d = {
       id: `skp-mesh-${meshes.length}`,
@@ -2207,7 +2358,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     };
     if (bk.nrm) mesh.normals = bk.nrm.done();
     if (bk.origin) mesh.origin = bk.origin;
-    if (bk.closed) mesh.capGroup = `skp-solid-${bk.slot}`;
+    if (bk.closed) mesh.capGroup = bk.cap ? `skp-solid-${bk.slot}-${bk.cap}` : `skp-solid-${bk.slot}`;
     if (bk.bb) {
       mesh.billboard = { origin: bk.bb.origin, axis: 'z', front: bk.bb.front };
       // 그 배치의 모서리는 같은 태그 그물의 윤곽선으로(함께 돈다)

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SkpMaterialInfo } from '../src/materials';
 import { FLAG_HIDDEN, type SkpDefinition, type SkpEdge, type SkpEntities, type SkpFace, type SkpInstance, type SkpModel } from '../src/model';
-import { buildSceneParts } from '../src/scene';
+import { BoxSet, MAX_CAP_SPLITS, buildSceneParts } from '../src/scene';
 import { solidInfo } from '../src/solid';
 
 const at = (x: number, y = 0, z = 0, s = 1): Float64Array => Float64Array.from([s, 0, 0, 0, 0, s, 0, 0, 0, 0, s, 0, x, y, z, 1]);
@@ -134,5 +134,74 @@ describe('단면 채우기 묶음과 노드 부피(buildSceneParts)', () => {
     const p = buildSceneParts(m, mats, 1, { outline: true });
     expect(p.meshes.every((x) => x.capGroup === undefined)).toBe(true);
     expect(p.treeInfo!.volume).toBeUndefined();
+  });
+
+  /** 같은 칸(나무 없음 → 칸 0)에 정육면체 배치들: [x, y, z, 배율] */
+  function cubes(places: [number, number, number, number][]): SkpModel {
+    return {
+      materials: new Map(),
+      layers: new Map([[1, 'Layer0']]),
+      defaultLayer: 1,
+      definitions: new Map<number, SkpDefinition>([[1, { id: 1, name: 'Box', entities: cube(1) }]]),
+      root: { points: new Float64Array(), faces: [], edges: [], instances: places.map(([x, y, z, k]) => ({ definition: 1, matrix: at(x, y, z, k), flags: 0, kind: 'group' as const })) },
+      counts: { vertices: 0, edges: 0, faces: 0, instances: places.length },
+      warnings: [],
+    };
+  }
+  /** 채우기 묶음마다 부호 있는 부피(바깥 감김이면 +) */
+  const capVolumes = (p: ReturnType<typeof buildSceneParts>): Map<string, number> => {
+    const out = new Map<string, number>();
+    for (const m of p.meshes) {
+      if (!m.capGroup) continue;
+      const P = m.positions, I = m.indices!, o = m.origin ?? [0, 0, 0];
+      let v = 0;
+      for (let k = 0; k < I.length; k += 3) {
+        const [a, b, c] = [3 * I[k]!, 3 * I[k + 1]!, 3 * I[k + 2]!].map((i) => [P[i]! + o[0], P[i + 1]! + o[1], P[i + 2]! + o[2]]) as [number[], number[], number[]];
+        v += a[0]! * (b[1]! * c[2]! - b[2]! * c[1]!) - a[1]! * (b[0]! * c[2]! - b[2]! * c[0]!) + a[2]! * (b[0]! * c[1]! - b[1]! * c[0]!);
+      }
+      out.set(m.capGroup, (out.get(m.capGroup) ?? 0) + v / 6);
+    }
+    return out;
+  };
+
+  it('같은 칸에서 겹치거나 안에 든 닫힌 입체는 다른 채우기 묶음(홀짝 채우기에서 겹친 곳이 비지 않게)', () => {
+    // 겹친 두 상자, 큰 상자 안의 작은 상자
+    const overlap = buildSceneParts(cubes([[0, 0, 0, 1], [0.5, 0.5, 0, 1]]), mats, 25.4);
+    expect(overlap.meshes.map((m) => m.capGroup)).toEqual(['skp-solid-0', 'skp-solid-0-1']);
+    const nested = capVolumes(buildSceneParts(cubes([[0, 0, 0, 3], [1, 1, 1, 1]]), mats, 1));
+    expect([...nested.keys()]).toEqual(['skp-solid-0', 'skp-solid-0-1']);
+    expect(nested.get('skp-solid-0')).toBeCloseTo(27, 6);
+    expect(nested.get('skp-solid-0-1')).toBeCloseTo(1, 6);
+  });
+
+  it('닿기만 한(맞붙은·쌓은) 상자와 떨어진 상자는 예전처럼 한 그물·한 채우기 묶음', () => {
+    const p = buildSceneParts(cubes([[0, 0, 0, 1], [1, 0, 0, 1], [0, 0, 1, 1], [5, 5, 5, 1]]), mats, 1);
+    expect(p.meshes.map((m) => m.capGroup)).toEqual(['skp-solid-0']);
+    expect(capVolumes(p).get('skp-solid-0')).toBeCloseTo(4, 6);
+  });
+
+  it('묶음 수 한도(모두 겹치면 첫 묶음)·비교 수 한도(넘으면 예전처럼 첫 묶음)', () => {
+    const stack = Array.from({ length: MAX_CAP_SPLITS + 2 }, (_, i): [number, number, number, number] => [0.1 * i, 0, 0, 1]);
+    const p = buildSceneParts(cubes(stack), mats, 1);
+    expect(p.meshes.map((m) => m.capGroup)).toEqual(Array.from({ length: MAX_CAP_SPLITS }, (_, g) => (g ? `skp-solid-0-${g}` : 'skp-solid-0')));
+    // 넘친 둘은 첫 묶음에(예전과 같은 홀짝): 부피 합은 그대로
+    const v = capVolumes(p);
+    expect([...v.values()].reduce((a, b) => a + b, 0)).toBeCloseTo(MAX_CAP_SPLITS + 2, 6);
+    expect(v.get('skp-solid-0')).toBeCloseTo(3, 6);
+    const capped = buildSceneParts(cubes([[0, 0, 0, 1], [0.5, 0.5, 0, 1]]), mats, 1, { maxCapTests: 0 });
+    expect(capped.meshes.map((m) => m.capGroup)).toEqual(['skp-solid-0']);
+  });
+
+  it('범위 상자 모음: 크기가 크게 다른 상자도 찾고, 닿기만 하면 겹치지 않는다', () => {
+    const set = new BoxSet();
+    const budget = { left: 1e6 };
+    set.add([0, 0, 0, 1000, 1000, 10]);
+    for (let i = 0; i < 50; i++) set.add([2000 + i, 0, 0, 2000 + i + 0.5, 0.5, 0.5]);
+    expect(set.overlaps([500, 500, 5, 500.001, 500.001, 5.001], budget)).toBe(true);
+    expect(set.overlaps([1000, 0, 0, 1500, 10, 10], budget)).toBe(false);
+    expect(set.overlaps([2010.2, 0.1, 0.1, 2010.3, 0.2, 0.2], budget)).toBe(true);
+    expect(set.overlaps([1500, -100, -100, 3000, 100, 100], budget)).toBe(true);
+    expect(set.overlaps([0, 0, 10, 1000, 1000, 20], budget)).toBe(false);
+    expect(set.overlaps([0, 0, 0, 1, 1, 1], { left: 0 })).toBeNull();
   });
 });
