@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SkpAttrDictsMeta, SkpTreeInfo } from '../../src/meta';
-import { ATTR_VALUE_CHARS, attributeDicts, attributeText, entityInfo, entityTitle, nodeEntity, type EntityInput } from '../../src/app/entity';
+import { ATTR_VALUE_CHARS, attributeDicts, attributeText, cardName, cardRows, entityInfo, entityTitle, nodeEntity, type EntityInput } from '../../src/app/entity';
 import type { TreeData } from '../../src/app/tree';
 import { DEFAULT_UNITS, type UnitsDisplay } from '../../src/app/units';
 
@@ -158,5 +158,21 @@ describe('나무 노드 → 정보 입력', () => {
     expect(e.size).toBeUndefined();
     expect(nodeEntity(t, 3, info, attributes)).toBeNull();
     expect(nodeEntity(t, -1, info, attributes)).toBeNull();
+  });
+});
+
+describe('고른 것 카드(휴대폰)', () => {
+  it('치수(크기·길이·넓이)와 놓인 수·태그·재질만 이 차례로 네 개까지, 이름은 인스턴스 → 이름 → 정의', () => {
+    const info = entityInfo(
+      { kind: 'component', name: '', definition: '탁자', instances: 2, tag: '가구', size: [1200, 800, 760], area: 2.5e6, faces: 26, guid: 'abc' },
+      DEFAULT_UNITS,
+      1,
+    );
+    expect(cardRows(info).map((r) => r.label)).toEqual(['크기', '넓이', '놓인 수', '태그']);
+    expect(cardRows(info)[0]!.value).toContain('1200');
+    expect(cardName(info)).toBe('탁자');
+    expect(cardName(entityInfo({ kind: 'group', name: '벽' }, DEFAULT_UNITS, 1))).toBe('벽');
+    expect(cardName({ rows: [] })).toBe('');
+    expect(cardRows({ rows: [{ label: 'GUID', value: 'x' }] })).toEqual([]);
   });
 });

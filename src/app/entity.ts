@@ -193,6 +193,29 @@ export function entityInfo(e: EntityInput, units: UnitsDisplay, mmPerUnit: numbe
   return { title: entityTitle(e), rows, dicts, moreDicts: all.length - dicts.length };
 }
 
+/** 고른 것 카드(휴대폰)에 보일 행: 치수(크기·길이·넓이)와 놓인 수·태그·재질만, 이 차례로 많아야 CARD_ROWS개 */
+const CARD_LABELS = ['크기', '길이', '넓이', '놓인 수', '태그', '재질'];
+const CARD_ROWS = 4;
+
+export function cardRows(info: Pick<EntityInfo, 'rows'>): InfoRow[] {
+  const out: InfoRow[] = [];
+  for (const label of CARD_LABELS) {
+    const r = info.rows.find((x) => x.label === label);
+    if (r) out.push(r);
+    if (out.length >= CARD_ROWS) break;
+  }
+  return out;
+}
+
+/** 고른 것 카드 제목에 붙일 이름(인스턴스 이름, 없으면 정의·이름) */
+export function cardName(info: Pick<EntityInfo, 'rows'>): string {
+  for (const label of ['인스턴스', '이름', '정의']) {
+    const r = info.rows.find((x) => x.label === label);
+    if (r?.value) return r.value;
+  }
+  return '';
+}
+
 /** meta.attributes 차례 → 사전(차례가 없거나 -1이면 null) */
 function dictsAt(attributes: readonly SkpAttrDictsMeta[] | null | undefined, index: number | undefined): SkpAttrDictsMeta | null {
   if (!attributes || index === undefined || !Number.isInteger(index) || index < 0) return null;

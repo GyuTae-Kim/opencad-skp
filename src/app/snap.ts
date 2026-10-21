@@ -62,6 +62,8 @@ export interface SnapScene {
 export const SNAP_RADIUS_PX = 10;
 /** 터치 추정 반경(손가락이 가리므로 넓게) */
 export const TOUCH_SNAP_RADIUS_PX = 22;
+/** 정밀 조준(길게 눌러 십자선을 보며 옮기기) 추정 반경: 보면서 맞추므로 마우스보다 조금 넓게 */
+export const AIM_SNAP_RADIUS_PX = 14;
 /** 코어 고르기 허용 거리(Viewer3d pickTolerance 기본값) */
 export const CORE_PICK_TOLERANCE_PX = 6;
 /** 축 고정 화면 각(도) */

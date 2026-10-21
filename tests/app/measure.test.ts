@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Viewer3d } from 'opencad-viewer3d';
 import { buildBvh } from 'opencad-viewer3d/bvh';
 import { projectToScreen, type CameraState } from 'opencad-viewer3d/camera';
 import { pickScene } from 'opencad-viewer3d/scenepick';
 import type { LineSet3d, Mesh3d, Scene3d } from 'opencad-viewer3d/types';
 import {
+  AIM_HOLD_MS,
+  AIM_OFFSET_PX,
   MeasureTool,
+  aimPoint,
   joinTip,
   measureHint,
   planeAngle,
@@ -66,6 +69,9 @@ describe('줄자·각도기 계산', () => {
     expect(tooltipPosition(50, 40, 80, 20, 400, 300)).toEqual({ left: 64, top: 58 });
     expect(tooltipPosition(380, 40, 80, 20, 400, 300)).toEqual({ left: 290, top: 58 });
     expect(tooltipPosition(50, 290, 80, 20, 400, 300)).toEqual({ left: 64, top: 260 });
+    // 정밀 조준: 손가락이 아래에 있어 위에 두고, 위가 모자라면 아래
+    expect(tooltipPosition(50, 60, 80, 20, 400, 300, true)).toEqual({ left: 64, top: 22 });
+    expect(tooltipPosition(50, 30, 80, 20, 400, 300, true)).toEqual({ left: 64, top: 48 });
   });
 
   it('툴팁 글·안내·추정 반경', () => {
@@ -77,7 +83,17 @@ describe('줄자·각도기 계산', () => {
     expect(measureHint('protractor', 0, false)).toContain('Shift');
     expect(measureHint('protractor', 2, false)).toContain('잴 방향');
     expect(measureHint(null, 0, false)).toBeNull();
-    expect(snapRadius('touch')).toBeGreaterThan(snapRadius('mouse'));
+    // 손가락 기기: 키 설명 대신 길게 누르기
+    for (const [mode, n, has] of [['tape', 0, false], ['tape', 1, false], ['tape', 0, true], ['protractor', 0, false], ['protractor', 1, false], ['protractor', 2, false], ['protractor', 0, true]] as const) {
+      const t = measureHint(mode, n, has, true)!;
+      expect(t).not.toMatch(/Esc|Shift/);
+      expect(t.split(' · ')[0]).toBe(measureHint(mode, n, has)!.split(' · ')[0]);
+    }
+    expect(measureHint('tape', 0, false, true)).toContain('길게 누르면 정밀 조준');
+    expect(snapRadius('touch')).toBeGreaterThan(snapRadius('aim'));
+    expect(snapRadius('aim')).toBeGreaterThan(snapRadius('mouse'));
+    expect(aimPoint(30, 100)).toEqual({ x: 30, y: 100 - AIM_OFFSET_PX });
+    expect(aimPoint(30, 10)).toEqual({ x: 30, y: 0 });
   });
 });
 
@@ -381,5 +397,86 @@ describe('측정 도구: 각도기', () => {
     // 중심을 찍은 뒤에는 Shift를 떼도 평면이 그대로
     r.move(post[0] + 30, post[1]);
     expect(r.q('.measure-protractor')?.getAttribute('data-axis')).toBe('z');
+  });
+});
+
+describe('측정 도구: 정밀 조준(터치 길게 누르기)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const touch = { pointerType: 'touch' };
+  const down = (r: Rig, x: number, y: number, id = 1): void => r.ptr('pointerdown', x, y, { ...touch, id, buttons: 1 });
+
+  it('손가락 위 십자선으로 추정을 보며 옮기고, 떼면 십자선 자리에 찍는다(그동안 궤도는 막는다)', () => {
+    vi.useFakeTimers();
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    // 원점 끝점(화면 100,100)의 64화소 아래를 길게 누른다
+    down(r, 101, 100 + AIM_OFFSET_PX + 1);
+    expect(r.tool.aiming).toBe(false);
+    vi.advanceTimersByTime(AIM_HOLD_MS);
+    expect(r.tool.aiming).toBe(true);
+    r.overlay.paintNow();
+    expect(r.q('.measure-aim')).not.toBeNull();
+    expect(r.tip()).toBe('끝점');
+
+    // 끌면 십자선이 따라가고, 캔버스(코어 궤도)에는 움직임이 닿지 않는다
+    let reached = 0;
+    r.canvas.addEventListener('pointermove', () => reached++);
+    r.ptr('pointermove', 151, 100 + AIM_OFFSET_PX + 2, { ...touch, buttons: 1 });
+    r.overlay.paintNow();
+    expect(reached).toBe(0);
+    expect(r.q('.measure-snap-midpoint')).not.toBeNull();
+    expect(r.tip()).toBe('중간점');
+    r.ptr('pointerup', 151, 100 + AIM_OFFSET_PX + 2, touch);
+    r.overlay.paintNow();
+    expect(r.tool.aiming).toBe(false);
+    expect(r.tool.pointCount).toBe(1);
+    expect(r.q('.measure-aim')).toBeNull();
+
+    // 둘째 점도 조준으로: 고무줄과 거리 툴팁을 보인다
+    down(r, 199, 100 + AIM_OFFSET_PX);
+    vi.advanceTimersByTime(AIM_HOLD_MS);
+    r.overlay.paintNow();
+    expect(r.q('line.measure-rubber')).not.toBeNull();
+    expect(r.tip()).toBe('끝점 · 50 mm');
+    r.ptr('pointerup', 199, 100 + AIM_OFFSET_PX, touch);
+    expect(r.results.at(-1)).toMatchObject({ kind: 'tape', a: [50, 0, 0], b: [100, 0, 0], distance: 50 });
+  });
+
+  it('누르자마자 끌면 조준하지 않고(궤도), 둘째 손가락이 닿으면 조준을 그만둔다', () => {
+    vi.useFakeTimers();
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    down(r, 101, 165);
+    r.ptr('pointermove', 120, 165, { ...touch, buttons: 1 });
+    vi.advanceTimersByTime(AIM_HOLD_MS * 2);
+    expect(r.tool.aiming).toBe(false);
+    r.ptr('pointerup', 120, 165, touch);
+    expect(r.tool.pointCount).toBe(0);
+
+    down(r, 101, 165);
+    vi.advanceTimersByTime(AIM_HOLD_MS);
+    expect(r.tool.aiming).toBe(true);
+    down(r, 160, 120, 2);
+    expect(r.tool.aiming).toBe(false);
+    r.ptr('pointerup', 160, 120, { ...touch, id: 2 });
+    r.ptr('pointerup', 101, 165, touch);
+    r.overlay.paintNow();
+    expect(r.tool.pointCount).toBe(0);
+    expect(r.q('.measure-aim')).toBeNull();
+  });
+
+  it('빈 곳에서 떼면 찍지 않고 십자선 자리 표시를 지운다', () => {
+    vi.useFakeTimers();
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    down(r, 30, 170);
+    vi.advanceTimersByTime(AIM_HOLD_MS);
+    r.ptr('pointerup', 30, 170, touch);
+    r.overlay.paintNow();
+    expect(r.tool.pointCount).toBe(0);
+    expect(r.tip()).toBeNull();
   });
 });
