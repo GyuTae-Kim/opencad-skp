@@ -7,10 +7,12 @@
  *   숨긴 개체(기억하면 숨긴 노드 전체를 그 목록으로), 활성 단면, 스타일. 기억하지 않은 것은 지금 상태 그대로 둔다.
  * - 처음 카메라: 파일을 열면 SketchUp처럼 모형 카메라(저장 당시 보기)로 보되, 그 카메라가 모형을 실제로 보여 줄 때만 쓴다
  *   (도구가 쓴 파일은 틀의 기본 카메라가 남아 모형이 화면 밖일 수 있다 — 그때는 앱이 전체 보기).
+ * - 세로 화면: 장면 카메라는 세로 시야각을 지키므로 휴대폰 세로 화면에서는 가로가 잘린다. 처음 카메라와 장면 전환은
+ *   장면이 만든 가로 범위(파일의 고정 종횡비, 없으면 16:10)를 지키게 시야각(평행은 화면 높이)을 넓힌다(fitSceneCamera). 가로 화면은 그대로.
  * 규칙은 PRISME 서비스 SKP 뷰어(skp_viewer_camera.js·skp_viewer_scene.js)와 형식 명세(spec-root §2.5·§3)에서 옮겼다.
  */
 import type { Box3, RenderMode } from 'opencad-viewer3d';
-import { DEFAULT_FOV, basisFromAngles, cameraBasis, cameraEye, dirToAngles, lerpCamera, type CameraState } from 'opencad-viewer3d/camera';
+import { DEFAULT_FOV, basisFromAngles, cameraBasis, cameraEye, dirToAngles, lerpCamera, type CameraState, type Projection } from 'opencad-viewer3d/camera';
 import type { Rgb, SkpCameraMeta, SkpFaceStyle, SkpPageMeta, SkpSectionPlaneMeta, SkpStyleMeta, Vec3 } from '../meta';
 
 /** SketchUp 기본 틀의 세로 시야각(도) — 원근 카메라에 시야각이 없을 때 */
@@ -124,6 +126,85 @@ export function sameSkpCamera(a: SkpCameraMeta | null | undefined, b: SkpCameraM
   return Math.abs(x.height - y.height) <= tolerance * span;
 }
 
+// ───────────────────────── 세로 화면 맞춤 ─────────────────────────
+
+/**
+ * 장면 카메라가 맞춰진 화면 종횡비(가로/세로) — 파일에 고정 종횡비가 없을 때. SketchUp 데스크톱 그리기 창(16:10)
+ */
+export const SCENE_REF_ASPECT = 16 / 10;
+/** 이 종횡비 이하(뚜렷한 세로 화면)는 장면이 만든 가로 범위를 모두 보인다. 정사각(1)과 이 값 사이는 점점 넓힌다 */
+export const PORTRAIT_FULL_ASPECT = 0.8;
+/** 세로 화면에서 넓힌 세로 시야각의 한도(도) — 더 넓으면 위·아래 가장자리가 너무 늘어난다 */
+export const PORTRAIT_MAX_FOV_DEG = 90;
+
+/** 장면 카메라를 지금 화면에 맞춘 상태(화면을 돌리면 refitSceneCamera로 다시 맞춘다) */
+export interface SceneFit {
+  /** 장면이 만들어진 종횡비 */
+  ref: number;
+  /** 넓힌 배율(1 = 그대로) */
+  scale: number;
+  /** 장면의 원래 세로 시야각(라디안, 원근) */
+  baseFovY: number;
+  /** 맞춘 뒤의 투영·시야각 — 사용자가 바꾸면 더 따라가지 않는다 */
+  projection: Projection;
+  fovY: number;
+}
+
+const validAspect = (a: number | undefined): a is number => isNum(a) && a > 0;
+
+/**
+ * 장면이 만든 가로 범위를 지키려고 세로 범위를 넓힐 배율(1 이상).
+ * 장면 카메라는 SketchUp처럼 세로 시야각을 지키므로, 세로로 긴 휴대폰 화면에서는 가로가 잘린다(앞마당 장면에서 지붕·옆벽이 잘림).
+ * - 가로·정사각 화면(종횡비 ≥ 1)은 1 — 데스크톱·휴대폰 가로는 지금과 똑같다.
+ * - 종횡비 ≤ 0.8은 장면 종횡비(ref)의 가로 범위를 모두 보이게 ref/종횡비.
+ * - 그 사이는 기준 종횡비를 1 → ref로 점점 옮겨, 정사각을 지날 때 보기가 튀지 않게 한다.
+ */
+export function sceneCoverageScale(viewAspect: number, refAspect?: number): number {
+  if (!validAspect(viewAspect) || viewAspect >= 1) return 1;
+  const ref = validAspect(refAspect) ? refAspect : SCENE_REF_ASPECT;
+  const w = Math.min(1, (1 - viewAspect) / (1 - PORTRAIT_FULL_ASPECT));
+  return Math.max(1, (1 + (ref - 1) * w) / viewAspect);
+}
+
+/** 세로 시야각을 배율만큼 넓힌다(tan 기준, 90°에서 멈춤 — 원래 더 넓으면 그대로) */
+export function widenFov(fovY: number, scale: number): number {
+  const f = validFov(fovY);
+  if (!(scale > 1)) return f;
+  const max = (PORTRAIT_MAX_FOV_DEG * Math.PI) / 180;
+  if (f >= max) return f;
+  return Math.min(max, 2 * Math.atan(Math.tan(f / 2) * scale));
+}
+
+/**
+ * 장면 카메라를 화면 종횡비에 맞춘다: 세로 화면이면
+ * - 원근은 눈 자리·방향을 그대로 두고 시야각만 넓힌다(장면 그림이 가운데에 그대로 있고 위·아래가 더 보인다 —
+ *   눈을 뒤로 빼면 실내 장면에서 벽을 지나가므로 쓰지 않는다)
+ * - 평행은 화면 높이를 배율만큼 키운다.
+ * 가로 화면이면 그대로(scale 1).
+ */
+export function fitSceneCamera(c: CameraState, viewAspect: number, refAspect?: number): { camera: CameraState; fit: SceneFit } {
+  const ref = validAspect(refAspect) ? refAspect : SCENE_REF_ASPECT;
+  const scale = sceneCoverageScale(viewAspect, ref);
+  const camera: CameraState =
+    c.projection === 'perspective' ? { ...c, target: [...c.target], fovY: widenFov(c.fovY, scale) } : { ...c, target: [...c.target], distance: c.distance * scale };
+  return { camera, fit: { ref, scale, baseFovY: c.fovY, projection: c.projection, fovY: camera.fovY } };
+}
+
+/**
+ * 화면 종횡비가 바뀌었을 때(휴대폰을 돌림) 장면 맞춤을 다시 한다. 사용자가 보기를 돌리거나 옮긴 것은 그대로 두고,
+ * 원근은 시야각을, 평행은 화면 높이를 새 배율로 바꾼다. 맞춘 뒤 투영·시야각이 바뀌었으면(사용자가 바꿈) null — 더 따라가지 않는다.
+ */
+export function refitSceneCamera(c: CameraState, fit: SceneFit, viewAspect: number): { camera: CameraState; fit: SceneFit } | null {
+  if (c.projection !== fit.projection || Math.abs(c.fovY - fit.fovY) > 1e-9) return null;
+  const scale = sceneCoverageScale(viewAspect, fit.ref);
+  if (Math.abs(scale - fit.scale) < 1e-9) return { camera: c, fit };
+  if (c.projection === 'perspective') {
+    const fovY = widenFov(fit.baseFovY, scale);
+    return { camera: { ...c, target: [...c.target], fovY }, fit: { ...fit, scale, fovY } };
+  }
+  return { camera: { ...c, target: [...c.target], distance: (c.distance * scale) / fit.scale }, fit: { ...fit, scale } };
+}
+
 /** 범위가 비었는지(min > max) */
 function emptyBox(b: Box3 | null | undefined): boolean {
   return !b || !(b.min[0] <= b.max[0] && b.min[1] <= b.max[1] && b.min[2] <= b.max[2]);
@@ -180,14 +261,27 @@ export function cameraShowsBox(c: CameraState, box: Box3 | null | undefined, wid
 }
 
 /**
- * 파일을 열 때 쓸 카메라: 모형 카메라(meta.camera)가 범위를 화면에 충분히 보여 주면 그것, 아니면 null(앱이 전체 보기).
- * width·height는 3D 보기 크기(CSS 화소), box는 장면 범위(scene.bounds).
+ * 파일을 열 때 쓸 카메라와 화면 맞춤: 모형 카메라(meta.camera)를 화면 종횡비에 맞춘 것(fitSceneCamera)이 범위를 화면에
+ * 충분히 보여 주면 그것, 아니면 null(앱이 전체 보기). width·height는 3D 보기 크기(CSS 화소), box는 장면 범위(scene.bounds).
  */
-export function initialCamera(meta: unknown, box: Box3 | null | undefined, width: number, height: number, viewerFovY: number = DEFAULT_FOV): CameraState | null {
+export function initialView(
+  meta: unknown,
+  box: Box3 | null | undefined,
+  width: number,
+  height: number,
+  viewerFovY: number = DEFAULT_FOV,
+): { camera: CameraState; fit: SceneFit } | null {
   const cam = readCamera(obj(meta)?.camera);
   if (!cam) return null;
   const c = cameraFromSkp(cam, viewerFovY);
-  return c && cameraShowsBox(c, box, width, height) ? c : null;
+  if (!c) return null;
+  const v = fitSceneCamera(c, width / Math.max(1, height), cam.aspect);
+  return cameraShowsBox(v.camera, box, width, height) ? v : null;
+}
+
+/** 파일을 열 때 쓸 카메라(initialView의 카메라) */
+export function initialCamera(meta: unknown, box: Box3 | null | undefined, width: number, height: number, viewerFovY: number = DEFAULT_FOV): CameraState | null {
+  return initialView(meta, box, width, height, viewerFovY)?.camera ?? null;
 }
 
 /**
@@ -465,14 +559,18 @@ export interface PageContext {
   folderHidden?: ReadonlySet<string>;
   /** 뷰어 시야각(평행 카메라 변환용, 라디안) */
   viewerFovY?: number;
+  /** 3D 보기 종횡비(가로/세로) — 세로 화면이면 장면이 만든 가로 범위를 지키게 맞춘다(fitSceneCamera). 없으면 맞추지 않음 */
+  viewAspect?: number;
   transition?: TransitionOptions;
 }
 
 /** 장면 하나를 적용할 때 바꿀 것(null·false = 지금 상태 그대로) */
 export interface PagePlan {
   name: string;
-  /** 바꿀 카메라(장면이 카메라를 기억하지 않거나 이상하면 null) */
+  /** 바꿀 카메라(장면이 카메라를 기억하지 않거나 이상하면 null) — viewAspect가 있으면 화면에 맞춘 것 */
   camera: CameraState | null;
+  /** 화면 맞춤(viewAspect가 없거나 카메라가 없으면 null) */
+  fit: SceneFit | null;
   /** 카메라 전환 시간(초, 0 = 바로) */
   seconds: number;
   /** 숨길 태그 이름 전체(목록에 없는 태그는 보인다). null = 그대로 */
@@ -498,7 +596,9 @@ export interface PagePlan {
  * - 스타일 → 그리기 방식
  */
 export function pagePlan(page: SkpPageMeta, ctx: PageContext = {}): PagePlan {
-  const camera = page.camera ? cameraFromSkp(page.camera, ctx.viewerFovY) : null;
+  const raw = page.camera ? cameraFromSkp(page.camera, ctx.viewerFovY) : null;
+  const fitted = raw && ctx.viewAspect !== undefined ? fitSceneCamera(raw, ctx.viewAspect, page.camera?.aspect) : null;
+  const camera = fitted?.camera ?? raw;
   let hiddenTags: Set<string> | null = null;
   if (page.hiddenTags) {
     hiddenTags = new Set(page.hiddenTags);
@@ -511,6 +611,7 @@ export function pagePlan(page: SkpPageMeta, ctx: PageContext = {}): PagePlan {
   return {
     name: page.name,
     camera,
+    fit: fitted?.fit ?? null,
     seconds: camera ? transitionSeconds(page, ctx.transition) : 0,
     hiddenTags,
     hiddenNodes: page.hiddenNodes ? new Set(page.hiddenNodes) : null,

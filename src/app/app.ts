@@ -26,7 +26,7 @@ import { AnnotationLabels } from './annotations';
 import { HISTORY_SETTLE_MS, ViewHistory } from './history';
 import { beginOpen, showAnalyticsSettings, trackExport, type OpenAttempt } from './analytics';
 import { MeasureTool, type MeasureMode, type MeasureToolResult } from './measure';
-import { initialCamera, initialSection, openingPage, pagePlan, renderModeForStyle, sectionToViewer, stepPage } from './pages';
+import { initialSection, initialView, openingPage, pagePlan, refitSceneCamera, renderModeForStyle, sectionToViewer, stepPage, type SceneFit } from './pages';
 import { DEFAULT_UNITS, mmPerSceneUnit } from './units';
 import { Overlay } from './overlay';
 import { cardName, cardRows, entityInfo } from './entity';
@@ -231,6 +231,10 @@ export class SkpViewerApp implements PanelHost {
   /** 나눠 올리기가 끝나면 부를 것(새 문서로 바뀌면 바로 부른다) */
   private uploadDone: (() => void) | null = null;
   private camAnim = 0;
+  /** 장면 카메라를 지금 3D 보기 종횡비에 맞춘 상태(세로 화면이면 장면의 가로 범위를 지키게 넓힘 — 휴대폰을 돌리면 다시 맞춘다) */
+  private sceneFit: SceneFit | null = null;
+  /** 장면 전환 중에 화면을 돌렸으면 전환이 끝난 뒤 다시 맞춘다 */
+  private refitLater = false;
   /** 3D 위 덧그림 층(문자·치수 라벨, 측정 표시) */
   private overlay: Overlay | null = null;
   /** 문자·치수 라벨 */
@@ -656,9 +660,12 @@ export class SkpViewerApp implements PanelHost {
     // 휴대폰 주소 막대가 숨고 나타날 때(높이만 바뀜)는 열린 메뉴를 닫지 않는다
     let lastWidth = window.innerWidth;
     window.addEventListener('resize', () => {
-      if (window.innerWidth !== lastWidth) this.closeMenu();
+      const turned = window.innerWidth !== lastWidth;
+      if (turned) this.closeMenu();
       lastWidth = window.innerWidth;
       this.applyLayout();
+      // 폭이 바뀌면(휴대폰을 돌림) 장면 맞춤을 새 종횡비로 — 높이만 바뀌는 주소 막대·시트는 건드리지 않는다
+      if (turned) requestAnimationFrame(() => this.refitScene());
     });
     // 휴대폰(좁은 화면·낮은 가로 화면)에서는 뷰 큐브를 줄인다
     this.phoneQuery?.addEventListener('change', () => this.viewer?.setViewCubeSize(this.viewCubeSize()));
@@ -819,6 +826,10 @@ export class SkpViewerApp implements PanelHost {
       return Promise.resolve();
     }
     this.closeNotice();
+    // 앞 장면이 세로 화면에 맞춰 넓힌 시야각은 원래대로(새 문서의 전체 보기·카메라가 넓은 시야각을 물려받지 않게)
+    const fov = this.sceneBaseFov(v);
+    if (fov !== v.getCamera().fovY) v.setCamera({ ...v.getCamera(), fovY: fov });
+    this.sceneFit = null;
     const old = this.doc;
     this.doc = d;
     // 앞 문서의 나눠 올리기를 기다리던 것은 끝낸다
@@ -868,10 +879,11 @@ export class SkpViewerApp implements PanelHost {
       v.setSection({ normal: sec.normal, offset: sec.offset }, { caps: 'closed' });
       d.fileSection = sec.index;
     }
-    const cam = initialCamera(d.scene.meta, d.scene.bounds, v.canvas.clientWidth, v.canvas.clientHeight, v.getCamera().fovY);
-    if (cam) {
-      v.setCamera(cam);
-      this.projection = cam.projection;
+    const first = initialView(d.scene.meta, d.scene.bounds, v.canvas.clientWidth, v.canvas.clientHeight, v.getCamera().fovY);
+    if (first) {
+      v.setCamera(first.camera);
+      this.sceneFit = first.fit;
+      this.projection = first.camera.projection;
       this.userMoved = true;
     }
     d.page = openingPage(d.scene.meta);
@@ -1055,11 +1067,38 @@ export class SkpViewerApp implements PanelHost {
     if (ids.length) v.fitItems(ids);
   }
 
+  private viewAspect(v: Viewer3d): number {
+    return v.canvas.clientWidth / Math.max(1, v.canvas.clientHeight);
+  }
+
+  /** 지금 시야각에서 세로 화면 맞춤을 뺀 것(맞춘 뒤 사용자가 시야각을 바꾸지 않았을 때만 장면의 원래 시야각) */
+  private sceneBaseFov(v: Viewer3d): number {
+    const c = v.getCamera();
+    const f = this.sceneFit;
+    return f && f.projection === c.projection && Math.abs(c.fovY - f.fovY) < 1e-9 ? f.baseFovY : c.fovY;
+  }
+
+  /** 휴대폰을 돌린 뒤: 장면 맞춤을 새 종횡비로(보기를 돌리거나 옮긴 것은 그대로, 사용자가 투영을 바꿨으면 그만 따라간다) */
+  private refitScene(): void {
+    const v = this.viewer;
+    const f = this.sceneFit;
+    if (!v || !f || !this.doc) return;
+    if (this.camAnim) {
+      this.refitLater = true;
+      return;
+    }
+    const cur = v.getCamera();
+    const r = refitSceneCamera(cur, f, this.viewAspect(v));
+    this.sceneFit = r?.fit ?? null;
+    if (r && r.camera !== cur) v.setCamera(r.camera);
+  }
+
   /** 카메라를 부드럽게 옮긴다(뷰어의 맞춰 보기 움직임과 비슷한 시간) */
   private animateCamera(to: CameraState, ms = 320, done?: () => void): void {
     const v = this.viewer;
     if (!v) return;
     cancelAnimationFrame(this.camAnim);
+    this.camAnim = 0;
     const from = v.getCamera();
     if (!(ms > 0)) {
       v.setCamera(to);
@@ -1071,8 +1110,17 @@ export class SkpViewerApp implements PanelHost {
       const k = Math.min(1, (now - t0) / ms);
       const e = 1 - (1 - k) ** 3;
       v.setCamera(lerpCamera(from, to, e));
-      if (k < 1) this.camAnim = requestAnimationFrame(step);
-      else done?.();
+      if (k < 1) {
+        this.camAnim = requestAnimationFrame(step);
+        return;
+      }
+      this.camAnim = 0;
+      done?.();
+      // 옮기는 동안 휴대폰을 돌렸으면 다 옮긴 뒤 다시 맞춘다
+      if (this.refitLater) {
+        this.refitLater = false;
+        this.refitScene();
+      }
     };
     this.camAnim = requestAnimationFrame(step);
   }
@@ -1180,7 +1228,7 @@ export class SkpViewerApp implements PanelHost {
     const v = this.viewer;
     const page = d?.pages[index];
     if (!d || !v || !page) return;
-    const plan = pagePlan(page, { sectionPlanes: d.sectionPlanesRaw, viewerFovY: v.getCamera().fovY });
+    const plan = pagePlan(page, { sectionPlanes: d.sectionPlanesRaw, viewerFovY: this.sceneBaseFov(v), viewAspect: this.viewAspect(v) });
     if (plan.hiddenTags) d.hiddenTags = new Set([...plan.hiddenTags].filter((t) => d.tags.some((x) => x.name === t)));
     if (plan.hiddenNodes) {
       // 숨긴 개체 목록은 저장 당시 전체 상태다: 보기에서 숨긴 것은 버리고 장면 목록으로 바꾼다
@@ -1208,6 +1256,7 @@ export class SkpViewerApp implements PanelHost {
     this.refreshAnnotations();
     if (plan.camera) {
       const to = plan.camera;
+      this.sceneFit = plan.fit;
       this.userMoved = true;
       // 평행·원근도 장면을 따른다(도구 막대도 맞춘다)
       this.projection = to.projection;

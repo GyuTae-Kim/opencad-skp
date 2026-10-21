@@ -4,25 +4,32 @@ import type { SkpCameraMeta, SkpPageMeta } from '../../src/meta';
 import {
   DEFAULT_TRANSITION_S,
   MAX_TRANSITION_S,
+  PORTRAIT_MAX_FOV_DEG,
+  SCENE_REF_ASPECT,
   cameraFromSkp,
   cameraShowsBox,
   delaySeconds,
+  fitSceneCamera,
   effectiveTagHidden,
   folderHiddenTags,
   initialCamera,
   initialSection,
+  initialView,
   openingPage,
   pagePlan,
   pickSection,
   readActivePage,
   readPages,
+  refitSceneCamera,
   renderModeForStyle,
   sameSkpCamera,
+  sceneCoverageScale,
   sectionToViewer,
   stepPage,
   transitionCamera,
   transitionProgress,
   transitionSeconds,
+  widenFov,
 } from '../../src/app/pages';
 
 const close = (a: readonly number[], b: readonly number[], eps = 1e-6): void => {
@@ -312,5 +319,140 @@ describe('장면 차례·전환', () => {
     expect(mid.target[0]).toBeCloseTo(5, 9);
     expect(mid.distance).toBeCloseTo(20, 9);
     expect(transitionCamera(a, b, 0.25).target[0]).toBeLessThan(2.5);
+  });
+});
+
+describe('세로 화면에서 장면이 만든 가로 범위 지키기', () => {
+  const deg = (r: number): number => (r * 180) / Math.PI;
+  const rad = (d: number): number => (d * Math.PI) / 180;
+  /** 상자 꼭짓점을 화면 정규 좌표(−1~1)로 — 가로 범위 [x0, x1], 세로 범위 [y0, y1] */
+  const ndc = (c: CameraState, b: typeof box, aspect: number): [number, number, number, number] => {
+    const bs = cameraBasis(c);
+    const eye = cameraEye(c);
+    const tan = Math.tan(c.fovY / 2);
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (let i = 0; i < 8; i++) {
+      const p = [i & 1 ? b.max[0] : b.min[0], i & 2 ? b.max[1] : b.min[1], i & 4 ? b.max[2] : b.min[2]];
+      const d = [p[0]! - eye[0], p[1]! - eye[1], p[2]! - eye[2]];
+      const dot = (v: readonly number[]): number => d[0]! * v[0]! + d[1]! * v[1]! + d[2]! * v[2]!;
+      const z = c.projection === 'perspective' ? -dot(bs.back) : 1;
+      const hh = c.projection === 'perspective' ? z * tan : c.distance * tan;
+      x0 = Math.min(x0, dot(bs.right) / (hh * aspect));
+      x1 = Math.max(x1, dot(bs.right) / (hh * aspect));
+      y0 = Math.min(y0, dot(bs.up) / hh);
+      y1 = Math.max(y1, dot(bs.up) / hh);
+    }
+    return [x0, x1, y0, y1];
+  };
+  const persp: CameraState = { target: [0, 0, 0], distance: 100, yaw: 0.3, pitch: 0.2, projection: 'perspective', fovY: rad(35) };
+
+  it('가로·정사각 화면은 그대로(배율 1), 세로 화면은 장면 종횡비의 가로 범위까지', () => {
+    expect(sceneCoverageScale(844 / 269)).toBe(1);
+    expect(sceneCoverageScale(1)).toBe(1);
+    expect(sceneCoverageScale(1.2, 1.6)).toBe(1);
+    expect(sceneCoverageScale(390 / 725)).toBeCloseTo(SCENE_REF_ASPECT / (390 / 725), 12);
+    expect(sceneCoverageScale(0.8)).toBeCloseTo(SCENE_REF_ASPECT / 0.8, 12);
+    // 파일에 고정 종횡비가 있으면 그것을 기준으로
+    expect(sceneCoverageScale(0.5, 2)).toBeCloseTo(4, 12);
+    // 정사각과 0.8 사이는 점점(정사각 바로 아래에서 튀지 않는다)
+    expect(sceneCoverageScale(0.999)).toBeLessThan(1.01);
+    const mid = sceneCoverageScale(0.9);
+    expect(mid).toBeGreaterThan(1 / 0.9);
+    expect(mid).toBeLessThan(SCENE_REF_ASPECT / 0.9);
+    // 세로로 만든 장면(종횡비 < 화면)은 넓히지 않는다
+    expect(sceneCoverageScale(0.6, 0.5)).toBe(1);
+    // 이상한 값은 1
+    expect(sceneCoverageScale(Number.NaN)).toBe(1);
+    expect(sceneCoverageScale(0)).toBe(1);
+  });
+
+  it('시야각은 tan 기준으로 넓히고 90°에서 멈춘다(원래 더 넓으면 그대로)', () => {
+    expect(widenFov(rad(35), 1)).toBeCloseTo(rad(35), 12);
+    expect(Math.tan(widenFov(rad(35), 2) / 2)).toBeCloseTo(2 * Math.tan(rad(17.5)), 12);
+    expect(deg(widenFov(rad(35), 10))).toBeCloseTo(PORTRAIT_MAX_FOV_DEG, 9);
+    expect(deg(widenFov(rad(100), 3))).toBeCloseTo(100, 9);
+  });
+
+  it('원근: 눈 자리·방향은 그대로 두고 시야각만 넓혀, 세로 화면에서도 장면의 가로 범위가 다 보인다', () => {
+    const portrait = 390 / 725;
+    const { camera, fit } = fitSceneCamera(persp, portrait);
+    close(cameraEye(camera), cameraEye(persp), 1e-9);
+    expect(camera.distance).toBe(persp.distance);
+    expect(camera.yaw).toBe(persp.yaw);
+    expect(camera.pitch).toBe(persp.pitch);
+    // 가로 반폭(tan) = 장면 종횡비에서의 가로 반폭
+    expect(Math.tan(camera.fovY / 2) * portrait).toBeCloseTo(Math.tan(persp.fovY / 2) * SCENE_REF_ASPECT, 9);
+    expect(deg(camera.fovY)).toBeLessThan(PORTRAIT_MAX_FOV_DEG);
+    expect(fit.baseFovY).toBe(persp.fovY);
+    expect(fit.fovY).toBe(camera.fovY);
+    // 장면 종횡비 화면에서 가로로 꽉 찬 상자(지붕·옆벽)가 세로 화면에서도 가로 안에 든다
+    const house = { min: [-40, -10, -12] as [number, number, number], max: [40, 10, 12] as [number, number, number] };
+    const [rx0, rx1] = ndc(persp, house, SCENE_REF_ASPECT);
+    expect(Math.max(-rx0, rx1)).toBeLessThan(1);
+    const [bx0, bx1] = ndc(persp, house, portrait);
+    expect(Math.max(-bx0, bx1)).toBeGreaterThan(1); // 고치기 전: 잘림
+    const [x0, x1, y0, y1] = ndc(camera, house, portrait);
+    expect(Math.max(-x0, x1)).toBeLessThan(1);
+    expect(Math.max(-y0, y1)).toBeLessThan(1);
+  });
+
+  it('가로 화면(휴대폰 가로·데스크톱)은 카메라가 지금과 똑같다', () => {
+    for (const aspect of [844 / 269, 1280 / 720, 1]) {
+      const { camera, fit } = fitSceneCamera(persp, aspect);
+      expect(camera).toEqual(persp);
+      expect(fit.scale).toBe(1);
+      const ortho: CameraState = { ...persp, projection: 'orthographic' };
+      expect(fitSceneCamera(ortho, aspect).camera).toEqual(ortho);
+    }
+  });
+
+  it('평행: 화면 높이를 배율만큼 키운다', () => {
+    const ortho: CameraState = { ...persp, projection: 'orthographic' };
+    const { camera, fit } = fitSceneCamera(ortho, 0.5);
+    expect(camera.fovY).toBe(ortho.fovY);
+    expect(camera.distance).toBeCloseTo(ortho.distance * (SCENE_REF_ASPECT / 0.5), 9);
+    expect(fit.scale).toBeCloseTo(SCENE_REF_ASPECT / 0.5, 12);
+  });
+
+  it('휴대폰을 돌리면 다시 맞추고, 사용자가 시야각·투영을 바꿨으면 그만 따라간다', () => {
+    const p = fitSceneCamera(persp, 0.5);
+    // 그사이 사용자가 돌리고 확대함(시야각은 그대로)
+    const moved: CameraState = { ...p.camera, yaw: 1, distance: 60 };
+    const land = refitSceneCamera(moved, p.fit, 844 / 269)!;
+    expect(land.camera.fovY).toBeCloseTo(persp.fovY, 12);
+    expect(land.camera.yaw).toBe(1);
+    expect(land.camera.distance).toBe(60);
+    const back = refitSceneCamera(land.camera, land.fit, 0.5)!;
+    expect(back.camera.fovY).toBeCloseTo(p.camera.fovY, 12);
+    // 같은 종횡비면 그대로
+    expect(refitSceneCamera(p.camera, p.fit, 0.5)!.camera).toBe(p.camera);
+    expect(refitSceneCamera({ ...p.camera, fovY: rad(50) }, p.fit, 2)).toBeNull();
+    expect(refitSceneCamera({ ...p.camera, projection: 'orthographic' }, p.fit, 2)).toBeNull();
+    const o = fitSceneCamera({ ...persp, projection: 'orthographic' }, 0.5);
+    const oLand = refitSceneCamera(o.camera, o.fit, 2)!;
+    expect(oLand.camera.distance).toBeCloseTo(persp.distance, 9);
+  });
+
+  it('처음 카메라와 장면 계획에 같은 맞춤을 쓴다(장면 종횡비가 파일에 있으면 그것)', () => {
+    const meta = { camera: cam({ eye: [0, -100, 10], target: [0, 0, 0], fovY: 35 }) };
+    const land = initialView(meta, box, 844, 269)!;
+    expect(land.camera).toEqual(cameraFromSkp(meta.camera)!);
+    expect(initialCamera(meta, box, 844, 269)).toEqual(land.camera);
+    const port = initialView(meta, box, 390, 725)!;
+    expect(port.fit.scale).toBeCloseTo(SCENE_REF_ASPECT / (390 / 725), 9);
+    expect(port.camera.fovY).toBeGreaterThan(land.camera.fovY);
+    const fixed = initialView({ camera: cam({ fovY: 35, aspect: 2 }) }, box, 390, 725)!;
+    expect(fixed.fit.ref).toBe(2);
+
+    const page: SkpPageMeta = { name: '앞마당', camera: cam({ fovY: 35 }) };
+    const plain = pagePlan(page);
+    expect(plain.fit).toBeNull();
+    const wide = pagePlan(page, { viewAspect: 844 / 269 });
+    expect(wide.camera).toEqual(plain.camera);
+    const tall = pagePlan(page, { viewAspect: 390 / 725 });
+    expect(tall.fit!.scale).toBeGreaterThan(2.9);
+    expect(tall.camera!.fovY).toBeCloseTo(tall.fit!.fovY, 12);
+    const top = pagePlan({ name: '위에서', camera: cam({ eye: [0, 0, 100], up: [0, 1, 0], perspective: false, height: 40 }) }, { viewAspect: 0.5, viewerFovY: DEFAULT_FOV });
+    expect(2 * top.camera!.distance * Math.tan(top.camera!.fovY / 2)).toBeCloseTo(40 * (SCENE_REF_ASPECT / 0.5), 6);
   });
 });
