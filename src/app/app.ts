@@ -66,7 +66,6 @@ import {
   faceOrEdgeSelection,
   sectionIndexOfId,
   sectionPlanesFor,
-  EDGE_STUB,
   hiddenSelection,
   tagColors,
   partBox,
@@ -220,6 +219,8 @@ export interface AppSnapshot {
   sun: { elevation: number; azimuth: number } | null;
   /** 외곽선·태그 색으로 칠하기 */
   profiles: boolean;
+  /** 뒤 모서리(숨은 선 방식의 점선) */
+  backEdges: boolean;
   colorByTag: boolean;
 }
 
@@ -1054,8 +1055,6 @@ export class SkpViewerApp implements PanelHost {
         },
       });
     else v.setScene(d.scene);
-    // 해석기 그물에는 윤곽선이 없어(SketchUp 모서리는 선분 묶음) 붙인 길이 0 윤곽선을 늘 숨긴다 — 숨은 선·와이어프레임에서 삼각형 변을 그리지 않게
-    for (const id of d.stubEdges) v.setHiddenRanges(id, { prims: [], edges: EDGE_STUB });
     v.setRenderMode(this.renderMode);
     v.highlight(null);
     v.highlightRanges(null);
@@ -1967,7 +1966,7 @@ export class SkpViewerApp implements PanelHost {
       const cur = this.hiddenRanges.get(item);
       this.hiddenRanges.set(item, cur ? normalizeRanges([...cur, ...list]) : list);
     }
-    // 길이 0 윤곽선을 단 그물은 그 윤곽선을 늘 숨긴 채로(hiddenSelection)
+    // 카메라를 보는 그물은 삼각형을 모두 숨기면 그 배치의 모서리(윤곽선)도(hiddenSelection)
     const next = new Set<string>();
     for (const [item, list] of this.hiddenRanges) {
       const id = this.itemId(item);
@@ -2216,6 +2215,18 @@ export class SkpViewerApp implements PanelHost {
     this.refreshToolbar();
   }
 
+  /**
+   * 뒤 모서리(스타일 "뒤 모서리" — 코어 0.7.1 hiddenEdges): 면 뒤로 가려진 모서리를 흐린 점선으로. 코어는 숨은 선 방식에서만 그린다
+   * (SketchUp은 음영 방식에서도 그린다 — 남은 일)
+   */
+  private backEdgesOn = false;
+
+  setBackEdges(on: boolean): void {
+    this.backEdgesOn = on;
+    this.viewer?.setRenderOptions({ hiddenEdges: on ? true : null });
+    this.refreshToolbar();
+  }
+
   /** 태그 색으로 칠하기(스타일 "태그 색으로" — 코어 setItemColor, 장면을 올리면 풀리므로 다시 건다) */
   private colorByTag = false;
 
@@ -2234,6 +2245,8 @@ export class SkpViewerApp implements PanelHost {
     if (typeof style?.profileWidth === 'number') this.profileWidth = Math.min(5, Math.max(1, style.profileWidth));
     if (typeof style?.profiles === 'boolean') this.setProfiles(style.profiles && !(first && d && isBigScene(d)));
     else if (first) this.setProfiles(false);
+    if (typeof style?.backEdges === 'boolean') this.setBackEdges(style.backEdges);
+    else if (first) this.setBackEdges(false);
     if (typeof style?.colorByTag === 'boolean') this.setColorByTag(style.colorByTag);
     else if (first) this.setColorByTag(false);
   }
@@ -2556,6 +2569,7 @@ export class SkpViewerApp implements PanelHost {
     this.openMenu(btn, '보기 설정', [
       ...narrowItems,
       { label: '외곽선(윤곽 굵게)', checked: this.profilesOn, toggle: true, sep: true, run: () => this.setProfiles(!this.profilesOn) },
+      { label: '뒤 모서리(숨은 선에서 점선)', checked: this.backEdgesOn, toggle: true, run: () => this.setBackEdges(!this.backEdgesOn) },
       { label: '태그 색으로 칠하기', checked: this.colorByTag, toggle: true, run: () => this.setColorByTag(!this.colorByTag) },
       { label: '그림자(파일의 날짜·시각·위치)', checked: this.shadowsOn, toggle: true, sep: true, run: () => this.setShadows(!this.shadowsOn) },
       { label: '안개', checked: this.fogOn, toggle: true, run: () => this.setFogOn(!this.fogOn) },
@@ -3036,6 +3050,7 @@ export class SkpViewerApp implements PanelHost {
         return sun ? { elevation: sun.elevation, azimuth: sun.azimuth } : null;
       })(),
       profiles: this.profilesOn,
+      backEdges: this.backEdgesOn,
       colorByTag: this.colorByTag,
     };
   }

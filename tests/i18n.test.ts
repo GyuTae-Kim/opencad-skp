@@ -30,7 +30,7 @@ describe('language URLs and UI presentation', () => {
     const hangul = /[가-힣]/;
     // "면 {0}"·"재질 {0}"·"모서리 · {0}"이 문장 끝까지 잡아 나머지가 한국어로 남던 줄(고른 것·재질 목록)
     const lines = ['면 · 넓이 12.5 m² · 재질 Wood · 태그 Walls', '모서리 · 길이 300 mm · 태그 Walls', '곡선 · 길이 30 mm · 반지름 5 mm', '면 12 · 뒷면 4', '재질 Wood · 면 1,234',
-      '그룹 Wall · 위치 House · 면 12', '컴포넌트 Chair (Chair#1) · 태그 Furniture · 재질 Wood · 면 1,234', '그룹 3 · 컴포넌트 5 · 그림 3(모든 단계, 4단계까지).'];
+      '그룹 Wall · 위치 House · 면 12', 'SketchUp 2015 · 15.0.1  |  단위 mm  |  1.23 MB  |  면 8,268 · 모서리 13,852  |  읽기 54 ms','컴포넌트 Chair (Chair#1) · 태그 Furniture · 재질 Wood · 면 1,234', '그룹 3 · 컴포넌트 5 · 그림 3(모든 단계, 4단계까지).'];
     for (const {code} of languages.filter(item => item.code !== 'ko'))
       for (const line of lines) expect(translate(line, code), `${code}: ${line}`).not.toMatch(hangul);
     expect(translate('면 · 넓이 12.5 m² · 재질 Wood · 태그 Walls', 'en')).toBe('Face · Area 12.5 m² · Material Wood · Tag Walls');

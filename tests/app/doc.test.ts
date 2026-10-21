@@ -2,10 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { Scene3d } from 'opencad-viewer3d/types';
 import { translate } from '../../site/i18n.mjs';
 import {
-  EDGE_STUB,
-  addEdgeStubs,
   createDoc,
   hiddenSelection,
+  prepareEdgeDisplay,
   sectionIndexOfId,
   sectionPlanesFor,
   tagColors,
@@ -180,7 +179,7 @@ describe('패널 목록', () => {
 });
 
 describe('숨은 선 모드용 윤곽선·태그 색', () => {
-  it('윤곽선이 없는 그물에만 길이 0 윤곽선을 달고(첫 정점), 숨길 구간에 늘 그 윤곽선을 넣는다', () => {
+  it('그물은 삼각형 변을 그리지 않고(코어 triangleEdges), 모형 모서리 묶음은 뒤 모서리 점선을 받는다(hiddenEdges)', () => {
     const s: Scene3d = {
       name: 'x',
       units: 'mm',
@@ -195,15 +194,26 @@ describe('숨은 선 모드용 윤곽선·태그 색', () => {
           billboard: { origin: [0, 0, 0], axis: 'z' },
         },
       ],
-      lines: [{ id: 'l', positions: new Float32Array(6) }],
+      lines: [
+        { id: 'skp-edges-2', positions: new Float32Array(6) },
+        { id: 'skp-soft-3', positions: new Float32Array(6) },
+        { id: 'skp-hidden-edges-4', positions: new Float32Array(6) },
+        { id: 'skp-reveal-edges-5', positions: new Float32Array(6) },
+        { id: 'skp-dims-6', positions: new Float32Array(6) },
+        { id: 'skp-guides-7', positions: new Float32Array(6) },
+      ],
     };
-    const ids = addEdgeStubs(s);
-    expect([...ids]).toEqual(['a']);
-    expect([...s.meshes[0]!.edges!]).toEqual([1, 2, 3, 1, 2, 3]);
+    prepareEdgeDisplay(s);
+    expect(s.meshes.map((m) => m.triangleEdges)).toEqual([false, false]);
+    // 그물에 윤곽선을 붙이지 않는다(카메라를 보는 그물은 그 배치의 모서리 그대로)
+    expect(s.meshes[0]!.edges).toBeUndefined();
     expect(s.meshes[1]!.edges!.length).toBe(12);
-    const d = { scene: s, stubEdges: ids };
-    expect(hiddenSelection(d, 0, null)).toEqual({ prims: [], edges: EDGE_STUB });
-    expect(hiddenSelection(d, 0, [{ start: 0, count: 1 }])).toEqual({ prims: [{ start: 0, count: 1 }], edges: EDGE_STUB });
+    // 모형 모서리 묶음만 뒤 모서리 점선(주석의 치수·보조선은 아님)
+    expect(s.lines.map((l) => l.hiddenEdges ?? false)).toEqual([true, true, true, true, false, false]);
+    const d = { scene: s };
+    // 보통 그물: 숨길 구간만(늘 숨기던 길이 0 윤곽선 구간은 없다)
+    expect(hiddenSelection(d, 0, null)).toBeNull();
+    expect(hiddenSelection(d, 0, [{ start: 0, count: 1 }])).toEqual([{ start: 0, count: 1 }]);
     // 카메라를 보는 그물: 삼각형을 모두 숨기면 윤곽선(그 배치의 모서리)도
     expect(hiddenSelection(d, 1, [{ start: 0, count: 1 }])).toEqual({ prims: [{ start: 0, count: 1 }], edges: [{ start: 0, count: 2 }] });
     expect(hiddenSelection(d, 1, null)).toBeNull();
