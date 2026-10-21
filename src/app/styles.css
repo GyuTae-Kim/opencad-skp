@@ -1511,27 +1511,13 @@ button.scene-card.sel {
   }
 }
 
-/* ---------------------------------------------------------------- 좁은 화면(760px 미만): 아이콘 단추, 도구 막대 줄바꿈, 패널은 아래 시트 */
-@media (max-width: 759.98px) {
-  .titlebar {
-    height: 44px;
-    padding: 0 4px 0 6px;
-  }
-
-  .titlebar .tbtn {
-    padding: 0 8px;
-  }
-
-  .titlebar .lbl,
+/*
+ * ---------------------------------------------------------------- 휴대폰 도구 막대
+ * 좁은 화면(760px 미만)과 휴대폰 가로(손가락 기기에 높이 500px 미만 — 폭은 760px을 넘을 수 있다)는
+ * 보기·측정 단추만 한 줄(전체 보기·표준 뷰·줄자·각도기·단면·보기 설정·패널)에 두고 나머지는 메뉴로 모아 3D 보기 높이를 지킨다(app.ts phoneQuery)
+ */
+@media (max-width: 759.98px), (pointer: coarse) and (max-height: 499.98px) {
   .toolbar .lbl {
-    display: none;
-  }
-
-  .brand {
-    font-size: 14px;
-  }
-
-  .docname {
     display: none;
   }
 
@@ -1546,7 +1532,6 @@ button.scene-card.sel {
     display: none;
   }
 
-  /* 휴대폰: 보기·측정 단추만 한 줄(전체 보기·표준 뷰·줄자·각도기·단면·보기 설정·패널), 나머지는 메뉴 */
   .toolbar .wide-only {
     display: none;
   }
@@ -1580,6 +1565,30 @@ button.scene-card.sel {
 
   .sec-range {
     width: 96px;
+  }
+}
+
+/* ---------------------------------------------------------------- 좁은 화면(760px 미만): 아이콘 단추, 패널은 아래 시트 */
+@media (max-width: 759.98px) {
+  .titlebar {
+    height: 44px;
+    padding: 0 4px 0 6px;
+  }
+
+  .titlebar .tbtn {
+    padding: 0 8px;
+  }
+
+  .titlebar .lbl {
+    display: none;
+  }
+
+  .brand {
+    font-size: 14px;
+  }
+
+  .docname {
+    display: none;
   }
 
   .workspace {

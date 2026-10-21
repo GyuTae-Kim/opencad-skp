@@ -208,6 +208,12 @@ export class SkpViewerApp implements PanelHost {
   private panelOpen: boolean;
   private readonly narrowQuery: MediaQueryList | null =
     typeof window.matchMedia === 'function' ? window.matchMedia(`(max-width: ${NARROW_WIDTH - 0.02}px)`) : null;
+  /**
+   * 휴대폰: 좁은 화면이거나 손가락 기기의 낮은 가로 화면(폭은 760px을 넘을 수 있다).
+   * 한 줄 도구 막대(styles.css)·작은 뷰 큐브·처음엔 닫힌 패널로 3D 보기 자리를 지킨다
+   */
+  private readonly phoneQuery: MediaQueryList | null =
+    typeof window.matchMedia === 'function' ? window.matchMedia(`(max-width: ${NARROW_WIDTH - 0.02}px), (pointer: coarse) and (max-height: 499.98px)`) : null;
   /** 손가락이 주인 기기(휴대폰·태블릿): 측정 안내·파일 고르기를 맞춘다 */
   private readonly coarseQuery: MediaQueryList | null = typeof window.matchMedia === 'function' ? window.matchMedia('(pointer: coarse)') : null;
   private projection: Projection = 'perspective';
@@ -249,7 +255,7 @@ export class SkpViewerApp implements PanelHost {
     this.themeStored = readStoredTheme();
     this.theme = resolveTheme(this.themeStored, systemPrefersDark());
     this.layout = readLayout();
-    this.panelOpen = !this.narrowQuery?.matches;
+    this.panelOpen = !this.phoneQuery?.matches;
     this.panel = new Panel(this);
   }
 
@@ -584,8 +590,8 @@ export class SkpViewerApp implements PanelHost {
       lastWidth = window.innerWidth;
       this.applyLayout();
     });
-    // 좁은 화면에서는 뷰 큐브를 줄인다
-    this.narrowQuery?.addEventListener('change', () => this.viewer?.setViewCubeSize(this.viewCubeSize()));
+    // 휴대폰(좁은 화면·낮은 가로 화면)에서는 뷰 큐브를 줄인다
+    this.phoneQuery?.addEventListener('change', () => this.viewer?.setViewCubeSize(this.viewCubeSize()));
   }
 
   // ───────────────────────── 열기 ─────────────────────────
@@ -859,7 +865,7 @@ export class SkpViewerApp implements PanelHost {
   }
 
   private viewCubeSize(): number {
-    return this.narrowQuery?.matches ? VIEW_CUBE_NARROW : VIEW_CUBE_WIDE;
+    return this.phoneQuery?.matches ? VIEW_CUBE_NARROW : VIEW_CUBE_WIDE;
   }
 
   // ───────────────────────── 고르기·측정 ─────────────────────────
