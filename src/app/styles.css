@@ -1967,3 +1967,121 @@ html:lang(zh-CN) { --font: -apple-system, "PingFang SC", "Microsoft YaHei", sans
     --statusbar-bg: #1b2027;
   }
 }
+
+/* 그림 저장 창(exporter.ts): 3D 보기 오른쪽 위, 좁은 화면은 아래에 */
+.export-dialog {
+  position: absolute;
+  top: 56px;
+  right: 12px;
+  z-index: 6;
+  box-sizing: border-box;
+  width: min(320px, calc(100% - 24px));
+  padding: 10px 12px 12px;
+  color: var(--text);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+}
+
+.ex-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.ex-group {
+  margin: 0 0 4px;
+  padding: 0;
+  border: 0;
+}
+
+.ex-group legend {
+  margin-bottom: 2px;
+  padding: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.ex-opt {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 30px;
+  cursor: pointer;
+}
+
+.ex-opt small {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.ex-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.ex-status {
+  min-height: 1em;
+  margin: 6px 0 0;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+@media (max-width: 759.98px) {
+  .export-dialog {
+    top: auto;
+    right: 12px;
+    bottom: 12px;
+    left: 12px;
+    width: auto;
+  }
+}
+
+@media (pointer: coarse) {
+  .ex-opt {
+    min-height: 40px;
+  }
+
+  .export-dialog .btn {
+    min-height: 40px;
+  }
+}
+
+/* 인쇄: 인쇄 전용 쪽(그림 한 장과 이름·날짜)만 */
+.print-sheet {
+  display: none;
+}
+
+@media print {
+  body > *:not(.print-sheet) {
+    display: none !important;
+  }
+
+  .print-sheet {
+    display: block;
+  }
+
+  .print-sheet img {
+    display: block;
+    max-width: 100%;
+    max-height: 92vh;
+    margin: 0 auto;
+    object-fit: contain;
+  }
+
+  .print-cap {
+    margin: 6px 0 0;
+    color: #333;
+    font: 11px system-ui, sans-serif;
+    text-align: center;
+  }
+
+  @page {
+    margin: 12mm;
+  }
+}

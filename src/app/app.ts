@@ -24,6 +24,7 @@ import { lerpCamera, type CameraState, type ViewFrame } from 'opencad-viewer3d/c
 import { dragStartPx } from 'opencad-viewer3d/pointer';
 import { ParseClient } from './client';
 import { AnnotationLabels, occludedBy } from './annotations';
+import { ExportDialog, type ExportContext } from './exporter';
 import { HISTORY_LIMIT, HISTORY_SETTLE_MS, ViewHistory } from './history';
 import { beginOpen, showAnalyticsSettings, trackExport, type OpenAttempt } from './analytics';
 import { MeasureTool, type MeasureMode, type MeasureToolResult } from './measure';
@@ -76,7 +77,7 @@ import {
   type Selection,
   type SkpDoc,
 } from './doc';
-import { MAX_FILE_BYTES, SKP_ACCEPT, baseName, fmtCount, formatBytes, formatMs, stripExtension } from './format';
+import { MAX_FILE_BYTES, SKP_ACCEPT, baseName, fmtCount, formatBytes, formatMs } from './format';
 import { VIEW_KEY_OF, VIEW_MENU, isEditableTarget, isViewKey, keyAction } from './keys';
 import type { LaunchRequest } from './launch';
 import { PANEL_WIDTH_DEFAULT, SHEET_DEFAULT, clampPanelWidth, clampSheetFraction, readLayout, storeLayout, type StoredLayout } from './layout';
@@ -87,7 +88,7 @@ import { deviceHints, textureLimitsFor, type TextureLimits } from './texlimits';
 import { THEME_CHOICES, applyThemeChoice, readStoredTheme, resolveTheme, storeTheme, systemPrefersDark, themeChoiceOf, type ThemeChoice, type ThemeName } from './theme';
 import { childrenOf, isAncestor, isSplit, nodeBox, nodePath, type PickMode } from './tree';
 import { cameraForBox, keepViewOnHeightChange } from './view';
-import { cssHex, loadFileBackground, safeStorage, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
+import { cssHex, isLightBackground, loadFileBackground, safeStorage, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
 import type { Rgb } from '../meta';
 
 export const APP_TITLE = 'OpenCAD SketchUp 뷰어';
@@ -256,6 +257,8 @@ export class SkpViewerApp implements PanelHost {
   private userMoved = false;
   /** 구간을 숨겨 둔 항목 id(다음에 바뀌면 풀려고)와 지금 숨긴 구간(항목 차례 → 구간) */
   private rangedIds = new Set<string>();
+  /** 그림 저장 창 */
+  private exportDialog: ExportDialog | null = null;
   /** 파일·장면 스타일 배경 쓰기(사용자 설정)와 지금 스타일의 배경 색 */
   private fileBg = loadFileBackground(safeStorage());
   private styleBg: Rgb | null = null;
@@ -365,7 +368,7 @@ export class SkpViewerApp implements PanelHost {
     const axesBtn = tbtn('좌표축', 'axes', '좌표축 보이기', () => this.toggleAxes());
     const measureBtn = tbtn('줄자', 'tape', '줄자 (T): 두 점 거리 — 끝점·중간점·모서리·면에 붙고, 축 방향이면 축에 고정 · Esc 지우기', () => this.toggleMeasure());
     const protractorBtn = tbtn('각도기', 'protractor', '각도기: 중심 → 기준 방향 → 잴 방향(Shift = 평면 고정) · Esc 지우기', () => this.toggleProtractor());
-    const pngBtn = tbtn('PNG 저장', 'image', '지금 화면을 PNG 그림으로 저장', () => void this.savePng(), 'compact wide-only');
+    const pngBtn = tbtn('그림 저장', 'image', '지금 화면을 그림으로 저장·공유·인쇄(크기·투명 배경·글과 측정 넣기)', () => this.savePng(), 'compact wide-only');
     const panelBtn = tbtn('패널', 'panel', '패널 열기·닫기', () => this.setPanelOpen(!this.panelOpen));
     // 단면 보기: 끔·X·Y·Z, 위치 슬라이더(장면 범위 안 0~1), 뒤집기. 잘린 면은 채우지 않고 테두리만(SKP는 입체 여부를 모른다)
     const axisBtn = (axis: SectionAxis): HTMLButtonElement => {
@@ -450,6 +453,15 @@ export class SkpViewerApp implements PanelHost {
     selClose.addEventListener('click', () => this.applySelection(null, false));
     const selBar = h('div', { class: 'measure-bar sel-bar', role: 'status', hidden: true }, selText, h('div', { class: 'mb-acts' }, selPart, selMore, selClose));
     const stage = h('div', { class: 'stage' }, viewHost, sceneTabs, measureBar, selBar, start, notice, busy);
+    this.exportDialog = new ExportDialog(
+      {
+        docName: () => this.doc?.name ?? 'model',
+        context: () => this.exportContext(),
+        notify: (e) => this.showNotice('error', '그림을 저장하지 못했습니다', errorText(e)),
+        track: () => trackExport('png'),
+      },
+      stage,
+    );
     const resizer = h('div', {
       class: 'resizer',
       role: 'separator',
@@ -869,6 +881,7 @@ export class SkpViewerApp implements PanelHost {
       return Promise.resolve();
     }
     this.closeNotice();
+    this.exportDialog?.close();
     // 앞 장면이 세로 화면에 맞춰 넓힌 시야각은 원래대로(새 문서의 전체 보기·카메라가 넓은 시야각을 물려받지 않게)
     const fov = this.sceneBaseFov(v);
     if (fov !== v.getCamera().fovY) v.setCamera({ ...v.getCamera(), fovY: fov });
@@ -1858,23 +1871,30 @@ export class SkpViewerApp implements PanelHost {
     });
   }
 
-  async savePng(): Promise<void> {
-    const v = this.viewer;
-    const d = this.doc;
-    if (!v || !d) return;
-    try {
-      const b = await v.toBlob('image/png');
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(b);
-      a.download = `${stripExtension(d.name)}.png`;
-      document.body.append(a);
-      a.click();
-      a.remove();
-      trackExport('png');
-      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-    } catch (e) {
-      this.showNotice('error', '그림을 저장하지 못했습니다', errorText(e));
+  /** 그림 저장 창(크기·투명 배경·글 넣기, 저장·공유·인쇄). 이미 열려 있으면 닫는다 */
+  savePng(): void {
+    if (!this.viewer || !this.doc) return;
+    const x = this.exportDialog;
+    if (!x) return;
+    if (x.isOpen) x.close();
+    else {
+      this.closeMenu();
+      x.open();
     }
+  }
+
+  /** 그림 내보내기 맥락: 뷰어·덧그림·라벨과 3D 테마 밝기(투명 배경 두 장은 배경만 바꾼다) */
+  private exportContext(): ExportContext | null {
+    const v = this.viewer;
+    if (!v || !this.doc) return null;
+    const bg = this.backdrop;
+    return {
+      viewer: v,
+      overlay: this.overlay,
+      labels: this.labels,
+      base: bg ? (isLightBackground(bg) ? 'light' : 'dark') : this.theme,
+      restoreTheme: () => this.applyTheme(),
+    };
   }
 
   private toggleViewMenu(btn: HTMLButtonElement): void {
@@ -1936,7 +1956,7 @@ export class SkpViewerApp implements PanelHost {
       { label: '뷰 큐브', checked: this.cubeOn, toggle: true, run: () => this.toggleCube() },
       { label: '좌표축', checked: this.axesOn, toggle: true, run: () => this.toggleAxes() },
       { label: '파일 배경 색', checked: this.fileBg, toggle: true, run: () => this.setFileBackground(!this.fileBg) },
-      { label: 'PNG 저장', icon: 'image', sep: true, run: () => void this.savePng() },
+      { label: '그림 저장…', icon: 'image', sep: true, run: () => this.savePng() },
     ]);
   }
 

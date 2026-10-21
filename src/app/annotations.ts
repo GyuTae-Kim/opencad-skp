@@ -604,9 +604,14 @@ export class AnnotationLabels {
     return this.items.length;
   }
 
-  /** 마지막 그림의 배치(상태 막대·시험용) */
+  /** 마지막 그림의 배치(상태 막대·그림 내보내기·시험용) */
   get placements(): readonly Placement[] {
     return this.last;
+  }
+
+  /** 라벨 자료(placements의 item 차례 — 그림 내보내기가 같은 글꼴·색으로 그린다) */
+  get itemList(): readonly AnnotationItem[] {
+    return this.items;
   }
 
   /** 가림 판정을 둔다(null이면 끈다). 숨긴 태그·노드·단면이 바뀌면 setFilter가 다시 판정하게 한다 */
