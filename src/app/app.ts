@@ -32,8 +32,10 @@ import { beginOpen, showAnalyticsSettings, trackExport, type OpenAttempt } from 
 import { MeasureTool, type MeasureMode, type MeasureToolResult } from './measure';
 import {
   baseFovOf,
-  initialSection,
+  activeSections,
+  initialSections,
   initialView,
+  type PageSection,
   openingPage,
   pagePlan,
   nextSlide,
@@ -45,7 +47,6 @@ import {
   restoreSceneCamera,
   sectionFillOf,
   sameSceneFit,
-  sectionToViewer,
   stepPage,
   unwidenSceneCamera,
   type SceneFit,
@@ -58,6 +59,8 @@ import {
   canHideNode,
   createDoc,
   faceOrEdgeSelection,
+  sectionIndexOfId,
+  sectionPlanesFor,
   EDGE_STUB,
   hiddenSelection,
   tagColors,
@@ -175,6 +178,9 @@ export interface AppSnapshot {
   pages: number;
   page: number | null;
   fileSection: number | null;
+  /** 적용한 파일 단면 모두 · 코어 단면 평면 수 */
+  fileSections: number[];
+  sectionPlanes: number;
   /** 숨긴 태그(실제 숨김) · 숨긴 나무 노드 수 · 글·치수 라벨 수(그린 것) */
   hiddenTags: string[];
   hiddenNodes: number;
@@ -1027,11 +1033,9 @@ export class SkpViewerApp implements PanelHost {
     this.applyLighting();
     // 잘린 면 채우기: 모형 스타일의 단면 채우기(장면 스타일이 바꿀 수 있다)
     this.sectionFill = sectionFillOf(d.style, d.info.major);
-    const sec = initialSection(d.scene.meta);
-    if (sec) {
-      v.setSection({ normal: sec.normal, offset: sec.offset }, { caps: this.caps });
-      d.fileSection = sec.index;
-    }
+    // 활성 단면 모두(모형 단면은 모형 전체, 그룹 안 단면은 그 그룹만)
+    const secs = initialSections(d.scene.meta);
+    if (secs.length) this.applyFileSections(secs);
     const first = initialView(d.scene.meta, d.scene.bounds, v.canvas.clientWidth, v.canvas.clientHeight, v.getCamera().fovY);
     if (first) {
       v.setCamera(first.camera);
@@ -1595,11 +1599,7 @@ export class SkpViewerApp implements PanelHost {
       this.sectionFill = plan.style.sectionFill;
       if (!plan.setsSection) this.applySectionFill();
     }
-    if (plan.setsSection) {
-      if (plan.section) v.setSection({ normal: plan.section.normal, offset: plan.section.offset }, { caps: this.caps });
-      else v.setSection(null);
-      d.fileSection = plan.section?.index ?? null;
-    }
+    if (plan.setsSection) this.applyFileSections(plan.sections);
     if (plan.style) {
       const st = plan.style;
       if (st.texts !== undefined) d.showTexts = st.texts;
@@ -1729,18 +1729,33 @@ export class SkpViewerApp implements PanelHost {
     if (next !== null) this.applyPage(next);
   }
 
-  /** 파일 단면 적용(null = 끔). 코어 단면은 평면 하나라 그룹 안 단면도 모형 전체를 자른다 */
+  /**
+   * 파일 단면 켜고 끄기(meta.sectionPlanes 차례, null = 모두 끔). 켜면 같은 묶음(노드)의 다른 단면은 끈다(SketchUp은 묶음마다 활성 단면 하나).
+   * 모형 단면은 모형 전체를, 그룹·컴포넌트 안 단면은 그 그룹 안쪽만 자른다(코어 여러 단면)
+   */
   setFileSection(index: number | null): void {
+    const d = this.doc;
+    if (!d || !this.viewer) return;
+    let next: number[] = [];
+    if (index !== null) {
+      const sp = d.sectionPlanes.find((p) => p.index === index);
+      if (!sp) return;
+      next = d.fileSections.includes(index) ? d.fileSections.filter((i) => i !== index) : [...d.fileSections.filter((i) => d.sectionPlanes.find((p) => p.index === i)?.node !== sp.node), index];
+    }
+    this.applyFileSections(activeSections(next, d.sectionPlanesRaw));
+    this.panel.rerender();
+  }
+
+  /** 파일 단면을 코어 여러 단면으로(sectionPlanesFor). 없으면 끈다 */
+  private applyFileSections(list: readonly PageSection[]): void {
     const d = this.doc;
     const v = this.viewer;
     if (!d || !v) return;
-    const sp = index === null ? null : d.sectionPlanes.find((p) => p.index === index);
-    const s = sp ? sectionToViewer(sp.plane) : null;
-    if (s) v.setSection(s, { caps: this.caps });
-    else v.setSection(null);
-    d.fileSection = s ? index : null;
+    const r = sectionPlanesFor(d, list, this.caps);
+    v.setSections(r.planes.length ? r.planes : null);
+    d.fileSections = r.applied;
+    d.sectionSkipped = r.skipped;
     this.refreshAnnotations();
-    this.panel.rerender();
     this.refreshToolbar();
   }
 
@@ -1908,6 +1923,13 @@ export class SkpViewerApp implements PanelHost {
     if (!d || !l) return;
     const hiddenTags = new Set(d.tags.filter((t) => tagHidden(d, t.name)).map((t) => t.name));
     const sec = this.viewer?.section ?? null;
+    // 여러 단면: 그룹 안 단면은 그 노드(와 안쪽) 라벨만 자른다
+    const t = d.tree;
+    const sections = (this.viewer?.sections ?? []).map((s) => {
+      const k = sectionIndexOfId(s.id);
+      const node = k === null ? -1 : (d.sectionPlanes.find((p) => p.index === k)?.node ?? -1);
+      return { normal: s.normal, offset: s.offset, scope: node >= 0 && t ? (n: number): boolean => n === node || (n >= 0 && isAncestor(t, node, n)) : null };
+    });
     l.setFilter({
       texts: d.showTexts,
       dimensions: d.showDimensions,
@@ -1915,6 +1937,7 @@ export class SkpViewerApp implements PanelHost {
       isNodeHidden: (n) => nodeHiddenForLabels(d, n),
       showHidden: d.showHidden,
       section: sec ? { normal: sec.normal, offset: sec.offset } : null,
+      sections,
     });
   }
 
@@ -2100,7 +2123,8 @@ export class SkpViewerApp implements PanelHost {
     const v = this.viewer;
     if (!v || !this.doc) return;
     // 축 단면은 파일 단면을 대신한다
-    this.doc.fileSection = null;
+    this.doc.fileSections = [];
+    this.doc.sectionSkipped = { scope: 0, limit: 0 };
     if (!axis) v.setSection(null);
     else {
       const cur = v.section;
@@ -2777,7 +2801,9 @@ export class SkpViewerApp implements PanelHost {
       camera: this.viewer?.getCamera() ?? null,
       pages: d?.pages.length ?? 0,
       page: d?.page ?? null,
-      fileSection: d?.fileSection ?? null,
+      fileSection: d?.fileSections[0] ?? null,
+      fileSections: d ? [...d.fileSections] : [],
+      sectionPlanes: this.viewer?.sections.length ?? 0,
       hiddenTags: d ? d.tags.filter((t) => tagHidden(d, t.name)).map((t) => t.name) : [],
       hiddenNodes: d?.hiddenNodes.size ?? 0,
       labels: this.labels?.size ?? 0,

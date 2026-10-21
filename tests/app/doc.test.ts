@@ -5,6 +5,8 @@ import {
   addEdgeStubs,
   createDoc,
   hiddenSelection,
+  sectionIndexOfId,
+  sectionPlanesFor,
   tagColors,
   definitionCounts,
   docLabel,
@@ -224,6 +226,29 @@ describe('숨은 선 모드용 윤곽선·태그 색', () => {
       ['a', [1, 0, 0, 1]],
       ['h', [1, 0, 0, 0.28]],
     ]);
+  });
+});
+
+describe('파일 단면 → 코어 여러 단면', () => {
+  it('모형 단면은 모두, 그룹 안 단면은 따로 나눈 노드의 항목만 자르고, 나누지 않은 노드·한도(6)를 넘는 것은 센다', () => {
+    const d = createDoc('예제.skp', 1, { scene: sampleScene(), ms: 1 });
+    const t = d.tree!;
+    const split = [...Array(t.count).keys()].find((i) => t.meshFirst[i]! >= 0)!;
+    const item = (index: number, node: number) => ({ index, plane: { node }, normal: [0, 0, 1], offset: index });
+    const r = sectionPlanesFor(d, [item(0, -1), item(1, split)], 'closed');
+    expect(r.applied).toEqual([0, 1]);
+    expect(r.planes[0]).toEqual({ normal: [0, 0, 1], offset: 0, caps: 'closed', id: 'skp-section-0' });
+    expect(r.planes[1]!.items!.length).toBeGreaterThan(0);
+    expect(r.planes[1]!.items!.every((id) => d.meshIndex.has(id) || d.lineIndex.has(id))).toBe(true);
+    // 나누지 않은 노드(구간으로만 아는 노드)는 그 노드만 자를 수 없다
+    const unsplit = { ...d, tree: { ...t, meshFirst: Int32Array.from(t.meshFirst).fill(-1) } };
+    expect(sectionPlanesFor(unsplit, [item(1, split)], 'none').skipped).toEqual({ scope: 1, limit: 0 });
+    const many = sectionPlanesFor(d, [...Array(8).keys()].map((i) => item(i, -1)), 'none');
+    expect(many.planes.length).toBe(6);
+    expect(many.skipped).toEqual({ scope: 0, limit: 2 });
+    expect(sectionIndexOfId('skp-section-12')).toBe(12);
+    expect(sectionIndexOfId('axis')).toBeNull();
+    expect(sectionIndexOfId(undefined)).toBeNull();
   });
 });
 

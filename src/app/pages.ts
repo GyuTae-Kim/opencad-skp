@@ -477,31 +477,47 @@ export function sectionToViewer(plane: readonly number[]): { normal: Vec3; offse
 }
 
 /**
- * 활성 단면 차례들 → 코어에 쓸 평면 하나. 코어 단면은 장면 전체를 자르므로 모형 단면(node −1)만 쓴다
- * (노드 단면은 그 그룹·컴포넌트 안쪽만 잘라야 해서 나타낼 수 없다). 여럿이면 처음 것, 없으면 null.
+ * 활성 단면 차례들 → 모형 단면(node −1) 가운데 처음 것(없으면 null). 여러 단면은 activeSections
  */
 export function pickSection(indices: readonly number[], planes: readonly unknown[]): PageSection | null {
-  for (const index of indices) {
-    const plane = readSectionPlane(planes[index]);
-    if (!plane || plane.node !== -1) continue;
-    const v = sectionToViewer(plane.plane);
-    if (v) return { index, plane, ...v };
-  }
-  return null;
+  return activeSections(indices, planes).find((s) => s.plane.node === -1) ?? null;
 }
 
 /**
- * 파일을 열 때의 단면: 모형 단면 가운데 활성(active)인 것. 모형 스타일이 단면 자르기를 끈 경우(sectionCuts false)는 null.
+ * 활성 단면 차례들 → 코어 setSections에 넘길 평면들: 모형 단면(node −1, 모형 전체를 자른다)이 먼저, 그다음 그룹·컴포넌트 안 단면(그 노드 안쪽만 —
+ * 앱이 노드의 항목을 items로 준다)을 파일 차례대로. SketchUp은 묶음(노드)마다 활성 단면이 하나라 같은 노드는 처음 것만. 읽지 못한 평면은 뺀다
  */
-export function initialSection(meta: unknown): PageSection | null {
+export function activeSections(indices: readonly number[], planes: readonly unknown[]): PageSection[] {
+  const out: PageSection[] = [];
+  const nodes = new Set<number>();
+  for (const index of indices) {
+    const plane = readSectionPlane(planes[index]);
+    if (!plane || nodes.has(plane.node)) continue;
+    const v = sectionToViewer(plane.plane);
+    if (!v) continue;
+    nodes.add(plane.node);
+    out.push({ index, plane, ...v });
+  }
+  return out.sort((a, b) => Number(a.plane.node !== -1) - Number(b.plane.node !== -1));
+}
+
+/**
+ * 파일을 열 때의 단면: 활성(active)인 단면 모두(activeSections). 모형 스타일이 단면 자르기를 끈 경우(sectionCuts false)는 없음.
+ */
+export function initialSections(meta: unknown): PageSection[] {
   const m = obj(meta);
   const list = Array.isArray(m?.sectionPlanes) ? (m!.sectionPlanes as unknown[]) : [];
-  if (readStyle(m?.style)?.sectionCuts === false) return null;
+  if (readStyle(m?.style)?.sectionCuts === false) return [];
   const active: number[] = [];
   list.forEach((p, i) => {
     if (readSectionPlane(p)?.active) active.push(i);
   });
-  return pickSection(active, list);
+  return activeSections(active, list);
+}
+
+/** 파일을 열 때의 모형 단면 하나(initialSections 가운데 모형 단면) */
+export function initialSection(meta: unknown): PageSection | null {
+  return initialSections(meta).find((s) => s.plane.node === -1) ?? null;
 }
 
 // ───────────────────────── 스타일 ─────────────────────────
@@ -652,8 +668,10 @@ export interface PagePlan {
   hiddenNodes: Set<number> | null;
   /** 단면을 바꾸는지(장면이 단면을 기억하거나, 기억한 스타일이 단면 자르기를 껐으면 참) */
   setsSection: boolean;
-  /** setsSection일 때 쓸 단면(null = 끈다) */
+  /** setsSection일 때 쓸 모형 단면(null = 없음) — sections의 모형 단면 */
   section: PageSection | null;
+  /** setsSection일 때 쓸 단면 모두(모형 단면 먼저, 그룹 안 단면은 그 노드만 자른다 — activeSections). 비면 끈다 */
+  sections: PageSection[];
   /** 장면 스타일(기억하지 않으면 null) — 글·치수·안내선·단면 기호 보이기, 배경 색 등은 앱이 이 값으로 */
   style: SkpStyleMeta | null;
   /** 스타일의 코어 그리기 방식(모르면 null) */
@@ -680,7 +698,8 @@ export function pagePlan(page: SkpPageMeta, ctx: PageContext = {}): PagePlan {
   const style = page.style ?? null;
   const cutsOff = style?.sectionCuts === false;
   const setsSection = !!page.sectionPlanes || cutsOff;
-  const section = page.sectionPlanes && !cutsOff ? pickSection(page.sectionPlanes, ctx.sectionPlanes ?? []) : null;
+  const sections = page.sectionPlanes && !cutsOff ? activeSections(page.sectionPlanes, ctx.sectionPlanes ?? []) : [];
+  const section = sections.find((s) => s.plane.node === -1) ?? null;
   return {
     name: page.name,
     camera,
@@ -690,6 +709,7 @@ export function pagePlan(page: SkpPageMeta, ctx: PageContext = {}): PagePlan {
     hiddenNodes: page.hiddenNodes ? new Set(page.hiddenNodes) : null,
     setsSection,
     section,
+    sections,
     style,
     renderMode: renderModeForStyle(style),
   };

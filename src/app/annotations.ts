@@ -130,6 +130,10 @@ export interface AnnotationFilter {
   showHidden: boolean;
   /** 단면(코어 setSection 꼴: normal·p > offset 쪽이 잘린다). null = 없음 */
   section: { normal: readonly number[]; offset: number } | null;
+  /**
+   * 여러 단면(있으면 section 대신): 모두의 남는 쪽만. scope가 있으면 그 노드 안 라벨만 자른다(그룹 안 단면 — 라벨의 node로 판정)
+   */
+  sections?: { normal: readonly number[]; offset: number; scope?: ((node: number) => boolean) | null }[];
 }
 
 export interface LayoutOptions {
@@ -368,17 +372,19 @@ export function annotationCandidates(items: readonly AnnotationItem[], f: Annota
     if (v === undefined) nodeMemo.set(n, (v = !!f.isNodeHidden(n)));
     return v;
   };
-  const sec = f.section;
+  const secs: NonNullable<AnnotationFilter['sections']> = f.sections ?? (f.section ? [f.section] : []);
   const out: number[] = [];
   items.forEach((it, i) => {
     if (it.kind === 'dim' ? !f.dimensions : !f.texts) return;
     if (it.hidden && !f.showHidden) return;
     if (f.hiddenTags.has(it.tag)) return;
     if (nodeHidden(it.node)) return;
-    if (sec && it.at) {
-      const n = sec.normal;
-      if (n[0]! * it.at[0] + n[1]! * it.at[1] + n[2]! * it.at[2] > sec.offset) return;
-    }
+    if (it.at)
+      for (const sec of secs) {
+        if (sec.scope && !sec.scope(it.node)) continue;
+        const n = sec.normal;
+        if (n[0]! * it.at[0] + n[1]! * it.at[1] + n[2]! * it.at[2] > sec.offset) return;
+      }
     out.push(i);
   });
   return out.sort((a, b) => PRIORITY[items[a]!.kind] - PRIORITY[items[b]!.kind] || a - b);

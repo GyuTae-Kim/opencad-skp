@@ -124,6 +124,10 @@ describe('거르기', () => {
     expect(isNodeHidden.mock.calls.map((c) => c[0]).sort()).toEqual([-1, 5]);
     // z > 50 쪽을 잘라 낸다
     expect(names(filter({ section: { normal: [0, 0, 1], offset: 50 } }))).toEqual(['e', '1200 mm', 'a', 'b']);
+    // 여러 단면: 그룹 안 단면(scope)은 그 노드 라벨만 — 노드 5의 'b'만 z > −1 쪽에서 잘린다
+    const inNode5 = (n: number): boolean => n === 5;
+    expect(names(filter({ sections: [{ normal: [0, 0, 1], offset: -1, scope: inNode5 }] }))).toEqual(['e', '1200 mm', 'a', 'd']);
+    expect(names(filter({ sections: [{ normal: [0, 0, 1], offset: 50 }, { normal: [0, 0, 1], offset: -1, scope: inNode5 }] }))).toEqual(['e', '1200 mm', 'a']);
   });
 });
 

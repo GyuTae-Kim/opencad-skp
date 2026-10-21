@@ -14,7 +14,9 @@ import {
   effectiveTagHidden,
   folderHiddenTags,
   initialCamera,
+  activeSections,
   initialSection,
+  initialSections,
   initialView,
   openingPage,
   pagePlan,
@@ -190,6 +192,26 @@ describe('단면', () => {
     expect(initialSection({ sectionPlanes: planes })!.index).toBe(1);
     expect(initialSection({ sectionPlanes: planes, style: { sectionCuts: false } })).toBeNull();
     expect(initialSection({ sectionPlanes: [{ ...planes[1], active: false }] })).toBeNull();
+  });
+
+  it('여러 단면: 모형 단면 먼저, 그룹 안 단면은 노드를 달고, 같은 노드는 처음 것만', () => {
+    const planes = [
+      { name: '안쪽', plane: [1, 0, 0, 0], active: true, tag: '', hidden: false, node: 3, size: 10 },
+      { name: '모형', plane: [0, 1, 0, -5], active: true, tag: '', hidden: false, node: -1, size: 10 },
+      { name: '안쪽2', plane: [0, 0, 1, 0], active: true, tag: '', hidden: false, node: 3, size: 10 },
+      { name: '다른 그룹', plane: [0, 0, -1, 2], active: false, tag: '', hidden: false, node: 7, size: 10 },
+    ];
+    expect(activeSections([0, 1, 2, 3, 9], planes).map((s) => [s.index, s.plane.node])).toEqual([
+      [1, -1],
+      [0, 3],
+      [3, 7],
+    ]);
+    expect(initialSections({ sectionPlanes: planes }).map((s) => s.index)).toEqual([1, 0]);
+    expect(initialSections({ sectionPlanes: planes, style: { sectionCuts: false } })).toEqual([]);
+    const plan = pagePlan({ name: 'p', sectionPlanes: [0, 3] }, { sectionPlanes: planes });
+    expect(plan.sections.map((s) => s.index)).toEqual([0, 3]);
+    expect(plan.section).toBeNull();
+    expect(pagePlan({ name: 'q', sectionPlanes: [0], style: { sectionCuts: false } }, { sectionPlanes: planes }).sections).toEqual([]);
   });
 });
 

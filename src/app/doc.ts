@@ -3,7 +3,8 @@
  * 해석기가 scene.meta에 적은 것(판·단위·통계·tagStats·materialStats·outline·tree·extraItems)을 안전하게 읽어 화면용 꼴로 바꾼다.
  * meta가 비었거나 옛 꼴이어도 장면(그물 이름·묶음)에서 최소한의 목록을 만든다.
  */
-import type { IndexRange, Pick3d, RangeSelection, Scene3d } from 'opencad-viewer3d';
+import type { IndexRange, Pick3d, RangeSelection, Scene3d, SectionPlane } from 'opencad-viewer3d';
+import { MAX_SECTION_PLANES } from 'opencad-viewer3d/section';
 import type { SkpImages } from '../images';
 import type {
   SkpAnnotationItems,
@@ -253,8 +254,10 @@ export interface SkpDoc {
   showDimensions: boolean;
   showGuides: boolean;
   showSectionPlanes: boolean;
-  /** 적용한 파일 단면(meta.sectionPlanes 차례, 없으면 null) */
-  fileSection: number | null;
+  /** 적용한 파일 단면(meta.sectionPlanes 차례, 모형 단면 먼저 — 없으면 빈 목록) */
+  fileSections: number[];
+  /** 마지막으로 적용하려던 파일 단면 가운데 적용하지 못한 수: 그 그룹만 자를 수 없는 그룹 안 단면 · 코어 평면 수 한도를 넘은 것 */
+  sectionSkipped: { scope: number; limit: number };
 }
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
@@ -663,6 +666,46 @@ export function hiddenSelection(d: Pick<SkpDoc, 'scene' | 'stubEdges'>, item: nu
   return prims;
 }
 
+/**
+ * 파일 단면(activeSections) → 코어 setSections 평면: 모형 단면은 장면 전체, 그룹·컴포넌트 안 단면은 그 노드의 항목(따로 나눈 노드만 — 해석기가
+ * 단면이 든 노드를 따로 나눈다)만 자른다. 나누지 않은 노드라 항목을 모르는 단면과 코어 한도(MAX_SECTION_PLANES)를 넘는 단면은 건너뛰고 수를 센다
+ */
+export function sectionPlanesFor(
+  d: Pick<SkpDoc, 'tree' | 'scene'>,
+  list: readonly { index: number; plane: Pick<SkpSectionPlaneMeta, 'node'>; normal: readonly number[]; offset: number }[],
+  caps: 'closed' | 'none' | 'all',
+): { planes: SectionPlane[]; applied: number[]; skipped: { scope: number; limit: number } } {
+  const planes: SectionPlane[] = [];
+  const applied: number[] = [];
+  const skipped = { scope: 0, limit: 0 };
+  for (const s of list) {
+    const base: SectionPlane = { normal: [s.normal[0]!, s.normal[1]!, s.normal[2]!], offset: s.offset, caps, id: `skp-section-${s.index}` };
+    const node = s.plane.node;
+    if (node >= 0) {
+      const t = d.tree;
+      const ids = t && node < t.count && isSplit(t, node) ? nodeItemIds(t, d.scene, node) : [];
+      if (!ids.length) {
+        skipped.scope++;
+        continue;
+      }
+      base.items = ids;
+    }
+    if (planes.length >= MAX_SECTION_PLANES) {
+      skipped.limit++;
+      continue;
+    }
+    planes.push(base);
+    applied.push(s.index);
+  }
+  return { planes, applied, skipped };
+}
+
+/** 단면 상태 id(sectionPlanesFor의 id) → 파일 단면 차례(파일 단면이 아니면 null) */
+export function sectionIndexOfId(id: string | undefined): number | null {
+  const m = id ? /^skp-section-(\d+)$/.exec(id) : null;
+  return m ? Number(m[1]) : null;
+}
+
 /** 태그 폴더가 (자신이나 조상이) 숨었는지 */
 export function folderHidden(d: Pick<SkpDoc, 'tagFolders' | 'hiddenFolders'>, folder: number): boolean {
   for (let f = folder, k = 0; f >= 0 && f < d.tagFolders.length && k < 64; f = d.tagFolders[f]!.parent ?? -1, k++) if (d.hiddenFolders.has(f)) return true;
@@ -713,7 +756,8 @@ export function readMetaExtras(scene: Scene3d): Pick<
   | 'showDimensions'
   | 'showGuides'
   | 'showSectionPlanes'
-  | 'fileSection'
+  | 'fileSections'
+  | 'sectionSkipped'
 > {
   const m = meta(scene);
   // 차례는 파일 그대로(activePage·장면의 단면 차례가 이 차례를 가리킨다)
@@ -762,7 +806,8 @@ export function readMetaExtras(scene: Scene3d): Pick<
     showDimensions: style?.dimensions !== false,
     showGuides: style?.guides !== false,
     showSectionPlanes: style?.sectionPlanes !== false,
-    fileSection: null,
+    fileSections: [],
+    sectionSkipped: { scope: 0, limit: 0 },
   };
 }
 

@@ -250,24 +250,45 @@ export class Panel {
       );
     if (view.length) this.body.append(section('보기', ...view));
 
-    // 파일 단면: 누르면 그 평면으로 자른다(코어 단면은 평면 하나 — 그룹 안 단면도 모형 전체를 자른다)
+    // 파일 단면: 누르면 켜고 끈다(여러 개 — 모형 단면은 모형 전체, 그룹·컴포넌트 안 단면은 그 그룹 안쪽만 자른다)
     if (d.sectionPlanes.length) {
       const list = h('div', { class: 'plist' });
       d.sectionPlanes.slice(0, LIST_LIMIT).forEach((sp, i) => {
-        const on = d.fileSection === i;
+        const on = d.fileSections.includes(sp.index);
         const b = h(
           'button',
-          { class: `prow pick${on ? ' sel' : ''}`, type: 'button', 'aria-pressed': on ? 'true' : 'false', title: on ? '누르면 단면을 끕니다' : '누르면 이 단면으로 모형을 자릅니다' },
+          { class: `prow pick${on ? ' sel' : ''}`, type: 'button', 'aria-pressed': on ? 'true' : 'false', title: on ? '누르면 이 단면을 끕니다' : '누르면 이 단면으로 자릅니다(같은 그룹의 다른 단면은 꺼짐)' },
           h('span', { class: 'swatch sec', 'aria-hidden': 'true' }),
           h('span', { class: 'name' }, sp.name || `단면 ${i + 1}`),
           sp.active ? h('span', { class: 'chip', title: '파일에서 활성인 단면' }, '활성') : null,
-          sp.node >= 0 ? h('span', { class: 'chip', title: '그룹·컴포넌트 안의 단면 — 이 뷰어는 모형 전체를 자릅니다' }, '그룹 안') : null,
+          sp.node >= 0 ? h('span', { class: 'chip', title: '그룹·컴포넌트 안의 단면 — 그 그룹 안쪽만 자릅니다' }, '그룹 안') : null,
           sp.tag ? h('span', { class: 'count' }, sp.tag) : null,
         );
-        b.addEventListener('click', () => this.host.setFileSection(on ? null : i));
+        b.addEventListener('click', () => this.host.setFileSection(sp.index));
         list.append(b);
       });
-      this.body.append(section(`단면 평면 ${d.sectionPlanes.length}개`, list));
+      const sk = d.sectionSkipped;
+      const notes: string[] = [];
+      if (sk.scope) notes.push(`그룹 안 단면 ${fmtCount(sk.scope)}개는 그 그룹만 자를 수 없어(그룹이 너무 많아 따로 나누지 않음) 적용하지 않았습니다.`);
+      if (sk.limit) notes.push(`단면은 한 번에 ${MAX_FILE_SECTIONS}개까지라 ${fmtCount(sk.limit)}개는 적용하지 않았습니다.`);
+      this.body.append(
+        section(
+          `단면 평면 ${d.sectionPlanes.length}개`,
+          list,
+          d.fileSections.length
+            ? h(
+                'div',
+                { class: 'pbar' },
+                (() => {
+                  const off = h('button', { class: 'mini-btn', type: 'button' }, '파일 단면 모두 끄기');
+                  off.addEventListener('click', () => this.host.setFileSection(null));
+                  return off;
+                })(),
+              )
+            : null,
+          ...notes.map((t) => h('p', { class: 'hint' }, t)),
+        ),
+      );
     }
 
     // 태그: 폴더 없는 태그 → 폴더(앞 순회 차례)와 그 안 태그
@@ -941,6 +962,9 @@ export class Panel {
     f.append(...lines);
   }
 }
+
+/** 한 번에 쓰는 파일 단면 수(코어 MAX_SECTION_PLANES) */
+const MAX_FILE_SECTIONS = 6;
 
 function indent(depth: number): number {
   return 4 + (depth - 1) * 14;

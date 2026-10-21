@@ -92,7 +92,7 @@ export interface MeasureToolOptions {
 export const RECENT_CENTERS = 4;
 
 /** 이 도구가 쓰는 뷰어 기능(시험에서 가짜로 바꿀 수 있게) */
-export type MeasureViewer = Pick<Viewer3d, 'canvas' | 'pick' | 'getCamera' | 'onCameraChange' | 'getRenderMode' | 'section'>;
+export type MeasureViewer = Pick<Viewer3d, 'canvas' | 'pick' | 'getCamera' | 'onCameraChange' | 'getRenderMode' | 'section'> & Partial<Pick<Viewer3d, 'sections'>>;
 /** 이 도구가 쓰는 덧그림 기능 */
 export type MeasureOverlay = Pick<Overlay, 'svg' | 'labels' | 'set' | 'frame' | 'invalidate'>;
 
@@ -423,13 +423,14 @@ export class MeasureTool {
       if (now() - t0 > budget) break;
       probes.push(v.pick(x + dx, y + dy));
     }
-    const sec = v.section;
-    const kept = sec ? (p: V3): boolean => dot(sec.normal, p) <= sec.offset + 1e-9 * (Math.abs(sec.offset) + 1) : null;
+    // 단면에 잘린 쪽 후보는 버린다: 장면 전체를 자르는 평면들(그룹 안 단면은 그 그룹 항목만 자르므로 후보 점으로는 가리지 않는다)
+    const cuts = (v.sections ?? (v.section ? [v.section] : [])).filter((s) => !('items' in s && s.items));
+    const kept = cuts.length ? (p: V3): boolean => cuts.every((sec) => dot(sec.normal, p) <= sec.offset + 1e-9 * (Math.abs(sec.offset) + 1)) : null;
     const mode = v.getRenderMode();
     let checks = 0;
-    // 음영 모드에서만 가림을 본다: 후보 점의 화면 자리에서 다시 골라 그보다 앞의 면이 맞으면 가린 것
+    // 음영 계열 모드에서만 가림을 본다: 후보 점의 화면 자리에서 다시 골라 그보다 앞의 면이 맞으면 가린 것
     const visible =
-      mode === 'shaded' || mode === 'shadedEdges'
+      mode === 'shaded' || mode === 'shadedEdges' || mode === 'hiddenLine' || mode === 'monochrome' || mode === 'noTexture'
         ? (p: V3): boolean => {
             if (++checks > VISIBLE_CHECKS) return false;
             const s = projectToScreen(f, p);
