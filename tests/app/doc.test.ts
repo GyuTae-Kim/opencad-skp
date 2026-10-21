@@ -1,16 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import type { Scene3d } from 'opencad-viewer3d/types';
+import { translate } from '../../site/i18n.mjs';
 import {
   createDoc,
+  hiddenSelection,
+  prepareEdgeDisplay,
+  sectionIndexOfId,
+  sectionPlanesFor,
+  tagColors,
   definitionCounts,
   docLabel,
   majorOf,
+  materialCount,
   materialRows,
   outlineRows,
   panelTabs,
   readInfo,
   releaseName,
   sceneCounts,
+  selectionEntity,
   selectionForPick,
   selectionIds,
   selectionText,
@@ -18,7 +26,7 @@ import {
   unitSummary,
   unsupportedVersion,
 } from '../../src/app/doc';
-import { skpToScene } from '../../src/index';
+import { readSkpImages, skpToScene } from '../../src/index';
 import { oldSkpHeader } from '../build';
 import { mfcFile, squareEntities } from '../mfcwrite';
 import { sampleSkpBytes } from '../../src/app/sample';
@@ -36,14 +44,16 @@ describe('판·단위 글', () => {
     expect(releaseName('이상함')).toBe('SketchUp');
   });
 
-  it('SketchUp 3~6만 아직 못 읽는 판으로 가린다(7·8·2013~2020은 읽는다)', () => {
+  it('SketchUp 3~5만 아직 못 읽는 판으로 가린다(6·7·8·2013~2020은 읽는다)', () => {
     expect(unsupportedVersion(skpToScene(mfcFile({ schemas: 'v4', root: squareEntities() })))).toBe('4.0.1');
+    expect(unsupportedVersion(skpToScene(mfcFile({ schemas: 'v6', root: squareEntities() })))).toBeNull();
     expect(unsupportedVersion(skpToScene(mfcFile({ schemas: 'v8', root: squareEntities() })))).toBeNull();
     expect(unsupportedVersion(skpToScene(mfcFile({ schemas: 'v20', root: squareEntities() })))).toBeNull();
     // 잘린 2017 파일은 판 안내가 아니라 열지 못한 파일이다
     expect(unsupportedVersion(skpToScene(oldSkpHeader('17.2.2555')))).toBeNull();
     expect(unsupportedVersion(sampleScene())).toBeNull();
-    expect(unsupportedVersion({ name: 'x', units: 'unknown', meshes: [], lines: [], meta: { version: '6.0.1', container: 'mfc' } })).toBe('6.0.1');
+    expect(unsupportedVersion({ name: 'x', units: 'unknown', meshes: [], lines: [], meta: { version: '5.0.1', container: 'mfc' } })).toBe('5.0.1');
+    expect(unsupportedVersion({ name: 'x', units: 'unknown', meshes: [], lines: [], meta: { version: '6.0.1', container: 'mfc' } })).toBeNull();
     expect(unsupportedVersion({ name: 'x', units: 'unknown', meshes: [], lines: [], meta: { version: '20.0.1', container: 'mfc' } })).toBeNull();
   });
 
@@ -103,6 +113,32 @@ describe('패널 목록', () => {
     expect(rows.every((r) => r.meshIds.length > 0 && r.meshIds.every((id) => ids.has(id)))).toBe(true);
   });
 
+  it('재질: 뒷면에 칠한 면 수(뒷면만이면 그것만)', () => {
+    const s: Scene3d = {
+      name: 'x',
+      units: 'mm',
+      meshes: [{ id: 'a', positions: new Float32Array(9), color: [1, 1, 1, 1], backColor: [0, 0, 1, 1] }],
+      lines: [],
+      meta: {
+        materialStats: [
+          { name: '기본 재질', color: [1, 1, 1, 1], faces: 3, meshIds: ['a'] },
+          { name: '파랑', color: [0, 0, 1, 1], faces: 0, backFaces: 3, meshIds: ['a'] },
+          { name: '빨강', color: [1, 0, 0, 1], faces: 2, backFaces: 1, meshIds: ['a'] },
+        ],
+      },
+    };
+    const rows = materialRows(s);
+    expect(rows.map((r) => [r.name, materialCount(r)])).toEqual([
+      ['기본 재질', '면 3'],
+      ['빨강', '면 2 · 뒷면 1'],
+      ['파랑', '뒷면 3'],
+    ]);
+    expect(materialCount({ faces: null, backFaces: 0 })).toBe('');
+    // 다른 언어에서 "Face 2 · 뒷면 1"처럼 섞이지 않는다
+    expect(translate(materialCount({ faces: 2, backFaces: 1 }), 'en')).toBe('Face 2 · Back 1');
+    expect(translate(materialCount({ faces: 1200, backFaces: 3 }), 'de')).toBe('Fläche 1,200 · Rückseite 3');
+  });
+
   it('재질: meta가 없으면 그물 이름에서', () => {
     const s: Scene3d = {
       name: 'x',
@@ -142,6 +178,94 @@ describe('패널 목록', () => {
   });
 });
 
+describe('숨은 선 모드용 윤곽선·태그 색', () => {
+  it('그물은 삼각형 변을 그리지 않고(코어 triangleEdges), 모형 모서리 묶음은 뒤 모서리 점선을 받는다(hiddenEdges)', () => {
+    const s: Scene3d = {
+      name: 'x',
+      units: 'mm',
+      meshes: [
+        { id: 'a', positions: Float32Array.from([1, 2, 3, 4, 5, 6, 7, 8, 9]), indices: Uint32Array.of(0, 1, 2), color: [1, 1, 1, 1] },
+        {
+          id: 'b',
+          positions: Float32Array.from([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+          indices: Uint32Array.of(0, 1, 2),
+          color: [1, 1, 1, 1],
+          edges: Float32Array.from([0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0]),
+          billboard: { origin: [0, 0, 0], axis: 'z' },
+        },
+      ],
+      lines: [
+        { id: 'skp-edges-2', positions: new Float32Array(6) },
+        { id: 'skp-soft-3', positions: new Float32Array(6) },
+        { id: 'skp-hidden-edges-4', positions: new Float32Array(6) },
+        { id: 'skp-reveal-edges-5', positions: new Float32Array(6) },
+        { id: 'skp-dims-6', positions: new Float32Array(6) },
+        { id: 'skp-guides-7', positions: new Float32Array(6) },
+      ],
+    };
+    prepareEdgeDisplay(s);
+    expect(s.meshes.map((m) => m.triangleEdges)).toEqual([false, false]);
+    // 그물에 윤곽선을 붙이지 않는다(카메라를 보는 그물은 그 배치의 모서리 그대로)
+    expect(s.meshes[0]!.edges).toBeUndefined();
+    expect(s.meshes[1]!.edges!.length).toBe(12);
+    // 모형 모서리 묶음만 뒤 모서리 점선(주석의 치수·보조선은 아님)
+    expect(s.lines.map((l) => l.hiddenEdges ?? false)).toEqual([true, true, true, true, false, false]);
+    const d = { scene: s };
+    // 보통 그물: 숨길 구간만(늘 숨기던 길이 0 윤곽선 구간은 없다)
+    expect(hiddenSelection(d, 0, null)).toBeNull();
+    expect(hiddenSelection(d, 0, [{ start: 0, count: 1 }])).toEqual([{ start: 0, count: 1 }]);
+    // 카메라를 보는 그물: 삼각형을 모두 숨기면 윤곽선(그 배치의 모서리)도
+    expect(hiddenSelection(d, 1, [{ start: 0, count: 1 }])).toEqual({ prims: [{ start: 0, count: 1 }], edges: [{ start: 0, count: 2 }] });
+    expect(hiddenSelection(d, 1, null)).toBeNull();
+    expect(hiddenSelection(d, 2, [{ start: 0, count: 1 }])).toEqual([{ start: 0, count: 1 }]);
+  });
+
+  it('태그 색: 그물의 묶음(태그) 색, 불투명도는 작은 쪽, 색을 모르는 태그는 빼고', () => {
+    const s: Scene3d = {
+      name: 'x',
+      units: 'mm',
+      meshes: [
+        { id: 'a', positions: new Float32Array(9), color: [1, 1, 1, 1], group: '벽' },
+        { id: 'h', positions: new Float32Array(9), color: [1, 1, 1, 0.28], group: '벽' },
+        { id: 'c', positions: new Float32Array(9), color: [1, 1, 1, 1], group: '모름' },
+      ],
+      lines: [],
+    };
+    const tags = [
+      { name: '벽', color: [1, 0, 0, 1] as [number, number, number, number] },
+      { name: '모름', color: null },
+    ];
+    const m = tagColors({ scene: s, tags: tags as never });
+    expect([...m]).toEqual([
+      ['a', [1, 0, 0, 1]],
+      ['h', [1, 0, 0, 0.28]],
+    ]);
+  });
+});
+
+describe('파일 단면 → 코어 여러 단면', () => {
+  it('모형 단면은 모두, 그룹 안 단면은 따로 나눈 노드의 항목만 자르고, 나누지 않은 노드·한도(6)를 넘는 것은 센다', () => {
+    const d = createDoc('예제.skp', 1, { scene: sampleScene(), ms: 1 });
+    const t = d.tree!;
+    const split = [...Array(t.count).keys()].find((i) => t.meshFirst[i]! >= 0)!;
+    const item = (index: number, node: number) => ({ index, plane: { node }, normal: [0, 0, 1], offset: index });
+    const r = sectionPlanesFor(d, [item(0, -1), item(1, split)], 'closed');
+    expect(r.applied).toEqual([0, 1]);
+    expect(r.planes[0]).toEqual({ normal: [0, 0, 1], offset: 0, caps: 'closed', id: 'skp-section-0' });
+    expect(r.planes[1]!.items!.length).toBeGreaterThan(0);
+    expect(r.planes[1]!.items!.every((id) => d.meshIndex.has(id) || d.lineIndex.has(id))).toBe(true);
+    // 나누지 않은 노드(구간으로만 아는 노드)는 그 노드만 자를 수 없다
+    const unsplit = { ...d, tree: { ...t, meshFirst: Int32Array.from(t.meshFirst).fill(-1) } };
+    expect(sectionPlanesFor(unsplit, [item(1, split)], 'none').skipped).toEqual({ scope: 1, limit: 0 });
+    const many = sectionPlanesFor(d, [...Array(8).keys()].map((i) => item(i, -1)), 'none');
+    expect(many.planes.length).toBe(6);
+    expect(many.skipped).toEqual({ scope: 0, limit: 2 });
+    expect(sectionIndexOfId('skp-section-12')).toBe(12);
+    expect(sectionIndexOfId('axis')).toBeNull();
+    expect(sectionIndexOfId(undefined)).toBeNull();
+  });
+});
+
 describe('문서·고르기', () => {
   it('고르기 결과는 윗단계 항목 전체를 강조한다', () => {
     const d = createDoc('예제.skp', 1234, { scene: sampleScene(), ms: 5 });
@@ -155,6 +279,8 @@ describe('문서·고르기', () => {
     expect(selectionText(d, sel, pick)).toBe('컴포넌트 의자 동 (의자) · 태그 가구 · 재질 파란 천 · 면 31');
     expect(selectionForPick(d, null)).toBeNull();
     expect(selectionForPick(d, { ...pick, id: 'unknown' })).toEqual({ kind: 'item', id: 'unknown' });
+    // 그물 윤곽선 고르기(kind 'edge')는 그 그물의 첫 삼각형 노드로(윤곽선 번호를 삼각형 번호로 읽지 않는다)
+    expect(selectionForPick(d, { ...pick, kind: 'edge', index: 99999, raw: 99999 })).toEqual(sel);
   });
 
   it('재질 고르기', () => {
@@ -162,8 +288,29 @@ describe('문서·고르기', () => {
     const sel = { kind: 'material' as const, name: '원목' };
     expect(selectionIds(d, sel)).toEqual(d.materials.find((m) => m.name === '원목')!.meshIds);
     expect(selectionText(d, sel)).toBe('재질 원목 · 면 88');
+    // 재질 이름(문서 자료)은 그대로, 뒤의 "면"까지 그 언어로
+    expect(translate(selectionText(d, sel), 'en')).toBe('Material 원목 · Face 88');
+    // 모형에 바로 놓인 형상: 이름이 곧 설명("형상 모형에 바로 놓인 형상"으로 겹치지 않게)
+    const loose = d.outline.find((r) => r.kind === 'loose')!;
+    expect(selectionText(d, { kind: 'outline', index: loose.index })).toMatch(/^모형에 바로 놓인 형상 · 면 \d/);
+    expect(translate(selectionText(d, { kind: 'outline', index: loose.index }), 'en')).toMatch(/^Geometry placed directly on the model · Face \d/);
     expect(selectionIds(d, null)).toEqual([]);
     expect(selectionText(d, null)).toBe('');
+  });
+
+  it('무늬 재질의 엔티티 정보는 3D에 무늬를 입혔는지를 목록 칩과 같은 기준으로 적는다', () => {
+    const bytes = sampleSkpBytes();
+    const withTex = createDoc('예제.skp', 1, { scene: skpToScene(bytes, { name: '예제', outline: true, textures: readSkpImages(bytes).materials }), ms: 1 });
+    const tile = withTex.materials.find((m) => m.name === '기와')!;
+    expect(tile.textured).toBe(true);
+    expect(tile.texture).not.toBeNull();
+    withTex.selection = { kind: 'material', name: '기와' };
+    expect(selectionEntity(withTex).extra).toContainEqual({ label: '무늬', value: '그림 재질(3D에 무늬를 입힘)' });
+    // 무늬 그림을 넘기지 않으면(옛 판·한도 초과) 평균색
+    const plain = createDoc('예제.skp', 1, { scene: sampleScene(), ms: 1 });
+    expect(plain.materials.find((m) => m.name === '기와')!.texture).toBeNull();
+    plain.selection = { kind: 'material', name: '기와' };
+    expect(selectionEntity(plain).extra).toContainEqual({ label: '무늬', value: '그림 재질(3D는 평균색)' });
   });
 
   it('outline이 없는 장면은 구성 탭을 숨긴다', () => {

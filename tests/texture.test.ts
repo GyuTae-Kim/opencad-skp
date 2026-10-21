@@ -123,15 +123,16 @@ function open(bytes: Uint8Array, o: Parameters<typeof skpToScene>[1] = {}): Scen
   return skpToScene(bytes, { textures: readSkpImages(bytes).materials, ...o });
 }
 
-/** 그물의 정점마다 [x, y, u, v, q](세계 좌표, origin 반영) */
-function corners(m: Mesh3d): number[][] {
+/** 그물의 정점마다 [x, y, u, v, q](세계 좌표, origin 반영). back이면 뒷면 무늬 좌표 */
+function corners(m: Mesh3d, back = false): number[][] {
   const nv = m.positions.length / 3;
-  const st = m.uvs!.length / nv;
+  const uvs = back ? m.backUvs! : m.uvs!;
+  const st = uvs.length / nv;
   const o = m.origin ?? [0, 0, 0];
   const out: number[][] = [];
   for (let i = 0; i < nv; i++) {
-    const q = st === 3 ? m.uvs![i * 3 + 2]! : 1;
-    out.push([m.positions[i * 3]! + o[0], m.positions[i * 3 + 1]! + o[1], m.uvs![i * st]! / q, m.uvs![i * st + 1]! / q, q]);
+    const q = st === 3 ? uvs[i * 3 + 2]! : 1;
+    out.push([m.positions[i * 3]! + o[0], m.positions[i * 3 + 1]! + o[1], uvs[i * st]! / q, uvs[i * st + 1]! / q, q]);
   }
   return out;
 }
@@ -323,22 +324,30 @@ describe('장면의 무늬 좌표', () => {
     expect(meshOf(s, '색').texture).toBeUndefined();
   });
 
-  it('앞·뒤 따로: 앞 재질이 없으면 물려받기 → 없으면 뒤 재질과 뒤 투영', () => {
+  it('앞·뒤 따로: 앞면은 앞 재질 → 물려받기 → 기본색, 뒷면은 뒤 재질과 뒤 투영(backTexture·backUvs)', () => {
     const backMap: TextureMapOpts = { kind: 1, matrix: [2, 0, 0, 0, 2, 0, 0, 0, 1] };
     const s = open(
       fileWith([
-        // 뒤 재질 무늬B(뒤 투영: 무늬 두 배 크기)만 있는 면 — 물려받을 것이 없으니 뒤 재질
+        // 뒤 재질 무늬B(뒤 투영: 무늬 두 배 크기)만 있는 면 — 앞면은 기본색, 뒷면은 무늬B
         { def: { back: 2, backMap }, at: 0 },
-        // 같은 면을 무늬A 인스턴스로 칠하면 물려받은 무늬A(기본 투영)
+        // 같은 면을 무늬A 인스턴스로 칠하면 앞면은 물려받은 무늬A(기본 투영), 뒷면은 그대로 자기 뒤 재질 무늬B
         { def: { back: 2, backMap }, material: 1, at: 100 },
       ]),
     );
-    const b = corners(meshOf(s, '무늬B'));
+    const plain = meshOf(s, '기본 재질');
+    expect(plain.texture).toBeUndefined();
+    expect(plain.backTexture).toBe('skp-tex-2');
+    const b = corners(plain, true);
     // 뒤 투영: 평면 10인치 = 무늬 5인치 = 한 장
     expect(uvAt(b, 10, 10)[0] - uvAt(b, 0, 0)[0]).toBeCloseTo(1, 6);
-    const a = corners(meshOf(s, '무늬A'));
+    const am = meshOf(s, '무늬A');
+    expect(am.backTexture).toBe('skp-tex-2');
+    const a = corners(am);
     expect(uvAt(a, 110, 10)[0] - uvAt(a, 100, 0)[0]).toBeCloseTo(1, 6);
     expect(uvAt(a, 110, 10)[1] - uvAt(a, 100, 0)[1]).toBeCloseTo(0.5, 6);
+    expect(uvAt(corners(am, true), 110, 10)[0] - uvAt(corners(am, true), 100, 0)[0]).toBeCloseTo(1, 6);
+    // 쓰인 무늬(뒷면만 쓰는 무늬B도)를 장면에 넣는다
+    expect(s.textures!.map((t) => t.id).sort()).toEqual(['skp-tex-1', 'skp-tex-2']);
   });
 
   it('원근 무늬가 섞인 그물은 3값(u·q, v·q, q), 나머지 면은 q = 1', () => {
@@ -438,6 +447,17 @@ describe('워커 무늬 손질(순수 부분)', () => {
     dropTexture(s, 'skp-tex-1');
     expect(s.textures).toBeUndefined();
     expect(s.meta!.textures).toBeUndefined();
+  });
+
+  it('dropTexture: 뒷면 무늬도 뺀다(뒷면은 재질 색으로)', () => {
+    const backMap: TextureMapOpts = { kind: 1, matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1] };
+    const s = open(fileWith([{ def: { back: 2, backMap }, at: 0 }]));
+    const m = s.meshes.find((x) => x.backTexture)!;
+    expect(m.backUvs).toBeDefined();
+    dropTexture(s, m.backTexture!);
+    expect(m.backTexture).toBeUndefined();
+    expect(m.backUvs).toBeUndefined();
+    expect(m.backColor).toBeDefined();
   });
 
   it('풀 무늬 고르기·투명 화소 재기', () => {

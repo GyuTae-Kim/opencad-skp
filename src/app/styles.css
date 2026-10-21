@@ -1096,6 +1096,61 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 
+/* 정의별 개수 줄: 누르면 그 정의의 인스턴스를 모두 고른다 */
+.ptable tr.pick {
+  cursor: pointer;
+}
+
+.ptable tr.pick:hover {
+  background: var(--bg-hover);
+}
+
+.ptable tr.pick.sel {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* 구성 찾기 */
+.search-box {
+  margin: 0 2px 6px;
+}
+
+.search-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 30px;
+  padding: 0 9px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+}
+
+.search-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.search-row .name .path {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-note {
+  margin: 0 2px 4px;
+}
+
+/* 손가락 기기: 누르기 쉬운 높이, iOS가 칸에 들어갈 때 화면을 키우지 않는 16px 글 */
+@media (pointer: coarse) {
+  .search-input {
+    height: 40px;
+    font-size: 16px;
+  }
+}
+
 .pfoot {
   flex: none;
   max-height: 32%;
@@ -1356,6 +1411,35 @@ button.scene-card.sel {
   background: var(--accent);
 }
 
+/* 장면 재생에서 뺀 장면 */
+.scene-tab.no-play:not(.on) {
+  font-style: italic;
+  opacity: 0.8;
+}
+
+/* 장면 재생(▶/■) */
+.scene-play {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.scene-play:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.scene-play.on {
+  color: var(--accent);
+}
+
 /* 태그 폴더·태그 색·단면 견본 */
 .prow.folder .name {
   font-weight: 600;
@@ -1605,6 +1689,80 @@ button.scene-card.sel {
   }
 }
 
+/* 카메라 띠(걷기·시야각·2점 투시): 넓은 화면에서도 보인다. 글은 위 한 줄, 시야각·단추는 아래 줄 */
+.cam-bar:not([hidden]) {
+  display: flex;
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.cam-bar .cam-text {
+  flex-basis: 100%;
+}
+
+.cam-bar .fov {
+  display: flex;
+  flex: 1 1 160px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.cam-bar .fov-range {
+  flex: 1 1 auto;
+  min-width: 80px;
+  accent-color: var(--accent);
+}
+
+.cam-bar .fov-value {
+  min-width: 3.2em;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.mb-btn.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-input));
+  color: var(--accent);
+}
+
+/* 휴대폰 걷기 조이스틱: 왼쪽 아래(카메라 띠 위) */
+.walk-stick {
+  position: absolute;
+  left: 16px;
+  bottom: 118px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 112px;
+  height: 112px;
+  border: 1px solid var(--border-soft);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--bg-elev) 55%, transparent);
+  box-shadow: var(--shadow);
+  touch-action: none;
+}
+
+.walk-stick[hidden] {
+  display: none;
+}
+
+.stick-knob {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.85;
+  pointer-events: none;
+  transition: transform 0.08s;
+}
+
+.walk-stick.on .stick-knob {
+  transition: none;
+}
+
 /* 손가락 기기에서만(또는 마우스에서만) 보이는 안내 */
 .coarse-only {
   display: none;
@@ -1679,7 +1837,8 @@ button.scene-card.sel {
   }
 
   .sec-group:not(.sec-on) .sec-range,
-  .sec-group:not(.sec-on) .sec-flip {
+  .sec-group:not(.sec-on) .sec-flip,
+  .sec-group .sec-fill {
     display: none;
   }
 
@@ -1948,6 +2107,11 @@ html:lang(zh-CN) { --font: -apple-system, "PingFang SC", "Microsoft YaHei", sans
     padding: 0 12px;
     font-size: 13px;
   }
+
+  .scene-play {
+    width: 40px;
+    min-height: 38px;
+  }
 }
 
 /*
@@ -1965,5 +2129,243 @@ html:lang(zh-CN) { --font: -apple-system, "PingFang SC", "Microsoft YaHei", sans
 
   :root[data-theme='light'] {
     --statusbar-bg: #1b2027;
+  }
+}
+
+/* 그림 저장 창(exporter.ts): 3D 보기 오른쪽 위, 좁은 화면은 아래에 */
+.export-dialog {
+  position: absolute;
+  top: 56px;
+  right: 12px;
+  z-index: 6;
+  box-sizing: border-box;
+  width: min(320px, calc(100% - 24px));
+  padding: 10px 12px 12px;
+  color: var(--text);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+}
+
+.ex-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.ex-group {
+  margin: 0 0 4px;
+  padding: 0;
+  border: 0;
+}
+
+.ex-group legend {
+  margin-bottom: 2px;
+  padding: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.ex-opt {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 30px;
+  cursor: pointer;
+}
+
+.ex-opt small {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.ex-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.ex-status {
+  min-height: 1em;
+  margin: 6px 0 0;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+@media (max-width: 759.98px) {
+  .export-dialog {
+    top: auto;
+    right: 12px;
+    bottom: 12px;
+    left: 12px;
+    width: auto;
+  }
+}
+
+@media (pointer: coarse) {
+  .ex-opt {
+    min-height: 40px;
+  }
+
+  .export-dialog .btn {
+    min-height: 40px;
+  }
+}
+
+/* 인쇄: 인쇄 전용 쪽(그림 한 장과 이름·날짜)만 */
+.print-sheet {
+  display: none;
+}
+
+@media print {
+  body > *:not(.print-sheet) {
+    display: none !important;
+  }
+
+  .print-sheet {
+    display: block;
+  }
+
+  .print-sheet img {
+    display: block;
+    max-width: 100%;
+    max-height: 92vh;
+    margin: 0 auto;
+    object-fit: contain;
+  }
+
+  .print-cap {
+    margin: 6px 0 0;
+    color: #333;
+    font: 11px system-ui, sans-serif;
+    text-align: center;
+  }
+
+  @page {
+    margin: 12mm;
+  }
+}
+
+/* 최근 측정(측정 띠 위 목록·패널 아래 띠) */
+.measure-log {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  left: 0;
+  box-sizing: border-box;
+  min-width: 260px;
+  max-height: 50vh;
+  padding: 8px;
+  overflow: auto;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+
+.ml-head {
+  margin: 0 2px 4px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.ml-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 40px;
+  padding: 4px 8px;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border-soft);
+  cursor: pointer;
+}
+
+.ml-row:hover {
+  background: var(--bg-hover);
+}
+
+.ml-acts {
+  margin: 6px 0 0;
+}
+
+.measure-flash {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  padding: 4px 10px;
+  color: var(--bg-elev);
+  font-size: 12px;
+  white-space: nowrap;
+  background: var(--text);
+  border-radius: 8px;
+  transform: translateX(-50%);
+}
+
+.measure-history > summary {
+  margin-top: 4px;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ml-line {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ml-copy-btn {
+  height: 22px;
+  padding: 0 6px;
+}
+
+/* 새 판 알림(서비스 워커) */
+.update-bar {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  z-index: 7;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  max-width: calc(100% - 24px);
+  padding: 8px 10px 8px 14px;
+  font-size: 13px;
+  background: var(--bg-elev);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  transform: translateX(-50%);
+}
+
+.update-bar[hidden] {
+  display: none;
+}
+
+.mini-btn.primary {
+  color: var(--on-accent);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+@media (pointer: coarse) {
+  .update-bar .mini-btn {
+    height: 36px;
   }
 }

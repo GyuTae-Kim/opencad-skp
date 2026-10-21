@@ -51,6 +51,8 @@ export interface SkpStyleMeta {
   /** 모서리 보이기(EdgeDisplayMode) */
   edges?: boolean;
   profiles?: boolean;
+  /** 윤곽선 굵기(화소, SilhouetteWidth) */
+  profileWidth?: number;
   backEdges?: boolean;
   background?: Rgb;
   /** 하늘·지면(켜져 있을 때만 색, 꺼져 있으면 null) */
@@ -69,6 +71,52 @@ export interface SkpStyleMeta {
   sectionCuts?: boolean;
   sectionFill?: boolean;
   colorByTag?: boolean;
+  /** 안개 켜짐(DisplayFog)·색(FogColor, 배경 색을 쓰면 fogUseBackground)·시작·끝 거리(장면 단위, −1 = SketchUp 기본 — 모형 크기를 따름) */
+  fog?: boolean;
+  fogColor?: Rgb;
+  fogUseBackground?: boolean;
+  fogStart?: number;
+  fogEnd?: number;
+}
+
+/**
+ * 위치·그림자 설정(Model Info > 위치, 그림자 창 — 엔진 SkpShadowInfo). time은 그곳 시각을 UTC 초처럼 적은 것(시간대 tz를 빼면 실제 UTC).
+ * north는 모형 축에서 북쪽 방향((0, 1, 0) = 북쪽 각 0). 읽지 못한 칸은 빠진다(2020 이하는 켜고 끄기 깃발이 없다)
+ */
+export interface SkpShadowMeta {
+  time?: number;
+  city?: string;
+  country?: string;
+  latitude?: number;
+  longitude?: number;
+  tz?: number;
+  north?: Vec3;
+  light?: number;
+  dark?: number;
+  display?: boolean;
+  onFaces?: boolean;
+  onGround?: boolean;
+  useSun?: boolean;
+}
+
+/** 모형 위치(정보 탭): 그림자 설정의 도시·나라·위경도·시간대·북쪽과, 모형이 지리 참조를 쓰는지(GeoReference.UsesGeoReferencing) */
+export interface SkpLocationMeta {
+  city?: string;
+  country?: string;
+  latitude?: number;
+  longitude?: number;
+  tz?: number;
+  /** 북쪽 각(도, 초록 축에서 빨강 축 쪽으로) */
+  northAngle?: number;
+  georeferenced: boolean;
+}
+
+/** 그리기 축(원점은 장면 단위, 축은 단위 벡터). 기본 축이면 없다 */
+export interface SkpAxesMeta {
+  origin: Vec3;
+  x: Vec3;
+  y: Vec3;
+  z: Vec3;
 }
 
 /** 장면(페이지). 각 칸은 그 장면이 그 속성을 기억할 때만 있다(use 깃발) */
@@ -88,6 +136,10 @@ export interface SkpPageMeta {
   delay?: number;
   /** 장면 미리보기 그림의 ZIP 경로(readSkpImages의 scenes[].name과 같음) */
   thumbnail?: string;
+  /** 장면 재생(슬라이드 쇼)에서 뺀 장면이면 false(넣는 장면은 칸이 없다) */
+  includeInAnimation?: boolean;
+  /** 이 장면이 기억하는 그림자 설정 */
+  shadow?: SkpShadowMeta;
 }
 
 /** 태그 폴더 */
@@ -198,6 +250,11 @@ export interface SkpTreeInfo {
   definitionAttrs: Int32Array;
   /** 정의마다 항상 카메라 보기(동작 0x1B5D, 1 = 켜짐) */
   definitionFaceCamera?: Uint8Array;
+  /**
+   * 노드마다 SketchUp 입체(닫힌 껍질, 면 방향이 맞고 떠 있는 모서리·안쪽 그룹이 없음)면 부피(장면 단위³), 아니면 NaN.
+   * 입체 노드가 하나도 없으면 칸이 없다
+   */
+  volume?: Float64Array;
 }
 
 /**
@@ -220,6 +277,24 @@ export interface SkpMetaExtras {
   dimensions?: SkpDimensionMeta[];
   sectionPlanes?: SkpSectionPlaneMeta[];
   annotationItems?: SkpAnnotationItems;
+  /**
+   * 그물마다(scene.meshes 차례) 면 경계: 면 k의 삼각형은 [runs[k], runs[k + 1])(마지막 면은 그물 끝까지).
+   * 해석기가 면마다 삼각형을 이어 붙이므로 고른 삼각형(Pick3d.raw)이 든 SketchUp 면 하나를 구간으로 찾는다
+   */
+  faceRuns?: Uint32Array[];
+  /** 모서리 묶음마다(scene.lines 차례) 선분의 놓인 곡선 번호(-1 = 곡선 아님, 같은 수 = 같은 곡선의 한 배치). 곡선이 없는 묶음·주석은 null */
+  segmentCurves?: (Int32Array | null)[];
+  /** 위치(정보 탭)·그림자 설정·그리기 축 */
+  location?: SkpLocationMeta;
+  shadow?: SkpShadowMeta;
+  axes?: SkpAxesMeta;
+  /** Model Info > Animation: 장면 재생을 되풀이할지(loop) */
+  animation?: { loop?: boolean };
+  /**
+   * 모형에서 숨겼지만 어떤 장면(숨긴 개체를 기억하는)에서는 보이는 인스턴스: 나무 노드마다 그 안쪽을 보통 색으로 따로 그린 항목 id.
+   * 화면은 처음에 숨기고, 그 노드를 숨기지 않는 장면을 고르면 보인다(숨긴 형상 보기의 반투명 그물과는 따로)
+   */
+  revealItems?: { node: number; ids: string[] }[];
   /** 속성 사전 모음(같은 것은 한 번만): 모형 속성은 modelAttrs 차례 */
   attributes?: SkpAttrDictsMeta[];
   modelAttrs?: number;

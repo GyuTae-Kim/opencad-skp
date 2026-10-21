@@ -48,8 +48,10 @@ const BASE = {
   CVertex: 0,
   CViewPage: 12,
 };
-export const MFC_SCHEMAS: Record<'v4' | 'v7' | 'v8' | 'v15' | 'v17' | 'v18' | 'v19' | 'v20', Record<string, number>> = {
+export const MFC_SCHEMAS: Record<'v4' | 'v6' | 'v7' | 'v8' | 'v15' | 'v17' | 'v18' | 'v19' | 'v20', Record<string, number>> = {
   v4: { ...BASE, CSketchUpModel: 12, CRenderingOptions: 25, CComponentInstance: 3, CDrawingElement: 8, CViewPage: 9, CArcCurve: 1 },
+  // SketchUp 6: 설정 묶음이 꼬리에, 동작 덩어리 38바이트, CAttributeNamed 끝 u32 없음, 렌더링 덩어리 189바이트
+  v6: { ...BASE, CSketchUpModel: 18, CRenderingOptions: 32, CComponentInstance: 4, CViewPage: 11, CArcCurve: 1, CAttributeNamed: 0, CComponentBehavior: 4 },
   v7: { ...BASE, CSketchUpModel: 22, CRenderingOptions: 35, CComponentInstance: 4, CViewPage: 11, CArcCurve: 1 },
   v8: { ...BASE, CSketchUpModel: 22, CRenderingOptions: 36, CComponentInstance: 4, CArcCurve: 1 },
   v15: { ...BASE },
@@ -88,6 +90,7 @@ export const MFC_SCHEMAS: Record<'v4' | 'v7' | 'v8' | 'v15' | 'v17' | 'v18' | 'v
 /** 판 → 머리 판 글 */
 export const MFC_VERSIONS: Record<keyof typeof MFC_SCHEMAS, string> = {
   v4: '4.0.1',
+  v6: '6.0.1',
   v7: '7.0.1',
   v8: '8.0.1',
   v15: '15.0.1',
@@ -311,8 +314,10 @@ export interface MfcFaceSpec {
   hidden?: boolean;
   pid?: number;
   attrs?: MfcDicts;
-  /** 앞면 무늬 위치(CFaceTextureCoords, 읽기만 하는지 본다) */
-  textureCoords?: boolean;
+  /**
+   * 무늬 위치(CFaceTextureCoords): true면 단위 행렬·앞면 깃발 1(예전 시험), 객체면 쪽마다 f64 12개(앞 9개 = 열 우선 3×3)와 깃발
+   */
+  textureCoords?: boolean | { front?: number[]; back?: number[]; frontFlags?: number; backFlags?: number };
 }
 
 export interface MfcInstanceSpec {
@@ -576,16 +581,21 @@ export interface MfcSpec {
   activeStyle?: number;
   /** 모형 작업 사본(없으면 null을 써서 스타일 목록 끝을 쓰게 한다) */
   currentStyle?: MfcStyleSpec;
+  /** 모형 꼬리 CShadowInfo(기본: Boulder, USA) */
+  shadow?: { time?: number; city?: string; country?: string; lon?: number; lat?: number; tz?: number; north?: Vec3; light?: number; dark?: number };
+  /** 모형 꼬리 CSketchCS: 원점·x·y·z(f64 12개, 기본 단위 축) */
+  axes?: number[];
 }
 
 // ── 쓰기 ──────────────────────────────────────────────────────
 
 /** 렌더링 덩어리 칸 자리(src/mfcview.ts와 같은 형식 기록에서) */
-const BLOCK_SIZE: Record<number, number> = { 25: 160, 33: 190, 35: 197, 36: 216, 37: 221, 38: 222, 39: 223 };
+const BLOCK_SIZE: Record<number, number> = { 25: 160, 32: 189, 33: 190, 35: 197, 36: 216, 37: 221, 38: 222, 39: 223 };
 const F36 = { xray: 6, background: 13, foreground: 17, texture: 32, profiles: 42, hiddenGeometry: 58, front: 63, back: 67, sky: 123, ground: 131, drawSky: 135, drawGround: 136 };
 const F38 = { ...F36, background: 14, foreground: 18, texture: 33, profiles: 43, hiddenGeometry: 59, front: 64, back: 68, sky: 124, ground: 132, drawSky: 136, drawGround: 137, sectionFill: 167 };
 const FIELDS: Record<number, Record<string, number>> = {
   25: F36,
+  32: F36,
   35: F36,
   36: F36,
   37: { ...F36, sectionFill: 166 },
@@ -636,7 +646,8 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
   const styleSlots: (number | undefined)[] = [];
   let rootSlots = emptySlots();
 
-  const pre = (attrs?: MfcDicts, pid?: number, texture = false): void => {
+  type TexCoords = MfcFaceSpec['textureCoords'];
+  const pre = (attrs?: MfcDicts, pid?: number, texture: TexCoords = false): void => {
     if (attrs?.length || texture) container(attrs ?? [], texture);
     else w.nil();
     if (pids) {
@@ -658,7 +669,7 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
       }
     }
   };
-  const container = (dicts: MfcDicts, texture = false): void => {
+  const container = (dicts: MfcDicts, texture: TexCoords = false): void => {
     w.obj('CAttributeContainer', () => {
       pre();
       for (const [name, entries] of dicts)
@@ -671,18 +682,21 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
             v(w);
           }
           w.str('');
-          w.u32(0);
+          if (w.schema('CAttributeNamed') >= 1) w.u32(0);
         });
       if (texture)
         w.obj('CFaceTextureCoords', () => {
+          const t = texture === true ? {} : texture;
+          const id12 = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
           pre();
           w.u32(0);
-          w.f64(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0);
+          w.f64(...(t.front ?? id12), ...(t.back ?? id12));
+          // 쪽마다 핀 수 × 32바이트(앞 하나, 뒤 없음 — 해석기는 건너뛴다)
           w.u32(1);
           w.zeros(32);
           w.u32(0);
-          w.u32(1);
-          w.u32(0);
+          w.u32(t.frontFlags ?? 1);
+          w.u32(t.backFlags ?? 0);
         });
       w.nil();
     });
@@ -845,21 +859,22 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
     else styleSlots[i] = styleObj(spec.styles![i]!);
   };
   const shadow = (): void => {
+    const o = spec.shadow ?? {};
     pre();
-    w.u32(0);
+    w.u32(o.time ?? 0);
     w.u8(0);
-    w.str('Boulder');
-    w.str('USA');
-    w.f64(-105.27, 40.01, -7, 0, 1, 0);
+    w.str(o.city ?? 'Boulder');
+    w.str(o.country ?? 'USA');
+    w.f64(o.lon ?? -105.27, o.lat ?? 40.01, o.tz ?? -7, ...(o.north ?? [0, 1, 0]));
     w.raw([0, 1, 1, 0]);
-    w.i32(80);
-    w.i32(20);
+    w.i32(o.light ?? 80);
+    w.i32(o.dark ?? 20);
     w.raw([0, 0]);
   };
   const axes = (): void => {
     pre();
     w.zeros(10);
-    w.f64(0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1);
+    w.f64(...(spec.axes ?? [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]));
     w.u8(0);
   };
   const folderBody = (f: MfcFolderSpec): void => {
@@ -939,7 +954,7 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
     (e.faces ?? []).forEach((f, i) =>
       list.push(() => {
         slots.faces[i] = w.obj('CFace', () => {
-          pre(f.attrs, f.pid, !!f.textureCoords);
+          pre(f.attrs, f.pid, f.textureCoords ?? false);
           drawing(f.front, f, f.layer);
           w.f64(...f.plane);
           w.u32(f.loops.length);
@@ -1118,14 +1133,15 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
       w.str(d.description ?? '');
       w.str('');
       w.u32(0);
-      const b = new Uint8Array(pids ? 43 : 42);
+      const oldBehavior = (w.schemas.CComponentBehavior ?? 5) < 5;
+      const b = new Uint8Array((oldBehavior ? 38 : 42) + (pids ? 1 : 0));
       const s = pids ? 1 : 0;
       const bh = d.behavior ?? {};
       b[27 + s] = bh.glue ? 1 : 0;
       b[28 + s] = bh.cuts ? 1 : 0;
       b[29 + s] = bh.snap ?? 0;
       b[33 + s] = (bh.faceCamera ? 1 : 0) | (bh.shadowsSun ? 2 : 0);
-      b[34 + s] = bh.noScale ?? 0;
+      if (!oldBehavior) b[34 + s] = bh.noScale ?? 0;
       w.raw(b);
       if (d.thumbnail)
         w.obj('CThumbnail', () => {
@@ -1142,22 +1158,29 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
   w.zeros(12);
   if (modelSchema >= 26) w.zeros(8);
   dib(spec.thumbnail);
-  w.zeros(modelSchema >= 26 ? 15 : 14);
+  // SketchUp 6(모형 스키마 18): 머리가 4바이트 짧고 설정 묶음·모형 속성·두 번째 그림이 없다(설정 묶음은 꼬리에)
+  const su6 = modelSchema < 21;
+  w.zeros(modelSchema >= 26 ? 15 : su6 ? 10 : 14);
   w.str(spec.description ?? '');
-  const opts = spec.options ?? [];
-  w.u32(0);
-  w.u32(opts.length);
-  for (const [group, entries] of opts) {
-    w.str(group);
-    for (const [k, v] of entries) {
-      w.str(k);
-      v(w);
+  const writeOptions = (): void => {
+    const opts = spec.options ?? [];
+    w.u32(0);
+    w.u32(opts.length);
+    for (const [group, entries] of opts) {
+      w.str(group);
+      for (const [k, v] of entries) {
+        w.str(k);
+        v(w);
+      }
+      w.str('');
     }
-    w.str('');
+  };
+  if (!su6) {
+    writeOptions();
+    if (spec.name !== undefined) container([['ModelProperties', [['Name', mv.str(spec.name)]]]]);
+    else w.nil();
+    w.nil();
   }
-  if (spec.name !== undefined) container([['ModelProperties', [['Name', mv.str(spec.name)]]]]);
-  else w.nil();
-  w.nil();
   camera(spec.camera);
   block(spec.rendering, false);
   rootSlots = emptySlots();
@@ -1220,7 +1243,11 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
   if (spec.activePage !== undefined) w.ref(pageSlots[spec.activePage]!);
   else w.nil();
   axes();
-  w.zeros(pids ? 70 : 69);
+  if (su6) {
+    w.zeros(63);
+    writeOptions();
+    w.zeros(6);
+  } else w.zeros(pids ? 70 : 69);
   const d = spec.defaults ?? {};
   fontRef(d.dimFont);
   const dim = new Uint8Array(58);

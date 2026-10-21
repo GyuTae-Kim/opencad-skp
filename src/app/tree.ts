@@ -190,14 +190,15 @@ export function deepestNodeAt(t: TreeView, scene: Scene3d, id: string, local: nu
   return t.runNode[list[lo]!]!;
 }
 
-export type PickMode = 'open' | 'deepest';
+/** 3D 누르기 방식: open = 펼친 단계, deepest = 가장 안쪽 노드, face = 면·모서리 하나(나무 단계는 deepest처럼 본다) */
+export type PickMode = 'open' | 'deepest' | 'face';
 
 /**
  * 가장 안쪽 노드 → 고를 노드. open: 뿌리에서 내려가며 처음 만나는 접힌(펼치지 않은) 노드, 모두 펼쳤으면 가장 안쪽.
  * deepest: 가장 안쪽 그대로.
  */
 export function levelNode(t: TreeData, deepest: number, expanded: ReadonlySet<number>, mode: PickMode): number {
-  if (mode === 'deepest' || deepest < 0) return deepest;
+  if (mode !== 'open' || deepest < 0) return deepest;
   for (const n of nodePath(t, deepest)) if (!expanded.has(n)) return n;
   return deepest;
 }

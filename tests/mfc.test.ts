@@ -14,7 +14,7 @@ const read = (spec: MfcSpec): ReturnType<typeof readMfcModel> => {
 };
 const model = (spec: MfcSpec): SkpModel => read(spec).model;
 const tiny = pngRgb(2, 2, (x, y) => [x * 255, y * 255, 0]);
-const ALL = ['v7', 'v8', 'v15', 'v17', 'v18', 'v19', 'v20'] as const;
+const ALL = ['v6', 'v7', 'v8', 'v15', 'v17', 'v18', 'v19', 'v20'] as const;
 
 /** 가운데에 구멍이 난 정사각형(구멍 고리를 먼저 쓰고 바깥 고리를 둘째로 쓴다) */
 const holed = (): MfcEntitiesSpec => ({
@@ -147,19 +147,19 @@ describe('MFC 바이트 커서', () => {
 });
 
 describe('판 거르기', () => {
-  it('SketchUp 3~6은 까닭을 적어 거절하고, 장면은 meta.unsupported', () => {
+  it('SketchUp 3~5는 까닭을 적어 거절하고, 장면은 meta.unsupported', () => {
     const bytes = mfcFile({ schemas: 'v4', root: squareEntities() });
     expect(() => readMfcModel(bytes, readSkpHeader(bytes)!)).toThrow(MfcRefused);
     const s = skpToScene(bytes);
     expect(s.meshes.length).toBe(0);
-    expect(s.warnings![0]).toContain('SketchUp 3~6');
+    expect(s.warnings![0]).toContain('SketchUp 3~5');
     expect(s.meta?.unsupported).toBe(true);
     expect(s.meta?.container).toBe('mfc');
   });
 
   it('모르는 스키마(2020 뒤 같은 값)도 거절한다', () => {
     const bytes = mfcFile({ schemas: { ...MFC_SCHEMAS.v20, CSketchUpModel: 30 }, root: squareEntities() });
-    expect(() => readMfcModel(bytes, readSkpHeader(bytes)!)).toThrow(/확인한 SketchUp 7~2020 형식과 달라/);
+    expect(() => readMfcModel(bytes, readSkpHeader(bytes)!)).toThrow(/확인한 SketchUp 6~2020 형식과 달라/);
   });
 
   it.each(ALL)('%s: 면·모서리·고리·재질·태그를 같은 중간 모형으로', (v) => {
@@ -465,7 +465,7 @@ describe('주석', () => {
 });
 
 describe('장면·스타일·설정', () => {
-  const pageSpec = (schemas: 'v15' | 'v17' | 'v20'): MfcSpec => ({
+  const pageSpec = (schemas: 'v6' | 'v15' | 'v17' | 'v20'): MfcSpec => ({
     schemas,
     layers: [{ name: 'Layer0' }, { name: '지붕' }],
     definitions: [{ name: '상자', entities: squareEntities({ sections: [{ plane: [0, 0, 1, -1], pid: 51 }] }) }],
@@ -517,6 +517,27 @@ describe('장면·스타일·설정', () => {
     expect(b!.sectionIds).toEqual([51]);
     expect(m.activePage).toBe(1);
     expect(m.animation).toEqual({ showTransition: true, transitionTime: 1.5, sceneDelay: 2, loop: true });
+  });
+
+  it('SketchUp 6: 설정 묶음(단위·장면 넘기기)은 꼬리에서, 속성 사전 끝 u32·늘이지 않음 마스크는 없다', () => {
+    const base = pageSpec('v6');
+    const m = model({
+      ...base,
+      rootAttrs: [['모형', [['수', mv.i32(3)]]]],
+      definitions: [{ ...base.definitions![0]!, behavior: { glue: true, snap: 1, faceCamera: true, noScale: 5 } }],
+    });
+    expect(m.warnings).toEqual([]);
+    expect(m.lengthUnit).toBe(2);
+    expect(m.units).toMatchObject({ lengthUnit: 'mm' });
+    expect(m.animation).toEqual({ showTransition: true, transitionTime: 1.5, sceneDelay: 2, loop: true });
+    expect(m.camera).toMatchObject({ eye: [100, -100, 80], fov: 35 });
+    expect(m.pages!.map((p) => p.name)).toEqual(['원근', '평행']);
+    expect(m.activePage).toBe(1);
+    expect(m.root.attrs).toEqual({ 모형: { 수: 3 } });
+    // 동작 덩어리가 38바이트라 늘이지 않음 마스크 칸이 없다
+    expect(m.definitions.get(0)!.behavior).toEqual({ alwaysFaceCamera: true, cutsOpening: false, shadowsFaceSun: false, snapTo: 'horizontal' });
+    expect(m.root.instances).toHaveLength(2);
+    expect(m.annotationDefaults).toMatchObject({ dimColor: [7, 8, 9], textColor: [1, 2, 3] });
   });
 
   it('영구 번호가 없는 파일(2016 이하)은 숨긴 대상에 음수 임시 번호를 붙여 잇는다', () => {
@@ -816,6 +837,104 @@ describe('장면 출력과 그림', () => {
     const again = readSkpImages(bytes);
     expect(again.materials.length).toBe(2);
     expect(readSkpImages(bytes, { maxCount: 1 }).skipped).toBeGreaterThan(0);
+  });
+});
+
+describe('무늬(2020 이하: CTexture·CFaceTextureCoords)', () => {
+  /** 열 우선 3×3(무늬 인치 → 평면 틀): 2배 늘리고 x로 5인치 옮김. 쪽마다 f64 12개(뒤 3개는 해석기가 쓰지 않는다) */
+  const moved = [2, 0, 0, 0, 2, 0, 5, 0, 1, 0, 0, 0];
+  const spec = (face: Partial<NonNullable<MfcEntitiesSpec['faces']>[number]>, extra: Partial<MfcSpec> = {}): MfcSpec => ({
+    schemas: 'v15',
+    materials: [
+      { name: '벽돌', color: [180, 60, 40] },
+      { name: '나무', color: [0, 0, 0, 0], texture: { image: tiny, path: 'C:\\maps\\wood.png', width: 20, height: 10, avg: [140, 100, 60, 255] } },
+      { name: '색 바꾼 돌', color: [30, 90, 200], type: 2, texture: { image: tiny, path: 'stone.png', width: 0, height: -3 } },
+    ],
+    root: squareEntities({ faces: [{ ...squareEntities().faces![0]!, ...face }] }),
+    ...extra,
+  });
+  const uvs = (s: ReturnType<typeof skpToScene>): number[][] => {
+    const m = s.meshes.find((x) => x.uvs)!;
+    const stride = m.uvs!.length / (m.positions.length / 3);
+    const out: number[][] = [];
+    for (let i = 0; i < m.positions.length / 3; i++) out.push([m.positions[3 * i]!, m.positions[3 * i + 1]!, m.uvs![stride * i]!, m.uvs![stride * i + 1]!]);
+    return out;
+  };
+
+  it('재질 무늬 크기(인치)·평균색·색 바꾸기(꼴 2)를 2021+ material.xml과 같은 꼴로 읽는다', () => {
+    const r = read(spec({ front: 1 }));
+    expect(r.materials.get('나무')!.texture).toEqual({ width: 20, height: 10, average: [140, 100, 60], file: 'wood.png' });
+    expect(r.materials.get('나무')!.colorize).toBeUndefined();
+    // 크기가 0·음수면 1인치(2021+ 읽기와 같게), 꼴 2는 색 바꾸기(방식 0 = shift)
+    expect(r.materials.get('색 바꾼 돌')!.texture).toMatchObject({ width: 1, height: 1 });
+    expect(r.materials.get('색 바꾼 돌')!.colorize).toBe('shift');
+    expect(r.materials.get('벽돌')!.texture).toBeUndefined();
+  });
+
+  it('면 무늬 위치: 그쪽 재질이 무늬 재질이고 깃발 비트 0이 있을 때만 앞 9개를 열 우선 행렬로', () => {
+    const face = (f: Parameters<typeof spec>[0]) => model(spec(f)).root.faces[0]!;
+    const fm = face({ front: 1, back: 0, textureCoords: { front: moved, back: moved, frontFlags: 1, backFlags: 1 } });
+    expect(fm.frontMap).toEqual({ kind: 0, matrix: Float64Array.from(moved.slice(0, 9)) });
+    // 뒤 재질(벽돌)은 무늬가 없다 — 남아 있는 위치를 읽지 않는다
+    expect(fm.backMap).toBeUndefined();
+    expect(face({ front: 1, textureCoords: { front: moved, frontFlags: 0 } }).frontMap).toBeUndefined();
+    expect(face({ front: 0, textureCoords: { front: moved, frontFlags: 1 } }).frontMap).toBeUndefined();
+    expect(face({ back: 1, textureCoords: { back: moved, backFlags: 1, frontFlags: 0 } }).backMap?.matrix[6]).toBe(5);
+  });
+
+  it('readSkpImages의 그림을 넘기면 무늬 좌표·무늬 id·장면 무늬를 둔다(저장된 위치, 없으면 기본 투영)', () => {
+    const stored = mfcFile(spec({ front: 1, textureCoords: { front: moved, frontFlags: 1 } }));
+    const s = skpToScene(stored, { textures: readSkpImages(stored).materials });
+    expect(s.textures?.map((t) => t.mime)).toEqual(['image/png']);
+    const meta = s.meta as Record<string, any>;
+    expect(meta.textures[0]).toMatchObject({ material: '나무', folder: '나무', tile: [20, 10] });
+    expect(meta.materialStats.find((m: { folder: string }) => m.folder === '나무').texture).toBe(s.textures![0]!.id);
+    // 저장된 행렬: 무늬 좌표 = M⁻¹·평면 좌표 → 가로 10인치에 u가 10 / 2 / 20 = 0.25 늘어난다
+    const a = uvs(s);
+    const at = (x: number, y: number) => a.find((p) => Math.abs(p[0]! - x * 25.4) < 1e-3 && Math.abs(p[1]! - y * 25.4) < 1e-3) ?? a.find((p) => p[0] === x && p[1] === y)!;
+    expect(at(10, 0)[2]! - at(0, 0)[2]!).toBeCloseTo(0.25);
+    expect(at(0, 10)[3]! - at(0, 0)[3]!).toBeCloseTo(0.5);
+    // 위치가 없는 면은 기본 투영: u = x / 20, v = y / 10
+    const plain = mfcFile(spec({ front: 1 }));
+    const b = uvs(skpToScene(plain, { textures: readSkpImages(plain).materials }));
+    const bt = (x: number, y: number) => b.find((p) => Math.abs(p[0]! - x * 25.4) < 1e-3 && Math.abs(p[1]! - y * 25.4) < 1e-3) ?? b.find((p) => p[0] === x && p[1] === y)!;
+    expect(bt(10, 0)[2]! - bt(0, 0)[2]!).toBeCloseTo(0.5);
+    expect(bt(0, 10)[3]! - bt(0, 0)[3]!).toBeCloseTo(1);
+    // 그림을 넘기지 않으면 예전처럼 평균색만
+    const none = skpToScene(plain);
+    expect(none.textures).toBeUndefined();
+    expect(none.meshes.some((m) => m.uvs)).toBe(false);
+  });
+
+  it('색 바꾼 무늬는 meta.textures에 색 바꾸기를 적고, maxTextures를 넘는 재질은 평균색으로 경고한다', () => {
+    const bytes = mfcFile(
+      spec(
+        { front: 2 },
+        { root: squareEntities({ faces: [{ ...squareEntities().faces![0]!, front: 2 }, { ...squareEntities().faces![0]!, plane: [0, 0, -1, 0], front: 1 }] }) },
+      ),
+    );
+    const s = skpToScene(bytes, { textures: readSkpImages(bytes).materials });
+    const t = (s.meta as Record<string, any>).textures.find((x: { folder: string }) => x.folder === '색 바꾼 돌');
+    expect(t.colorize).toEqual({ type: 'shift', color: [30, 90, 200], average: [128, 128, 128] });
+    const limited = skpToScene(bytes, { textures: readSkpImages(bytes).materials, maxTextures: 1 });
+    expect(limited.textures?.length).toBe(1);
+    expect(limited.warnings?.some((w) => w.includes('1개 한도'))).toBe(true);
+  });
+
+  it('그림을 먼저 꺼내면(워커 차례) 그때 읽은 모형을 skpToScene이 이어 써서 두 번 읽지 않는다', async () => {
+    const mod = await import('../src/mfcmodel');
+    const bytes = mfcFile(spec({ front: 1 }));
+    const seen: number[] = [];
+    readSkpImages(bytes, { onProgress: (f) => seen.push(f) });
+    expect(seen.length).toBeGreaterThanOrEqual(0);
+    const kept = mod.takeMfcResult(bytes);
+    expect(kept?.model.root.faces.length).toBe(1);
+    // 꺼낸 것은 한 번만 쓴다
+    expect(mod.takeMfcResult(bytes)).toBeUndefined();
+    // skpToScene 뒤에는 남지 않는다
+    readSkpImages(bytes);
+    skpToScene(bytes);
+    expect(mod.takeMfcResult(bytes)).toBeUndefined();
   });
 });
 

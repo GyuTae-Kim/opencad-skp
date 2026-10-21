@@ -41,6 +41,7 @@ import {
   probeOffsets,
   rayPlane,
   type Axis,
+  type AxisDirs,
   type Ray,
   type Snap,
 } from './snap';
@@ -81,10 +82,17 @@ export interface MeasureToolOptions {
   onHint?: (text: string | null) => void;
   /** 손가락이 주인 기기인지: 안내에서 키(Esc·Shift) 설명을 빼고 길게 누르기를 알린다 */
   touch?: () => boolean;
+  /** 선분(묶음 id, 선분 번호)이 든 호·원의 중심(세계, 곡선이 아니면 null) — "중심" 추정 */
+  curveCenter?: (id: string, seg: number) => V3 | null;
+  /** 모형의 그리기 축(옮겼으면 — 축 고정·각도기 기본 평면이 그 축을 따른다, 없으면 세계 축) */
+  getAxes?: () => AxisDirs | null;
 }
 
+/** 기억해 두는 지나간 곡선 중심 수 */
+export const RECENT_CENTERS = 4;
+
 /** 이 도구가 쓰는 뷰어 기능(시험에서 가짜로 바꿀 수 있게) */
-export type MeasureViewer = Pick<Viewer3d, 'canvas' | 'pick' | 'getCamera' | 'onCameraChange' | 'getRenderMode' | 'section'>;
+export type MeasureViewer = Pick<Viewer3d, 'canvas' | 'pick' | 'getCamera' | 'onCameraChange' | 'getRenderMode' | 'section'> & Partial<Pick<Viewer3d, 'sections'>>;
 /** 이 도구가 쓰는 덧그림 기능 */
 export type MeasureOverlay = Pick<Overlay, 'svg' | 'labels' | 'set' | 'frame' | 'invalidate'>;
 
@@ -154,14 +162,14 @@ export function protractorResult(center: readonly number[], a: readonly number[]
  * 각도기 평면: 추정에 면 법선이 있으면 그 면, 없으면 카메라를 가장 정면으로 보는 축 평면(SketchUp 파랑·빨강·초록 각도기).
  * forward는 눈이 보는 방향.
  */
-export function protractorPlane(snap: Pick<Snap, 'normal'> | null, forward: readonly number[]): { normal: V3; axis: Axis | null } {
+export function protractorPlane(snap: Pick<Snap, 'normal'> | null, forward: readonly number[], axes: AxisDirs = AXIS_DIRS): { normal: V3; axis: Axis | null } {
   if (snap?.normal) {
     const n = unit(snap.normal);
-    if (dot(n, n) > 0) return { normal: n, axis: axisOf(n) };
+    if (dot(n, n) > 0) return { normal: n, axis: axisOf(n, axes) };
   }
   let best: Axis = 'z';
-  for (const a of ['z', 'x', 'y'] as const) if (Math.abs(dot(AXIS_DIRS[a], forward)) > Math.abs(dot(AXIS_DIRS[best], forward)) + 1e-12) best = a;
-  return { normal: [...AXIS_DIRS[best]], axis: best };
+  for (const a of ['z', 'x', 'y'] as const) if (Math.abs(dot(axes[a], forward)) > Math.abs(dot(axes[best], forward)) + 1e-12) best = a;
+  return { normal: [...axes[best]], axis: best };
 }
 
 /** 점을 평면(지나는 점 c, 법선 n)에 내린 점 */
@@ -267,6 +275,8 @@ export class MeasureTool {
   private aimId: number | null = null;
   private aimTimer: ReturnType<typeof setTimeout> | null = null;
   private lastHint: string | null = null;
+  /** 앞서 커서가 지나간 호·원의 중심(새것이 앞) */
+  private centers: V3[] = [];
   private readonly g: SVGGElement;
   private readonly layer: HTMLDivElement;
   private readonly tip: HTMLDivElement;
@@ -360,6 +370,7 @@ export class MeasureTool {
   clear(): void {
     this.pts = [];
     this.normal = null;
+    this.centers = [];
     this.dropResult();
     this.hoverDirty = true;
     this.refreshHint();
@@ -412,13 +423,14 @@ export class MeasureTool {
       if (now() - t0 > budget) break;
       probes.push(v.pick(x + dx, y + dy));
     }
-    const sec = v.section;
-    const kept = sec ? (p: V3): boolean => dot(sec.normal, p) <= sec.offset + 1e-9 * (Math.abs(sec.offset) + 1) : null;
+    // 단면에 잘린 쪽 후보는 버린다: 장면 전체를 자르는 평면들(그룹 안 단면은 그 그룹 항목만 자르므로 후보 점으로는 가리지 않는다)
+    const cuts = (v.sections ?? (v.section ? [v.section] : [])).filter((s) => !('items' in s && s.items));
+    const kept = cuts.length ? (p: V3): boolean => cuts.every((sec) => dot(sec.normal, p) <= sec.offset + 1e-9 * (Math.abs(sec.offset) + 1)) : null;
     const mode = v.getRenderMode();
     let checks = 0;
-    // 음영 모드에서만 가림을 본다: 후보 점의 화면 자리에서 다시 골라 그보다 앞의 면이 맞으면 가린 것
+    // 음영 계열 모드에서만 가림을 본다: 후보 점의 화면 자리에서 다시 골라 그보다 앞의 면이 맞으면 가린 것
     const visible =
-      mode === 'shaded' || mode === 'shadedEdges'
+      mode === 'shaded' || mode === 'shadedEdges' || mode === 'hiddenLine' || mode === 'monochrome' || mode === 'noTexture'
         ? (p: V3): boolean => {
             if (++checks > VISIBLE_CHECKS) return false;
             const s = projectToScreen(f, p);
@@ -429,6 +441,15 @@ export class MeasureTool {
             return viewDepth(f, k.point) >= dp - Math.max(1e-6 * Math.abs(dp), worldPerPixel(f, dp) * 1.5);
           }
         : null;
+    // 곡선 중심: 커서 둘레 곡선 선분의 중심을 재고 기억한다(가운데로 옮기면 붙게)
+    const cc = this.opts.curveCenter;
+    const curveCenter = cc
+      ? (p: Parameters<NonNullable<Parameters<typeof chooseSnap>[0]['curveCenter']>>[0]): V3 | null => {
+          const c = cc(p.id, p.raw ?? p.index);
+          if (c) this.rememberCenter(c);
+          return c;
+        }
+      : null;
     return chooseSnap({
       frame: f,
       x,
@@ -441,7 +462,21 @@ export class MeasureTool {
       anchor: v.getCamera().target,
       kept,
       visible,
+      curveCenter,
+      centers: this.centers,
+      axisDirs: this.opts.getAxes?.() ?? null,
     });
+  }
+
+  /** 축 고정·각도기 평면의 축(모형의 그리기 축 또는 세계 축) */
+  private get axes(): AxisDirs {
+    return this.opts.getAxes?.() ?? AXIS_DIRS;
+  }
+
+  /** 지나간 곡선 중심 기억(같은 점은 앞으로 옮기고, RECENT_CENTERS개까지) */
+  private rememberCenter(c: V3): void {
+    const same = (a: V3): boolean => Math.abs(a[0] - c[0]) + Math.abs(a[1] - c[1]) + Math.abs(a[2] - c[2]) < 1e-9 * (1 + Math.abs(c[0]) + Math.abs(c[1]) + Math.abs(c[2]));
+    this.centers = [c, ...this.centers.filter((x) => !same(x))].slice(0, RECENT_CENTERS);
   }
 
   dispose(): void {
@@ -629,13 +664,13 @@ export class MeasureTool {
     } else if (this.modeValue === 'protractor') {
       if (!this.pts.length) {
         if (snap.kind === 'free') return;
-        if (shift && !this.planeLock) this.planeLock = protractorPlane(snap, forwardOf(f)).normal;
+        if (shift && !this.planeLock) this.planeLock = protractorPlane(snap, forwardOf(f), this.axes).normal;
         this.dropResult();
-        this.normal = this.planeLock ?? protractorPlane(snap, forwardOf(f)).normal;
+        this.normal = this.planeLock ?? protractorPlane(snap, forwardOf(f), this.axes).normal;
         this.pts = [snap.point];
       } else {
         const c = this.pts[0]!;
-        const n = this.normal ?? protractorPlane(null, forwardOf(f)).normal;
+        const n = this.normal ?? protractorPlane(null, forwardOf(f), this.axes).normal;
         const p = protractorPoint(ray, snap, c, n);
         if (samePoint(c, p)) return;
         if (this.pts.length === 1) this.pts.push(p);
@@ -675,6 +710,7 @@ export class MeasureTool {
   private reset(): void {
     this.pts = [];
     this.normal = null;
+    this.centers = [];
     this.planeLock = null;
     this.hoverPlane = null;
     this.hover = null;
@@ -712,8 +748,8 @@ export class MeasureTool {
     this.hoverPoint = null;
     if (!snap) return;
     if (this.modeValue === 'protractor') {
-      if (!this.pts.length) this.hoverPlane = protractorPlane(snap, forwardOf(f)).normal;
-      else this.hoverPoint = protractorPoint(screenRay(f, c.x, c.y), snap, this.pts[0]!, this.normal ?? AXIS_DIRS.z);
+      if (!this.pts.length) this.hoverPlane = protractorPlane(snap, forwardOf(f), this.axes).normal;
+      else this.hoverPoint = protractorPoint(screenRay(f, c.x, c.y), snap, this.pts[0]!, this.normal ?? this.axes.z);
     }
   }
 
@@ -753,7 +789,7 @@ export class MeasureTool {
       const [c, base] = this.pts;
       const n = this.normal;
       if (!c) {
-        if (snap && snap.kind !== 'free') this.disk(f, snap.point, this.planeLock ?? this.hoverPlane ?? protractorPlane(snap, forwardOf(f)).normal, !!this.planeLock);
+        if (snap && snap.kind !== 'free') this.disk(f, snap.point, this.planeLock ?? this.hoverPlane ?? protractorPlane(snap, forwardOf(f), this.axes).normal, !!this.planeLock);
       } else if (n) {
         this.disk(f, c, n, false);
         this.dot(f, c);
@@ -838,7 +874,7 @@ export class MeasureTool {
     this.g.append(svgEl('circle', { class: 'measure-point', cx: s[0], cy: s[1], r: 3.5, fill: 'currentColor', stroke: '#ffffff', 'stroke-width': 1 }));
   }
 
-  /** 추정 표식: 끝점 초록 원, 중간점 청록 원, 모서리 위 빨강 사각형, 면 위 파랑 마름모, 축 위 축 색 작은 사각형 */
+  /** 추정 표식: 끝점 초록 원, 중간점 청록 원, 중심 초록 원과 십자, 수직 자홍 직각 표, 모서리 위 빨강 사각형, 면 위 파랑 마름모, 축 위 축 색 작은 사각형 */
   private marker(f: ViewFrame, snap: Snap): void {
     const s = screenPoint(f, snap.point, 20);
     if (!s) return;
@@ -847,7 +883,14 @@ export class MeasureTool {
     const base = { class: `measure-snap measure-snap-${snap.kind}`, 'data-kind': snap.kind, fill: color, stroke: '#ffffff', 'stroke-width': 1.25 };
     let el: SVGElement;
     if (snap.kind === 'endpoint' || snap.kind === 'midpoint') el = svgEl('circle', { ...base, cx: x, cy: y, r: 5 });
-    else if (snap.kind === 'onFace') el = svgEl('polygon', { ...base, points: `${x},${y - 6.5} ${x + 6.5},${y} ${x},${y + 6.5} ${x - 6.5},${y}` });
+    else if (snap.kind === 'center') {
+      el = svgEl('g', { class: base.class, 'data-kind': snap.kind });
+      el.append(svgEl('circle', { cx: x, cy: y, r: 6, fill: 'none', stroke: '#ffffff', 'stroke-width': 3 }), svgEl('circle', { cx: x, cy: y, r: 6, fill: 'none', stroke: color, 'stroke-width': 1.75 }));
+      el.append(svgEl('path', { d: `M${x - 3.5},${y}h7M${x},${y - 3.5}v7`, stroke: color, 'stroke-width': 1.5 }));
+    } else if (snap.kind === 'perpendicular') {
+      // 직각 표(ㄴ 모양)
+      el = svgEl('path', { class: base.class, 'data-kind': snap.kind, d: `M${x - 6},${y - 6}v12h12`, fill: 'none', stroke: color, 'stroke-width': 2.5, 'stroke-linejoin': 'round' });
+    } else if (snap.kind === 'onFace') el = svgEl('polygon', { ...base, points: `${x},${y - 6.5} ${x + 6.5},${y} ${x},${y + 6.5} ${x - 6.5},${y}` });
     else {
       const h = snap.kind === 'onEdge' ? 4.5 : 3.5;
       el = svgEl('rect', { ...base, x: x - h, y: y - h, width: 2 * h, height: 2 * h });
@@ -861,7 +904,7 @@ export class MeasureTool {
     if (f.projection === 'perspective' && !(depth > 0)) return;
     const R = worldPerPixel(f, depth) * PROTRACTOR_PX;
     const [u, v] = planeBasis(normal);
-    const axis = axisOf(normal);
+    const axis = axisOf(normal, this.axes);
     const color = axis ? AXIS_COLORS[axis] : 'currentColor';
     const at = (t: number, r: number): [number, number] | null => {
       const p = addScaled(addScaled(center, u, Math.cos(t) * r), v, Math.sin(t) * r);

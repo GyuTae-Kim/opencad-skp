@@ -3,11 +3,12 @@
  * 형식 지식을 옮겨 더했다(docs/formats/skp.md).
  *
  * 지원: SketchUp 2021~2026(머리 뒤 "VFF" 블록 + ZIP 꾸러미, 안의 model.dat가 TLV)과
- * SketchUp 7·8·2013~2020(머리 뒤 MFC 객체 직렬화, src/mfcmodel.ts). 두 해석기가 같은 중간 모형(SkpModel)을 내서 장면 출력은 하나다.
+ * SketchUp 6·7·8·2013~2020(머리 뒤 MFC 객체 직렬화, src/mfcmodel.ts). 두 해석기가 같은 중간 모형(SkpModel)을 내서 장면 출력은 하나다.
  * 면(구멍 포함)·모서리·재질 색·그룹/컴포넌트/그림 인스턴스 변환·태그(보임·색·폴더·선 종류)·문자·치수·보조선·단면 평면·속성 사전·
  * 단위·카메라·장면(페이지)·스타일(style.xml 또는 옛 스타일 기록 + 렌더링 설정)을 읽는다. 부드러운 음영(매끈한 모서리)은 smooth 선택으로 낸다.
- * 무늬(텍스처)는 그림(readSkpImages)을 textures로 넘기면 면 무늬 좌표를 읽어 입힌다(2021+ 꾸러미만 — 넘기지 않거나 옛 판이면 재질 색 = 무늬 평균색).
- * SketchUp 3~6(옛 MFC 스키마)은 읽지 않고 까닭을 적은 경고와 빈 장면(meta.unsupported)을 돌려준다.
+ * 무늬(텍스처)는 그림(readSkpImages)을 textures로 넘기면 면 무늬 좌표를 읽어 입힌다(2021+ 꾸러미의 무늬 그림·위치, 2020 이하의 CTexture·CFaceTextureCoords —
+ *   넘기지 않으면 재질 색 = 무늬 평균색).
+ * SketchUp 3~5(옛 MFC 스키마)는 읽지 않고 까닭을 적은 경고와 빈 장면(meta.unsupported)을 돌려준다.
  */
 
 import type { Scene3d, Texture3d } from 'opencad-viewer3d/types';
@@ -16,10 +17,10 @@ import { readSkpHeader } from './header';
 import type { SkpImages } from './images';
 import { parseMaterialXml, type SkpMaterialInfo } from './materials';
 import type { SkpMetaExtras } from './meta';
-import { MfcRefused, readMfcModel, rememberMfcImages } from './mfcmodel';
+import { MfcRefused, readMfcModel, rememberMfcImages, takeMfcResult } from './mfcmodel';
 import { readModelDat, type SkpModel } from './model';
 import { buildSceneParts, type SceneTexture } from './scene';
-import { cameraMeta, pagesMeta, styleFor, unitsFor } from './scene-meta';
+import { axesMeta, cameraMeta, locationMeta, pagesMeta, shadowMeta, styleFor, unitsFor } from './scene-meta';
 import { parseStyleXml } from './styles';
 import { findSkpZipItems, readZipItem, readZipItemPartial } from './zip';
 
@@ -33,8 +34,8 @@ export { TREE_HIDDEN, TREE_MORE } from './scene';
 export type * from './meta';
 export { cameraMeta, pagesMeta, unitsFor } from './scene-meta';
 
-/** 읽는 가장 낮은 판(SketchUp 7). 3~6은 MFC 스키마가 달라 읽지 않는다 */
-export const SKP_MIN_SUPPORTED_MAJOR = 7;
+/** 읽는 가장 낮은 판(SketchUp 6). 3~5는 MFC 스키마가 달라 읽지 않는다 */
+export const SKP_MIN_SUPPORTED_MAJOR = 6;
 /** 2021+ 형식(VFF + ZIP)이 시작하는 판. 이보다 낮으면 MFC 객체 직렬화다 */
 export const SKP_ZIP_MIN_MAJOR = 21;
 /** 표본으로 확인한 가장 높은 판 */
@@ -62,7 +63,7 @@ export interface SkpOptions {
   /**
    * 무늬 그림(readSkpImages(bytes).materials). 주면 무늬 재질 면의 무늬 투영을 읽어 그물에 무늬 좌표(uvs)·무늬 id(texture)를 두고
    * 쓰인 그림을 scene.textures에 넣는다(바이트는 복사하지 않고 같은 배열을 쓴다). 그림 정보·색 바꾸기는 meta.textures.
-   * 주지 않으면 예전처럼 무늬 평균색만 칠한다. 2021+ 꾸러미에서만 쓴다(옛 판은 평균색).
+   * 주지 않으면 예전처럼 무늬 평균색만 칠한다. 2020 이하는 재질 열쇠가 폴더다(readSkpImages가 같은 열쇠로 꺼낸다).
    */
   textures?: SkpImages['materials'];
   /** 무늬를 입힐 재질 수 한도(기본 MAX_SKP_TEXTURES — 넘는 재질은 평균색) */
@@ -115,12 +116,15 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
   const warnings: string[] = [];
   let read: Package | Scene3d;
   if (header.container === 'mfc') {
-    // SketchUp 2020 이하: 객체 직렬화 하나(꾸러미·압축 없음)
-    progress(0.05, '옛 형식(2020 이하) 모형 읽는 중');
+    // SketchUp 2020 이하: 객체 직렬화 하나(꾸러미·압축 없음). 무늬 그림을 먼저 꺼냈으면(readSkpImages) 그때 읽은 모형을 쓴다
     try {
-      const res = readMfcModel(bytes, header, (f) => progress(0.05 + 0.59 * f, '모형 요소 읽는 중'));
-      rememberMfcImages(bytes, res.images);
-      read = { model: res.model, materials: res.materials, styles: res.styles, damaged: false, texImages: new Map() };
+      let res = takeMfcResult(bytes);
+      if (!res) {
+        progress(0.05, '옛 형식(2020 이하) 모형 읽는 중');
+        res = readMfcModel(bytes, header, (f) => progress(0.05 + 0.59 * f, '모형 요소 읽는 중'));
+        rememberMfcImages(bytes, res.images);
+      }
+      read = { model: res.model, materials: res.materials, styles: res.styles, damaged: false, texImages: textureImages(res.materials, opts, warnings) };
     } catch (e) {
       if (e instanceof MfcRefused) {
         // 화면이 "아직 못 읽는 판" 안내를 띄우는 표시
@@ -153,11 +157,12 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
   // 모형 스타일(렌더링 설정 + 그 스타일의 style.xml): 재질 없는 면은 스타일 앞면 색으로 칠한다(SketchUp 기본 화면처럼)
   let style: ReturnType<typeof styleFor>;
   try {
-    style = styleFor(model.rendering, styles);
+    style = styleFor(model.rendering, styles, u.scale);
   } catch {
     warnings.push('모형 스타일을 풀지 못했습니다');
   }
   const front = style?.front;
+  const back = style?.back;
   let parts: ReturnType<typeof buildSceneParts>;
   try {
     progress(0.65, '면 삼각화·인스턴스 펼치는 중');
@@ -166,6 +171,8 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
       extras: !!opts.extras,
       smooth: !!opts.smooth,
       ...(front && front.every(Number.isFinite) ? { defaultFaceColor: [front[0], front[1], front[2], 1] as const } : {}),
+      // 앞·뒤 재질이 다른 면은 뒷면 색·무늬를 따로(재질 없는 뒷면은 스타일 뒷면 색)
+      ...(back && back.every(Number.isFinite) ? { defaultBackColor: [back[0], back[1], back[2], 1] as const } : {}),
       onProgress: (f) => progress(0.65 + 0.3 * f, '면 삼각화·인스턴스 펼치는 중'),
     };
     if (sceneTex.size) build.textures = sceneTex;
@@ -192,6 +199,9 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
   if (parts.outlineSkipped) meta.outlineSkipped = parts.outlineSkipped;
   if (parts.tree) meta.tree = parts.tree;
   if (parts.extras) meta.extraItems = parts.extras;
+  // 면·곡선 고르기(화면의 면 넓이·곡선 길이): 그물마다 면 경계, 모서리 묶음마다 선분의 곡선 번호
+  meta.faceRuns = parts.faceRuns;
+  if (parts.segmentCurves) meta.segmentCurves = parts.segmentCurves;
   Object.assign(meta, extrasMeta(model, u.scale, styles, style, parts, warnings));
   // 화면이 알림을 띄울지 가리는 표시: 깨지거나 잘린 곳(damaged), 출력 한도(limited)
   if (damaged || model.damaged) meta.damaged = true;
@@ -202,7 +212,10 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
   // 그물이 쓰는 무늬만 장면에 넣는다
   if (sceneTex.size) {
     const used = new Set<string>();
-    for (const m of scene.meshes) if (m.texture) used.add(m.texture);
+    for (const m of scene.meshes) {
+      if (m.texture) used.add(m.texture);
+      if (m.backTexture) used.add(m.backTexture);
+    }
     const textures: Texture3d[] = [];
     const infos: SkpTextureInfo[] = [];
     for (const [id, t] of sceneTex) {
@@ -304,19 +317,12 @@ function readZipPackage(
       }
     }
     // 무늬: 그림이 있는 무늬 재질만(재질 폴더 = model.dat 재질 이름). 한도를 넘는 재질은 평균색
-    if (opts.textures?.length) {
-      const byFolder = new Map(opts.textures.map((t) => [t.folder, t] as const));
-      let skipped = 0;
-      for (const item of dir) {
-        const m = /^materials\/(.+)\/material\.xml$/.exec(item.name);
-        const info = m ? materials.get(m[1]!) : undefined;
-        const img = m ? byFolder.get(m[1]!) : undefined;
-        if (!info?.texture || !img || texImages.has(m![1]!)) continue;
-        if (texImages.size >= (opts.maxTextures ?? MAX_SKP_TEXTURES)) skipped++;
-        else texImages.set(m![1]!, img);
-      }
-      if (skipped) warnings.push(`무늬 재질이 너무 많아(${opts.maxTextures ?? MAX_SKP_TEXTURES}개 한도) ${skipped}개는 평균색으로 그렸습니다`);
+    const folders: string[] = [];
+    for (const item of dir) {
+      const m = /^materials\/(.+)\/material\.xml$/.exec(item.name);
+      if (m) folders.push(m[1]!);
     }
+    for (const [k, v] of textureImages(materials, opts, warnings, folders)) texImages.set(k, v);
     progress(0.2, 'model.dat 푸는 중');
     const unpacking = (f: number): void => progress(0.2 + 0.19 * f, 'model.dat 푸는 중');
     let dat: Uint8Array;
@@ -347,6 +353,31 @@ function readZipPackage(
   return { model, materials, styles, damaged, texImages };
 }
 
+/**
+ * 무늬를 입힐 재질 폴더 → 그림. 무늬 정보(크기)가 있고 그림을 받은 재질만, 폴더 차례(2021+는 꾸러미 차례, 2020 이하는 재질 차례)대로
+ * maxTextures개까지(넘는 재질은 평균색으로 그리고 경고). 2020 이하의 폴더는 재질 열쇠(readSkpImages가 같은 열쇠로 그림을 꺼낸다)
+ */
+function textureImages(
+  materials: ReadonlyMap<string, SkpMaterialInfo>,
+  opts: Pick<SkpOptions, 'textures' | 'maxTextures'>,
+  warnings: string[],
+  folders: Iterable<string> = materials.keys(),
+): Map<string, TexImage> {
+  const out = new Map<string, TexImage>();
+  if (!opts.textures?.length) return out;
+  const byFolder = new Map(opts.textures.map((t) => [t.folder, t] as const));
+  const max = opts.maxTextures ?? MAX_SKP_TEXTURES;
+  let skipped = 0;
+  for (const folder of folders) {
+    const img = byFolder.get(folder);
+    if (!materials.get(folder)?.texture || !img || out.has(folder)) continue;
+    if (out.size >= max) skipped++;
+    else out.set(folder, img);
+  }
+  if (skipped) warnings.push(`무늬 재질이 너무 많아(${max}개 한도) ${skipped}개는 평균색으로 그렸습니다`);
+  return out;
+}
+
 /** 뿌리 절·주석·나무 정보 → meta에 더할 칸(src/meta.ts SkpMetaExtras). 없거나 풀지 못한 칸은 빠진다 */
 function extrasMeta(
   model: SkpModel,
@@ -370,6 +401,17 @@ function extrasMeta(
   } catch (e) {
     warnings.push(`장면 목록을 풀지 못했습니다(${e instanceof Error ? e.message : String(e)})`);
   }
+  if (model.animation?.loop !== undefined) out.animation = { loop: model.animation.loop };
+  try {
+    const loc = locationMeta(model);
+    if (loc) out.location = loc;
+    if (model.shadowInfo) out.shadow = shadowMeta(model.shadowInfo);
+    const ax = axesMeta(model.axes, scale);
+    if (ax) out.axes = ax;
+  } catch {
+    warnings.push('위치·그림자·그리기 축을 풀지 못했습니다');
+  }
+  if (parts.revealItems?.length) out.revealItems = parts.revealItems;
   if (model.tagFolders?.length) out.tagFolders = model.tagFolders.map((f) => ({ name: f.name, visible: f.visible !== false, parent: f.parent }));
   if (model.name) out.modelName = model.name;
   if (model.description) out.modelDescription = model.description;

@@ -20,7 +20,9 @@
  * 보조점은 PointSet3d, 글·잰 값·단면 평면은 meta(texts·dimensions·sectionPlanes, src/meta.ts 꼴)로 낸다.
  * 숨긴 주석(깃발·감싼 숨긴 인스턴스)은 meta에 hidden: true로 넣고, 선분은 extras일 때만 따로 묶어 extraItems.hidden에도 적는다.
  *
- * 재질 물려받기(SketchUp 화면과 같게 잡은 규칙): 면 앞 재질 → 감싼 인스턴스 재질(안쪽부터) → 면 뒤 재질 → 기본색(스타일 앞면 색).
+ * 재질 물려받기(SketchUp 화면과 같게 잡은 규칙, 앞·뒤 따로): 앞면은 면 앞 재질 → 감싼 인스턴스 재질(안쪽부터) → 기본색(스타일 앞면 색),
+ *   뒷면은 면 뒤 재질 → 감싼 인스턴스 재질 → 스타일 뒷면 색. 뒷면이 앞면과 다르면 그물에 backColor(뒷면 무늬면 backTexture·backUvs)를 단다.
+ *   삼각형은 면 법선 쪽에서 반시계로 감는다(거울상 배치도 바로잡는다 — 코어가 시계 방향으로 보이는 쪽을 뒷면으로 칠한다).
  * 태그 물려받기: 요소 태그가 없거나 기본 태그면 감싼 인스턴스의 태그를 따른다.
  *
  * 무늬(textures 선택): 칠하는 재질이 무늬 재질이면 그물에 무늬 좌표(uvs)와 무늬 id를 둔다(projection.ts).
@@ -55,9 +57,10 @@ import type {
   Vec3,
 } from './meta';
 import * as A from './scene-annotations';
-import { AttrPool } from './scene-meta';
+import { AttrPool, PAGE_USE_HIDDEN_OBJECTS } from './scene-meta';
 import { cornerNormals, faceUnitNormal } from './scene-smooth';
 import { applyFaceUvq, faceUvq, planeAxes } from './projection';
+import { solidInfo } from './solid';
 
 export const DEFAULT_FACE_COLOR: Rgba = [0.82, 0.82, 0.8, 1];
 export const EDGE_COLOR: Rgba = [0.12, 0.12, 0.12, 1];
@@ -89,6 +92,107 @@ export const MAX_SPLIT_ITEMS = 3000;
 export const MAX_TREE_RUNS = 2_000_000;
 /** 무늬 좌표를 다는 정점 수 한도(넘으면 그 뒤 그물은 무늬 없이 평균색 — 정점마다 8~12바이트가 더 든다) */
 export const MAX_UV_VERTICES = 6_000_000;
+/** 장면이 다시 보이는 모형 숨김 인스턴스(revealItems): 노드 수·정점 수 한도(한 번 더 그리는 형상이라 작게) */
+export const MAX_REVEAL_NODES = 200;
+export const MAX_REVEAL_VERTICES = 2_000_000;
+/** "항상 카메라 보기" 컴포넌트를 따로 돌릴 그물로 낼 배치 수 한도(넘는 배치는 저장된 방향 그대로 다른 형상과 함께) */
+export const MAX_BILLBOARDS = 500;
+/**
+ * 나누는 단계보다 깊어도 따로 나눌 나무 노드 수 한도: 단면 평면이 든 그룹·컴포넌트(그 그룹만 자르는 단면 — 코어 setSections의 items)와
+ * "항상 카메라 보기" 컴포넌트(돌리는 그물·윤곽선을 항목째 숨기기)
+ */
+export const MAX_FORCED_SPLITS = 256;
+/**
+ * 한 칸 안에서 단면 채우기 묶음(capGroup)을 나눌 수 한도: 코어는 묶음 안을 홀짝으로 채워(겹친 두 입체의 겹친 곳이 비고 고르기도 지나간다),
+ * 범위 상자가 겹치는 닫힌 입체 배치는 다른 묶음에 넣는다. 모두 겹치면 예전처럼 첫 묶음
+ */
+export const MAX_CAP_SPLITS = 4;
+/** 채우기 묶음을 나눌 때 상자 비교 수 한도(넘으면 그 뒤 배치는 예전처럼 첫 묶음 — 아주 큰 모형의 시간 보호) */
+export const MAX_CAP_TESTS = 4_000_000;
+
+/**
+ * 범위 상자(최소 xyz, 최대 xyz) 모음과 겹침 찾기: 크기 단계(상자보다 큰 2의 거듭제곱 칸)마다 격자에 넣어, 찾을 상자가 덮는 칸만 본다
+ * (덮는 칸이 너무 많은 작은 단계는 그 단계 상자를 모두 본다). 닿기만 한 상자(맞붙은 벽·쌓은 상자)는 겹치지 않은 것으로 본다
+ */
+export class BoxSet {
+  private readonly boxes: number[] = [];
+  private readonly seen: number[] = [];
+  private query = 0;
+  private readonly levels = new Map<number, { cells: Map<string, number[]>; members: number[] }>();
+
+  get size(): number {
+    return this.boxes.length / 6;
+  }
+
+  private static level(b: ArrayLike<number>): number {
+    const ext = Math.max(b[3]! - b[0]!, b[4]! - b[1]!, b[5]! - b[2]!, 1e-12);
+    return Math.ceil(Math.log2(ext));
+  }
+
+  add(b: ArrayLike<number>): void {
+    const id = this.boxes.length / 6;
+    for (let k = 0; k < 6; k++) this.boxes.push(b[k]!);
+    this.seen.push(0);
+    const L = BoxSet.level(b);
+    let lv = this.levels.get(L);
+    if (!lv) this.levels.set(L, (lv = { cells: new Map(), members: [] }));
+    lv.members.push(id);
+    const c = 2 ** L;
+    for (let x = Math.floor(b[0]! / c); x <= Math.floor(b[3]! / c); x++)
+      for (let y = Math.floor(b[1]! / c); y <= Math.floor(b[4]! / c); y++)
+        for (let z = Math.floor(b[2]! / c); z <= Math.floor(b[5]! / c); z++) {
+          const key = `${x},${y},${z}`;
+          const list = lv.cells.get(key);
+          if (list) list.push(id);
+          else lv.cells.set(key, [id]);
+        }
+  }
+
+  /** b와 부피가 겹치는 상자가 있는지. budget.left(비교 수)가 다 떨어지면 null(모른다) */
+  overlaps(b: ArrayLike<number>, budget: { left: number }): boolean | null {
+    const q = ++this.query;
+    const B = this.boxes;
+    const test = (id: number): boolean => {
+      if (this.seen[id] === q) return false;
+      this.seen[id] = q;
+      budget.left--;
+      const o = 6 * id;
+      for (let k = 0; k < 3; k++) {
+        const lo = Math.max(B[o + k]!, b[k]!);
+        const hi = Math.min(B[o + 3 + k]!, b[3 + k]!);
+        // 닿기만 한 것(겹친 길이가 작은 쪽 폭의 백만분의 1 또는 좌표 반올림 오차 안)은 겹치지 않은 것으로
+        const ext = Math.min(B[o + 3 + k]! - B[o + k]!, b[3 + k]! - b[k]!);
+        if (!(hi - lo > ext * 1e-6 + Math.max(Math.abs(lo), Math.abs(hi)) * 1e-13)) return false;
+      }
+      return true;
+    };
+    for (const [L, lv] of this.levels) {
+      const c = 2 ** L;
+      const x0 = Math.floor(b[0]! / c), x1 = Math.floor(b[3]! / c);
+      const y0 = Math.floor(b[1]! / c), y1 = Math.floor(b[4]! / c);
+      const z0 = Math.floor(b[2]! / c), z1 = Math.floor(b[5]! / c);
+      const cells = (x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1);
+      if (!(cells <= 64) || cells > lv.members.length) {
+        for (const id of lv.members) {
+          if (budget.left <= 0) return null;
+          if (test(id)) return true;
+        }
+        continue;
+      }
+      for (let x = x0; x <= x1; x++)
+        for (let y = y0; y <= y1; y++)
+          for (let z = z0; z <= z1; z++) {
+            const list = lv.cells.get(`${x},${y},${z}`);
+            if (!list) continue;
+            for (const id of list) {
+              if (budget.left <= 0) return null;
+              if (test(id)) return true;
+            }
+          }
+    }
+    return false;
+  }
+}
 
 /**
  * 큰 좌표 기준(인치): 덧붙이는 형상(배치 하나의 한 묶음)의 첫 정점이 원점에서 이보다 멀면(어느 축이든),
@@ -118,11 +222,13 @@ export const TREE_HIDDEN = 1;
 /** 나무 노드 깃발: 안쪽 인스턴스가 있지만 노드 한도로 목록에 넣지 않음 */
 export const TREE_MORE = 2;
 
-/** 재질 열쇠: ≥0 면 앞 재질, -1 물려받기(없으면 기본색), ≤-2 물려받기(없으면 뒤 재질 -(k+2)) */
+/** 재질 열쇠(앞·뒤 따로): ≥0 면의 그쪽 재질, -1 물려받기(감싼 인스턴스 재질, 없으면 스타일 앞면·뒷면 색) */
 type MatKey = number;
 
 interface Batch {
   mat: MatKey;
+  /** 뒷면 재질 열쇠 */
+  back: MatKey;
   /** 태그 번호, -1이면 물려받기 */
   layer: number;
   pos: Float64Array;
@@ -137,11 +243,16 @@ interface Batch {
   /** smooth 선택일 때 꼭짓점 법선(로컬, 위치와 같은 차례)과 이어 칠한 면이 들었는지 */
   nrm?: Float32Array;
   smoothed?: boolean;
-  /** 자기 재질(앞, 또는 열쇠가 뒤 재질이면 뒤)이 무늬 재질일 때 무늬 좌표(무늬 한 장 단위) */
+  /** 자기 앞 재질이 무늬 재질일 때 무늬 좌표(무늬 한 장 단위) */
   uv?: Float32Array;
   uvStride?: 2 | 3;
+  /** 자기 뒷면 재질이 무늬 재질일 때 뒷면 무늬 좌표 */
+  buv?: Float32Array;
+  buvStride?: 2 | 3;
   /** 물려받은 무늬 재질용 기본 투영 평면 좌표(인치, 정점마다 2값 — 무늬 크기로 나눠 쓴다) */
   plane?: Float32Array;
+  /** 면마다 삼각형 수(면 차례 — 한 면의 삼각형은 idx 안에서 이어진다) */
+  ft: Uint32Array;
 }
 
 /** 무늬 재질(model.dat 재질 번호 → 무늬 id·무늬 한 장 크기(인치)) */
@@ -168,6 +279,8 @@ interface LineBatch {
   layer: number;
   pos: Float64Array;
   cls: LineCls;
+  /** 선분마다 정의 안 곡선 차례(-1 = 곡선 아님). 곡선 모서리가 없으면 없다 */
+  curve?: Int32Array;
 }
 
 interface Prepared {
@@ -179,6 +292,10 @@ interface Prepared {
   hiddenBatches: Batch[];
   /** 부드러운·숨긴 모서리(extras일 때만) */
   extraLines: LineBatch[];
+  /** 보통 면이 닫힌 껍질(숨긴 면·삼각화 못 한 면 없음) — 단면 채우기 묶음(capGroup)에 넣는다 */
+  closed: boolean;
+  /** SketchUp 입체면 부피(로컬 인치³, solid.ts) */
+  volume?: number;
 }
 
 class F32 {
@@ -216,6 +333,25 @@ class U32 {
     this.a[this.n++] = v;
   }
   done(): Uint32Array {
+    return this.a.slice(0, this.n);
+  }
+}
+
+class I32 {
+  a: Int32Array;
+  n = 0;
+  constructor(size = 1024) {
+    this.a = new Int32Array(size);
+  }
+  reserve(k: number): void {
+    if (this.n + k <= this.a.length) return;
+    let size = Math.max(1, this.a.length * 2);
+    while (size < this.n + k) size *= 2;
+    const b = new Int32Array(size);
+    b.set(this.a.subarray(0, this.n));
+    this.a = b;
+  }
+  done(): Int32Array {
     return this.a.slice(0, this.n);
   }
 }
@@ -258,14 +394,18 @@ export function triangulateFace(
 
 interface FaceGroup {
   mat: MatKey;
+  back: MatKey;
   layer: number;
   pos: number[];
   idx: number[];
   faces: number;
-  /** 자기 무늬 재질의 무늬 좌표(정점마다 u, v, q) */
+  /** 자기 무늬 재질의 무늬 좌표(정점마다 u, v, q) — 앞면·뒷면 */
   uv: number[] | null;
+  buv: number[] | null;
   /** 기본 투영 평면 좌표(정점마다 x, y 인치) */
   plane: number[] | null;
+  /** 면마다 삼각형 수 */
+  ft: number[];
   area: number;
   fa: number[];
   fn: number[];
@@ -301,6 +441,37 @@ function loopArea(points: Float64Array, loop: readonly number[], n: ArrayLike<nu
   return Math.abs(n[0] || n[1] || n[2] ? d : Math.hypot(sx, sy, sz)) / 2;
 }
 
+/** 원근 무늬 면이 없으면 (u, v, q) 무늬 좌표를 (u, v) 2값으로 줄인다 */
+function compactUv(src: number[]): { uv: Float32Array; stride: 2 | 3 } {
+  let q = false;
+  for (let i = 2; i < src.length && !q; i += 3) q = src[i] !== 1;
+  if (q) return { uv: Float32Array.from(src), stride: 3 };
+  const uv = new Float32Array((src.length / 3) * 2);
+  for (let i = 0, o = 0; i < src.length; i += 3, o += 2) {
+    uv[o] = src[i]!;
+    uv[o + 1] = src[i + 1]!;
+  }
+  return { uv, stride: 2 };
+}
+
+/** idx[from…] 삼각형들의 감김이 법선 n 쪽에서 보아 시계 방향인지(넓이 벡터 합 · n < 0) */
+function windingAgainst(pos: readonly number[], idx: readonly number[], from: number, n: ArrayLike<number>): boolean {
+  let s = 0;
+  for (let t = from; t + 2 < idx.length; t += 3) {
+    const a = 3 * idx[t]!;
+    const b = 3 * idx[t + 1]!;
+    const c = 3 * idx[t + 2]!;
+    const ux = pos[b]! - pos[a]!;
+    const uy = pos[b + 1]! - pos[a + 1]!;
+    const uz = pos[b + 2]! - pos[a + 2]!;
+    const vx = pos[c]! - pos[a]!;
+    const vy = pos[c + 1]! - pos[a + 1]!;
+    const vz = pos[c + 2]! - pos[a + 2]!;
+    s += (uy * vz - uz * vy) * n[0]! + (uz * vx - ux * vz) * n[1]! + (ux * vy - uy * vx) * n[2]!;
+  }
+  return s < 0;
+}
+
 /** 면 넓이(바깥 고리 − 구멍, 0 아래로는 내려가지 않는다) */
 export function faceArea(points: Float64Array, loops: readonly (readonly number[])[], n: ArrayLike<number>): number {
   let a = 0;
@@ -323,22 +494,26 @@ function prepare(
   const cn = smooth ? cornerNormals(ents) : null;
   const fu = new Float64Array(3);
   let k = 0;
+  let failedHere = 0;
   for (let fi = 0; fi < ents.faces.length; fi++) {
     const f = ents.faces[fi]!;
     if (onFaces && ++k % 2048 === 0) onFaces(2048);
     const isHidden = (f.flags & FLAG_HIDDEN) !== 0;
     if (isHidden && !extras) continue;
-    const mat: MatKey = f.front !== undefined ? f.front : f.back !== undefined ? -(f.back + 2) : -1;
+    const mat: MatKey = f.front !== undefined ? f.front : -1;
+    const back: MatKey = f.back !== undefined ? f.back : -1;
     const layer = layerKey(f.layer);
-    const key = `${mat}|${layer}`;
+    const key = `${mat}|${back}|${layer}`;
     const map = isHidden ? hidden : groups;
     let g = map.get(key);
     if (!g) {
-      const own = tex ? (mat >= 0 ? tex.tile(mat) : mat <= -2 ? tex.tile(-(mat + 2)) : undefined) : undefined;
+      const own = tex && mat >= 0 ? tex.tile(mat) : undefined;
+      const ownBack = tex && back >= 0 ? tex.tile(back) : undefined;
       map.set(
         key,
         (g = {
           mat,
+          back,
           layer,
           pos: [],
           idx: [],
@@ -349,17 +524,24 @@ function prepare(
           nrm: smooth ? [] : null,
           smoothed: false,
           uv: own ? [] : null,
-          plane: tex?.plane && mat < 0 ? [] : null,
+          buv: ownBack ? [] : null,
+          plane: tex?.plane && (mat < 0 || back < 0) ? [] : null,
+          ft: [],
         }),
       );
     }
     const before = g.pos.length;
+    const tri0 = g.idx.length;
     if (!triangulateFace(ents.points, f.loops, f.normal, g.pos, g.idx)) {
       if (!isHidden) counter.failed++;
+      failedHere++;
       continue;
     }
     g.faces++;
+    g.ft.push((g.idx.length - tri0) / 3);
     faceUnitNormal(f.normal, fu, 0);
+    // 삼각형 감김을 면 법선 쪽에서 반시계로(코어가 시계 방향으로 보이는 쪽을 뒷면으로 칠한다). earcut은 한 면의 삼각형을 같은 방향으로 내므로 합으로 본다
+    if (windingAgainst(g.pos, g.idx, tri0, fu)) for (let t = tri0; t < g.idx.length; t += 3) [g.idx[t + 1], g.idx[t + 2]] = [g.idx[t + 2]!, g.idx[t + 1]!];
     const area = faceArea(ents.points, f.loops, fu);
     g.area += area;
     g.fa.push(area);
@@ -378,10 +560,16 @@ function prepare(
     const v0 = before / 3;
     const nv = (g.pos.length - before) / 3;
     if (g.uv) {
-      const t = tex!.tile(mat >= 0 ? mat : -(mat + 2))!;
-      const r = faceUvq(f.normal, mat >= 0 ? f.frontMap : f.backMap, t.w, t.h);
+      const t = tex!.tile(mat)!;
+      const r = faceUvq(f.normal, f.frontMap, t.w, t.h);
       if (r.singular) tex!.singular++;
       if (applyFaceUvq(r.m, g.pos, v0, nv, g.uv).flat) tex!.flat++;
+    }
+    if (g.buv) {
+      const t = tex!.tile(back)!;
+      const r = faceUvq(f.normal, f.backMap, t.w, t.h);
+      if (r.singular) tex!.singular++;
+      if (applyFaceUvq(r.m, g.pos, v0, nv, g.buv).flat) tex!.flat++;
     }
     if (g.plane) {
       const [x, y] = planeAxes(f.normal);
@@ -398,6 +586,7 @@ function prepare(
       if (!g.idx.length) continue;
       const b: Batch = {
         mat: g.mat,
+        back: g.back,
         layer: g.layer,
         pos: Float64Array.from(g.pos),
         idx: Uint32Array.from(g.idx),
@@ -405,25 +594,21 @@ function prepare(
         area: g.area,
         fa: Float64Array.from(g.fa),
         fn: Float32Array.from(g.fn),
+        ft: Uint32Array.from(g.ft),
       };
       if (g.nrm) {
         b.nrm = Float32Array.from(g.nrm);
         b.smoothed = g.smoothed;
       }
       if (g.uv) {
-        // 원근 무늬 면이 없으면 (u, v) 2값으로 줄인다
-        let q = false;
-        for (let i = 2; i < g.uv.length && !q; i += 3) q = g.uv[i] !== 1;
-        if (q) b.uv = Float32Array.from(g.uv);
-        else {
-          const uv = new Float32Array((g.uv.length / 3) * 2);
-          for (let i = 0, o = 0; i < g.uv.length; i += 3, o += 2) {
-            uv[o] = g.uv[i]!;
-            uv[o + 1] = g.uv[i + 1]!;
-          }
-          b.uv = uv;
-        }
-        b.uvStride = q ? 3 : 2;
+        const c = compactUv(g.uv);
+        b.uv = c.uv;
+        b.uvStride = c.stride;
+      }
+      if (g.buv) {
+        const c = compactUv(g.buv);
+        b.buv = c.uv;
+        b.buvStride = c.stride;
       }
       if (g.plane) b.plane = Float32Array.from(g.plane);
       out.push(b);
@@ -431,12 +616,17 @@ function prepare(
     return out;
   };
 
-  const lineGroups = new Map<number, number[]>();
-  const softGroups = new Map<number, number[]>();
-  const hiddenLines = new Map<number, number[]>();
+  // 모서리는 태그마다 모은다. 곡선(호·원·곡선) 모서리면 선분마다 정의 안 곡선 차례를 함께 적는다(화면이 고른 선분의 곡선 전체 길이를 잰다)
+  interface LineGroup {
+    pos: number[];
+    curve: number[] | null;
+  }
+  const lineGroups = new Map<number, LineGroup>();
+  const softGroups = new Map<number, LineGroup>();
+  const hiddenLines = new Map<number, LineGroup>();
   const p = ents.points;
   for (const e of ents.edges) {
-    let map: Map<number, number[]>;
+    let map: Map<number, LineGroup>;
     if (e.flags & FLAG_HIDDEN) {
       if (!extras) continue;
       map = hiddenLines;
@@ -445,16 +635,28 @@ function prepare(
       map = softGroups;
     } else map = lineGroups;
     const layer = layerKey(e.layer);
-    let arr = map.get(layer);
-    if (!arr) map.set(layer, (arr = []));
-    arr.push(p[3 * e.a]!, p[3 * e.a + 1]!, p[3 * e.a + 2]!, p[3 * e.b]!, p[3 * e.b + 1]!, p[3 * e.b + 2]!);
+    let g = map.get(layer);
+    if (!g) map.set(layer, (g = { pos: [], curve: null }));
+    const k = e.curve !== undefined && e.curve >= 0 ? e.curve : -1;
+    if (k >= 0 && !g.curve) g.curve = new Array<number>(g.pos.length / 6).fill(-1);
+    g.curve?.push(k);
+    g.pos.push(p[3 * e.a]!, p[3 * e.a + 1]!, p[3 * e.a + 2]!, p[3 * e.b]!, p[3 * e.b + 1]!, p[3 * e.b + 2]!);
   }
+  const batchOf = (layer: number, g: LineGroup, cls: LineCls): LineBatch => {
+    const l: LineBatch = { layer, pos: Float64Array.from(g.pos), cls };
+    if (g.curve) l.curve = Int32Array.from(g.curve);
+    return l;
+  };
   const lines: LineBatch[] = [];
-  for (const [layer, arr] of lineGroups) lines.push({ layer, pos: Float64Array.from(arr), cls: 0 });
+  for (const [layer, g] of lineGroups) lines.push(batchOf(layer, g, 0));
   const extraLines: LineBatch[] = [];
-  for (const [layer, arr] of softGroups) extraLines.push({ layer, pos: Float64Array.from(arr), cls: 1 });
-  for (const [layer, arr] of hiddenLines) extraLines.push({ layer, pos: Float64Array.from(arr), cls: 2 });
-  return { batches: toBatches(groups), lines, hiddenBatches: toBatches(hidden), extraLines };
+  for (const [layer, g] of softGroups) extraLines.push(batchOf(layer, g, 1));
+  for (const [layer, g] of hiddenLines) extraLines.push(batchOf(layer, g, 2));
+  // 닫힌 입체: 단면에서 잘린 면을 채울 수 있다(삼각화하지 못한 면이 있으면 그물에 틈이 생기므로 빼고)
+  const solid = solidInfo(ents);
+  const out: Prepared = { batches: toBatches(groups), lines, hiddenBatches: toBatches(hidden), extraLines, closed: solid.closed && !failedHere };
+  if (solid.volume !== undefined) out.volume = solid.volume;
+  return out;
 }
 
 /** 열 우선 4×4 곱 a·b */
@@ -558,6 +760,8 @@ export interface SkpMaterialStat {
   /** 3D에 무늬 그림을 입힌 그물이 있으면 그 무늬 id(Scene3d.textures) */
   texture?: string;
   faces: number;
+  /** 이 재질을 뒷면에 칠한 면 수(앞면 재질이 다른 면 — 있을 때만) */
+  backFaces?: number;
   /** 그린 면 넓이 합(세계, 장면 단위²) */
   area: number;
   meshIds: string[];
@@ -659,6 +863,8 @@ export interface BuildOptions {
   maxTreeNodes?: number;
   /** 구간 수 한도 */
   maxTreeRuns?: number;
+  /** 단면 채우기 묶음을 나눌 때 상자 비교 수 한도(기본 MAX_CAP_TESTS — 시험용) */
+  maxCapTests?: number;
   /** 부드러운 모서리·숨긴 형상을 따로 묶어 낸다(기본 false) */
   extras?: boolean;
   /** 인스턴스 배치 수 한도 */
@@ -669,6 +875,11 @@ export interface BuildOptions {
   annotations?: boolean;
   /** 재질 없는 면의 색(기본 DEFAULT_FACE_COLOR) — 모형 스타일의 앞면 색을 넘긴다 */
   defaultFaceColor?: Rgba;
+  /**
+   * 재질 없는 뒷면의 색(모형 스타일의 뒷면 색). 주면 앞·뒤 재질이 다른 면을 따로 모아 그물에 뒷면 색·무늬(backColor·backTexture·backUvs)를 단다.
+   * 없으면 재질 없는 뒷면은 앞면과 같은 색으로 둔다
+   */
+  defaultBackColor?: Rgba;
   /** 큰 좌표 기준(장면 단위). 기본은 LARGE_COORD_INCH × scale(= 100 m). Infinity면 origin을 쓰지 않는다 */
   originThreshold?: number;
   /** 무늬를 입힐 재질(model.dat 재질 번호 → 무늬 id·한 장 크기). 없으면 무늬 좌표를 만들지 않는다 */
@@ -701,6 +912,13 @@ export interface SceneParts {
   limited?: boolean;
   /** 보조점(PointSet3d) */
   points: PointSet3d[];
+  /**
+   * 그물마다(meshes 차례) 면 경계: 면 k의 삼각형은 [runs[k], runs[k + 1])(마지막 면은 그물 끝까지). 면마다 삼각형을 이어 붙이므로
+   * 고른 삼각형이 든 SketchUp 면 하나를 구간으로 찾는다(화면의 면 넓이·강조)
+   */
+  faceRuns: Uint32Array[];
+  /** 모서리 묶음마다(lines 차례) 선분의 놓인 곡선 번호(-1 = 곡선 아님, 같은 수 = 같은 곡선의 한 배치). 곡선이 없는 묶음은 null, 곡선이 하나도 없으면 없다 */
+  segmentCurves?: (Int32Array | null)[];
   /** 주석(모형에 주석이 있을 때만): meta.texts·dimensions·sectionPlanes·annotationItems 꼴 */
   texts?: SkpTextMeta[];
   dimensions?: SkpDimensionMeta[];
@@ -715,6 +933,8 @@ export interface SceneParts {
   /** 속성 사전 모음(meta.attributes)과 모형 속성 차례 */
   attributes?: SkpAttrDictsMeta[];
   modelAttrs?: number;
+  /** 모형에서 숨겼지만 장면이 다시 보이는 인스턴스 노드와 그 안쪽을 보통 색으로 그린 항목(meta.revealItems) */
+  revealItems?: { node: number; ids: string[] }[];
 }
 
 /** 넓이 우선으로 모은 나무(펼치기 전) */
@@ -745,6 +965,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   const annotate = opts.annotations !== false;
   const maxPlacements = opts.maxPlacements ?? MAX_PLACEMENTS;
   const defaultColor = opts.defaultFaceColor ?? DEFAULT_FACE_COLOR;
+  const defaultBack = opts.defaultBackColor ?? null;
 
   // ── 진행: 삼각화한 면 수(정의마다 한 번)와 펼친 배치 수의 반반 ──
   const totalFaces = Math.max(1, model.counts.faces);
@@ -925,7 +1146,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
         if (visiting.has(e)) return s;
         visiting.add(e);
         const p = prep(e);
-        for (const b of p.batches) s.add(`f${b.mat}|${b.layer}`);
+        for (const b of p.batches) s.add(`f${b.mat}|${b.layer}${p.closed ? 'c' : ''}`);
         for (const b of p.hiddenBatches) s.add(`h${b.mat}|${b.layer}`);
         for (const l of p.lines) s.add(`l${l.layer}`);
         for (const l of p.extraLines) s.add(`x${l.cls}|${l.layer}`);
@@ -958,7 +1179,26 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     } else if (visibleTop > 0) outlineSkipped = visibleTop;
   }
 
-  interface Bucket {
+  // ── 단계보다 깊어도 따로 나눌 노드: 단면 평면이 든 그룹·컴포넌트, "항상 카메라 보기" 컴포넌트(한도 안에서 넓이 우선 차례) ──
+  const forced = new Set<number>();
+  if (tb && splitDepth >= 1)
+    for (let i = 0; i < tb.n && forced.size < MAX_FORCED_SPLITS; i++) {
+      if (tb.depth[i]! <= splitDepth || tb.hidden[i]) continue;
+      const ents = tb.ents[i]!;
+      if (ents.sections?.length || model.definitions.get(tb.inst[i]!.definition)?.behavior?.alwaysFaceCamera) forced.add(i);
+    }
+
+  /** 무늬 좌표를 쌓는 곳(앞면은 묶음 자신, 뒷면은 bk.back) */
+  interface UvSink {
+    /** 무늬 재질이면 무늬 좌표(정점마다 uvStride값). 한도에 걸리면 null로 버린다 */
+    uv: F32 | null;
+    uvStride: 2 | 3;
+  }
+  /** 앞과 다른 뒷면: 뒷면 재질(undefined = 스타일 뒷면 색)과 그 무늬 좌표 */
+  interface BackSide extends UvSink {
+    mat: number | undefined;
+  }
+  interface Bucket extends UvSink {
     serial: number;
     slot: number;
     /** 0 보통 · 1 숨긴 면 */
@@ -974,9 +1214,24 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     nrm?: F32;
     /** 큰 좌표면 묶음 원점(처음 넣을 때 정한다, null = 원점 없음) */
     origin?: [number, number, number] | null;
-    /** 무늬 재질이면 무늬 좌표(정점마다 uvStride값). 한도에 걸리면 null로 버린다 */
-    uv: F32 | null;
-    uvStride: 2 | 3;
+    /** 면마다 첫 삼각형 차례(SketchUp 면 하나 = 이어진 삼각형 구간) */
+    fs: U32;
+    /** 닫힌 입체 배치만 모은 묶음(단면 채우기 묶음 capGroup = 칸마다 하나, 겹치는 입체는 cap번째 묶음) */
+    closed: boolean;
+    /** 칸 안 채우기 묶음 번호(0 = 예전과 같은 skp-solid-<칸>) */
+    cap: number;
+    /** 앞과 다른 뒷면(없으면 양면이 앞면 재질) */
+    back: BackSide | null;
+    /** "항상 카메라 보기" 배치(그 배치만 모은 묶음 — 코어 billboard) */
+    bb: Billboard | null;
+  }
+  /** 카메라를 보는 컴포넌트 배치: 묶음 열쇠 꼬리, 세계 원점(Z축 둘레로 돈다)과 저장된 앞 방향(컴포넌트 −Y) */
+  interface Billboard {
+    key: string;
+    origin: [number, number, number];
+    front: [number, number, number];
+    /** 그 배치의 보통 모서리(세계 좌표, 태그마다 — 같은 태그의 첫 그물, 없으면 첫 그물의 윤곽선으로 함께 돌린다) */
+    edges: Map<number, number[]>;
   }
   interface LineBucket {
     serial: number;
@@ -985,6 +1240,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     layer: number;
     pos: F32;
     origin?: [number, number, number] | null;
+    /** 선분마다 놓인 곡선 번호(-1 = 곡선 아님) — 곡선 선분이 처음 들어올 때 만든다 */
+    curves: I32 | null;
   }
   const originLimit = opts.originThreshold ?? LARGE_COORD_INCH * Math.abs(scale);
   const cellSize = originLimit * 10;
@@ -1016,6 +1273,21 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   const ownFaces = T ? new Float64Array(T.n) : null;
   const ownEdges = T ? new Float64Array(T.n) : null;
   const ownArea = T ? new Float64Array(T.n) : null;
+  // "항상 카메라 보기" 배치
+  let billboards = 0;
+  let billboardsSkipped = 0;
+  const billboardList: Billboard[] = [];
+  /** 그물 윤곽선으로 옮긴 모서리 수(태그마다 — 태그 통계) */
+  const bbEdgeCount = new Map<string, number>();
+  /** 배치의 앞 방향: 컴포넌트 −Y(SketchUp 앞 뷰에서 보이는 쪽)를 세계로 옮겨 수평으로 */
+  const frontOf = (m: Float64Array): [number, number, number] => {
+    const x = -m[4]!;
+    const y = -m[5]!;
+    const l = Math.hypot(x, y);
+    return l > 1e-12 ? [x / l, y / l, 0] : [0, -1, 0];
+  };
+  /** 노드마다 SketchUp 입체면 부피(장면 단위³ — 정의 부피 × 배치 변환 행렬식), 아니면 NaN */
+  const nodeVolume = T ? new Float64Array(T.n).fill(NaN) : null;
   const runItem = new U32(T ? 4096 : 1);
   const runStart = new U32(T ? 4096 : 1);
   const runNode1 = new U32(T ? 4096 : 1);
@@ -1024,7 +1296,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   let lastRunSerial = -1;
   let lastRunNode = -2;
   const addRun = (serial: number, start: number, node: number): void => {
-    if (!T || runsDropped) return;
+    // REVEAL_NODE: 장면이 다시 보이는 숨김 인스턴스의 두 번째 그림 — 나무 구간에 넣지 않는다(고르기는 그 항목 그대로)
+    if (!T || runsDropped || node < -1) return;
     if (serial === lastRunSerial && node === lastRunNode) return;
     if (runItem.n >= maxRuns) {
       runsDropped = true;
@@ -1049,6 +1322,57 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   let placementsStopped = false;
   let missingDefs = 0;
   let cycles = 0;
+
+  // ── 단면 채우기 묶음 나누기: 칸마다 묶음별 범위 상자 모음(겹치는 닫힌 입체 배치는 다른 묶음) ──
+  const localBoxes = new Map<Prepared, Float64Array>();
+  /** 배치의 세계 범위 상자(정의의 보통 면 범위 상자 여덟 구석을 옮긴 것 — 돌린 배치는 조금 넉넉하다) */
+  const placedBox = (p: Prepared, m: Float64Array): Float64Array => {
+    let lb = localBoxes.get(p);
+    if (!lb) {
+      lb = Float64Array.from([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]);
+      for (const b of p.batches)
+        for (let i = 0; i < b.pos.length; i += 3)
+          for (let k = 0; k < 3; k++) {
+            const v = b.pos[i + k]!;
+            if (v < lb[k]!) lb[k] = v;
+            if (v > lb[3 + k]!) lb[3 + k] = v;
+          }
+      localBoxes.set(p, lb);
+    }
+    const out = Float64Array.from([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]);
+    for (let c = 0; c < 8; c++) {
+      const x = lb[c & 1 ? 3 : 0]!, y = lb[c & 2 ? 4 : 1]!, z = lb[c & 4 ? 5 : 2]!;
+      let w = m[3]! * x + m[7]! * y + m[11]! * z + m[15]!;
+      if (!w) w = 1;
+      const X = (m[0]! * x + m[4]! * y + m[8]! * z + m[12]!) / w;
+      const Y = (m[1]! * x + m[5]! * y + m[9]! * z + m[13]!) / w;
+      const Z = (m[2]! * x + m[6]! * y + m[10]! * z + m[14]!) / w;
+      for (const [k, v] of [X, Y, Z].entries()) {
+        if (v < out[k]!) out[k] = v;
+        if (v > out[3 + k]!) out[3 + k] = v;
+      }
+    }
+    return out;
+  };
+  const capSets = new Map<number, BoxSet[]>();
+  const capBudget = { left: opts.maxCapTests ?? MAX_CAP_TESTS };
+  /** 닫힌 입체 배치의 채우기 묶음 번호: 범위 상자가 겹치지 않는 첫 묶음(없거나 비교 한도를 넘으면 0 — 예전과 같다) */
+  const capOf = (slot: number, box: Float64Array): number => {
+    if (!box.every(Number.isFinite)) return 0;
+    let sets = capSets.get(slot);
+    if (!sets) capSets.set(slot, (sets = []));
+    for (let g = 0; g < MAX_CAP_SPLITS; g++) {
+      const set = sets[g] ?? (sets[g] = new BoxSet());
+      const hit = set.size ? set.overlaps(box, capBudget) : false;
+      if (hit === null) return 0;
+      if (!hit) {
+        set.add(box);
+        return g;
+      }
+    }
+    sets[0]!.add(box);
+    return 0;
+  };
 
   const put = (dst: F32, src: Float64Array, m: Float64Array, bounds: boolean, origin?: [number, number, number] | null): void => {
     dst.reserve(src.length);
@@ -1088,21 +1412,74 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     dst.n = n;
   };
 
-  const faceBucket = (slot: number, cls: number, layer: number, mat: number | undefined, far: ReturnType<typeof farCell>): Bucket => {
-    // 보통(가까운) 형상의 열쇠는 예전과 같다(기본 호출 출력이 바뀌지 않게). 먼 형상은 칸 열쇠를 붙인다
-    const key = (cls ? `${slot}|h|${layer}|${mat ?? 'd'}` : `${slot}|${layer}|${mat ?? 'd'}`) + (far ? far.key : '');
+  /**
+   * 묶음의 뒷면: 앞면 재질(자기 → 물려받기)과 뒷면 재질(자기 → 물려받기)이 같으면 null(양면이 앞면 재질 — 뒷면 재질이 없는데 스타일 뒷면 색을 모를 때도),
+   * 다르면 뒷면 재질(undefined = 스타일 뒷면 색)
+   */
+  const sideBack = (b: Batch, inhMat: number | undefined): number | undefined | null => {
+    const front = b.mat >= 0 ? b.mat : inhMat;
+    const back = b.back >= 0 ? b.back : inhMat;
+    // 재질 없는 뒷면인데 스타일 뒷면 색을 모르면 앞면과 같게
+    if (back === undefined && !defaultBack) return null;
+    return front === back && front !== undefined ? null : back;
+  };
+  /** back: 앞과 다른 뒷면 재질(undefined = 스타일 뒷면 색), null = 뒷면도 앞면 재질 */
+  const newBack = (back: number | undefined | null): BackSide | null =>
+    back === null ? null : { mat: back, uv: back !== undefined && texMap?.has(back) ? new F32() : null, uvStride: 2 };
+  const faceBucket = (
+    slot: number,
+    cls: number,
+    layer: number,
+    mat: number | undefined,
+    far: ReturnType<typeof farCell>,
+    closed: boolean,
+    // 기본값을 두지 않는다: undefined(스타일 뒷면 색)를 넘기면 기본값 null로 바뀌기 때문
+    back: number | undefined | null,
+    bb: Billboard | null = null,
+    cap = 0,
+  ): Bucket => {
+    // 보통(가까운) 형상의 열쇠는 예전과 같다(기본 호출 출력이 바뀌지 않게). 닫힌 입체는 따로(|c), 앞과 다른 뒷면은 그 재질(|b),
+    // 카메라를 보는 배치는 배치마다(|bb), 먼 형상은 칸 열쇠를 붙인다
+    const key =
+      (cls ? `${slot}|h|${layer}|${mat ?? 'd'}` : `${slot}|${layer}|${mat ?? 'd'}`) +
+      (closed ? (cap ? `|c${cap}` : '|c') : '') +
+      (back !== null ? `|b${back ?? 'd'}` : '') +
+      (bb ? bb.key : '') +
+      (far ? far.key : '');
     let bk = buckets.get(key);
-    if (!bk) buckets.set(key, (bk = { serial: serials++, slot, cls, layer, mat, pos: new F32(), idx: new U32(), faces: 0, area: 0, origin: far ? far.origin : null, uv: mat !== undefined && texMap?.has(mat) ? new F32() : null, uvStride: 2 }));
+    if (!bk)
+      buckets.set(
+        key,
+        (bk = {
+          serial: serials++,
+          slot,
+          cls,
+          layer,
+          mat,
+          pos: new F32(),
+          idx: new U32(),
+          faces: 0,
+          area: 0,
+          origin: far ? far.origin : null,
+          uv: mat !== undefined && texMap?.has(mat) ? new F32() : null,
+          uvStride: 2,
+          fs: new U32(64),
+          closed,
+          cap: closed ? cap : 0,
+          back: newBack(back),
+          bb,
+        }),
+      );
     return bk;
   };
   const lineBucket = (slot: number, cls: LineCls, layer: number, far: ReturnType<typeof farCell>): LineBucket => {
     const key = (cls === 0 ? `${slot}|${layer}` : `${slot}|${cls === 1 ? 's' : 'x'}|${layer}`) + (far ? far.key : '');
     let lb = lineBuckets.get(key);
-    if (!lb) lineBuckets.set(key, (lb = { serial: serials++, slot, cls, layer, pos: new F32(), origin: far ? far.origin : null }));
+    if (!lb) lineBuckets.set(key, (lb = { serial: serials++, slot, cls, layer, pos: new F32(), origin: far ? far.origin : null, curves: null }));
     return lb;
   };
   /** 묶음의 무늬 좌표를 3값으로 넓힌다(원근 무늬가 처음 들어올 때, q = 1을 끼운다) */
-  const widenUv = (bk: Bucket): void => {
+  const widenUv = (bk: UvSink): void => {
     const old = bk.uv!;
     const nv = old.n / 2;
     const w = new F32();
@@ -1120,7 +1497,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
    * 무늬 좌표 덧붙이기. src: 자기 재질 무늬 좌표(stride 2·3) 또는 물려받은 재질용 평면 좌표와 무늬 크기 역수(scale).
    * src가 없으면(그럴 일은 없지만) 0으로 채워 정점 수를 맞춘다
    */
-  const appendUv = (bk: Bucket, nv: number, src: { arr: Float32Array; stride: 2 | 3; scale?: [number, number] } | null): void => {
+  const appendUv = (bk: UvSink, nv: number, src: { arr: Float32Array; stride: 2 | 3; scale?: [number, number] } | null): void => {
     if (!bk.uv) return;
     if (uvVerts + nv > maxUv) {
       // 한도: 이 묶음은 무늬 없이(평균색) 그린다
@@ -1204,7 +1581,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     dst.n = n;
   };
   /** 묶음 하나를 덧붙이고 그 배치의 면 넓이(세계)를 돌려준다 */
-  const appendFaces = (bk: Bucket, b: Batch, m: Float64Array, node: number, L: Linear, inhMat?: number): number => {
+  const appendFaces = (bk: Bucket, b: Batch, m: Float64Array, node: number, L: Linear): number => {
     const base = bk.pos.n / 3;
     addRun(bk.serial, bk.idx.n / 3, node);
     put(bk.pos, b.pos, m, bk.cls === 0, bk.origin);
@@ -1212,27 +1589,76 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       if (!bk.nrm && b.smoothed) bk.nrm = backfillNormals(bk, base);
       if (bk.nrm) putNormals(bk.nrm, b.nrm, L);
     }
+    // 면 경계: 이 묶음의 면마다 첫 삼각형 차례(삼각형은 면 차례대로 이어 붙는다)
+    bk.fs.reserve(b.ft.length);
+    let tri = bk.idx.n / 3;
+    for (let i = 0; i < b.ft.length; i++) {
+      bk.fs.a[bk.fs.n++] = tri;
+      tri += b.ft[i]!;
+    }
     bk.idx.reserve(b.idx.length);
-    for (let i = 0; i < b.idx.length; i++) bk.idx.a[bk.idx.n++] = base + b.idx[i]!;
+    const ix = bk.idx.a;
+    let n = bk.idx.n;
+    // 거울상 배치(행렬식 < 0)는 감김이 뒤집히므로 바로잡는다(앞면이 면 법선 쪽에 남게 — 뒷면 색)
+    if (L.det < 0)
+      for (let i = 0; i < b.idx.length; i += 3) {
+        ix[n++] = base + b.idx[i]!;
+        ix[n++] = base + b.idx[i + 2]!;
+        ix[n++] = base + b.idx[i + 1]!;
+      }
+    else for (let i = 0; i < b.idx.length; i++) ix[n++] = base + b.idx[i]!;
+    bk.idx.n = n;
     bk.faces += b.faces;
-    if (bk.uv) {
-      // 자기 재질(앞, 또는 물려받을 것이 없을 때 뒤)로 칠하면 그 무늬 좌표, 물려받은 재질이면 평면 좌표 ÷ 무늬 크기
-      const own = b.mat >= 0 || (b.mat <= -2 && inhMat === undefined);
+    // 무늬 좌표: 그쪽 자기 재질로 칠하면 그 무늬 좌표, 물려받은 재질이면 평면 좌표 ÷ 무늬 크기
+    const side = (sink: UvSink, own: boolean, uv: Float32Array | undefined, stride: 2 | 3 | undefined, mat: number | undefined): void => {
       let src: Parameters<typeof appendUv>[2] = null;
-      if (own && b.uv) src = { arr: b.uv, stride: b.uvStride ?? 2 };
-      else if (!own && b.plane && bk.mat !== undefined) {
-        const t = texMap!.get(bk.mat)!;
+      if (own && uv) src = { arr: uv, stride: stride ?? 2 };
+      else if (!own && b.plane && mat !== undefined) {
+        const t = texMap!.get(mat)!;
         src = { arr: b.plane, stride: 2, scale: [1 / t.w, 1 / t.h] };
       }
-      appendUv(bk, b.pos.length / 3, src);
-    }
+      appendUv(sink, b.pos.length / 3, src);
+    };
+    if (bk.uv) side(bk, b.mat >= 0, b.uv, b.uvStride, bk.mat);
+    if (bk.back?.uv) side(bk.back, b.back >= 0, b.buv, b.buvStride, bk.back.mat);
     const area = placedArea(b, L);
     bk.area += area;
     return area;
   };
-  const appendLines = (lb: LineBucket, l: LineBatch, m: Float64Array, node: number): void => {
-    addRun(lb.serial, lb.pos.n / 6, node);
+  /** 놓인 곡선 번호: 배치마다 그 정의의 곡선 수만큼 새 번호를 쓴다(같은 정의를 여러 번 놓아도 곡선마다 따로) */
+  let curveSerial = 0;
+  const curveBase = new Map<SkpEntities, number>();
+  const curvePlacement = new Map<SkpEntities, number>();
+  const appendLines = (lb: LineBucket, l: LineBatch, m: Float64Array, node: number, ents: SkpEntities, placement: number): void => {
+    const seg0 = lb.pos.n / 6;
+    addRun(lb.serial, seg0, node);
     put(lb.pos, l.pos, m, lb.cls === 0, lb.origin);
+    const ns = l.pos.length / 6;
+    if (!l.curve && !lb.curves) return;
+    if (!lb.curves) {
+      lb.curves = new I32(Math.max(64, seg0 + ns));
+      lb.curves.a.fill(-1, 0, seg0);
+      lb.curves.n = seg0;
+    }
+    const c = lb.curves;
+    c.reserve(ns);
+    if (!l.curve) {
+      c.a.fill(-1, c.n, c.n + ns);
+      c.n += ns;
+      return;
+    }
+    // 이 배치에서 처음 보는 정의면 그 곡선 수만큼 번호를 잡는다(배치가 바뀌면 새로)
+    let base = curveBase.get(ents);
+    if (base === undefined || curvePlacement.get(ents) !== placement) {
+      base = curveSerial;
+      curveSerial += Math.max(1, ents.curves?.length ?? 0);
+      curveBase.set(ents, base);
+      curvePlacement.set(ents, placement);
+    }
+    for (let i = 0; i < ns; i++) {
+      const k = l.curve[i]!;
+      c.a[c.n++] = k >= 0 ? base + k : -1;
+    }
   };
 
   // ── 정의 로컬 범위(인치, 안쪽 인스턴스 포함 — 단면 기호 크기·나무 정보 크기용, 처음 쓸 때 정의마다 한 번) ──
@@ -1519,6 +1945,101 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     }
   };
 
+  // ── 장면이 다시 보이는 모형 숨김 인스턴스: 숨긴 개체를 기억하는 장면 중 하나라도 숨기지 않는 인스턴스(영구 번호)는
+  //    숨긴 형상(반투명 extras)과 따로 보통 색으로 한 번 더 그려 둔다(화면은 그 장면에서만 보인다). 나무가 있을 때만(노드로 잇는다)
+  const revealPids = new Set<number>();
+  if (extras && T && model.pages?.length) {
+    const hiddenPids: number[] = [];
+    const scanHidden = (e: SkpEntities): void => {
+      for (const inst of e.instances) if (inst.flags & FLAG_HIDDEN && inst.pid !== undefined) hiddenPids.push(inst.pid);
+    };
+    scanHidden(model.root);
+    for (const d of model.definitions.values()) scanHidden(d.entities);
+    if (hiddenPids.length)
+      for (const pg of model.pages) {
+        if (!(Number.isFinite(pg.flags) && pg.flags & PAGE_USE_HIDDEN_OBJECTS)) continue;
+        const shown = new Set(pg.hiddenIds ?? []);
+        for (const pid of hiddenPids) if (!shown.has(pid)) revealPids.add(pid);
+      }
+  }
+  const REVEAL_NODE = -2;
+  const REVEAL_SLOT = Number.MAX_SAFE_INTEGER;
+  const revealFaces = new Map<string, Bucket & { node: number }>();
+  const revealLines = new Map<string, LineBucket & { node: number }>();
+  const revealNodes = new Set<number>();
+  let revealVerts = 0;
+  let revealLimited = false;
+  /** 다시 보일 숨김 인스턴스 안쪽(그 안에서 또 숨긴 인스턴스는 빼고)을 노드 몫 묶음에 보통 색으로 덧붙인다 */
+  let revealPlacement = -1;
+  const reveal = (ents: SkpEntities, m: Float64Array, inhMat: number | undefined, inhLayer: number | undefined, depth: number, stack: Set<SkpEntities>, node: number): void => {
+    if (revealLimited) return;
+    const p = prep(ents);
+    const layerHere = inhLayer ?? model.defaultLayer ?? -1;
+    const matOf = (b: Batch): number | undefined => (b.mat >= 0 ? b.mat : inhMat);
+    const backOf = (b: Batch): number | undefined | null => sideBack(b, inhMat);
+    const L = linearOf(m);
+    for (const b of p.batches) {
+      const nv = b.pos.length / 3;
+      if (revealVerts + nv > MAX_REVEAL_VERTICES) {
+        revealLimited = true;
+        return;
+      }
+      revealVerts += nv;
+      const layer = b.layer >= 0 ? b.layer : layerHere;
+      const mat = matOf(b);
+      const back = backOf(b);
+      const far = farCell(b.pos, m);
+      const key = `${node}|${layer}|${mat ?? 'd'}${back !== null ? `|b${back ?? 'd'}` : ''}${far ? far.key : ''}`;
+      let bk = revealFaces.get(key);
+      if (!bk)
+        revealFaces.set(
+          key,
+          (bk = {
+            serial: -1,
+            slot: REVEAL_SLOT,
+            // 0이 아닌 갈래: 장면 범위(bounds)에 넣지 않는다(숨긴 형상처럼)
+            cls: 2,
+            layer,
+            mat,
+            pos: new F32(),
+            idx: new U32(),
+            faces: 0,
+            area: 0,
+            origin: far ? far.origin : null,
+            uv: mat !== undefined && texMap?.has(mat) ? new F32() : null,
+            uvStride: 2,
+            fs: new U32(64),
+            closed: false,
+            cap: 0,
+            back: newBack(back),
+            bb: null,
+            node,
+          }),
+        );
+      appendFaces(bk, b, m, REVEAL_NODE, L);
+    }
+    const placement = revealPlacement--;
+    for (const l of p.lines) {
+      const layer = l.layer >= 0 ? l.layer : layerHere;
+      const far = farCell(l.pos, m);
+      const key = `${node}|${layer}${far ? far.key : ''}`;
+      let lb = revealLines.get(key);
+      if (!lb) revealLines.set(key, (lb = { serial: -1, slot: REVEAL_SLOT, cls: 2, layer, pos: new F32(), origin: far ? far.origin : null, curves: null, node }));
+      appendLines(lb, l, m, REVEAL_NODE, ents, placement);
+    }
+    if (depth >= MAX_DEPTH) return;
+    stack.add(ents);
+    for (const inst of ents.instances) {
+      if (inst.flags & FLAG_HIDDEN) continue;
+      const def = model.definitions.get(inst.definition);
+      if (!def || stack.has(def.entities)) continue;
+      const layer = inst.layer !== undefined && inst.layer !== model.defaultLayer ? inst.layer : inhLayer;
+      reveal(def.entities, mul4(m, inst.matrix), inst.material ?? inhMat, layer, depth + 1, stack, node);
+      if (revealLimited) break;
+    }
+    stack.delete(ents);
+  };
+
   /**
    * 요소 묶음 하나를 놓는다. node: 이 배치를 맡는 나무 노드(목록에 없는 깊은 배치는 목록에 든 조상, -1 = 모형).
    * hiddenSub: 숨긴 인스턴스 안쪽(extras일 때만 온다)
@@ -1533,6 +2054,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     slot: number,
     node: number,
     hiddenSub: boolean,
+    bb: Billboard | null = null,
   ): void => {
     if (truncated || placementsStopped) return;
     if (placements >= maxPlacements) {
@@ -1544,8 +2066,12 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     const p = prep(ents);
     const layerHere = inhLayer ?? model.defaultLayer ?? -1;
     if (annotate && hasAnnotations(ents)) collectAnnotations(ents, m, layerHere, node, hiddenSub);
-    const matOf = (b: Batch): number | undefined => (b.mat >= 0 ? b.mat : (inhMat ?? (b.mat <= -2 ? -(b.mat + 2) : undefined)));
+    const matOf = (b: Batch): number | undefined => (b.mat >= 0 ? b.mat : inhMat);
+    const backOf = (b: Batch): number | undefined | null => sideBack(b, inhMat);
     const L = linearOf(m);
+    // 닫힌 입체는 따로 모은다(단면 채우기). 반투명 재질이 든 배치는 코어가 채우기에서 빼므로 홀짝이 어긋나지 않게 보통 묶음으로
+    const closedHere = !bb && p.closed && !hiddenSub && p.batches.every((b) => colorOf(matOf(b))[3] >= 0.999);
+    const cap = closedHere ? capOf(slot, placedBox(p, m)) : 0;
     // 보통 면(숨긴 인스턴스 안쪽이면 숨긴 면으로)
     for (const b of p.batches) {
       const nv = b.pos.length / 3;
@@ -1556,14 +2082,14 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
           continue;
         }
         extraVerts += nv;
-        appendFaces(faceBucket(slot, 1, layer, matOf(b), farCell(b.pos, m)), b, m, node, L, inhMat);
+        appendFaces(faceBucket(slot, 1, layer, matOf(b), farCell(b.pos, m), false, null), b, m, node, L);
         continue;
       }
       if (outVerts + nv > MAX_OUTPUT_VERTICES) {
         truncated = true;
         return;
       }
-      const area = appendFaces(faceBucket(slot, 0, layer, matOf(b), farCell(b.pos, m)), b, m, node, L, inhMat);
+      const area = appendFaces(faceBucket(slot, 0, layer, matOf(b), farCell(b.pos, m), closedHere, backOf(b), bb, cap), b, m, node, L);
       outVerts += nv;
       if (node >= 0) {
         ownFaces![node]! += b.faces;
@@ -1578,7 +2104,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
         continue;
       }
       extraVerts += nv;
-      appendFaces(faceBucket(slot, 1, b.layer >= 0 ? b.layer : layerHere, matOf(b), farCell(b.pos, m)), b, m, node, L, inhMat);
+      appendFaces(faceBucket(slot, 1, b.layer >= 0 ? b.layer : layerHere, matOf(b), farCell(b.pos, m), false, null), b, m, node, L);
     }
     // 보통 모서리(예전 규칙 그대로: 한도에 걸리면 이 배치의 나머지 보통 모서리는 건너뛴다)
     for (const l of p.lines) {
@@ -1590,7 +2116,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
           continue;
         }
         extraSegs += ns;
-        appendLines(lineBucket(slot, 2, layer, farCell(l.pos, m)), l, m, node);
+        appendLines(lineBucket(slot, 2, layer, farCell(l.pos, m)), l, m, node, ents, placements);
         continue;
       }
       if (outSegs + ns > MAX_OUTPUT_SEGMENTS) {
@@ -1598,19 +2124,29 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
         break;
       }
       outSegs += ns;
-      appendLines(lineBucket(slot, 0, layer, farCell(l.pos, m)), l, m, node);
       if (node >= 0) ownEdges![node]! += ns;
+      // 카메라를 보는 배치의 모서리는 그물 윤곽선으로 함께 돌린다(선분 묶음은 돌지 않는다)
+      if (bb) {
+        const tmp = new F32();
+        put(tmp, l.pos, m, true, null);
+        let list = bb.edges.get(layer);
+        if (!list) bb.edges.set(layer, (list = []));
+        for (let i = 0; i < tmp.n; i++) list.push(tmp.a[i]!);
+        bbEdgeCount.set(layerName(layer), (bbEdgeCount.get(layerName(layer)) ?? 0) + ns);
+        continue;
+      }
+      appendLines(lineBucket(slot, 0, layer, farCell(l.pos, m)), l, m, node, ents, placements);
     }
-    // 부드러운·숨긴 모서리(숨긴 인스턴스 안의 부드러운 모서리는 그리지 않는다)
+    // 부드러운·숨긴 모서리(숨긴 인스턴스 안의 부드러운 모서리는 그리지 않는다. 카메라를 보는 배치는 돌릴 수 없어 뺀다)
     for (const l of p.extraLines) {
-      if (hiddenSub && l.cls === 1) continue;
+      if ((hiddenSub && l.cls === 1) || bb) continue;
       const ns = l.pos.length / 6;
       if (extraSegs + ns > MAX_EXTRA_SEGMENTS) {
         extrasTruncated = true;
         continue;
       }
       extraSegs += ns;
-      appendLines(lineBucket(slot, l.cls, l.layer >= 0 ? l.layer : layerHere, farCell(l.pos, m)), l, m, node);
+      appendLines(lineBucket(slot, l.cls, l.layer >= 0 ? l.layer : layerHere, farCell(l.pos, m)), l, m, node, ents, placements);
     }
     if (depth >= MAX_DEPTH) {
       if (ents.instances.length) cycles++;
@@ -1638,7 +2174,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       const own = T !== null && child !== node && child >= 0;
       let childSlot = slot;
       if (own) {
-        if (T.depth[child]! <= splitDepth) {
+        if (T.depth[child]! <= splitDepth || forced.has(child)) {
           childSlot = slotNode.length;
           slotNode.push(child);
           nodeSlot![child] = childSlot;
@@ -1646,7 +2182,27 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
         runFirst![child] = runItem.n;
       }
       const layer = inst.layer !== undefined && inst.layer !== model.defaultLayer ? inst.layer : inhLayer;
-      emit(def.entities, mul4(m, inst.matrix), inst.material ?? inhMat, layer, depth + 1, stack, childSlot, child, hiddenSub || hiddenInst);
+      const placed = mul4(m, inst.matrix);
+      if (own) {
+        const vol = prep(def.entities).volume;
+        if (vol !== undefined) nodeVolume![child] = vol * Math.abs(linearOf(placed).det);
+      }
+      // "항상 카메라 보기" 컴포넌트: 그 배치(안쪽 포함)를 따로 모아 코어가 Z축 둘레로 돌리게(안쪽의 같은 깃발은 바깥 배치를 따른다)
+      let childBb = bb;
+      if (!bb && !hiddenSub && !hiddenInst && def.behavior?.alwaysFaceCamera) {
+        if (billboards < MAX_BILLBOARDS) childBb = { key: `|bb${billboards++}`, origin: A.xfPoint(placed, [0, 0, 0]), front: frontOf(placed), edges: new Map() };
+        else billboardsSkipped++;
+        if (childBb) billboardList.push(childBb);
+      }
+      emit(def.entities, placed, inst.material ?? inhMat, layer, depth + 1, stack, childSlot, child, hiddenSub || hiddenInst, childBb);
+      // 모형에서 숨겼지만 어떤 장면에서는 보이는 인스턴스: 그 노드 몫으로 보통 색 그림을 하나 더(숨긴 안쪽의 안쪽은 이미 숨김 그대로)
+      if (hiddenInst && !hiddenSub && own && inst.pid !== undefined && revealPids.has(inst.pid) && !revealLimited) {
+        if (revealNodes.size >= MAX_REVEAL_NODES && !revealNodes.has(child)) revealLimited = true;
+        else {
+          revealNodes.add(child);
+          reveal(def.entities, placed, inst.material ?? inhMat, layer, depth + 1, new Set(stack), child);
+        }
+      }
       if (own) {
         runEnd![child] = runItem.n;
         if (childSlot !== slot) nodeSlotEnd![child] = slotNode.length;
@@ -1658,6 +2214,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
 
   const rootM = new Float64Array([scale, 0, 0, 0, 0, scale, 0, 0, 0, 0, scale, 0, 0, 0, 0, 1]);
   emit(model.root, rootM, undefined, undefined, 0, new Set(), 0, -1, false);
+  if (billboardsSkipped)
+    warnings.push(`"항상 카메라 보기" 컴포넌트가 너무 많아(${MAX_BILLBOARDS}개 한도) ${billboardsSkipped}개는 저장된 방향 그대로 둡니다`);
   report(placementsTotal);
 
   // 통계: 태그는 모형 차례로 미리 넣는다(그릴 것이 없는 태그도 목록에 보이게)
@@ -1686,7 +2244,18 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     return t;
   };
   for (const name of model.layers.values()) tagStat(name);
+  for (const [tag, n] of bbEdgeCount) tagStat(tag).edges += n;
   const matStats = new Map<string, SkpMaterialStat>();
+  const matStatOf = (name: string, stored: string | undefined, color: Rgba): SkpMaterialStat => {
+    let ms = matStats.get(name);
+    if (!ms) {
+      const textured = stored !== undefined && !!materials.get(stored)?.textured;
+      ms = { name, color: [color[0], color[1], color[2], color[3]], textured, faces: 0, area: 0, meshIds: [] };
+      if (stored !== undefined) ms.folder = stored;
+      matStats.set(name, ms);
+    }
+    return ms;
+  };
   const slotStats = new Map<number, { faces: number; edges: number; area: number }>();
   const slotStat = (slot: number): { faces: number; edges: number; area: number } => {
     let s = slotStats.get(slot);
@@ -1698,19 +2267,54 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   const serialItem = new Int32Array(serials);
   const meshes: Mesh3d[] = [];
   const meshSlots: number[] = [];
+  /** 그물마다 면 경계(면마다 첫 삼각형 차례) — meta.faceRuns */
+  const faceRuns: Uint32Array[] = [];
   const softIds: string[] = [];
   const hiddenIds: string[] = [];
   let hiddenFaces = 0;
   let triangles = 0;
-  /** 무늬 재질 묶음이면 무늬 좌표·무늬 id를 단다 */
+  /** 무늬 재질 묶음이면 무늬 좌표·무늬 id를 단다. 앞과 다른 뒷면이면 뒷면 색(재질 색 또는 스타일 뒷면 색)과 뒷면 무늬도 */
   const withTexture = (mesh: Mesh3d, bk: Bucket): void => {
-    if (!bk.uv || bk.mat === undefined) return;
-    const t = texMap?.get(bk.mat);
-    if (!t || bk.uv.n !== (bk.pos.n / 3) * bk.uvStride) return;
-    mesh.uvs = bk.uv.done();
-    mesh.texture = t.id;
+    const nv = bk.pos.n / 3;
+    const t = bk.uv && bk.mat !== undefined ? texMap?.get(bk.mat) : undefined;
+    if (t && bk.uv!.n === nv * bk.uvStride) {
+      mesh.uvs = bk.uv!.done();
+      mesh.texture = t.id;
+    }
+    const back = bk.back;
+    if (!back) return;
+    mesh.backColor = back.mat !== undefined ? colorOf(back.mat) : defaultBack!;
+    const bt = back.uv && back.mat !== undefined ? texMap?.get(back.mat) : undefined;
+    if (bt && back.uv!.n === nv * back.uvStride) {
+      mesh.backUvs = back.uv!.done();
+      mesh.backTexture = bt.id;
+    }
   };
-  const sorted = [...buckets.values()].sort((a, b) => a.slot - b.slot || a.cls - b.cls || a.layer - b.layer || (a.mat ?? -1) - (b.mat ?? -1));
+  /** 같은 칸·재질 묶음의 차례: 뒷면 없음 → 스타일 뒷면 색 → 뒷면 재질 번호 */
+  const backRank = (bk: Bucket): number => (!bk.back ? -2 : (bk.back.mat ?? -1));
+  const sorted = [...buckets.values()].sort(
+    (a, b) => a.slot - b.slot || a.cls - b.cls || a.layer - b.layer || (a.mat ?? -1) - (b.mat ?? -1) || Number(a.closed) - Number(b.closed) || a.cap - b.cap || backRank(a) - backRank(b),
+  );
+  // 카메라를 보는 배치의 모서리를 실을 그물: 태그마다 그 태그의 첫 그물(태그를 숨기면 모서리도 함께 숨게), 그 태그의 그물이 없으면 첫 그물
+  const bbEdgeHost = new Map<Bucket, number[]>();
+  {
+    const first = new Map<Billboard, Bucket>();
+    const byTag = new Map<Billboard, Map<number, Bucket>>();
+    for (const bk of sorted) {
+      if (!bk.bb || bk.cls) continue;
+      if (!first.has(bk.bb)) first.set(bk.bb, bk);
+      let m = byTag.get(bk.bb);
+      if (!m) byTag.set(bk.bb, (m = new Map()));
+      if (!m.has(bk.layer)) m.set(bk.layer, bk);
+    }
+    for (const [bb, host] of first)
+      for (const [layer, e] of bb.edges) {
+        const to = byTag.get(bb)?.get(layer) ?? host;
+        const list = bbEdgeHost.get(to);
+        if (list) for (const v of e) list.push(v);
+        else bbEdgeHost.set(to, [...e]);
+      }
+  }
   for (const bk of sorted) {
     const stored = bk.mat !== undefined ? model.materials.get(bk.mat) : undefined;
     // 표시 이름은 material.xml의 원래 이름(model.dat에는 '<Black>'이 '_Black_'처럼 바뀌어 있다)
@@ -1735,11 +2339,14 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       if (bk.origin) hm.origin = bk.origin;
       withTexture(hm, bk);
       meshes.push(hm);
+      faceRuns.push(bk.fs.done());
       hiddenIds.push(id);
       hiddenFaces += bk.faces;
       continue;
     }
-    // SKP는 면이 닫힌 입체인지 모르므로 closed는 두지 않는다(단면에서 잘린 면은 채우지 않고 테두리만)
+    // 닫힌 입체 배치만 모은 묶음은 칸마다 같은 채우기 묶음(capGroup): 재질·태그로 나뉜 그물이 함께 하나의 입체를 이룬다.
+    // 범위 상자가 겹치는 입체는 그 칸의 다른 묶음(skp-solid-<칸>-<번호>) — 홀짝 채우기에서 겹친 곳이 비지 않게
+    // 나머지(열린 면·얇은 판)는 채우지 않고 단면 테두리만
     const mesh: Mesh3d = {
       id: `skp-mesh-${meshes.length}`,
       name: `${matName} · ${tag}`,
@@ -1751,27 +2358,67 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     };
     if (bk.nrm) mesh.normals = bk.nrm.done();
     if (bk.origin) mesh.origin = bk.origin;
+    if (bk.closed) mesh.capGroup = bk.cap ? `skp-solid-${bk.slot}-${bk.cap}` : `skp-solid-${bk.slot}`;
+    if (bk.bb) {
+      mesh.billboard = { origin: bk.bb.origin, axis: 'z', front: bk.bb.front };
+      // 그 배치의 모서리는 같은 태그 그물의 윤곽선으로(함께 돈다)
+      const own = bbEdgeHost.get(bk);
+      if (own?.length) {
+        const e = Float32Array.from(own);
+        if (bk.origin) for (let i = 0; i < e.length; i += 3) for (let c = 0; c < 3; c++) e[i + c]! -= bk.origin[c]!;
+        mesh.edges = e;
+        slotStat(bk.slot).edges += e.length / 6;
+      }
+    }
     withTexture(mesh, bk);
     triangles += mesh.indices!.length / 3;
     meshes.push(mesh);
+    faceRuns.push(bk.fs.done());
     tagStat(tag).faces += bk.faces;
-    let ms = matStats.get(matName);
-    if (!ms) {
-      const textured = stored !== undefined && !!materials.get(stored)?.textured;
-      ms = { name: matName, color: [color[0], color[1], color[2], color[3]], textured, faces: 0, area: 0, meshIds: [] };
-      if (stored !== undefined) ms.folder = stored;
-      matStats.set(matName, ms);
-    }
+    const ms = matStatOf(matName, stored, color);
     if (mesh.texture) ms.texture = mesh.texture;
     ms.faces += bk.faces;
     ms.area += bk.area;
     ms.meshIds.push(mesh.id);
+    // 뒷면 재질도 목록에(뒷면 수로 세고, 고르면 이 그물도 강조)
+    const bm = bk.back?.mat;
+    if (bm !== undefined) {
+      const bStored = model.materials.get(bm);
+      const bs = matStatOf(bStored !== undefined ? (materials.get(bStored)?.name ?? bStored) : `재질 ${bm}`, bStored, colorOf(bm));
+      bs.backFaces = (bs.backFaces ?? 0) + bk.faces;
+      if (mesh.backTexture) bs.texture = mesh.backTexture;
+      if (!bs.meshIds.includes(mesh.id)) bs.meshIds.push(mesh.id);
+    }
     const ss = slotStat(bk.slot);
     ss.faces += bk.faces;
     ss.area += bk.area;
   }
+  // 장면이 다시 보이는 숨김 인스턴스의 보통 색 그림(통계·나무 구간에는 넣지 않는다 — 노드 몫 항목 id만 meta.revealItems에)
+  const revealIds = new Map<number, string[]>();
+  const revealId = (node: number, id: string): void => {
+    const list = revealIds.get(node);
+    if (list) list.push(id);
+    else revealIds.set(node, [id]);
+  };
+  for (const bk of [...revealFaces.values()].sort((a, b) => a.node - b.node || a.layer - b.layer || (a.mat ?? -1) - (b.mat ?? -1))) {
+    if (!bk.idx.n) continue;
+    const stored = bk.mat !== undefined ? model.materials.get(bk.mat) : undefined;
+    const matName = bk.mat === undefined ? '기본 재질' : stored !== undefined ? (materials.get(stored)?.name ?? stored) : `재질 ${bk.mat}`;
+    const tag = layerName(bk.layer);
+    const id = `skp-reveal-${meshes.length}`;
+    const mesh: Mesh3d = { id, name: `장면에서 보이는 숨긴 개체 · ${matName} · ${tag}`, positions: bk.pos.done(), indices: bk.idx.done(), color: colorOf(bk.mat), group: tag, doubleSided: true };
+    if (bk.nrm) mesh.normals = bk.nrm.done();
+    if (bk.origin) mesh.origin = bk.origin;
+    withTexture(mesh, bk);
+    meshes.push(mesh);
+    meshSlots.push(REVEAL_SLOT);
+    faceRuns.push(bk.fs.done());
+    revealId(bk.node, id);
+  }
   const lines: LineSet3d[] = [];
   const lineSlots: number[] = [];
+  /** 모서리 묶음마다 선분의 놓인 곡선 번호(곡선 선분이 없는 묶음·주석 선분은 null) — meta.segmentCurves */
+  const segmentCurves: (Int32Array | null)[] = [];
   let segments = 0;
   let softSegments = 0;
   let hiddenSegments = 0;
@@ -1781,6 +2428,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     const n = positions.length / 6;
     serialItem[lb.serial] = meshes.length + lines.length;
     lineSlots.push(lb.slot);
+    segmentCurves.push(lb.curves ? lb.curves.done() : null);
     const withOrigin = <T extends LineSet3d>(l: T): T => {
       if (lb.origin) l.origin = lb.origin;
       return l;
@@ -1807,6 +2455,20 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     tagStat(tag).edges += n;
     slotStat(lb.slot).edges += n;
   }
+
+  for (const lb of [...revealLines.values()].sort((a, b) => a.node - b.node || a.layer - b.layer)) {
+    if (!lb.pos.n) continue;
+    const tag = layerName(lb.layer);
+    const id = `skp-reveal-edges-${lines.length}`;
+    const l: LineSet3d = { id, name: `장면에서 보이는 숨긴 개체 모서리 · ${tag}`, positions: lb.pos.done(), color: EDGE_COLOR, group: tag };
+    if (dashedTags.has(tag)) l.dashed = true;
+    if (lb.origin) l.origin = lb.origin;
+    lines.push(l);
+    lineSlots.push(REVEAL_SLOT);
+    segmentCurves.push(lb.curves ? lb.curves.done() : null);
+    revealId(lb.node, id);
+  }
+  if (revealLimited) warnings.push(`장면에서 다시 보이는 숨긴 개체가 너무 많아(노드 ${MAX_REVEAL_NODES}개·정점 ${MAX_REVEAL_VERTICES.toLocaleString('en-US')}개 한도) 일부는 장면에서도 숨긴 채 둡니다`);
 
   // ── 주석 선분·보조점(형상 모서리 뒤에 붙인다 — 나무 항목 차례는 그대로) ──
   const points: PointSet3d[] = [];
@@ -1877,6 +2539,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     }
     for (const sk of sinks.values()) {
       const id = `skp-${ANNOTATION_ID[sk.kind]}-${lines.length}`;
+      segmentCurves.push(null);
       const l: LineSet3d = { id, name: `${sk.hidden ? '숨긴 ' : ''}${ANNOTATION_LABEL[sk.kind]} · ${sk.tag}`, positions: toF32(sk.pos, sk.origin), color: sk.color, group: sk.tag };
       if (sk.kind === 'guides' || sk.hidden) l.dashed = true;
       if (sk.origin) l.origin = sk.origin;
@@ -1931,7 +2594,9 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     tags: [...tagStats.values()],
     materials: [...matStats.values()],
     points,
+    faceRuns,
   };
+  if (segmentCurves.some((c) => c)) parts.segmentCurves = segmentCurves;
   if (annSeen) {
     parts.texts = texts;
     parts.dimensions = dims;
@@ -2093,6 +2758,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       definitionAttrs: Int32Array.from(definitionNames, (_, k) => pool.add(defOfIndex[k]?.entities.attrs)),
       definitionFaceCamera: Uint8Array.from(definitionNames, (_, k) => (defOfIndex[k]?.behavior?.alwaysFaceCamera ? 1 : 0)),
     };
+    if (nodeVolume!.some(Number.isFinite)) info.volume = nodeVolume!;
     parts.treeInfo = info;
 
     if (!outlineSkipped) {
@@ -2127,5 +2793,6 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   }
   if (outlineSkipped) parts.outlineSkipped = outlineSkipped;
   if (pool.list.length) parts.attributes = pool.list;
+  if (revealIds.size) parts.revealItems = [...revealIds].map(([node, ids]) => ({ node, ids }));
   return parts;
 }

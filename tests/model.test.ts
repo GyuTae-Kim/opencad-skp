@@ -242,11 +242,11 @@ describe('skpToScene', () => {
     expect(Math.min(...xs)).toBeCloseTo(90);
     expect(Math.max(...xs)).toBeCloseTo(100);
 
-    // 그룹(태그 Walls, 재질 없음) → 면 뒤 재질(파랑, 반투명)
-    const blue = byName.get('파랑 · Walls')!;
+    // 그룹(태그 Walls, 재질 없음): 앞면은 기본색, 뒷면은 면 뒤 재질(파랑) — 앞·뒤를 따로 칠한다
+    const blue = byName.get('기본 재질 · Walls')!;
     expect(blue.group).toBe('Walls');
-    expect(blue.color[2]).toBe(1);
-    expect(blue.color[3]).toBeCloseTo(0.5);
+    expect(blue.backColor![2]).toBe(1);
+    expect(blue.color[3]).toBe(1);
     for (let i = 2; i < blue.positions.length; i += 3) expect(blue.positions[i]).toBeCloseTo(50);
 
     // 모형 바로 아래 면(앞 재질)

@@ -2,7 +2,7 @@
  * 장면(페이지)·저장 카메라·스타일을 뷰어 코어(opencad-viewer3d)의 보기 상태로 바꾸기(순수 함수, DOM 없음).
  *
  * - 카메라: SketchUp 카메라(눈·목표·위, 원근이면 세로 시야각, 평행이면 화면 전체 높이) → 코어 CameraState
- *   (Z 위 턴테이블, 굴림 없음). 굴림·2점 투시·고정 종횡비는 코어가 나타낼 수 없어 버린다.
+ *   (Z 위 턴테이블). 위 벡터가 기운 카메라는 굴림(roll), 2점 투시 카메라는 앙각 0 + 렌즈 이동(shiftY)으로 나타낸다. 고정 종횡비는 세로 화면 맞춤에만 쓴다.
  * - 장면 적용: 장면이 기억하는 것(use 깃발이 켜진 칸)만 바꾼다 — 카메라, 숨긴 태그(기억하면 모든 태그를 그 값으로),
  *   숨긴 개체(기억하면 숨긴 노드 전체를 그 목록으로), 활성 단면, 스타일. 기억하지 않은 것은 지금 상태 그대로 둔다.
  * - 처음 카메라: 파일을 열면 SketchUp처럼 모형 카메라(저장 당시 보기)로 보되, 그 카메라가 모형을 실제로 보여 줄 때만 쓴다
@@ -13,7 +13,7 @@
  */
 import type { Box3, RenderMode } from 'opencad-viewer3d';
 import { DEFAULT_FOV, basisFromAngles, cameraBasis, cameraEye, dirToAngles, lerpCamera, type CameraState, type Projection } from 'opencad-viewer3d/camera';
-import type { Rgb, SkpCameraMeta, SkpFaceStyle, SkpPageMeta, SkpSectionPlaneMeta, SkpStyleMeta, Vec3 } from '../meta';
+import type { Rgb, SkpCameraMeta, SkpFaceStyle, SkpPageMeta, SkpSectionPlaneMeta, SkpShadowMeta, SkpStyleMeta, Vec3 } from '../meta';
 
 /** SketchUp 기본 틀의 세로 시야각(도) — 원근 카메라에 시야각이 없을 때 */
 export const SKP_DEFAULT_FOV_DEG = 35;
@@ -88,7 +88,7 @@ const validFov = (f: number | undefined): number => (isNum(f) && f > 0 && f < Ma
  * - 방향: 시선이 수평 성분을 가지면 yaw·pitch를 시선에서, 곧장 위·아래면 yaw를 위 벡터에서 얻는다.
  *   수직을 살짝 넘은 카메라(시선 z > 0.99, 위 벡터가 수평 보기의 위와 반대쪽)는 SketchUp에서 그림이 뒤집혀 보이지 않으므로
  *   곧장 위·아래 보기로 바로잡고 yaw를 위 벡터에서 얻는다(코어 pitch는 ±90°를 넘을 수 없다).
- * - 굴림(위 벡터가 시선 둘레로 돈 것)·2점 투시·고정 종횡비는 버린다.
+ * - 굴림(위 벡터가 시선 둘레로 돈 것)은 roll로(0.05° 아래는 버린다), 2점 투시(twoPoint)는 twoPointCamera로. 고정 종횡비는 버린다.
  */
 export function cameraFromSkp(cam: SkpCameraMeta, viewerFovY: number = DEFAULT_FOV): CameraState | null {
   const c = readCamera(cam);
@@ -103,14 +103,93 @@ export function cameraFromSkp(cam: SkpCameraMeta, viewerFovY: number = DEFAULT_F
     pitch = n[2] >= 0 ? Math.PI / 2 : -Math.PI / 2;
   }
   const target: Vec3 = [c.target[0], c.target[1], c.target[2]];
+  const roll = rollFromUp(yaw, pitch, c.up);
+  const withRoll = (cam: CameraState): CameraState => (roll ? { ...cam, roll } : cam);
   if (c.perspective) {
     const deg = Math.min(MAX_FOV_DEG, Math.max(MIN_FOV_DEG, c.fovY ?? SKP_DEFAULT_FOV_DEG));
-    return { target, distance, yaw, pitch, projection: 'perspective', fovY: (deg * Math.PI) / 180 };
+    const cam: CameraState = { target, distance, yaw, pitch, projection: 'perspective', fovY: (deg * Math.PI) / 180 };
+    // 2점 투시: 세로선을 곧게(앙각 0 + 렌즈 이동) — 굴림은 쓰지 않는다
+    if (c.twoPoint) return twoPointCamera(cam) ?? withRoll(cam);
+    return withRoll(cam);
   }
   const fovY = validFov(viewerFovY);
   const tan = Math.tan(fovY / 2);
   const height = c.height ?? 2 * distance * tan;
-  return { target, distance: height / 2 / tan, yaw, pitch, projection: 'orthographic', fovY };
+  return withRoll({ target, distance: height / 2 / tan, yaw, pitch, projection: 'orthographic', fovY });
+}
+
+/** 이보다 작은 굴림(라디안 — 0.05°)은 없는 것으로 본다(저장된 위 벡터의 작은 오차) */
+const ROLL_EPS = (0.05 * Math.PI) / 180;
+
+/**
+ * SketchUp 위 벡터 → 코어 굴림(라디안). 코어는 굴림 r이면 화면 위 = cos r·up₀ − sin r·right₀(up₀·right₀는 yaw·pitch의 굴림 없는 틀)이라
+ * 위 벡터를 시선에 수직으로 만든 u에서 r = atan2(−u·right₀, u·up₀)(−90°~90°). 위 벡터가 시선과 나란하거나 아래로 기울었거나 굴림이 아주 작으면 0
+ */
+export function rollFromUp(yaw: number, pitch: number, up: readonly number[]): number {
+  const b = basisFromAngles(yaw, pitch);
+  const k = dot(up, b.back);
+  const u: Vec3 = [up[0]! - b.back[0] * k, up[1]! - b.back[1] * k, up[2]! - b.back[2] * k];
+  // 위 벡터가 화면 아래쪽을 가리키는(90° 넘게 기운) 카메라는 깨진 값으로 보고 굴리지 않는다(그림이 뒤집히지 않게)
+  if (!(Math.hypot(...u) > 1e-9) || !(dot(u, b.up) > 0)) return 0;
+  const r = Math.atan2(-dot(u, b.right), dot(u, b.up));
+  return Math.abs(r) < ROLL_EPS ? 0 : r;
+}
+
+/** 2점 투시로 볼 수 없을 만큼 위·아래를 보는 앙각(도) */
+export const TWO_POINT_MAX_PITCH_DEG = 80;
+
+/**
+ * 2점 투시(SketchUp 카메라 › 2점 투시): 눈 자리·방향(yaw)·시야각은 그대로 두고 앙각을 0으로(세로선이 곧다), 원래 대상점이 화면의 같은 높이에
+ * 오게 렌즈를 위아래로 옮긴다(코어 shiftY = −그 점의 정규 장치 y). 굴림은 없앤다. 원근만 — 평행이거나 곧장 위·아래(80° 넘게)를 보면 null
+ */
+export function twoPointCamera(c: CameraState): CameraState | null {
+  if (c.projection !== 'perspective' || !(Math.abs(c.pitch) <= (TWO_POINT_MAX_PITCH_DEG * Math.PI) / 180)) return null;
+  const eye = cameraEye(c);
+  const b = basisFromAngles(c.yaw, 0);
+  const d = Math.max(c.distance, 1e-9);
+  const target: Vec3 = [eye[0] - b.back[0] * d, eye[1] - b.back[1] * d, eye[2] - b.back[2] * d];
+  // 원래 대상점의 새 틀 안 높이(정규 장치 y)
+  const v = sub(c.target, eye);
+  const z = -dot(v, b.back);
+  const tan = Math.tan(validFov(c.fovY) / 2);
+  const y = z > 1e-12 ? dot(v, b.up) / (z * tan) : 0;
+  const { roll: _r, shiftX: _x, shiftY: _y, ...base } = c;
+  void _r, _x, _y;
+  const out: CameraState = { ...base, target, distance: d, pitch: 0 };
+  return Math.abs(y) > 1e-12 ? { ...out, shiftY: -y } : out;
+}
+
+/**
+ * 새 문서를 열 때의 카메라: 앞 문서의 굴림·렌즈 이동(2점 투시)은 없애고 시야각은 fovY로(세로 화면 맞춤을 뺀 원래 값).
+ * 바꿀 것이 없으면 null(카메라를 다시 넣지 않는다)
+ */
+export function freshDocCamera(c: CameraState, fovY: number): CameraState | null {
+  const { roll, shiftX, shiftY, ...base } = c;
+  if (!roll && !shiftX && !shiftY && fovY === c.fovY) return null;
+  return { ...base, target: [...c.target], fovY };
+}
+
+/** 2점 투시 카메라인지(앙각 0, 렌즈를 위아래로만 옮김) */
+export function isTwoPoint(c: CameraState): boolean {
+  return c.projection === 'perspective' && Math.abs(c.pitch) < 1e-9 && !c.roll && !c.shiftX;
+}
+
+/**
+ * 시야각만 바꾸기: 렌즈 이동은 정규 장치 좌표라 시야각이 바뀌면 같은 점이 같은 자리에 남게 tan(시야/2) 비로 다시 맞춘다(2점 투시 프레임 지키기)
+ */
+export function withFov(c: CameraState, fovY: number): CameraState {
+  const f = validFov(fovY);
+  const k = Math.tan(validFov(c.fovY) / 2) / Math.tan(f / 2);
+  const out: CameraState = { ...c, target: [...c.target], fovY: f };
+  if (c.shiftX) out.shiftX = c.shiftX * k;
+  if (c.shiftY) out.shiftY = c.shiftY * k;
+  return out;
+}
+
+/** 걷기 눈높이: SketchUp 기본 5′6″(1.676 m)를 장면 단위로(단위를 모르면 undefined — 코어가 범위로 정한다) */
+export function eyeHeightFor(units: string): number | undefined {
+  const mm = units === 'mm' ? 1 : units === 'inch' ? 25.4 : units === 'm' ? 1000 : 0;
+  return mm ? 1676.4 / mm : undefined;
 }
 
 /** 두 SketchUp 카메라가 같은 보기인지(눈·목표가 눈-목표 거리의 tolerance배 안, 투영·시야각·높이가 같음) */
@@ -186,7 +265,7 @@ export function fitSceneCamera(c: CameraState, viewAspect: number, refAspect?: n
   const ref = validAspect(refAspect) ? refAspect : SCENE_REF_ASPECT;
   const scale = sceneCoverageScale(viewAspect, ref);
   const camera: CameraState =
-    c.projection === 'perspective' ? { ...c, target: [...c.target], fovY: widenFov(c.fovY, scale) } : { ...c, target: [...c.target], distance: c.distance * scale };
+    c.projection === 'perspective' ? withFov(c, widenFov(c.fovY, scale)) : { ...c, target: [...c.target], distance: c.distance * scale };
   return { camera, fit: { ref, scale, baseFovY: c.fovY, projection: c.projection, fovY: camera.fovY } };
 }
 
@@ -200,7 +279,7 @@ export function refitSceneCamera(c: CameraState, fit: SceneFit, viewAspect: numb
   if (Math.abs(scale - fit.scale) < 1e-9) return { camera: c, fit };
   if (c.projection === 'perspective') {
     const fovY = widenFov(fit.baseFovY, scale);
-    return { camera: { ...c, target: [...c.target], fovY }, fit: { ...fit, scale, fovY } };
+    return { camera: withFov(c, fovY), fit: { ...fit, scale, fovY } };
   }
   return { camera: { ...c, target: [...c.target], distance: (c.distance * scale) / fit.scale }, fit: { ...fit, scale } };
 }
@@ -215,7 +294,7 @@ export function unwidenSceneCamera(c: CameraState, fit: SceneFit | null): Camera
   if (!fit) return c;
   const base = validFov(fit.baseFovY);
   if (!(c.fovY > base + 1e-9)) return c;
-  return { ...c, target: [...c.target], fovY: base, distance: (c.distance * Math.tan(c.fovY / 2)) / Math.tan(base / 2) };
+  return { ...withFov(c, base), distance: (c.distance * Math.tan(c.fovY / 2)) / Math.tan(base / 2) };
 }
 
 /**
@@ -353,8 +432,10 @@ const STYLE_FLAGS = [
   'sectionCuts',
   'sectionFill',
   'colorByTag',
+  'fog',
+  'fogUseBackground',
 ] as const;
-const STYLE_COLORS = ['background', 'front', 'back', 'edgeColor'] as const;
+const STYLE_COLORS = ['background', 'front', 'back', 'edgeColor', 'fogColor'] as const;
 
 /** 스타일(모르는 꼴이어도 안전하게). 알아본 칸만 남긴다 — 객체가 아니면 null */
 export function readStyle(v: unknown): SkpStyleMeta | null {
@@ -368,6 +449,8 @@ export function readStyle(v: unknown): SkpStyleMeta | null {
     const c = rgb(o[k]);
     if (c) out[k] = c;
   }
+  for (const k of ['fogStart', 'fogEnd'] as const) if (isNum(o[k])) out[k] = o[k] as number;
+  if (isNum(o.profileWidth) && o.profileWidth > 0) out.profileWidth = o.profileWidth;
   for (const k of ['sky', 'ground'] as const) {
     if (o[k] === null) out[k] = null;
     else {
@@ -398,7 +481,23 @@ export function readPage(v: unknown, index: number): SkpPageMeta {
   const delay = seconds(o.delay);
   if (delay !== undefined) page.delay = delay;
   if (typeof o.thumbnail === 'string' && o.thumbnail) page.thumbnail = o.thumbnail;
+  if (o.includeInAnimation === false) page.includeInAnimation = false;
+  const shadow = readShadow(o.shadow);
+  if (shadow) page.shadow = shadow;
   return page;
+}
+
+/** 그림자 설정(모르는 꼴이어도 안전하게 — 수·참거짓·북쪽 벡터만 남긴다). 객체가 아니면 null */
+export function readShadow(v: unknown): SkpShadowMeta | null {
+  const o = obj(v);
+  if (!o) return null;
+  const out: SkpShadowMeta = {};
+  for (const k of ['time', 'latitude', 'longitude', 'tz', 'light', 'dark'] as const) if (isNum(o[k])) out[k] = o[k] as number;
+  for (const k of ['city', 'country'] as const) if (typeof o[k] === 'string') out[k] = o[k] as string;
+  for (const k of ['display', 'onFaces', 'onGround', 'useSun'] as const) if (typeof o[k] === 'boolean') out[k] = o[k] as boolean;
+  const n = vec3(o.north);
+  if (n) out.north = n;
+  return out;
 }
 
 /** meta.pages → 장면 목록. 차례는 파일 그대로 지킨다(activePage·장면 단면 차례가 이 차례를 가리킨다) */
@@ -457,50 +556,82 @@ export function sectionToViewer(plane: readonly number[]): { normal: Vec3; offse
 }
 
 /**
- * 활성 단면 차례들 → 코어에 쓸 평면 하나. 코어 단면은 장면 전체를 자르므로 모형 단면(node −1)만 쓴다
- * (노드 단면은 그 그룹·컴포넌트 안쪽만 잘라야 해서 나타낼 수 없다). 여럿이면 처음 것, 없으면 null.
+ * 활성 단면 차례들 → 모형 단면(node −1) 가운데 처음 것(없으면 null). 여러 단면은 activeSections
  */
 export function pickSection(indices: readonly number[], planes: readonly unknown[]): PageSection | null {
-  for (const index of indices) {
-    const plane = readSectionPlane(planes[index]);
-    if (!plane || plane.node !== -1) continue;
-    const v = sectionToViewer(plane.plane);
-    if (v) return { index, plane, ...v };
-  }
-  return null;
+  return activeSections(indices, planes).find((s) => s.plane.node === -1) ?? null;
 }
 
 /**
- * 파일을 열 때의 단면: 모형 단면 가운데 활성(active)인 것. 모형 스타일이 단면 자르기를 끈 경우(sectionCuts false)는 null.
+ * 활성 단면 차례들 → 코어 setSections에 넘길 평면들: 모형 단면(node −1, 모형 전체를 자른다)이 먼저, 그다음 그룹·컴포넌트 안 단면(그 노드 안쪽만 —
+ * 앱이 노드의 항목을 items로 준다)을 파일 차례대로. SketchUp은 묶음(노드)마다 활성 단면이 하나라 같은 노드는 처음 것만. 읽지 못한 평면은 뺀다
  */
-export function initialSection(meta: unknown): PageSection | null {
+export function activeSections(indices: readonly number[], planes: readonly unknown[]): PageSection[] {
+  const out: PageSection[] = [];
+  const nodes = new Set<number>();
+  for (const index of indices) {
+    const plane = readSectionPlane(planes[index]);
+    if (!plane || nodes.has(plane.node)) continue;
+    const v = sectionToViewer(plane.plane);
+    if (!v) continue;
+    nodes.add(plane.node);
+    out.push({ index, plane, ...v });
+  }
+  return out.sort((a, b) => Number(a.plane.node !== -1) - Number(b.plane.node !== -1));
+}
+
+/**
+ * 파일을 열 때의 단면: 활성(active)인 단면 모두(activeSections). 모형 스타일이 단면 자르기를 끈 경우(sectionCuts false)는 없음.
+ */
+export function initialSections(meta: unknown): PageSection[] {
   const m = obj(meta);
   const list = Array.isArray(m?.sectionPlanes) ? (m!.sectionPlanes as unknown[]) : [];
-  if (readStyle(m?.style)?.sectionCuts === false) return null;
+  if (readStyle(m?.style)?.sectionCuts === false) return [];
   const active: number[] = [];
   list.forEach((p, i) => {
     if (readSectionPlane(p)?.active) active.push(i);
   });
-  return pickSection(active, list);
+  return activeSections(active, list);
+}
+
+/** 파일을 열 때의 모형 단면 하나(initialSections 가운데 모형 단면) */
+export function initialSection(meta: unknown): PageSection | null {
+  return initialSections(meta).find((s) => s.plane.node === -1) ?? null;
 }
 
 // ───────────────────────── 스타일 ─────────────────────────
 
 /**
  * 스타일 → 코어 그리기 방식. 모르면 null(지금 방식 그대로).
- * - 와이어프레임 → 'wireframe'(면이 없으니 X-ray보다 먼저)
+ * - 와이어프레임(RenderMode 0) → 'wireframe'(면이 없으니 X-ray보다 먼저)
  * - X-ray → 'xray'
- * - 은선(hiddenLine)·음영·무늬 음영·단색 → 모서리 보이기(edges)가 꺼졌으면 'shaded', 아니면 'shadedEdges'
- *   (코어에 은선·단색·무늬 끄기가 없어 음영으로 가깝게 그린다)
+ * - 은선(RenderMode 1) → 'hiddenLine'(면을 배경 색으로 채워 뒤 모서리를 가린다), 단색(5) → 'monochrome',
+ *   무늬를 끈 음영(Texture 꺼짐) → 'noTexture'
+ * - 무늬 음영 → 모서리 보이기(edges)가 꺼졌으면 'shaded', 아니면 'shadedEdges'
  * - 면 스타일이 없고 모서리 보이기만 있으면 그것만 따른다.
  */
 export function renderModeForStyle(style: SkpStyleMeta | null | undefined): RenderMode | null {
   if (!style) return null;
   if (style.faceStyle === 'wireframe') return 'wireframe';
   if (style.xray === true) return 'xray';
+  if (style.faceStyle === 'hiddenLine') return 'hiddenLine';
+  if (style.faceStyle === 'monochrome') return 'monochrome';
+  if (style.faceStyle === 'shaded') return 'noTexture';
   if (style.faceStyle) return style.edges === false ? 'shaded' : 'shadedEdges';
   if (typeof style.edges === 'boolean') return style.edges ? 'shadedEdges' : 'shaded';
   return null;
+}
+
+/** 음영 계열 그리기 방식(면이 불투명하게 앞을 가린다 — 라벨 가림·채우기) */
+export const SHADED_MODES: ReadonlySet<RenderMode> = new Set(['shaded', 'shadedEdges', 'hiddenLine', 'monochrome', 'noTexture']);
+
+/**
+ * 단면에서 잘린 면을 채울지(스타일 "단면 채우기"). 스타일이 값을 가지면 그것, 없으면 SketchUp 2018(채우기가 생긴 판) 이상이면 채운다.
+ * 판을 모르면 채운다(앱의 X·Y·Z 단면도 같은 값을 쓴다)
+ */
+export function sectionFillOf(style: Pick<SkpStyleMeta, 'sectionFill'> | null | undefined, major: number | null | undefined): boolean {
+  if (typeof style?.sectionFill === 'boolean') return style.sectionFill;
+  return !(isNum(major) && major < 18);
 }
 
 // ───────────────────────── 태그 ─────────────────────────
@@ -616,8 +747,10 @@ export interface PagePlan {
   hiddenNodes: Set<number> | null;
   /** 단면을 바꾸는지(장면이 단면을 기억하거나, 기억한 스타일이 단면 자르기를 껐으면 참) */
   setsSection: boolean;
-  /** setsSection일 때 쓸 단면(null = 끈다) */
+  /** setsSection일 때 쓸 모형 단면(null = 없음) — sections의 모형 단면 */
   section: PageSection | null;
+  /** setsSection일 때 쓸 단면 모두(모형 단면 먼저, 그룹 안 단면은 그 노드만 자른다 — activeSections). 비면 끈다 */
+  sections: PageSection[];
   /** 장면 스타일(기억하지 않으면 null) — 글·치수·안내선·단면 기호 보이기, 배경 색 등은 앱이 이 값으로 */
   style: SkpStyleMeta | null;
   /** 스타일의 코어 그리기 방식(모르면 null) */
@@ -644,7 +777,8 @@ export function pagePlan(page: SkpPageMeta, ctx: PageContext = {}): PagePlan {
   const style = page.style ?? null;
   const cutsOff = style?.sectionCuts === false;
   const setsSection = !!page.sectionPlanes || cutsOff;
-  const section = page.sectionPlanes && !cutsOff ? pickSection(page.sectionPlanes, ctx.sectionPlanes ?? []) : null;
+  const sections = page.sectionPlanes && !cutsOff ? activeSections(page.sectionPlanes, ctx.sectionPlanes ?? []) : [];
+  const section = sections.find((s) => s.plane.node === -1) ?? null;
   return {
     name: page.name,
     camera,
@@ -654,6 +788,7 @@ export function pagePlan(page: SkpPageMeta, ctx: PageContext = {}): PagePlan {
     hiddenNodes: page.hiddenNodes ? new Set(page.hiddenNodes) : null,
     setsSection,
     section,
+    sections,
     style,
     renderMode: renderModeForStyle(style),
   };
@@ -670,6 +805,32 @@ export function stepPage(count: number, current: number | null, dir: 1 | -1, wra
   const next = current + dir;
   if (next >= 0 && next < count) return next;
   return wrap ? (next + count) % count : null;
+}
+
+// ───────────────────────── 장면 재생(슬라이드 쇼) ─────────────────────────
+
+/** 재생할 장면 차례: "장면 재생에 넣기"를 끈 장면은 뺀다(모두 껐으면 모든 장면) */
+export function slideshowOrder(pages: readonly Pick<SkpPageMeta, 'includeInAnimation'>[]): number[] {
+  const order = pages.map((_, i) => i).filter((i) => pages[i]!.includeInAnimation !== false);
+  return order.length ? order : pages.map((_, i) => i);
+}
+
+/**
+ * 다음 재생 장면: 지금 장면 다음(지금 장면이 재생 목록에 없으면 처음). 끝에서 loop면 처음으로, 아니면 null(멈춤).
+ * started: 이번 재생에서 이미 넘긴 장면 수(처음 부를 때 0) — 되풀이하지 않는 재생은 목록을 한 바퀴 돌면 멈춘다
+ */
+export function nextSlide(order: readonly number[], current: number | null, loop: boolean, started = 0): number | null {
+  if (!order.length) return null;
+  const at = current === null ? -1 : order.indexOf(current);
+  if (at < 0) return order[0]!;
+  if (at + 1 < order.length) return order[at + 1]!;
+  return loop || started === 0 ? order[0]! : null;
+}
+
+/** 장면 하나를 보이는 시간(ms): 전환 시간(카메라 옮기기, 앱은 4초에서 자른다) + 지연 시간(없으면 1초) */
+export function slideDurationMs(page: Pick<SkpPageMeta, 'delay'>, transitionS: number): number {
+  const t = Number.isFinite(transitionS) && transitionS > 0 ? Math.min(transitionS, 4) : 0;
+  return Math.round((t + delaySeconds(page)) * 1000);
 }
 
 /** 부드럽게 시작하고 멈추는 진행(0~1) */

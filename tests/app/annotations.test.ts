@@ -6,7 +6,11 @@ import {
   AnnotationLabels,
   DEFAULT_FILTER,
   LEADER_GAP_PX,
+  OCCLUSION_SETTLE_MS,
   annotationCandidates,
+  frameKey,
+  occludedBy,
+  viewDepthOf,
   annotationColor,
   dimensionText,
   estimateEm,
@@ -120,6 +124,10 @@ describe('거르기', () => {
     expect(isNodeHidden.mock.calls.map((c) => c[0]).sort()).toEqual([-1, 5]);
     // z > 50 쪽을 잘라 낸다
     expect(names(filter({ section: { normal: [0, 0, 1], offset: 50 } }))).toEqual(['e', '1200 mm', 'a', 'b']);
+    // 여러 단면: 그룹 안 단면(scope)은 그 노드 라벨만 — 노드 5의 'b'만 z > −1 쪽에서 잘린다
+    const inNode5 = (n: number): boolean => n === 5;
+    expect(names(filter({ sections: [{ normal: [0, 0, 1], offset: -1, scope: inNode5 }] }))).toEqual(['e', '1200 mm', 'a', 'd']);
+    expect(names(filter({ sections: [{ normal: [0, 0, 1], offset: 50 }, { normal: [0, 0, 1], offset: -1, scope: inNode5 }] }))).toEqual(['e', '1200 mm', 'a']);
   });
 });
 
@@ -261,5 +269,58 @@ describe('AnnotationLabels(DOM)', () => {
     a.paint(top);
     expect(a.size).toBe(2000);
     expect(a.el.children).toHaveLength(50);
+  });
+
+  it('형상 가림: 카메라가 멈추면 판정해 가린 라벨을 숨기고, 보기 상태가 바뀌면 다시 판정한다', () => {
+    vi.useFakeTimers();
+    try {
+      const h = host();
+      const a = new AnnotationLabels(h);
+      a.setData([text({ text: '앞', point: [100, 0, 0] }), text({ text: '뒤', point: [-100, 0, 0] }), text({ text: '화면', screen: [0.1, 0.1] })], [], 'mm');
+      // 왼쪽(x < 400 화소) 글만 가린다고 판정
+      const test = vi.fn((_p: readonly number[], x: number) => x < 400);
+      a.setOcclusion(test);
+      a.paint(top);
+      // 멈추기 전에는 모두 보인다
+      expect(a.placements.length).toBe(3);
+      vi.advanceTimersByTime(OCCLUSION_SETTLE_MS + 5);
+      // 화면 고정 글은 판정하지 않는다
+      expect(test).toHaveBeenCalledTimes(2);
+      expect(a.occludedCount).toBe(1);
+      a.paint(top);
+      expect(a.placements.map((p) => (a.el.children[a.placements.indexOf(p)] as HTMLElement).textContent).sort()).toEqual(['앞', '화면']);
+      // 같은 카메라로 다시 그려도 다시 판정하지 않는다
+      a.paint(top);
+      vi.advanceTimersByTime(OCCLUSION_SETTLE_MS + 5);
+      expect(test).toHaveBeenCalledTimes(2);
+      // 태그 숨김 등 보기 상태가 바뀌면 지우고 다시 판정
+      a.setFilter({ texts: true });
+      expect(a.occludedCount).toBe(0);
+      a.paint(top);
+      vi.advanceTimersByTime(OCCLUSION_SETTLE_MS + 5);
+      expect(test).toHaveBeenCalledTimes(4);
+      // 끄면 가리지 않는다
+      a.setOcclusion(null);
+      a.paint(top);
+      expect(a.placements.length).toBe(3);
+      a.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('가림 셈', () => {
+  it('시선 방향 깊이로 고른 점이 기준점보다 앞이면 가렸다(깊이 0.5 % 또는 주어진 거리 안은 같은 면)', () => {
+    // 위에서 본 평행 투영: 눈은 +z 쪽, 깊이는 z가 작을수록 크다
+    const dTop = viewDepthOf(top, [0, 0, 0]);
+    expect(viewDepthOf(top, [0, 0, -10])).toBeCloseTo(dTop + 10);
+    expect(occludedBy(top, [0, 0, -10], [0, 0, 0])).toBe(true);
+    expect(occludedBy(top, [0, 0, 0], [0, 0, -10])).toBe(false);
+    // 같은 면 위의 점(아주 조금 앞)
+    expect(occludedBy(top, [0, 0, -10], [0, 0, -9.999])).toBe(false);
+    expect(occludedBy(top, [0, 0, -10], [0, 0, -5], 6)).toBe(false);
+    expect(frameKey(top)).toBe(frameKey(frameFor(TOP, 800, 600)));
+    expect(frameKey(top)).not.toBe(frameKey(frameFor({ ...TOP, yaw: 0.1 }, 800, 600)));
   });
 });

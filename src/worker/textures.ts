@@ -35,11 +35,16 @@ export interface TexturePrepResult {
 export function dropTexture(scene: Scene3d, id: string): void {
   if (!scene.textures) return;
   scene.textures = scene.textures.filter((t) => t.id !== id);
-  for (const m of scene.meshes)
+  for (const m of scene.meshes) {
     if (m.texture === id) {
       delete m.texture;
       delete m.uvs;
     }
+    if (m.backTexture === id) {
+      delete m.backTexture;
+      delete m.backUvs;
+    }
+  }
   const infos = (scene.meta?.textures ?? []) as SkpTextureInfo[];
   if (scene.meta) scene.meta.textures = infos.filter((t) => t.id !== id);
   const stats = scene.meta?.materialStats as { texture?: string }[] | undefined;

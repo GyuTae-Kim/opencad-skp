@@ -295,6 +295,7 @@ describe('스타일(렌더링 레코드 + style.xml)', () => {
     [
       [1000, 4, '1'],
       [1006, 1, '1'],
+      [1007, 2, '4'],
       [2001, 4, '2'],
       [2002, 4, '-3618591'],
       [2004, 1, '0'],
@@ -315,7 +316,7 @@ describe('스타일(렌더링 레코드 + style.xml)', () => {
     expect(items.get(4000)).toBe('-1');
     expect(items.get(2002)).toBe('-3618591');
     expect(items.has(5001)).toBe(false);
-    expect(items.size).toBe(13);
+    expect(items.size).toBe(14);
   });
 
   it('레코드 → (없거나 unset이면) style.xml: 배경 unset(0000) → 흰색, 앞면은 레코드', () => {
@@ -341,6 +342,7 @@ describe('스타일(렌더링 레코드 + style.xml)', () => {
     expect(s.faceStyle).toBe('textured');
     expect(s.edges).toBe(true);
     expect(s.profiles).toBe(true);
+    expect(s.profileWidth).toBe(4);
     expect(s.guides).toBe(false);
     // 7013 = 2: 비트 0 단면 평면 꺼짐, 비트 1 단면 자르기 켜짐
     expect(s.sectionPlanes).toBe(false);
@@ -352,6 +354,30 @@ describe('스타일(렌더링 레코드 + style.xml)', () => {
     const face = (mode: number, texture?: number): string | undefined =>
       resolveStyle({ values: new Map([[0x733d, i32(mode)], ...(texture !== undefined ? ([[0x7340, u8(texture)]] as [number, Uint8Array][]) : [])]) }, undefined).faceStyle;
     expect([face(0), face(1), face(5), face(2, 0), face(2, 1), face(2), face(6, 0), face(3)]).toEqual(['wireframe', 'hiddenLine', 'monochrome', 'shaded', 'textured', 'textured', 'shaded', 'textured']);
+  });
+
+  it('안개(2021+ 레코드): 켜짐·색·배경 색 쓰기·시작·끝 거리(인치 → 장면 단위, 음수는 −1 = 기본)', () => {
+    const f64le = (v: number): Uint8Array => new Uint8Array(Float64Array.of(v).buffer);
+    const s = resolveStyle(
+      {
+        values: new Map<number, Uint8Array>([
+          [0x735f, u8(1)],
+          [0x7360, rgba(200, 210, 220)],
+          [0x7361, u8(0)],
+          [0x7362, f64le(42.17)],
+          [0x7363, f64le(152.95)],
+        ]),
+      },
+      undefined,
+      25.4,
+    );
+    expect(s.fog).toBe(true);
+    expect(s.fogColor).toEqual([200 / 255, 210 / 255, 220 / 255]);
+    expect(s.fogUseBackground).toBe(false);
+    expect(s.fogStart).toBeCloseTo(42.17 * 25.4, 9);
+    expect(s.fogEnd).toBeCloseTo(152.95 * 25.4, 9);
+    const unset = resolveStyle({ values: new Map<number, Uint8Array>([[0x735f, u8(0)], [0x7360, rgba(0, 0, 0, 0)], [0x7362, f64le(-1)], [0x7363, f64le(-1)]]) }, undefined, 25.4);
+    expect(unset).toEqual({ fog: false, fogStart: -1, fogEnd: -1 });
   });
 
   it('레코드·style.xml이 없으면 빈 스타일', () => {

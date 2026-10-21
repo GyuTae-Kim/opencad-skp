@@ -12,6 +12,8 @@ import {
   axisLock,
   axisOf,
   chooseSnap,
+  footOnLine,
+  footOnPlane,
   probeOffsets,
   rayClosestOnSegment,
   segmentOfPick,
@@ -166,6 +168,16 @@ describe('추정: 면', () => {
     expect(triangleOfPick({ meshes: [m], lines: [] }, { kind: 'mesh', id: 'm', index: -1, raw: -1, point: [0, 0, 0], section: true })).toBeNull();
   });
 
+  it('카메라를 보는 그물(billboard)은 저장된 꼭짓점에 붙지 않고 면 위, 그물 윤곽선 고르기(edge)는 모서리 위', () => {
+    const m: Mesh3d = { id: 'b', positions: Float32Array.from([0, 0, 0, 1, 0, 0, 0, 1, 0]), color: [1, 1, 1, 1], billboard: { origin: [0, 0, 0], axis: 'z' } };
+    const sc = { meshes: [m], lines: [] };
+    expect(triangleOfPick(sc, { kind: 'mesh', id: 'b', index: 0, raw: 0, point: [0.2, 0.2, 0] })).toBeNull();
+    const s = chooseSnap({ frame: topFrame, x: 100, y: 100, pick: { kind: 'mesh', id: 'b', index: 0, raw: 0, point: [0, 0, 0], normal: [0, 0, 1] }, scene: sc });
+    expect(s.kind).toBe('onFace');
+    const e = chooseSnap({ frame: topFrame, x: 100, y: 100, pick: { kind: 'edge', id: 'b', index: 0, raw: 0, point: [0, 0, 0] }, scene: sc });
+    expect(e).toMatchObject({ kind: 'onEdge', point: [0, 0, 0] });
+  });
+
   it('단면 채운 면은 면 위(단면에)', () => {
     const p: Pick3d = { kind: 'mesh', id: 'm', index: -1, raw: -1, point: [1, 2, 3], normal: [0, 0, 1], section: true };
     const s = chooseSnap({ frame: topFrame, x: 101, y: 98, pick: p, scene: { meshes: [], lines: [] } });
@@ -268,5 +280,57 @@ describe('추정 도움 함수', () => {
     expect(axisOf([1, 0, 0])).toBe('x');
     expect(axisOf([1, 1, 0])).toBeNull();
     expect(axisOf([0, 0, 0])).toBeNull();
+  });
+});
+
+describe('추정: 수직·중심', () => {
+  it('시작점에서 모서리에 내린 발(선분 안)이 반경 안이면 수직, 시작점이 없으면 모서리 위', () => {
+    const scene: SnapScene = { meshes: [], lines: [lines('e', [[-50, 40, 0, 50, 40, 0]])] };
+    const s = snapWith(scene, 112, 62, { from: [10, 0, 0] });
+    expect(s.kind).toBe('perpendicular');
+    expect(s.label).toBe('모서리에 수직');
+    close(s.point, [10, 40, 0]);
+    expect(snapWith(scene, 112, 62).kind).toBe('onEdge');
+    // 발이 선분 밖이면 수직이 아니다
+    expect(footOnLine([80, 0, 0], [-50, 40, 0], [50, 40, 0])!.t).toBeGreaterThan(1);
+    expect(snapWith(scene, 147, 62, { from: [80, 0, 0] }).kind).not.toBe('perpendicular');
+  });
+
+  it('시작점에서 커서 밑 면의 평면에 내린 발이 반경 안이면 면에 수직(맞은편 면까지의 거리)', () => {
+    const scene: SnapScene = { meshes: [quad('f', -80, -80, 80, 80, 0)], lines: [] };
+    const s = snapWith(scene, 133, 82, { from: [30, 20, 50] });
+    expect(s.kind).toBe('perpendicular');
+    expect(s.label).toBe('면에 수직');
+    close(s.point, [30, 20, 0]);
+    expect(s.normal).toBeDefined();
+    // 발에서 멀면 면 위
+    expect(snapWith(scene, 160, 40, { from: [30, 20, 50] }).kind).toBe('onFace');
+    expect(snapWith(scene, 133, 82).kind).toBe('onFace');
+    close(footOnPlane([1, 2, 3], [0, 0, 0], [0, 0, 2])!, [1, 2, 0]);
+    expect(footOnPlane([1, 2, 3], [0, 0, 0], [0, 0, 0])).toBeNull();
+  });
+
+  it('호의 중심: 곡선 선분의 중심(부른 쪽 판정)과 앞서 지나간 중심에 붙는다', () => {
+    const N = 12;
+    const segs: number[][] = [];
+    for (let i = 0; i < N; i++) {
+      const a = (2 * Math.PI * i) / N + 0.1;
+      const b = (2 * Math.PI * (i + 1)) / N + 0.1;
+      segs.push([30 * Math.cos(a), 30 * Math.sin(a), 0, 30 * Math.cos(b), 30 * Math.sin(b), 0]);
+    }
+    const scene: SnapScene = { meshes: [], lines: [lines('c', segs)] };
+    const pick = picker(scene);
+    const seen: string[] = [];
+    // 원 위(끝점 사이)를 지날 때 중심을 잰다 — 커서에서 멀어 그때는 모서리 위
+    const onArc = chooseSnap({ frame: topFrame, x: 130, y: 100, pick: pick(130, 100), scene, curveCenter: (p) => (seen.push(p.id), [0, 0, 0]) });
+    expect(seen).toContain('c');
+    expect(onArc.kind).not.toBe('center');
+    // 가운데로 옮기면 기억한 중심에 붙는다
+    const s = chooseSnap({ frame: topFrame, x: 101, y: 101, pick: pick(101, 101), scene, centers: [[0, 0, 0]] });
+    expect(s.kind).toBe('center');
+    expect(s.label).toBe('중심');
+    close(s.point, [0, 0, 0]);
+    // 반경 밖이면 붙지 않는다
+    expect(chooseSnap({ frame: topFrame, x: 115, y: 100, pick: null, scene, centers: [[0, 0, 0]] }).kind).toBe('free');
   });
 });

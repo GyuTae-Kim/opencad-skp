@@ -9,13 +9,14 @@
  * 이것을 2021+와 같은 꼴(SkpRenderingRaw의 0x733c 자식 꼬리표 값 + style.xml 항목 번호 글)로 옮겨 styles.ts가 함께 푼다.
  */
 
-import type { SkpAnnotationDefaults, SkpCamera, SkpFont, SkpPage, SkpRenderingRaw } from './model';
+import type { SkpAnnotationDefaults, SkpAxes, SkpCamera, SkpFont, SkpPage, SkpRenderingRaw, SkpShadowInfo } from './model';
+import { axesOf } from './vffroot';
 import { MfcError, type MfcReadFn } from './mfcstream';
 import { C, type MfcState } from './mfcstate';
 import { arrowName, leaderName, textAlignmentName } from './vffcommon';
 
 /** CRenderingOptions 스키마 → 모형 카메라 뒤 덩어리 길이(장면 안은 8 짧다) */
-export const RENDERING_BLOCK: Readonly<Record<number, number>> = { 33: 190, 35: 197, 36: 216, 37: 221, 38: 222, 39: 223 };
+export const RENDERING_BLOCK: Readonly<Record<number, number>> = { 32: 189, 33: 190, 35: 197, 36: 216, 37: 221, 38: 222, 39: 223 };
 
 type Field = 'xray' | 'background' | 'foreground' | 'texture' | 'profiles' | 'hiddenGeometry' | 'front' | 'back' | 'sky' | 'ground' | 'drawSky' | 'drawGround' | 'sectionFill';
 
@@ -50,6 +51,7 @@ const RO_38: Partial<Record<Field, number>> = {
   sectionFill: 167,
 };
 const RO_FIELDS: Readonly<Record<number, Partial<Record<Field, number>>>> = {
+  32: RO_36,
   33: RO_36,
   35: RO_36,
   36: RO_36,
@@ -144,6 +146,9 @@ export class MfcView {
   modelStyle: MfcStyle | undefined;
   activeStyle: MfcStyle | undefined;
   defaults: SkpAnnotationDefaults | undefined;
+  /** 모형 위치·그림자(모형 꼬리 CShadowInfo)와 그리기 축(CSketchCS, 기본 축이면 없음) */
+  shadow: SkpShadowInfo | undefined;
+  axesValue: SkpAxes | undefined;
   /** 스타일 열쇠 → 항목(index.ts가 장면·모형 스타일을 풀 때 쓴다) */
   readonly styles = new Map<string, Map<number, string>>();
 
@@ -312,7 +317,7 @@ export class MfcView {
       const raw = this.rendering(block, style ?? undefined);
       if (raw) page.rendering = raw;
     }
-    if (stored & PAGE_SHADOWS) this.shadowInfo();
+    if (stored & PAGE_SHADOWS) page.shadowInfo = this.shadowInfo();
     if (stored & PAGE_AXES) this.axes();
     if (stored & PAGE_HIDDEN) {
       const n = s.count(10_000_000, '장면 숨긴 개체');
@@ -361,33 +366,56 @@ export class MfcView {
     return out;
   }
 
-  /** 줄 안에 쓴 CShadowInfo(앞머리, u32 시각, u8, 도시, 나라, f64×6, 4바이트, i32×2, 2바이트) — 위치·그림자는 아직 쓰지 않는다 */
-  shadowInfo(): void {
+  /**
+   * 줄 안에 쓴 CShadowInfo: 2021+ 6590과 같은 차례 — 앞머리, u32 시각, u8, 도시, 나라, f64 경도·위도·시간대, f64×3 북쪽, 4바이트 깃발,
+   * i32 밝음·어둠, 2바이트. 깃발 넷은 2020 이하 파일이 모두 0 1 1 0이라 어느 것이 그림자 보이기인지 몰라 넣지 않는다(엔진 legacy와 같다)
+   */
+  shadowInfo(): SkpShadowInfo {
     const st = this.st;
     const s = st.s;
     st.preamble();
-    s.u32();
+    const out: SkpShadowInfo = { time: s.u32() };
     s.u8();
-    s.cstr();
-    s.cstr();
-    s.skip(48 + 4 + 8 + 2);
+    const city = s.cstr().slice(0, 256);
+    const country = s.cstr().slice(0, 256);
+    if (city) out.city = city;
+    if (country) out.country = country;
+    const v = s.doubles(6);
+    const fin = (x: number | undefined): x is number => x !== undefined && Number.isFinite(x);
+    if (fin(v[0])) out.longitude = v[0];
+    if (fin(v[1])) out.latitude = v[1];
+    if (fin(v[2])) out.tz = v[2];
+    if (fin(v[3]) && fin(v[4]) && fin(v[5])) out.north = [v[3], v[4], v[5]];
+    s.skip(4);
+    out.light = s.i32();
+    out.dark = s.i32();
+    s.skip(2);
+    return out;
   }
 
-  /** 줄 안에 쓴 CSketchCS(그리기 축): 앞머리, 10바이트, f64×12, u8 */
-  axes(): void {
+  /**
+   * 줄 안에 쓴 CSketchCS(그리기 축): 앞머리, 10바이트, f64×12(원점, x·y·z 축 — 2021+ 4651~4654와 같은 차례로 본다), u8.
+   * 기본 축이면 undefined
+   */
+  axes(): SkpAxes | undefined {
     this.st.preamble();
-    this.st.s.skip(10 + 96 + 1);
+    const s = this.st.s;
+    s.skip(10);
+    const v = s.doubles(12);
+    s.skip(1);
+    const p = (i: number): [number, number, number] => [v[i]!, v[i + 1]!, v[i + 2]!];
+    return v.every(Number.isFinite) ? axesOf(p(0), p(3), p(6), p(9)) : undefined;
   }
 
   /**
    * 모형 꼬리(뿌리 요소 뒤): 위치, 장면 목록과 활성 장면, 축, 문자·치수 기본값과 글꼴, 글꼴 목록, (2019+) 선 종류, 스타일 목록·활성·작업 사본.
    * 그 뒤(워터마크·분류 체계 …)는 읽지 않는다.
    */
-  readTail(): void {
+  readTail(options?: () => void): void {
     const st = this.st;
     const s = st.s;
     const pids = st.entityPids;
-    this.shadowInfo();
+    this.shadow = this.shadowInfo();
     s.skip(pids ? 2 : 1);
     const seen = new Set<MfcPage>();
     const n = s.count(100_000, '장면');
@@ -402,9 +430,14 @@ export class MfcView {
     const active = s.readObject(C.PAGE) as MfcPage | null;
     const ai = active ? this.pages.indexOf(active) : -1;
     if (ai >= 0) this.activePage = ai;
-    this.axes();
+    this.axesValue = this.axes();
     // Model Info 기본값: 치수 글꼴 + 58바이트(2021+ 24502..24518과 같은 차례), 문자 글꼴 + 22바이트, 지시선 글꼴
-    s.skip(pids ? 70 : 69);
+    if (options) {
+      // SketchUp 6: 69바이트 사이(63 뒤)에 설정 묶음이 끼어 있다
+      s.skip(63);
+      options();
+      s.skip(6);
+    } else s.skip(pids ? 70 : 69);
     const dimFont = s.readObject(C.FONT);
     const dim = s.bytes(58);
     s.skip((pids ? 61 : 60) - 58);

@@ -88,6 +88,7 @@ const KEYS = {
   HideConstructionGeometry: ['bool', 0x7346, 7012],
   DisplayColorByLayer: ['bool', 0x7347, 7011],
   DrawSilhouettes: ['bool', 0x734f, 1006],
+  SilhouetteWidth: ['int', 0x7350, 1007],
   DrawBackEdges: ['bool', 0x7356, 1015],
   BackgroundColor: ['color', 0x7357, 4000],
   ForegroundColor: ['color', 0x7358, 1014],
@@ -103,6 +104,13 @@ const KEYS = {
   DrawHiddenGeometry: ['bool', 0x7380, 7017],
   DrawHiddenObjects: ['bool', 0x7381, 7018],
   EdgeDisplayMode: ['int', undefined, 1000],
+  // 안개(2021+ 렌더링 레코드만 — style.xml에는 없다). 꼬리표는 표준 파일(C API 값: DisplayFog 거짓, FogColor 미설정, FogUseBkColor 참,
+  // FogStartDist·FogEndDist −1)과 실제 파일(시작 < 끝)의 값으로 맞춘 것이다(◐)
+  DisplayFog: ['bool', 0x735f, undefined],
+  FogColor: ['color', 0x7360, undefined],
+  FogUseBkColor: ['bool', 0x7361, undefined],
+  FogStartDist: ['float', 0x7362, undefined],
+  FogEndDist: ['float', 0x7363, undefined],
 } as const satisfies Record<string, readonly [Kind, number | undefined, number | undefined]>;
 
 type Key = keyof typeof KEYS;
@@ -115,8 +123,11 @@ function faceStyle(mode: Value | undefined, texture: Value | undefined): SkpFace
   return texture === false || texture === 0 ? 'shaded' : 'textured';
 }
 
-/** 렌더링 레코드 + 그 스타일의 style.xml 항목 → 화면용 스타일. 레코드·항목 어디에도 없는 값은 빠진다 */
-export function resolveStyle(raw: SkpRenderingRaw | undefined, items: Map<number, string> | undefined): SkpStyleMeta {
+/**
+ * 렌더링 레코드 + 그 스타일의 style.xml 항목 → 화면용 스타일. 레코드·항목 어디에도 없는 값은 빠진다.
+ * scale은 인치 → 장면 단위(안개 거리)
+ */
+export function resolveStyle(raw: SkpRenderingRaw | undefined, items: Map<number, string> | undefined, scale = 1): SkpStyleMeta {
   const out: SkpStyleMeta = {};
   const name = raw?.activeName ?? raw?.styleName;
   if (name !== undefined) out.name = name;
@@ -151,6 +162,8 @@ export function resolveStyle(raw: SkpRenderingRaw | undefined, items: Map<number
   const edges = get('EdgeDisplayMode');
   if (typeof edges === 'number') out.edges = edges !== 0;
   set('profiles', bool('DrawSilhouettes'));
+  const pw = get('SilhouetteWidth');
+  if (typeof pw === 'number' && pw > 0 && pw < 1000) out.profileWidth = pw;
   set('backEdges', bool('DrawBackEdges'));
   set('background', rgb('BackgroundColor'));
   // 하늘·지면: 켜져 있을 때만 색, 꺼져 있으면 null(켜짐을 모르면 뺀다)
@@ -174,5 +187,15 @@ export function resolveStyle(raw: SkpRenderingRaw | undefined, items: Map<number
   set('sectionCuts', bool('DisplaySectionCuts'));
   set('sectionFill', bool('SectionCutFilled'));
   set('colorByTag', bool('DisplayColorByLayer'));
+  // 안개: 거리는 장면 단위(음수 = SketchUp이 모형 크기로 정하는 기본 거리 — 화면이 정한다)
+  set('fog', bool('DisplayFog'));
+  set('fogColor', rgb('FogColor'));
+  set('fogUseBackground', bool('FogUseBkColor'));
+  const dist = (key: Key): number | undefined => {
+    const v = get(key);
+    return typeof v === 'number' && Number.isFinite(v) ? (v < 0 ? -1 : v * Math.abs(scale)) : undefined;
+  };
+  set('fogStart', dist('FogStartDist'));
+  set('fogEnd', dist('FogEndDist'));
   return out;
 }

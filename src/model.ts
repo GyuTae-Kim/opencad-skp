@@ -37,7 +37,7 @@ import {
   unitsFromOptions,
   type Warn,
 } from './vffcommon';
-import { readAnnotationDefaults, readCamera, readFonts, readLayers, readLineStyles, readModelProperties, readPages, readRenderingValues, readStyles, type LayerSet, type StyleSet } from './vffroot';
+import { readAnnotationDefaults, readAxes, readCamera, readFonts, readLayers, readLineStyles, readModelProperties, readPages, readRenderingValues, readShadowInfo, readStyles, type LayerSet, type StyleSet } from './vffroot';
 import { TAG } from './vfftags';
 
 export { TAG } from './vfftags';
@@ -332,6 +332,38 @@ export interface SkpRenderingRaw {
 }
 
 /** 장면(0x7148) */
+/**
+ * Model Info > 위치와 그림자 창(Sketchup::ShadowInfo, 엔진 SkpShadowInfo). 2021+ 0204 → 6590(장면 714e), 2020 이하 모형 꼬리 CShadowInfo.
+ * 읽지 못한 칸은 빠진다(2020 이하는 켜고 끄기 깃발의 자리를 몰라 넣지 않는다)
+ */
+export interface SkpShadowInfo {
+  /** ShadowTime_time_t: 그곳 시각을 UTC 초처럼 적은 것(시간대를 빼면 실제 UTC) */
+  time?: number;
+  city?: string;
+  country?: string;
+  latitude?: number;
+  longitude?: number;
+  /** 시간대(시간, UTC 동쪽이 +) */
+  tz?: number;
+  /** 모형 축에서 북쪽 방향((0, 1, 0) = NorthAngle 0) */
+  north?: [number, number, number];
+  /** 밝음·어둠 0~100 */
+  light?: number;
+  dark?: number;
+  display?: boolean;
+  onFaces?: boolean;
+  onGround?: boolean;
+  useSun?: boolean;
+}
+
+/** 그리기 축(Sketchup::Axes): 원점과 세 축 방향(인치·단위 벡터) */
+export interface SkpAxes {
+  origin: [number, number, number];
+  x: [number, number, number];
+  y: [number, number, number];
+  z: [number, number, number];
+}
+
 export interface SkpPage {
   pid?: number;
   name: string;
@@ -353,6 +385,8 @@ export interface SkpPage {
   includeInAnimation?: boolean;
   /** 장면 미리보기 그림의 ZIP 경로(0x7158 → 0x2134) */
   thumbnail?: string;
+  /** 이 장면이 기억하는 그림자 설정(깃발 0x004) */
+  shadowInfo?: SkpShadowInfo;
 }
 
 /** Model Info > Animation(설정 절의 PageOptions·SlideshowOptions) */
@@ -402,6 +436,10 @@ export interface SkpModel {
   properties?: SkpAttrDicts;
   fonts?: Map<number, SkpFont>;
   annotationDefaults?: SkpAnnotationDefaults;
+  /** 위치·그림자 설정(0x0204, 2020 이하는 모형 꼬리 CShadowInfo) */
+  shadowInfo?: SkpShadowInfo;
+  /** 그리기 축(0x01fc, 2020 이하 모형 꼬리 CSketchCS) — 기본 축이면 없다 */
+  axes?: SkpAxes;
 }
 
 /** 모형 전체를 읽은 뒤 풀 붙은 치수 점 */
@@ -1108,6 +1146,14 @@ export function readModelDat(bytes: Uint8Array, onProgress?: (fraction: number) 
     note(ctx, '문자·치수 기본값을 읽지 못했습니다');
   }
   const props = section(TAG.PROPS_SECTION, '모형 속성', (n) => readModelProperties(r, n, warn));
+  const shadowInfo = section(TAG.SHADOW_SECTION, '위치·그림자', (n) => {
+    const rec = r.firstSafe(n, TAG.SHADOW_INFO);
+    return rec ? readShadowInfo(r, rec) : undefined;
+  });
+  const axes = section(TAG.AXES_SECTION, '그리기 축', (n) => {
+    const rec = r.firstSafe(n, TAG.AXES);
+    return rec ? readAxes(r, rec) : undefined;
+  });
 
   const warnings = [...ctx.warn].map(([m, k]) => (k > 1 ? `${m} (${k}개)` : m));
   const model: SkpModel = { materials, layers: layerSet.layers, definitions, root: rootEnts, counts: ctx.counts, warnings };
@@ -1133,6 +1179,8 @@ export function readModelDat(bytes: Uint8Array, onProgress?: (fraction: number) 
   if (props?.properties) model.properties = props.properties;
   if (props?.name !== undefined) model.name = props.name;
   if (props?.description !== undefined) model.description = props.description;
+  if (shadowInfo) model.shadowInfo = shadowInfo;
+  if (axes) model.axes = axes;
   if (ctx.damaged) model.damaged = true;
   return model;
 }

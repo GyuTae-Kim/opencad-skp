@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_FOV, cameraBasis, cameraEye, type CameraState } from 'opencad-viewer3d/camera';
+import { DEFAULT_FOV, cameraBasis, cameraEye, computeFrame, projectToScreen, type CameraState } from 'opencad-viewer3d/camera';
 import type { SkpCameraMeta, SkpPageMeta } from '../../src/meta';
 import {
   DEFAULT_TRANSITION_S,
@@ -10,11 +10,19 @@ import {
   cameraFromSkp,
   cameraShowsBox,
   delaySeconds,
+  eyeHeightFor,
+  isTwoPoint,
+  rollFromUp,
+  twoPointCamera,
+  freshDocCamera,
+  withFov,
   fitSceneCamera,
   effectiveTagHidden,
   folderHiddenTags,
   initialCamera,
+  activeSections,
   initialSection,
+  initialSections,
   initialView,
   openingPage,
   pagePlan,
@@ -27,6 +35,7 @@ import {
   sameSceneFit,
   sameSkpCamera,
   sceneCoverageScale,
+  sectionFillOf,
   sectionToViewer,
   stepPage,
   transitionCamera,
@@ -91,6 +100,71 @@ describe('SketchUp 카메라 → 코어 카메라', () => {
     const iso = cameraFromSkp(cam({ eye: [100, -100, 100], up: [0.3, 0.3, -0.9] }))!;
     close(cameraEye(iso), [100, -100, 100], 1e-6);
     expect(cameraBasis(iso).up[2]).toBeGreaterThan(0);
+  });
+
+  it('굴림: 위 벡터가 시선 둘레로 기운 카메라는 roll로(코어 틀의 화면 위가 그 위 벡터), 작거나 아래로 기운 것은 버린다', () => {
+    const up: [number, number, number] = [Math.sin(0.3), 0, Math.cos(0.3)];
+    const c = cameraFromSkp(cam({ eye: [0, -100, 0], target: [0, 0, 0], up }))!;
+    expect(c.roll).toBeCloseTo(-0.3, 9);
+    close(cameraBasis(c).up, up, 1e-9);
+    expect(rollFromUp(0, 0, [0, 0, 1])).toBe(0);
+    expect(rollFromUp(0, 0, [1e-6, 0, 1])).toBe(0);
+    expect(rollFromUp(0, 0, [0.2, 0, -1])).toBe(0);
+    expect(cameraFromSkp(cam({}))!.roll).toBeUndefined();
+  });
+
+  it('새 문서 카메라: 앞 문서의 굴림·렌즈 이동(2점 투시)을 없애고 시야각을 되돌린다', () => {
+    const c: CameraState = { target: [10, 20, 0], distance: 100, yaw: 0.3, pitch: 0.4, projection: 'perspective', fovY: 0.7 };
+    // 2점 투시·굴림이 남은 앞 문서 카메라: 카메라가 없는 새 문서가 기운·옮긴 화면으로 열리지 않게
+    const tilted = { ...twoPointCamera(c)!, roll: 0.2 };
+    expect(tilted.shiftY).toBeTruthy();
+    const f = freshDocCamera(tilted, 0.7)!;
+    expect(f.roll).toBeUndefined();
+    expect(f.shiftX).toBeUndefined();
+    expect(f.shiftY).toBeUndefined();
+    expect(f).toMatchObject({ target: tilted.target, distance: tilted.distance, yaw: tilted.yaw, pitch: 0, fovY: 0.7 });
+    // 세로 화면에 맞춰 넓힌 시야각만 다르면 시야각만
+    expect(freshDocCamera({ ...c, fovY: 1.2 }, 0.7)).toEqual({ ...c, fovY: 0.7 });
+    expect(freshDocCamera({ ...c, shiftX: 0.1, shiftY: 0 }, 0.7)).toEqual(c);
+    // 바꿀 것이 없으면 null
+    expect(freshDocCamera(c, 0.7)).toBeNull();
+    expect(freshDocCamera({ ...c, roll: 0 }, 0.7)).toBeNull();
+  });
+
+  it('2점 투시: 앙각 0·눈 자리 그대로, 원래 대상점이 화면 가운데에 남게 렌즈를 위아래로 옮긴다(세로선이 곧다)', () => {
+    const c: CameraState = { target: [10, 20, 0], distance: 100, yaw: 0.3, pitch: 0.4, projection: 'perspective', fovY: 0.7, roll: 0.1 };
+    const t = twoPointCamera(c)!;
+    expect(t.pitch).toBe(0);
+    expect(t.roll).toBeUndefined();
+    close(cameraEye(t), cameraEye(c), 1e-9);
+    expect(isTwoPoint(t)).toBe(true);
+    const f = computeFrame(t, 800, 600, { center: [0, 0, 0], radius: 500 });
+    const p = projectToScreen(f, c.target)!;
+    expect(p[0]).toBeCloseTo(400, 6);
+    expect(p[1]).toBeCloseTo(300, 6);
+    // 세로선의 두 점은 화면 x가 같다
+    const a = projectToScreen(f, [30, 40, 0])!;
+    const b = projectToScreen(f, [30, 40, 50])!;
+    expect(a[0]).toBeCloseTo(b[0], 6);
+    expect(twoPointCamera({ ...c, projection: 'orthographic' })).toBeNull();
+    expect(twoPointCamera({ ...c, pitch: 1.5 })).toBeNull();
+    // 파일의 2점 투시 카메라
+    const fromFile = cameraFromSkp(cam({ eye: [0, -100, 60], target: [0, 0, 0], up: [0, 0.5, 0.86], twoPoint: true }))!;
+    expect(fromFile.pitch).toBe(0);
+    // 눈보다 아래의 대상점을 가운데에 두려고 렌즈를 올린다(+)
+    expect(fromFile.shiftY).toBeGreaterThan(0);
+  });
+
+  it('시야각만 바꾸면 렌즈 이동도 tan 비로 맞추고, 걷기 눈높이는 5′6″', () => {
+    const c: CameraState = { target: [0, 0, 0], distance: 10, yaw: 0, pitch: 0, projection: 'perspective', fovY: 0.6, shiftY: 0.2 };
+    const w = withFov(c, 1.2);
+    expect(w.fovY).toBe(1.2);
+    expect(w.shiftY).toBeCloseTo((0.2 * Math.tan(0.3)) / Math.tan(0.6), 12);
+    expect(withFov({ ...c, shiftY: undefined }, 1).shiftY).toBeUndefined();
+    expect(eyeHeightFor('mm')).toBeCloseTo(1676.4, 9);
+    expect(eyeHeightFor('inch')).toBeCloseTo(66, 9);
+    expect(eyeHeightFor('m')).toBeCloseTo(1.6764, 9);
+    expect(eyeHeightFor('unknown')).toBeUndefined();
   });
 
   it('눈과 목표가 같거나 값이 이상하면 null', () => {
@@ -190,6 +264,36 @@ describe('단면', () => {
     expect(initialSection({ sectionPlanes: planes, style: { sectionCuts: false } })).toBeNull();
     expect(initialSection({ sectionPlanes: [{ ...planes[1], active: false }] })).toBeNull();
   });
+
+  it('여러 단면: 모형 단면 먼저, 그룹 안 단면은 노드를 달고, 같은 노드는 처음 것만', () => {
+    const planes = [
+      { name: '안쪽', plane: [1, 0, 0, 0], active: true, tag: '', hidden: false, node: 3, size: 10 },
+      { name: '모형', plane: [0, 1, 0, -5], active: true, tag: '', hidden: false, node: -1, size: 10 },
+      { name: '안쪽2', plane: [0, 0, 1, 0], active: true, tag: '', hidden: false, node: 3, size: 10 },
+      { name: '다른 그룹', plane: [0, 0, -1, 2], active: false, tag: '', hidden: false, node: 7, size: 10 },
+    ];
+    expect(activeSections([0, 1, 2, 3, 9], planes).map((s) => [s.index, s.plane.node])).toEqual([
+      [1, -1],
+      [0, 3],
+      [3, 7],
+    ]);
+    expect(initialSections({ sectionPlanes: planes }).map((s) => s.index)).toEqual([1, 0]);
+    expect(initialSections({ sectionPlanes: planes, style: { sectionCuts: false } })).toEqual([]);
+    const plan = pagePlan({ name: 'p', sectionPlanes: [0, 3] }, { sectionPlanes: planes });
+    expect(plan.sections.map((s) => s.index)).toEqual([0, 3]);
+    expect(plan.section).toBeNull();
+    expect(pagePlan({ name: 'q', sectionPlanes: [0], style: { sectionCuts: false } }, { sectionPlanes: planes }).sections).toEqual([]);
+  });
+});
+
+describe('단면 채우기(스타일)', () => {
+  it('스타일 값이 먼저, 없으면 SketchUp 2018 이상(또는 판을 모르면)만 채운다', () => {
+    expect(sectionFillOf({ sectionFill: false }, 26)).toBe(false);
+    expect(sectionFillOf({ sectionFill: true }, 8)).toBe(true);
+    expect(sectionFillOf({}, 17)).toBe(false);
+    expect(sectionFillOf(null, 18)).toBe(true);
+    expect(sectionFillOf(undefined, null)).toBe(true);
+  });
 });
 
 describe('스타일 → 그리기 방식', () => {
@@ -199,8 +303,11 @@ describe('스타일 → 그리기 방식', () => {
     expect(renderModeForStyle({ faceStyle: 'wireframe', xray: true })).toBe('wireframe');
     expect(renderModeForStyle({ faceStyle: 'shaded', xray: true })).toBe('xray');
     expect(renderModeForStyle({ faceStyle: 'textured' })).toBe('shadedEdges');
-    expect(renderModeForStyle({ faceStyle: 'monochrome', edges: false })).toBe('shaded');
-    expect(renderModeForStyle({ faceStyle: 'hiddenLine' })).toBe('shadedEdges');
+    expect(renderModeForStyle({ faceStyle: 'textured', edges: false })).toBe('shaded');
+    // 은선(1)·단색(5)·무늬 끈 음영은 코어 0.7.0 모드로
+    expect(renderModeForStyle({ faceStyle: 'monochrome', edges: false })).toBe('monochrome');
+    expect(renderModeForStyle({ faceStyle: 'hiddenLine' })).toBe('hiddenLine');
+    expect(renderModeForStyle({ faceStyle: 'shaded' })).toBe('noTexture');
     expect(renderModeForStyle({ edges: false })).toBe('shaded');
   });
 });
@@ -273,7 +380,7 @@ describe('장면 적용 계획', () => {
     expect([...p.hiddenNodes!]).toEqual([4, 9]);
     expect(p.setsSection).toBe(true);
     expect(p.section!.index).toBe(0);
-    expect(p.renderMode).toBe('shaded');
+    expect(p.renderMode).toBe('noTexture');
     // 단면을 기억하지만 모형 단면이 없으면 끈다
     const off = pagePlan({ name: '노드 단면', sectionPlanes: [1] }, { sectionPlanes: planes });
     expect(off.setsSection).toBe(true);

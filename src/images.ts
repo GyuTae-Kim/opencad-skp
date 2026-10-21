@@ -51,6 +51,11 @@ export interface SkpImageOptions {
   maxBytesEach?: number;
   /** 전체 크기 한도(풀었을 때 바이트) */
   maxTotalBytes?: number;
+  /**
+   * 진행(0~1). 2020 이하는 그림 자리를 찾으려고 모형 전체를 읽으므로 오래 걸린다(그 모형은 바로 이어 부르는
+   * skpToScene이 다시 읽지 않고 쓴다). 2021+ 꾸러미는 부르지 않는다
+   */
+  onProgress?: (fraction: number) => void;
 }
 
 export const MAX_IMAGE_COUNT = 600;
@@ -143,7 +148,14 @@ export function readSkpImages(bytes: Uint8Array, opts: SkpImageOptions = {}): Sk
   const header = readSkpHeader(bytes);
   if (!header) return out;
   if (header.container === 'mfc')
-    return mfcImages(bytes, mfcImageRefs(bytes, header), out, opts.maxCount ?? MAX_IMAGE_COUNT, opts.maxBytesEach ?? MAX_IMAGE_BYTES, opts.maxTotalBytes ?? MAX_IMAGE_TOTAL);
+    return mfcImages(
+      bytes,
+      mfcImageRefs(bytes, header, opts.onProgress),
+      out,
+      opts.maxCount ?? MAX_IMAGE_COUNT,
+      opts.maxBytesEach ?? MAX_IMAGE_BYTES,
+      opts.maxTotalBytes ?? MAX_IMAGE_TOTAL,
+    );
   const found = findSkpZipItems(bytes, header.bodyOffset);
   const dir = found.items;
   if (!dir) return out;

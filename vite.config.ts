@@ -1,6 +1,7 @@
 import { siteLocalization } from './tools/localization-plugin.mjs';
 import { defineConfig } from 'vitest/config';
 import { siteMetadata } from './tools/site-plugin.mjs';
+import { serviceWorker } from './tools/sw-plugin.mjs';
 
 /**
  * 앱 빌드·개발 서버와 시험 설정을 함께 둔다.
@@ -8,7 +9,7 @@ import { siteMetadata } from './tools/site-plugin.mjs';
  */
 export default defineConfig({
   base: './',
-  plugins: [siteLocalization(), siteMetadata()],
+  plugins: [siteLocalization(), siteMetadata(), serviceWorker()],
   build: {
     target: 'es2022',
     sourcemap: true,

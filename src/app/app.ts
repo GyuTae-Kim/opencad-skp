@@ -20,24 +20,38 @@ import {
   type SectionAxis,
   type ViewName,
 } from 'opencad-viewer3d';
-import { lerpCamera, type CameraState } from 'opencad-viewer3d/camera';
+import { lerpCamera, type CameraState, type ViewFrame } from 'opencad-viewer3d/camera';
 import { dragStartPx } from 'opencad-viewer3d/pointer';
 import { ParseClient } from './client';
-import { AnnotationLabels } from './annotations';
+import { AnnotationLabels, occludedBy } from './annotations';
+import { ExportDialog, type ExportContext } from './exporter';
+import { edgeGeometry } from './faces';
+import { copyText } from './clipboard';
 import { HISTORY_LIMIT, HISTORY_SETTLE_MS, ViewHistory } from './history';
 import { beginOpen, showAnalyticsSettings, trackExport, type OpenAttempt } from './analytics';
 import { MeasureTool, type MeasureMode, type MeasureToolResult } from './measure';
 import {
   baseFovOf,
-  initialSection,
+  activeSections,
+  initialSections,
   initialView,
+  type PageSection,
   openingPage,
   pagePlan,
+  nextSlide,
+  slideDurationMs,
+  slideshowOrder,
   refitSceneCamera,
   renderModeForStyle,
+  SHADED_MODES,
   restoreSceneCamera,
+  sectionFillOf,
+  eyeHeightFor,
+  isTwoPoint,
+  twoPointCamera,
+  freshDocCamera,
+  withFov,
   sameSceneFit,
-  sectionToViewer,
   stepPage,
   unwidenSceneCamera,
   type SceneFit,
@@ -49,6 +63,14 @@ import { h, icon } from './dom';
 import {
   canHideNode,
   createDoc,
+  faceOrEdgeSelection,
+  sectionIndexOfId,
+  sectionPlanesFor,
+  hiddenSelection,
+  tagColors,
+  partBox,
+  partOfPick,
+  selectedDefinitionNodes,
   docLabel,
   hiddenNodeRanges,
   isBigScene,
@@ -56,6 +78,8 @@ import {
   nodeSelection,
   pickDeepest,
   releaseName,
+  revealGhostRanges,
+  revealNodesFor,
   selectedNode,
   selectionForPick,
   selectionIds,
@@ -64,7 +88,9 @@ import {
   selectionText,
   selectionEntity,
   measureAxes,
+  measureLine,
   measureText,
+  pushMeasure,
   nodeHiddenForLabels,
   annotationShown,
   tagHidden,
@@ -73,17 +99,22 @@ import {
   type Selection,
   type SkpDoc,
 } from './doc';
-import { MAX_FILE_BYTES, SKP_ACCEPT, baseName, fmtCount, formatBytes, formatMs, stripExtension } from './format';
+import { MAX_FILE_BYTES, SKP_ACCEPT, baseName, fmtCount, formatBytes, formatMs } from './format';
 import { VIEW_KEY_OF, VIEW_MENU, isEditableTarget, isViewKey, keyAction } from './keys';
 import type { LaunchRequest } from './launch';
 import { PANEL_WIDTH_DEFAULT, SHEET_DEFAULT, clampPanelWidth, clampSheetFraction, readLayout, storeLayout, type StoredLayout } from './layout';
 import { Panel, type PanelHost } from './panel';
-import { RecentStore, canKeepRecent, recentTimeText, type RecentEntry } from './recent';
+import { RecentStore, canKeepRecent, nameOfRecentId, recentTimeText, type RecentEntry } from './recent';
 import { errorText, sceneHasGeometry } from './protocol';
 import { deviceHints, textureLimitsFor, type TextureLimits } from './texlimits';
 import { THEME_CHOICES, applyThemeChoice, readStoredTheme, resolveTheme, storeTheme, systemPrefersDark, themeChoiceOf, type ThemeChoice, type ThemeName } from './theme';
-import { childrenOf, isAncestor, isSplit, nodeBox, nodePath, type PickMode } from './tree';
+import { childrenOf, isAncestor, isSplit, nodeBox, nodePath, normalizeRanges, type PickMode } from './tree';
 import { cameraForBox, keepViewOnHeightChange } from './view';
+import { cssHex, isLightBackground, loadFileBackground, safeStorage, skyBackground, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
+import type { BackgroundOptions } from 'opencad-viewer3d';
+import type { Rgb, SkpShadowMeta, SkpStyleMeta } from '../meta';
+import { fogFor, lightingForShadow, shadowOrDefault, sunForShadow, usesSun } from './sun';
+import { WalkStick } from './joystick';
 
 export const APP_TITLE = 'OpenCAD SketchUp 뷰어';
 const TOOLS_URL = 'https://gyutae-kim.github.io/opencad';
@@ -93,10 +124,15 @@ export const NARROW_WIDTH = 760;
 /** 뷰 큐브 한 변(CSS 화소): 넓은 화면 · 좁은 화면 */
 export const VIEW_CUBE_WIDE = 112;
 export const VIEW_CUBE_NARROW = 76;
+/** 정의의 인스턴스 모두에 맞춰 볼 때 범위를 셀 노드 수 한도 */
+const MAX_FIT_NODES = 5000;
 
 const RENDER_MODES: [RenderMode, string, string][] = [
   ['shaded', '음영', 'shaded'],
   ['shadedEdges', '음영+모서리', 'shadedEdges'],
+  ['noTexture', '무늬 없음', 'noTexture'],
+  ['monochrome', '단색', 'monochrome'],
+  ['hiddenLine', '숨은 선', 'hiddenLine'],
   ['wireframe', '와이어프레임', 'wireframe'],
   ['xray', 'X-ray', 'xray'],
 ];
@@ -147,12 +183,45 @@ export interface AppSnapshot {
   pages: number;
   page: number | null;
   fileSection: number | null;
+  /** 적용한 파일 단면 모두 · 코어 단면 평면 수 */
+  fileSections: number[];
+  sectionPlanes: number;
   /** 숨긴 태그(실제 숨김) · 숨긴 나무 노드 수 · 글·치수 라벨 수(그린 것) */
   hiddenTags: string[];
   hiddenNodes: number;
   labels: number;
+  /** 형상에 가려 숨긴 라벨 수(카메라가 멈춘 뒤 판정) */
+  labelsOccluded: number;
   /** 측정 도구(줄자·각도기, 꺼져 있으면 null) */
   measureMode: MeasureMode | null;
+  /** 고른 것의 종류(outline·node·material·item·face·edge, 없으면 null) */
+  selectionKind: Selection['kind'] | null;
+  /** 장면 재생 중인지 */
+  slideshow: boolean;
+  /** 파일·장면 스타일 배경 색 쓰기(사용자 설정)와 지금 3D 배경(파일 색이면 #rrggbb, 앱 테마면 null) */
+  fileBackground: boolean;
+  background: string | null;
+  /** 잘린 면 채우기(닫힌 입체) */
+  sectionFill: boolean;
+  /** 하늘·지면 바탕을 그리는지 */
+  sky: boolean;
+  /** 그림자·안개를 켰는지, 해 조명을 쓰는지, 지금 해 고도·방위(도) */
+  shadows: boolean;
+  fog: boolean;
+  lit: boolean;
+  /** 걷는 중인지·코어 조작 방식·세로 시야각(도)·2점 투시·카메라 띠·조이스틱이 보이는지 */
+  walking: boolean;
+  navigation: 'orbit' | 'walk';
+  fov: number | null;
+  twoPoint: boolean;
+  camBar: boolean;
+  joystick: boolean;
+  sun: { elevation: number; azimuth: number } | null;
+  /** 외곽선·태그 색으로 칠하기 */
+  profiles: boolean;
+  /** 뒤 모서리(숨은 선 방식의 점선) */
+  backEdges: boolean;
+  colorByTag: boolean;
 }
 
 interface Els {
@@ -164,6 +233,7 @@ interface Els {
   projBtns: Map<Projection, HTMLButtonElement>;
   modeBtns: Map<RenderMode, HTMLButtonElement>;
   gridBtn: HTMLButtonElement;
+  bgBtn: HTMLButtonElement;
   cubeBtn: HTMLButtonElement;
   axesBtn: HTMLButtonElement;
   measureBtn: HTMLButtonElement;
@@ -174,6 +244,7 @@ interface Els {
   secBtns: Map<SectionAxis | 'off', HTMLButtonElement>;
   secRange: HTMLInputElement;
   secFlip: HTMLButtonElement;
+  secFill: HTMLButtonElement;
   workspace: HTMLElement;
   viewHost: HTMLElement;
   start: HTMLElement;
@@ -194,8 +265,20 @@ interface Els {
   measureBar: HTMLElement;
   measureText: HTMLElement;
   measureClear: HTMLButtonElement;
+  measureCopy: HTMLButtonElement;
+  measureLogBtn: HTMLButtonElement;
+  measureLog: HTMLElement;
+  measureFlash: HTMLElement;
+  updateBar: HTMLElement;
   selBar: HTMLElement;
   selText: HTMLElement;
+  selPart: HTMLButtonElement;
+  camBar: HTMLElement;
+  camText: HTMLElement;
+  fovRange: HTMLInputElement;
+  fovValue: HTMLElement;
+  walkBtn: HTMLButtonElement;
+  twoPointBtn: HTMLButtonElement;
 }
 
 interface MenuItem {
@@ -242,6 +325,18 @@ export class SkpViewerApp implements PanelHost {
   private userMoved = false;
   /** 구간을 숨겨 둔 항목 id(다음에 바뀌면 풀려고)와 지금 숨긴 구간(항목 차례 → 구간) */
   private rangedIds = new Set<string>();
+  /** 그림 저장 창 */
+  private exportDialog: ExportDialog | null = null;
+  /** 최근 측정(새것이 앞)·측정 띠 알림 타이머 */
+  private measureLog: MeasureToolResult[] = [];
+  private flashTimer = 0;
+  /** 곡선(묶음 차례#곡선 번호) → 중심(측정 "중심" 추정, 문서마다) */
+  private curveCenters = new Map<string, [number, number, number] | null>();
+  /** 파일·장면 스타일 배경 쓰기(사용자 설정)와 지금 스타일의 배경 색 */
+  private fileBg = loadFileBackground(safeStorage());
+  private styleBg: Rgb | null = null;
+  /** 스타일의 하늘·지면(코어 하늘·땅 기울기 바탕, 없으면 null) */
+  private styleSky: BackgroundOptions | null = null;
   private hiddenRanges = new Map<number, IndexRange[]>();
   /** 나눠 올리기가 끝나면 부를 것(새 문서로 바뀌면 바로 부른다) */
   private uploadDone: (() => void) | null = null;
@@ -343,13 +438,14 @@ export class SkpViewerApp implements PanelHost {
     ]);
     const modeBtns = new Map<RenderMode, HTMLButtonElement>(RENDER_MODES.map(([m, label, ico]) => [m, tbtn(label, ico, `그리기: ${label}`, () => this.setRenderMode(m))]));
     const gridBtn = tbtn('격자', 'grid', '바닥 격자 (F7)', () => this.toggleGrid());
+    const bgBtn = tbtn('배경', 'backdrop', '파일 스타일의 배경 색·하늘·지면으로 보기(끄면 앱 테마 배경)', () => this.setFileBackground(!this.fileBg));
     const cubeBtn = tbtn('뷰 큐브', 'cube', '뷰 큐브 보이기', () => this.toggleCube());
     const axesBtn = tbtn('좌표축', 'axes', '좌표축 보이기', () => this.toggleAxes());
     const measureBtn = tbtn('줄자', 'tape', '줄자 (T): 두 점 거리 — 끝점·중간점·모서리·면에 붙고, 축 방향이면 축에 고정 · Esc 지우기', () => this.toggleMeasure());
     const protractorBtn = tbtn('각도기', 'protractor', '각도기: 중심 → 기준 방향 → 잴 방향(Shift = 평면 고정) · Esc 지우기', () => this.toggleProtractor());
-    const pngBtn = tbtn('PNG 저장', 'image', '지금 화면을 PNG 그림으로 저장', () => void this.savePng(), 'compact wide-only');
+    const pngBtn = tbtn('그림 저장', 'image', '지금 화면을 그림으로 저장·공유·인쇄(크기·투명 배경·글과 측정 넣기)', () => this.savePng(), 'compact wide-only');
     const panelBtn = tbtn('패널', 'panel', '패널 열기·닫기', () => this.setPanelOpen(!this.panelOpen));
-    // 단면 보기: 끔·X·Y·Z, 위치 슬라이더(장면 범위 안 0~1), 뒤집기. 잘린 면은 채우지 않고 테두리만(SKP는 입체 여부를 모른다)
+    // 단면 보기: 끔·X·Y·Z, 위치 슬라이더(장면 범위 안 0~1), 뒤집기, 잘린 면 채우기(해석기가 닫힌 입체로 가린 그물만 — capGroup)
     const axisBtn = (axis: SectionAxis): HTMLButtonElement => {
       const b = h('button', { class: 'tbtn sec-axis', type: 'button', title: `${axis.toUpperCase()}축에 수직인 단면(+${axis.toUpperCase()} 쪽을 잘라 냄)`, 'aria-label': `${axis.toUpperCase()}축 단면` }, axis.toUpperCase());
       b.addEventListener('click', () => this.setSectionAxis(axis));
@@ -364,6 +460,7 @@ export class SkpViewerApp implements PanelHost {
     const secRange = h('input', { class: 'sec-range', type: 'range', min: '0', max: '1000', step: '1', value: '500', 'aria-label': '단면 위치', title: '단면 위치(장면 범위 안)' });
     secRange.addEventListener('input', () => this.viewer?.setSectionPosition(Number(secRange.value) / 1000));
     const secFlip = tbtn('뒤집기', 'flip', '자르는 쪽 뒤집기', () => this.flipSection(), 'icon-only sec-flip');
+    const secFill = tbtn('채우기', 'fill', '잘린 면 채우기(닫힌 입체 — 파일 스타일의 단면 채우기를 따름)', () => this.setSectionFill(!this.sectionFill), 'icon-only sec-fill');
     // 좁은 화면(휴대폰): 보기·측정에 쓰는 단추만 한 줄에 두고, 단면 축과 나머지 보기 설정은 메뉴로 모은다
     const menuBtn = (label: string, ico: string, title: string): HTMLButtonElement =>
       h('button', { class: 'tbtn narrow-only', type: 'button', title, 'aria-label': title, 'aria-haspopup': 'menu', 'aria-expanded': 'false', html: `${icon(ico)}<span class="lbl">${label}</span>` });
@@ -371,7 +468,9 @@ export class SkpViewerApp implements PanelHost {
     const secBadge = h('b', { class: 'sec-badge', hidden: true });
     secMenuBtn.append(secBadge);
     secMenuBtn.addEventListener('click', () => this.toggleSectionMenu());
-    const moreBtn = menuBtn('보기 설정', 'sliders', '보기 설정');
+    // 보기 설정: 외곽선·태그 색·그림자·안개·걷기·시야각·2점 투시(넓은 화면도), 휴대폰은 도구 막대에 없는 보기 단추까지
+    const moreBtn = menuBtn('보기 설정', 'sliders', '보기 설정(외곽선·태그 색·그림자·안개·걷기·시야각·2점 투시)');
+    moreBtn.classList.remove('narrow-only');
     moreBtn.addEventListener('click', () => this.toggleMoreMenu());
     const toolbar = h(
       'div',
@@ -382,11 +481,11 @@ export class SkpViewerApp implements PanelHost {
       sep(),
       h('div', { class: 'tgroup seg wide-only', role: 'group', 'aria-label': '그리기 방식' }, ...modeBtns.values()),
       sep(),
-      h('div', { class: 'tgroup compact wide-only' }, gridBtn, cubeBtn, axesBtn),
+      h('div', { class: 'tgroup compact wide-only' }, gridBtn, cubeBtn, axesBtn, bgBtn),
       sep(),
       h('div', { class: 'tgroup' }, measureBtn, protractorBtn, pngBtn),
       sep(),
-      h('div', { class: 'tgroup sec-group', role: 'group', 'aria-label': '단면 보기' }, secMenuBtn, h('div', { class: 'tgroup seg wide-only' }, ...secBtns.values()), secRange, secFlip),
+      h('div', { class: 'tgroup sec-group', role: 'group', 'aria-label': '단면 보기' }, secMenuBtn, h('div', { class: 'tgroup seg wide-only' }, ...secBtns.values()), secRange, secFlip, secFill),
       moreBtn,
       h('span', { class: 'spacer' }),
       h('div', { class: 'tgroup' }, panelBtn),
@@ -420,15 +519,70 @@ export class SkpViewerApp implements PanelHost {
     measureClear.addEventListener('click', () => this.measureTool?.clear());
     const measureClose = h('button', { class: 'mb-btn icon', type: 'button', title: '측정 끝내기', 'aria-label': '측정 끝내기', html: icon('close', 16) });
     measureClose.addEventListener('click', () => this.setMeasureMode(null));
-    const measureBar = h('div', { class: 'measure-bar', role: 'status', hidden: true }, measureText, h('div', { class: 'mb-acts' }, measureClear, measureClose));
+    // 지금 결과 복사·최근 측정 기록(새것부터 10개, 줄마다 복사)
+    const measureCopy = h('button', { class: 'mb-btn icon', type: 'button', title: '지금 결과 글 복사', 'aria-label': '지금 결과 글 복사', html: icon('copy', 16) });
+    measureCopy.addEventListener('click', () => this.copyMeasure('current'));
+    const measureLogBtn = h('button', { class: 'mb-btn icon', type: 'button', title: '최근 측정 기록', 'aria-label': '최근 측정 기록', html: icon('list', 16) });
+    measureLogBtn.addEventListener('click', () => this.toggleMeasureLog());
+    const measureLogEl = h('div', { class: 'measure-log', hidden: true });
+    const measureFlash = h('div', { class: 'measure-flash', role: 'status', hidden: true });
+    const measureBar = h(
+      'div',
+      { class: 'measure-bar', role: 'status', hidden: true },
+      measureText,
+      h('div', { class: 'mb-acts' }, measureCopy, measureLogBtn, measureClear, measureClose),
+      measureLogEl,
+      measureFlash,
+    );
     // 고른 것 카드(휴대폰·터치): 패널을 열지 않고 고른 그룹·컴포넌트의 크기·태그를 보이고, 자세히(선택 탭)·선택 해제 단추를 둔다
     const selText = h('div', { class: 'mb-text' });
+    // 그룹을 고른 뒤 누른 면·모서리 하나만(면 넓이·모서리 길이) — 휴대폰에서 패널을 열지 않고
+    const selPart = h('button', { class: 'mb-btn', type: 'button', title: '누른 면 하나의 넓이(모서리면 길이)만 보기', hidden: true, html: `${icon('face', 16)}<span class="mb-part">면만</span>` });
+    selPart.addEventListener('click', () => this.selectPickedPart());
     const selMore = h('button', { class: 'mb-btn', type: 'button', title: '패널의 선택 탭에서 전체 정보 보기', html: `${icon('panel', 16)}<span>자세히</span>` });
     selMore.addEventListener('click', () => this.showEntityTab());
     const selClose = h('button', { class: 'mb-btn icon', type: 'button', title: '선택 해제', 'aria-label': '선택 해제', html: icon('close', 16) });
     selClose.addEventListener('click', () => this.applySelection(null, false));
-    const selBar = h('div', { class: 'measure-bar sel-bar', role: 'status', hidden: true }, selText, h('div', { class: 'mb-acts' }, selMore, selClose));
-    const stage = h('div', { class: 'stage' }, viewHost, sceneTabs, measureBar, selBar, start, notice, busy);
+    const selBar = h('div', { class: 'measure-bar sel-bar', role: 'status', hidden: true }, selText, h('div', { class: 'mb-acts' }, selPart, selMore, selClose));
+    // 카메라 띠: 걷기(1인칭)·시야각·2점 투시(보기 설정 메뉴로 연다, 걸으면 늘 보인다). 휴대폰은 걷는 동안 왼쪽 아래에 조이스틱
+    const camText = h('div', { class: 'mb-text cam-text' });
+    const fovRange = h('input', { class: 'fov-range', type: 'range', min: '10', max: '120', step: '1', value: '35', 'aria-label': '시야각(도)', title: '세로 시야각(도)' });
+    fovRange.addEventListener('input', () => this.setFov(Number(fovRange.value)));
+    const fovValue = h('span', { class: 'fov-value' });
+    const walkBtn = h('button', { class: 'mb-btn', type: 'button', title: '걷기(1인칭): 눈 자리에서 둘러보고 걷기', 'aria-pressed': 'false', html: `${icon('walk', 16)}<span>걷기</span>` });
+    walkBtn.addEventListener('click', () => this.setWalk(!this.walking));
+    const twoPointBtn = h('button', { class: 'mb-btn', type: 'button', title: '2점 투시: 세로선을 곧게(수평으로 보고 렌즈를 위아래로 옮김)', 'aria-pressed': 'false' }, '2점 투시');
+    twoPointBtn.addEventListener('click', () => this.setTwoPoint(!this.twoPointOn));
+    const camClose = h('button', { class: 'mb-btn icon', type: 'button', title: '카메라 띠 닫기(걷기 끝내기)', 'aria-label': '카메라 띠 닫기', html: icon('close', 16) });
+    camClose.addEventListener('click', () => this.closeCamBar());
+    const camBar = h(
+      'div',
+      { class: 'measure-bar cam-bar', role: 'group', 'aria-label': '카메라', hidden: true },
+      camText,
+      h('label', { class: 'fov' }, h('span', { class: 'fov-label' }, '시야각'), fovRange, fovValue),
+      h('div', { class: 'mb-acts' }, walkBtn, twoPointBtn, camClose),
+    );
+    this.stick = new WalkStick((i) => this.viewer?.setWalkInput(i));
+    // 새 판 알림(서비스 워커가 새 판을 받아 기다릴 때)
+    const updLater = h('button', { class: 'mini-btn', type: 'button' }, '나중에');
+    const updateBar = h(
+      'div',
+      { class: 'update-bar', role: 'status', hidden: true },
+      h('span', {}, '새 버전이 있습니다. 새로 고치면 열어 둔 파일은 최근 문서에서 다시 엽니다.'),
+      h('button', { class: 'mini-btn primary upd-apply', type: 'button' }, '새로 고침'),
+      updLater,
+    );
+    updLater.addEventListener('click', () => (updateBar.hidden = true));
+    const stage = h('div', { class: 'stage' }, viewHost, sceneTabs, measureBar, selBar, camBar, this.stick.el, start, notice, busy, updateBar);
+    this.exportDialog = new ExportDialog(
+      {
+        docName: () => this.doc?.name ?? 'model',
+        context: () => this.exportContext(),
+        notify: (e) => this.showNotice('error', '그림을 저장하지 못했습니다', errorText(e)),
+        track: () => trackExport('png'),
+      },
+      stage,
+    );
     const resizer = h('div', {
       class: 'resizer',
       role: 'separator',
@@ -465,6 +619,7 @@ export class SkpViewerApp implements PanelHost {
       projBtns,
       modeBtns,
       gridBtn,
+      bgBtn,
       cubeBtn,
       axesBtn,
       measureBtn,
@@ -475,6 +630,7 @@ export class SkpViewerApp implements PanelHost {
       secBtns,
       secRange,
       secFlip,
+      secFill,
       workspace,
       viewHost,
       start,
@@ -495,8 +651,20 @@ export class SkpViewerApp implements PanelHost {
       measureBar,
       measureText,
       measureClear,
+      measureCopy,
+      measureLogBtn,
+      measureLog: measureLogEl,
+      measureFlash,
+      updateBar,
       selBar,
       selText,
+      selPart,
+      camBar,
+      camText,
+      fovRange,
+      fovValue,
+      walkBtn,
+      twoPointBtn,
     };
 
     this.bindWindow();
@@ -547,8 +715,8 @@ export class SkpViewerApp implements PanelHost {
         h(
           'ul',
           { class: 'facts' },
-          h('li', {}, h('b', {}, '지원 형식 '), 'SketchUp 7·8·2013~2026에서 저장한 파일 (확장자 .skp)'),
-          h('li', { class: 'muted' }, h('b', {}, '아직 못 읽음 '), 'SketchUp 3~6에서 저장한 아주 옛 파일(형식이 달라 판만 알려 드립니다)'),
+          h('li', {}, h('b', {}, '지원 형식 '), 'SketchUp 6·7·8·2013~2026에서 저장한 파일 (확장자 .skp)'),
+          h('li', { class: 'muted' }, h('b', {}, '아직 못 읽음 '), 'SketchUp 3~5에서 저장한 아주 옛 파일(형식이 달라 판만 알려 드립니다)'),
           h('li', {}, h('span', { class: 'lock', html: icon('lock', 15) }), h('b', {}, '파일은 이 브라우저 밖으로 나가지 않습니다. '), '서버로 올리지 않고 이 컴퓨터에서 읽습니다.'),
         ),
         h('p', { class: 'keys fine-only' }, '왼쪽 끌기 돌리기 · 오른쪽 끌기 옮기기 · 휠 확대 · F 전체 보기 · 1~7 표준 뷰 · F7 격자'),
@@ -801,7 +969,7 @@ export class SkpViewerApp implements PanelHost {
         this.showNotice(
           'warn',
           `아직 읽지 못하는 판입니다: ${releaseName(old)} (${old})`,
-          `"${name}" 파일은 SketchUp 3~6의 아주 옛 형식으로 저장되어 있습니다. 이 뷰어는 SketchUp 7·8·2013~2026 파일을 읽습니다. SketchUp 7 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.`,
+          `"${name}" 파일은 SketchUp 3~5의 아주 옛 형식으로 저장되어 있습니다. 이 뷰어는 SketchUp 6·7·8·2013~2026 파일을 읽습니다. SketchUp 6 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.`,
         );
         return false;
       }
@@ -846,9 +1014,20 @@ export class SkpViewerApp implements PanelHost {
       return Promise.resolve();
     }
     this.closeNotice();
-    // 앞 장면이 세로 화면에 맞춰 넓힌 시야각은 원래대로(새 문서의 전체 보기·카메라가 넓은 시야각을 물려받지 않게)
-    const fov = this.sceneBaseFov(v);
-    if (fov !== v.getCamera().fovY) v.setCamera({ ...v.getCamera(), fovY: fov });
+    this.stopSlideshow();
+    this.exportDialog?.close();
+    // 걷기·2점 투시는 새 문서에서 끈다(카메라 띠는 열려 있으면 그대로)
+    if (this.walking) {
+      this.walking = false;
+      v.setNavigation('orbit');
+    }
+    this.twoPointOn = false;
+    this.curveCenters.clear();
+    this.measureLog = [];
+    // 앞 장면이 세로 화면에 맞춰 넓힌 시야각은 원래대로, 앞 문서의 굴림·렌즈 이동(2점 투시)은 없앤다
+    // (카메라가 없는 새 문서의 전체 보기가 넓은 시야각·기운 화면·옮긴 렌즈를 물려받지 않게)
+    const fresh = freshDocCamera(v.getCamera(), this.sceneBaseFov(v));
+    if (fresh) v.setCamera(fresh);
     this.sceneFit = null;
     const old = this.doc;
     this.doc = d;
@@ -894,11 +1073,19 @@ export class SkpViewerApp implements PanelHost {
       this.renderMode = mode;
       v.setRenderMode(mode);
     }
-    const sec = initialSection(d.scene.meta);
-    if (sec) {
-      v.setSection({ normal: sec.normal, offset: sec.offset }, { caps: 'closed' });
-      d.fileSection = sec.index;
-    }
+    // 스타일의 외곽선·태그 색(장면을 올리면 겉모습이 풀린다)
+    this.applyStyleLooks(d.style, true);
+    // 해 조명·그림자(파일의 그림자 보이기·해로 음영)와 안개(스타일)
+    this.activeShadow = d.shadow;
+    this.shadowsOn = d.shadow?.display === true;
+    this.fogStyle = d.style;
+    this.fogOn = d.style?.fog === true;
+    this.applyLighting();
+    // 잘린 면 채우기: 모형 스타일의 단면 채우기(장면 스타일이 바꿀 수 있다)
+    this.sectionFill = sectionFillOf(d.style, d.info.major);
+    // 활성 단면 모두(모형 단면은 모형 전체, 그룹 안 단면은 그 그룹만)
+    const secs = initialSections(d.scene.meta);
+    if (secs.length) this.applyFileSections(secs);
     const first = initialView(d.scene.meta, d.scene.bounds, v.canvas.clientWidth, v.canvas.clientHeight, v.getCamera().fovY);
     if (first) {
       v.setCamera(first.camera);
@@ -907,6 +1094,10 @@ export class SkpViewerApp implements PanelHost {
       this.userMoved = true;
     }
     d.page = openingPage(d.scene.meta);
+    // 배경: 모형 스타일의 배경 색(장면을 고르면 그 장면 스타일의 색으로 바뀐다)
+    this.styleBg = styleBackground(d.style);
+    this.styleSky = skyBackground(d.style);
+    this.applyTheme();
     this.labels?.setData(d.texts, d.dimensions, d.scene.units, d.units);
     this.refreshAnnotations();
     if (old && old !== d) revokeImages(old);
@@ -933,7 +1124,7 @@ export class SkpViewerApp implements PanelHost {
     if (this.viewer) return this.viewer;
     try {
       const v = new Viewer3d(this.els.viewHost, {
-        theme: this.theme,
+        theme: viewerTheme(this.theme, this.backdrop),
         projection: this.projection,
         renderMode: this.renderMode,
         viewCubeSize: this.viewCubeSize(),
@@ -952,6 +1143,8 @@ export class SkpViewerApp implements PanelHost {
       this.overlay = new Overlay(this.els.viewHost);
       this.overlay.attach(v);
       this.labels = new AnnotationLabels(this.overlay);
+      // 형상 뒤의 글·치수는 숨긴다(카메라가 멈추면 라벨 기준점에서 코어 고르기로 판정)
+      this.labels.setOcclusion((p, x, y, f) => this.labelOccluded(p, x, y, f));
       this.measureTool = new MeasureTool(v, this.overlay, {
         getScene: () => this.doc?.scene ?? null,
         getUnits: () => this.doc?.units ?? DEFAULT_UNITS,
@@ -962,6 +1155,12 @@ export class SkpViewerApp implements PanelHost {
           this.panel.refreshSelection();
         },
         touch: () => !!this.coarseQuery?.matches,
+        curveCenter: (id, seg) => this.curveCenter(id, seg),
+        // 모형의 그리기 축을 옮겼으면 줄자·각도기의 축 고정·기본 평면이 그 축을 따른다
+        getAxes: () => {
+          const a = this.doc?.axes;
+          return a ? { x: a.x, y: a.y, z: a.z } : null;
+        },
       });
       return v;
     } catch (e) {
@@ -982,13 +1181,18 @@ export class SkpViewerApp implements PanelHost {
     let down: { x: number; y: number } | null = null;
     cv.addEventListener('pointerdown', (e) => {
       down = { x: e.clientX, y: e.clientY };
+      // 3D를 만지면 장면 재생을 멈춘다(SketchUp처럼)
+      this.stopSlideshow();
     });
     cv.addEventListener('pointermove', (e) => {
       // 코어와 같은 끌기 시작 거리(터치 10화소): 그 안의 손가락 떨림은 누르기라 보기를 움직이지 않는다
       if (down && e.buttons && Math.hypot(e.clientX - down.x, e.clientY - down.y) >= dragStartPx(e.pointerType)) this.userMoved = true;
     });
     cv.addEventListener('pointerup', () => (down = null));
-    cv.addEventListener('wheel', () => (this.userMoved = true), { passive: true });
+    cv.addEventListener('wheel', () => {
+      this.userMoved = true;
+      this.stopSlideshow();
+    }, { passive: true });
     // 뷰 큐브를 누르면 표준 뷰 + 전체 보기
     const cube = v.host.querySelector<HTMLElement>('.v3d-cube');
     cube?.addEventListener('pointerdown', () => (this.userMoved = false));
@@ -1029,6 +1233,8 @@ export class SkpViewerApp implements PanelHost {
     if (!d) return;
     // 줄자·각도기가 켜져 있으면 누르기는 측정 점이다(코어는 같은 누르기로 고르기를 따로 알린다)
     if (this.measureTool?.active) return;
+    // 걷는 중 누르기는 고르지 않는다(두 번 누르기는 코어가 그 자리에 서는 데 쓰고 두 번째는 알리지 않는다 — 그룹에 들어가지 않게)
+    if (this.walking) return;
     // 단면에서 잘린 면(채운 면)은 형상이 아니므로 고르기에서 무시한다
     if (p?.section) return;
     if (e?.clicks === 2 && this.enterLevel(p)) return;
@@ -1045,6 +1251,8 @@ export class SkpViewerApp implements PanelHost {
         }
     if (opened && d.panelTab === 'outline') this.panel.rerender();
     this.applySelection(sel, true);
+    // 면·모서리 방식에서 두 번 누르면 그 면·모서리에 맞춰 본다
+    if (e?.clicks === 2 && (sel?.kind === 'face' || sel?.kind === 'edge')) this.zoomToSelection();
   }
 
   /** 3D에서 두 번 누르기: 고른 그룹·컴포넌트를 펼치고, 누른 곳을 품은 바로 안쪽 항목을 고른다. 들어갔으면 true */
@@ -1069,8 +1277,65 @@ export class SkpViewerApp implements PanelHost {
     const d = this.doc;
     if (!d) return;
     d.measure = m;
+    this.measureLog = pushMeasure(this.measureLog, m);
     this.panel.refreshSelection();
     this.refreshStatus();
+  }
+
+  /** 최근 측정(새것이 앞, PanelHost) */
+  get measureLogList(): readonly MeasureToolResult[] {
+    return this.measureLog;
+  }
+
+  /** 측정 결과 글 복사: 차례(기록 안), 'all'(기록 전부, 한 줄씩), 'current'(지금 결과) */
+  copyMeasure(which: number | 'all' | 'current'): void {
+    const d = this.doc;
+    if (!d) return;
+    const mm = mmPerSceneUnit(d.scene.units);
+    const list = which === 'all' ? this.measureLog : which === 'current' ? (d.measure ? [d.measure] : []) : this.measureLog.slice(which, which + 1);
+    if (!list.length) return;
+    const text = list.map((m) => measureLine(m, d.units, mm)).join('\n');
+    void copyText(text).then((ok) => this.flashMeasure(ok ? '복사했습니다' : '복사하지 못했습니다'));
+  }
+
+  clearMeasureLog(): void {
+    this.measureLog = [];
+    this.els.measureLog.hidden = true;
+    this.panel.refreshSelection();
+    this.refreshStatus();
+  }
+
+  /** 측정 띠에 잠깐 알림(복사 등) */
+  private flashMeasure(text: string): void {
+    const el = this.els.measureFlash;
+    el.textContent = text;
+    el.hidden = false;
+    clearTimeout(this.flashTimer);
+    this.flashTimer = window.setTimeout(() => (el.hidden = true), 1600);
+  }
+
+  /** 측정 기록 펼치기(측정 띠 위 목록) */
+  private toggleMeasureLog(): void {
+    const el = this.els.measureLog;
+    el.hidden = !el.hidden;
+    if (!el.hidden) this.renderMeasureLog();
+  }
+
+  private renderMeasureLog(): void {
+    const d = this.doc;
+    const el = this.els.measureLog;
+    if (!d || el.hidden) return;
+    const mm = mmPerSceneUnit(d.scene.units);
+    const rows = this.measureLog.map((m, i) => {
+      const b = h('button', { class: 'ml-row', type: 'button', title: '눌러서 이 결과 복사' }, h('span', { 'data-i18n-skip': '' }, measureLine(m, d.units, mm)), h('span', { class: 'ml-copy', html: icon('copy', 14) }));
+      b.addEventListener('click', () => this.copyMeasure(i));
+      return b;
+    });
+    const all = h('button', { class: 'mini-btn', type: 'button' }, '모두 복사');
+    all.addEventListener('click', () => this.copyMeasure('all'));
+    const clear = h('button', { class: 'mini-btn', type: 'button' }, '기록 지우기');
+    clear.addEventListener('click', () => this.clearMeasureLog());
+    el.replaceChildren(h('div', { class: 'ml-head' }, h('b', {}, `최근 측정 ${fmtCount(this.measureLog.length)}개`)), ...rows, h('div', { class: 'pbar ml-acts' }, all, clear));
   }
 
   /** 목록에서 고르기(PanelHost) */
@@ -1103,12 +1368,58 @@ export class SkpViewerApp implements PanelHost {
     return item < s.meshes.length ? s.meshes[item]!.id : (s.lines[item - s.meshes.length]?.id ?? '');
   }
 
+  /** 측정 도구 "중심" 추정: 선분이 든 호·원의 중심(곡선 번호마다 한 번 재어 둔다 — 곡선 선분을 모으려고 묶음 전체를 훑는다) */
+  private curveCenter(id: string, seg: number): [number, number, number] | null {
+    const d = this.doc;
+    const item = d?.lineIndex.get(id);
+    if (!d || item === undefined) return null;
+    const curves = d.faceIndex.segmentCurves[item];
+    const no = curves?.[seg];
+    if (!curves || no === undefined || no < 0) return null;
+    const key = `${item}#${no}`;
+    let c = this.curveCenters.get(key);
+    if (c === undefined) {
+      const line = d.scene.lines[item];
+      c = (line ? edgeGeometry(line, curves, seg)?.center : null) ?? null;
+      this.curveCenters.set(key, c);
+    }
+    return c;
+  }
+
+  /** 마지막으로 3D에서 누른 자리의 면·모서리 하나를 고른다(PanelHost, 고른 것 카드) */
+  selectPickedPart(): void {
+    const d = this.doc;
+    const part = d ? faceOrEdgeSelection(d, d.pick) : null;
+    if (part) this.applySelection(part, false);
+  }
+
   zoomToSelection(): void {
     const d = this.doc;
     const v = this.viewer;
     if (!d || !v) return;
     this.unwidenScene();
     const sel = d.selection;
+    const pb = partBox(d, sel);
+    if (pb) {
+      this.animateCamera(cameraForBox(v.getCamera(), pb, v.canvas.clientWidth / Math.max(1, v.canvas.clientHeight)));
+      return;
+    }
+    // 정의의 인스턴스 모두: 보이는 노드 범위를 합친다(많으면 앞의 MAX_FIT_NODES개)
+    const defNodes = selectedDefinitionNodes(d, sel);
+    if (defNodes.length && d.tree) {
+      const lo: [number, number, number] = [Infinity, Infinity, Infinity];
+      const hi: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+      for (const n of defNodes.slice(0, MAX_FIT_NODES)) {
+        const b = nodeBox(d.tree, d.scene, n, (item) => v.isVisible(this.itemId(item)), this.hiddenRanges);
+        if (!b) continue;
+        for (let k = 0; k < 3; k++) {
+          lo[k] = Math.min(lo[k]!, b.min[k]!);
+          hi[k] = Math.max(hi[k]!, b.max[k]!);
+        }
+      }
+      if (lo[0] <= hi[0]) this.animateCamera(cameraForBox(v.getCamera(), { min: lo, max: hi }, v.canvas.clientWidth / Math.max(1, v.canvas.clientHeight)));
+      return;
+    }
     if (sel?.kind === 'node' && d.tree && !isSplit(d.tree, sel.index)) {
       const box = nodeBox(d.tree, d.scene, sel.index, (item) => v.isVisible(this.itemId(item)), this.hiddenRanges);
       if (box) this.animateCamera(cameraForBox(v.getCamera(), box, v.canvas.clientWidth / Math.max(1, v.canvas.clientHeight)));
@@ -1218,6 +1529,13 @@ export class SkpViewerApp implements PanelHost {
 
   /** 카메라가 바뀔 때: 보기 기록(멈추면 한 칸, 그때의 장면 맞춤과 함께) */
   private onCamera(c: CameraState): void {
+    // 2점 투시에서 돌려 앙각이 생기면(옮기는 중이 아닐 때) 2점 투시를 끝내고 렌즈 이동을 없앤다
+    if (this.twoPointOn && !this.camAnim && !isTwoPoint(c)) {
+      this.twoPointOn = false;
+      if (c.shiftX || c.shiftY) this.viewer?.setLensShift(0, 0);
+      this.refreshCamBar();
+    }
+    if (!this.els.camBar.hidden) this.refreshCamBar();
     this.history.observe(c, performance.now(), this.sceneFit);
     clearTimeout(this.historyTimer);
     this.historyTimer = window.setTimeout(() => {
@@ -1317,11 +1635,13 @@ export class SkpViewerApp implements PanelHost {
    * 장면(페이지) 적용: 장면이 기억하는 것만 바꾼다(카메라·숨긴 태그·숨긴 개체·단면·스타일).
    * 카메라는 장면 전환 시간(없으면 2초) 동안 부드럽게 옮긴다.
    */
-  applyPage(index: number): void {
+  applyPage(index: number, fromSlideshow = false): number {
     const d = this.doc;
     const v = this.viewer;
     const page = d?.pages[index];
-    if (!d || !v || !page) return;
+    if (!d || !v || !page) return 0;
+    // 사용자가 장면을 고르면 재생을 멈춘다
+    if (!fromSlideshow) this.stopSlideshow();
     const plan = pagePlan(page, { sectionPlanes: d.sectionPlanesRaw, viewerFovY: this.sceneBaseFov(v), viewAspect: this.viewAspect(v) });
     if (plan.hiddenTags) d.hiddenTags = new Set([...plan.hiddenTags].filter((t) => d.tags.some((x) => x.name === t)));
     if (plan.hiddenNodes) {
@@ -1330,12 +1650,15 @@ export class SkpViewerApp implements PanelHost {
       d.hiddenOutline.clear();
       for (const n of plan.hiddenNodes) if (canHideNode(d, n)) d.hiddenNodes.add(n);
       this.isolatedOn = false;
+      // 모형에서 숨겼지만 이 장면은 숨기지 않는 개체는 보인다
+      d.revealNodes = revealNodesFor(d, plan.hiddenNodes) ?? d.revealNodes;
     }
-    if (plan.setsSection) {
-      if (plan.section) v.setSection({ normal: plan.section.normal, offset: plan.section.offset }, { caps: 'closed' });
-      else v.setSection(null);
-      d.fileSection = plan.section?.index ?? null;
+    // 장면 스타일의 단면 채우기(기억하는 장면만) — 단면을 바꾸지 않는 장면이면 지금 단면에 바로
+    if (typeof plan.style?.sectionFill === 'boolean' && plan.style.sectionFill !== this.sectionFill) {
+      this.sectionFill = plan.style.sectionFill;
+      if (!plan.setsSection) this.applySectionFill();
     }
+    if (plan.setsSection) this.applyFileSections(plan.sections);
     if (plan.style) {
       const st = plan.style;
       if (st.texts !== undefined) d.showTexts = st.texts;
@@ -1344,6 +1667,26 @@ export class SkpViewerApp implements PanelHost {
       if (st.sectionPlanes !== undefined) d.showSectionPlanes = st.sectionPlanes;
     }
     if (plan.renderMode) this.setRenderMode(plan.renderMode);
+    if (plan.style) this.applyStyleLooks(plan.style, false);
+    // 장면이 기억하는 그림자 설정(날짜·시각·켜짐)과 장면 스타일의 안개
+    if (page.shadow) {
+      this.activeShadow = { ...(d.shadow ?? {}), ...page.shadow };
+      if (typeof page.shadow.display === 'boolean') this.shadowsOn = page.shadow.display;
+    }
+    if (typeof plan.style?.fog === 'boolean') {
+      this.fogStyle = plan.style;
+      this.fogOn = plan.style.fog;
+    }
+    if (page.shadow || typeof plan.style?.fog === 'boolean') this.applyLighting();
+    // 장면 스타일의 배경 색
+    const bg = styleBackground(plan.style);
+    // 하늘·지면은 장면 스타일이 켜고 끔을 알 때만(모르면 그대로)
+    const skyKnown = plan.style && (plan.style.sky !== undefined || plan.style.ground !== undefined);
+    if (bg || skyKnown) {
+      if (bg) this.styleBg = bg;
+      if (skyKnown) this.styleSky = skyBackground(plan.style);
+      this.applyTheme();
+    }
     d.page = index;
     for (const t of d.tags) v.setGroupVisible(t.name, !tagHidden(d, t.name));
     this.refreshItemVisibility();
@@ -1354,12 +1697,63 @@ export class SkpViewerApp implements PanelHost {
       this.userMoved = true;
       // 평행·원근도 장면을 따른다(도구 막대도 맞춘다)
       this.projection = to.projection;
-      this.animateCamera(to, Math.min(plan.seconds, 4) * 1000, () => this.refreshToolbar());
+      // 장면 카메라가 2점 투시면(앙각 0 + 렌즈 이동) 다 옮긴 뒤 2점 투시로 둔다
+      if (this.walking) this.setWalk(false);
+      this.twoPointOn = false;
+      this.animateCamera(to, Math.min(plan.seconds, 4) * 1000, () => {
+        this.twoPointOn = !!to.shiftY && isTwoPoint(to);
+        this.refreshToolbar();
+        this.refreshCamBar();
+      });
     }
     this.renderSceneTabs();
     this.panel.rerender();
     this.refreshToolbar();
     this.refreshStatus();
+    return plan.camera ? plan.seconds : 0;
+  }
+
+  // ───────────────────────── 장면 재생(슬라이드 쇼) ─────────────────────────
+
+  private slideTimer = 0;
+  private sliding = false;
+  private slides = 0;
+
+  /** 장면 재생 켜고 끄기(▶ 단추) */
+  toggleSlideshow(): void {
+    if (this.sliding) this.stopSlideshow();
+    else this.startSlideshow();
+  }
+
+  /** 지금 장면 다음부터 "장면 재생에 넣기" 장면을 전환 + 지연 시간마다 넘긴다(모형 설정이 되풀이를 끄면 한 바퀴) */
+  startSlideshow(): void {
+    const d = this.doc;
+    if (!d || !d.pages.length || !this.viewer) return;
+    this.sliding = true;
+    this.slides = 0;
+    this.slideNext();
+  }
+
+  stopSlideshow(): void {
+    if (!this.sliding) return;
+    this.sliding = false;
+    clearTimeout(this.slideTimer);
+    this.slideTimer = 0;
+    this.renderSceneTabs();
+  }
+
+  private slideNext(): void {
+    const d = this.doc;
+    if (!this.sliding || !d) return;
+    const loop = (d.scene.meta as { animation?: { loop?: boolean } } | undefined)?.animation?.loop !== false;
+    const next = nextSlide(slideshowOrder(d.pages), d.page, loop, this.slides);
+    if (next === null) {
+      this.stopSlideshow();
+      return;
+    }
+    this.slides++;
+    const seconds = this.applyPage(next, true);
+    this.slideTimer = window.setTimeout(() => this.slideNext(), slideDurationMs(d.pages[next]!, seconds));
   }
 
   /** 장면 탭 줄을 다시 그린다(장면이 없으면 숨김) */
@@ -1369,11 +1763,22 @@ export class SkpViewerApp implements PanelHost {
     el.innerHTML = '';
     el.hidden = !d || !d.pages.length;
     if (!d) return;
+    // 장면 재생(▶/■)
+    const play = h('button', {
+      class: `scene-play${this.sliding ? ' on' : ''}`,
+      type: 'button',
+      title: this.sliding ? '장면 재생 멈추기' : '장면 재생: 장면을 전환 시간과 지연 시간마다 차례로 넘깁니다(3D를 누르거나 장면을 고르면 멈춤)',
+      'aria-label': this.sliding ? '장면 재생 멈추기' : '장면 재생',
+      'aria-pressed': this.sliding ? 'true' : 'false',
+      html: icon(this.sliding ? 'stop' : 'play', 16),
+    });
+    play.addEventListener('click', () => this.toggleSlideshow());
+    el.append(play);
     d.pages.forEach((pg, i) => {
       const on = d.page === i;
       const b = h(
         'button',
-        { class: `scene-tab${on ? ' on' : ''}`, type: 'button', role: 'tab', 'aria-selected': on ? 'true' : 'false', title: [pg.name, pg.description].filter(Boolean).join('\n') },
+        { class: `scene-tab${on ? ' on' : ''}${pg.includeInAnimation === false ? ' no-play' : ''}`, type: 'button', role: 'tab', 'aria-selected': on ? 'true' : 'false', title: [pg.name, pg.description].filter(Boolean).join('\n') },
         pg.name || `장면 ${i + 1}`,
       );
       b.addEventListener('click', () => this.applyPage(i));
@@ -1390,18 +1795,33 @@ export class SkpViewerApp implements PanelHost {
     if (next !== null) this.applyPage(next);
   }
 
-  /** 파일 단면 적용(null = 끔). 코어 단면은 평면 하나라 그룹 안 단면도 모형 전체를 자른다 */
+  /**
+   * 파일 단면 켜고 끄기(meta.sectionPlanes 차례, null = 모두 끔). 켜면 같은 묶음(노드)의 다른 단면은 끈다(SketchUp은 묶음마다 활성 단면 하나).
+   * 모형 단면은 모형 전체를, 그룹·컴포넌트 안 단면은 그 그룹 안쪽만 자른다(코어 여러 단면)
+   */
   setFileSection(index: number | null): void {
+    const d = this.doc;
+    if (!d || !this.viewer) return;
+    let next: number[] = [];
+    if (index !== null) {
+      const sp = d.sectionPlanes.find((p) => p.index === index);
+      if (!sp) return;
+      next = d.fileSections.includes(index) ? d.fileSections.filter((i) => i !== index) : [...d.fileSections.filter((i) => d.sectionPlanes.find((p) => p.index === i)?.node !== sp.node), index];
+    }
+    this.applyFileSections(activeSections(next, d.sectionPlanesRaw));
+    this.panel.rerender();
+  }
+
+  /** 파일 단면을 코어 여러 단면으로(sectionPlanesFor). 없으면 끈다 */
+  private applyFileSections(list: readonly PageSection[]): void {
     const d = this.doc;
     const v = this.viewer;
     if (!d || !v) return;
-    const sp = index === null ? null : d.sectionPlanes.find((p) => p.index === index);
-    const s = sp ? sectionToViewer(sp.plane) : null;
-    if (s) v.setSection(s, { caps: 'closed' });
-    else v.setSection(null);
-    d.fileSection = s ? index : null;
+    const r = sectionPlanesFor(d, list, this.caps);
+    v.setSections(r.planes.length ? r.planes : null);
+    d.fileSections = r.applied;
+    d.sectionSkipped = r.skipped;
     this.refreshAnnotations();
-    this.panel.rerender();
     this.refreshToolbar();
   }
 
@@ -1541,13 +1961,23 @@ export class SkpViewerApp implements PanelHost {
     }
     // 나누지 않은 깊은 노드 숨김: 항목마다 구간을 합쳐 한 번에 넘기고, 더는 숨길 것이 없는 항목은 푼다
     this.hiddenRanges = hiddenNodeRanges(d);
+    // 장면이 다시 보이게 한 숨김 개체: 반투명 숨긴 형상은 숨긴다(보통 색 그림과 겹치지 않게)
+    for (const [item, list] of revealGhostRanges(d)) {
+      const cur = this.hiddenRanges.get(item);
+      this.hiddenRanges.set(item, cur ? normalizeRanges([...cur, ...list]) : list);
+    }
+    // 카메라를 보는 그물은 삼각형을 모두 숨기면 그 배치의 모서리(윤곽선)도(hiddenSelection)
     const next = new Set<string>();
     for (const [item, list] of this.hiddenRanges) {
       const id = this.itemId(item);
       next.add(id);
-      v.setHiddenRanges(id, list);
+      v.setHiddenRanges(id, hiddenSelection(d, item, list));
     }
-    for (const id of this.rangedIds) if (!next.has(id)) v.setHiddenRanges(id, null);
+    for (const id of this.rangedIds) {
+      if (next.has(id)) continue;
+      const item = d.meshIndex.get(id) ?? (d.lineIndex.has(id) ? d.scene.meshes.length + d.lineIndex.get(id)! : -1);
+      v.setHiddenRanges(id, item >= 0 ? hiddenSelection(d, item, null) : null);
+    }
     this.rangedIds = next;
     if (d.selection?.kind === 'node') this.applySelection(d.selection, false);
   }
@@ -1559,6 +1989,13 @@ export class SkpViewerApp implements PanelHost {
     if (!d || !l) return;
     const hiddenTags = new Set(d.tags.filter((t) => tagHidden(d, t.name)).map((t) => t.name));
     const sec = this.viewer?.section ?? null;
+    // 여러 단면: 그룹 안 단면은 그 노드(와 안쪽) 라벨만 자른다
+    const t = d.tree;
+    const sections = (this.viewer?.sections ?? []).map((s) => {
+      const k = sectionIndexOfId(s.id);
+      const node = k === null ? -1 : (d.sectionPlanes.find((p) => p.index === k)?.node ?? -1);
+      return { normal: s.normal, offset: s.offset, scope: node >= 0 && t ? (n: number): boolean => n === node || (n >= 0 && isAncestor(t, node, n)) : null };
+    });
     l.setFilter({
       texts: d.showTexts,
       dimensions: d.showDimensions,
@@ -1566,6 +2003,7 @@ export class SkpViewerApp implements PanelHost {
       isNodeHidden: (n) => nodeHiddenForLabels(d, n),
       showHidden: d.showHidden,
       section: sec ? { normal: sec.normal, offset: sec.offset } : null,
+      sections,
     });
   }
 
@@ -1599,13 +2037,238 @@ export class SkpViewerApp implements PanelHost {
   setProjection(p: Projection): void {
     this.projection = p;
     this.viewer?.setProjection(p);
+    // 걷기·2점 투시는 원근에서만
+    if (p !== 'perspective') {
+      if (this.walking) this.setWalk(false);
+      if (this.twoPointOn) this.setTwoPoint(false);
+    }
     this.refreshToolbar();
+    this.refreshCamBar();
   }
 
   setRenderMode(m: RenderMode): void {
     this.renderMode = m;
     this.viewer?.setRenderMode(m);
+    // X-ray·와이어프레임은 형상이 글을 가리지 않는다
+    this.labels?.resetOcclusion();
     this.refreshToolbar();
+  }
+
+  // ───────────────────────── 걷기·시야각·2점 투시 ─────────────────────────
+
+  /** 걷는 중(코어 setNavigation('walk'))·2점 투시 켜짐·조이스틱 */
+  private walking = false;
+  private twoPointOn = false;
+  private stick!: WalkStick;
+
+  /**
+   * 걷기(SketchUp 걷기·둘러보기·카메라 위치 정하기): 끌기 = 제자리에서 둘러보기, 휠·W/S·↑/↓ = 앞뒤, A/D = 옆, ←/→ = 돌기, Q/E·PageUp/PageDown = 위아래,
+   * 두 번 누르기 = 그 자리에 눈높이(5′6″)로 서기. 원근으로 바꾸고 측정·2점 투시·장면 재생은 끈다. 휴대폰은 조이스틱으로 걷는다
+   */
+  setWalk(on: boolean): void {
+    const v = this.viewer;
+    const d = this.doc;
+    if (!v || !d) return;
+    if (on) {
+      if (this.measureTool?.active) this.setMeasureMode(null);
+      this.stopSlideshow();
+      this.unwidenScene();
+      if (this.twoPointOn) this.setTwoPoint(false);
+      if (this.projection !== 'perspective') this.setProjection('perspective');
+      const eye = eyeHeightFor(d.scene.units);
+      v.setNavigation('walk', eye !== undefined ? { eyeHeight: eye, tapToStand: true } : { tapToStand: true });
+      this.els.camBar.hidden = false;
+    } else v.setNavigation('orbit');
+    this.walking = on;
+    this.userMoved = true;
+    this.refreshCamBar();
+    this.refreshToolbar();
+    this.refreshStatus();
+  }
+
+  /** 세로 시야각(도, 10~120): 렌즈 이동(2점 투시)은 같은 자리에 남게 함께 맞춘다. 세로 화면 맞춤은 끝낸다 */
+  setFov(deg: number): void {
+    const v = this.viewer;
+    if (!v || !Number.isFinite(deg)) return;
+    const f = (Math.min(120, Math.max(10, deg)) * Math.PI) / 180;
+    this.sceneFit = null;
+    v.setCamera(withFov(v.getCamera(), f));
+    this.userMoved = true;
+    this.refreshCamBar();
+  }
+
+  /** 2점 투시(SketchUp 카메라 › 2점 투시): 수평으로 보고 렌즈를 위아래로 옮겨 세로선을 곧게. 돌려 앙각이 생기면 끝난다 */
+  setTwoPoint(on: boolean): void {
+    const v = this.viewer;
+    if (!v || !this.doc) return;
+    this.stopCameraAnim();
+    if (on) {
+      if (this.walking) this.setWalk(false);
+      if (this.projection !== 'perspective') this.setProjection('perspective');
+      const c = twoPointCamera(v.getCamera());
+      if (!c) {
+        this.showNotice('info', '2점 투시로 바꿀 수 없습니다', '곧장 위·아래를 보는 보기(앙각 80° 넘게)는 2점 투시가 되지 않습니다. 옆에서 보도록 돌린 뒤 다시 켜세요.');
+        return;
+      }
+      this.twoPointOn = true;
+      v.setCamera(c);
+    } else {
+      this.twoPointOn = false;
+      v.setLensShift(0, 0);
+    }
+    this.userMoved = true;
+    this.refreshCamBar();
+  }
+
+  /** 카메라 띠 열기(보기 설정 메뉴) */
+  openCamBar(): void {
+    this.els.camBar.hidden = false;
+    this.refreshCamBar();
+    this.refreshSelBar();
+  }
+
+  /** 카메라 띠 닫기: 걷기도 끝낸다 */
+  private closeCamBar(): void {
+    if (this.walking) this.setWalk(false);
+    this.els.camBar.hidden = true;
+    this.refreshCamBar();
+    this.refreshSelBar();
+  }
+
+  /** 카메라 띠(시야각 값·걷기·2점 투시 눌림·안내)와 조이스틱을 지금 상태로 */
+  private refreshCamBar(): void {
+    const e = this.els;
+    const v = this.viewer;
+    if (!e) return;
+    const touch = !!this.coarseQuery?.matches;
+    this.stick?.setVisible(this.walking && touch && !!this.doc);
+    // 조이스틱은 카메라 띠 위에(띠 높이는 화면 폭·글 줄 수에 따라 다르다)
+    if (this.stick && !this.stick.el.hidden) this.stick.el.style.bottom = `${(e.camBar.hidden ? 0 : e.camBar.offsetHeight) + 22}px`;
+    if (e.camBar.hidden || !v) return;
+    const fov = v.fov;
+    e.fovRange.value = String(Math.round(fov));
+    e.fovValue.textContent = `${Math.round(fov)}°`;
+    const persp = v.getProjection() === 'perspective';
+    e.fovRange.disabled = !persp;
+    e.walkBtn.classList.toggle('on', this.walking);
+    e.walkBtn.setAttribute('aria-pressed', this.walking ? 'true' : 'false');
+    e.twoPointBtn.classList.toggle('on', this.twoPointOn);
+    e.twoPointBtn.setAttribute('aria-pressed', this.twoPointOn ? 'true' : 'false');
+    e.camText.replaceChildren(
+      h('b', { class: 'mb-value' }, this.walking ? '걷기' : '카메라'),
+      h(
+        'span',
+        { class: 'mb-sub' },
+        this.walking
+          ? touch
+            ? '한 손가락 끌기: 둘러보기 · 조이스틱: 걷기 · 두 손가락: 벌려 앞으로·끌어 옆/위아래 · 두 번 누르기: 그 자리에 서기'
+            : '끌기: 둘러보기 · W/S·↑/↓: 앞뒤 · A/D: 옆 · ←/→: 돌기 · Q/E: 위아래 · Shift: 빠르게 · 두 번 누르기: 그 자리에 서기 · Esc: 끝내기'
+          : persp
+            ? '시야각을 바꾸거나 걷기·2점 투시를 켭니다'
+            : '평행 투영에서는 시야각을 쓰지 않습니다',
+      ),
+    );
+    if (this.stick && !this.stick.el.hidden) this.stick.el.style.bottom = `${e.camBar.offsetHeight + 22}px`;
+  }
+
+  // ───────────────────────── 해 조명·그림자·안개 ─────────────────────────
+
+  /** 지금 그림자 설정(모형, 장면이 기억하면 그 장면의 것) */
+  private activeShadow: SkpShadowMeta | null = null;
+  /** 그림자를 그리는지(처음엔 파일의 그림자 보이기) */
+  private shadowsOn = false;
+  /** 안개를 그리는지(처음엔 스타일의 안개)와 안개 거리·색을 읽을 스타일 */
+  private fogOn = false;
+  private fogStyle: SkpStyleMeta | null = null;
+
+  setShadows(on: boolean): void {
+    this.shadowsOn = on;
+    this.applyLighting();
+    this.refreshToolbar();
+  }
+
+  setFogOn(on: boolean): void {
+    this.fogOn = on;
+    this.applyLighting();
+  }
+
+  /**
+   * 코어 조명·안개를 지금 상태로: 그림자를 켰거나 파일이 해로 음영을 칠하면 그 날짜·시각·위치의 해(설정이 없으면 SketchUp 기본 11월 8일 13:30 볼더),
+   * 아니면 예전 고정 조명. 안개는 장면 범위로 정한 기본 거리(스타일 거리가 있으면 그것)
+   */
+  private applyLighting(): void {
+    const v = this.viewer;
+    const d = this.doc;
+    if (!v) return;
+    const s = this.activeShadow;
+    v.setLighting(d && (this.shadowsOn || usesSun(s)) ? lightingForShadow(shadowOrDefault(s), this.shadowsOn) : null);
+    v.setFog(d && this.fogOn ? fogFor(this.fogStyle, d.scene.bounds) : null);
+  }
+
+  /** 외곽선(스타일 "윤곽선" — 코어 화면 공간 외곽선) */
+  private profilesOn = false;
+  private profileWidth = 2;
+
+  setProfiles(on: boolean): void {
+    this.profilesOn = on;
+    this.viewer?.setRenderOptions({ profiles: on ? { width: this.profileWidth } : null });
+    this.refreshToolbar();
+  }
+
+  /**
+   * 뒤 모서리(스타일 "뒤 모서리" — 코어 0.7.1 hiddenEdges): 면 뒤로 가려진 모서리를 흐린 점선으로. 코어는 숨은 선 방식에서만 그린다
+   * (SketchUp은 음영 방식에서도 그린다 — 남은 일)
+   */
+  private backEdgesOn = false;
+
+  setBackEdges(on: boolean): void {
+    this.backEdgesOn = on;
+    this.viewer?.setRenderOptions({ hiddenEdges: on ? true : null });
+    this.refreshToolbar();
+  }
+
+  /** 태그 색으로 칠하기(스타일 "태그 색으로" — 코어 setItemColor, 장면을 올리면 풀리므로 다시 건다) */
+  private colorByTag = false;
+
+  setColorByTag(on: boolean): void {
+    this.colorByTag = on;
+    const d = this.doc;
+    const v = this.viewer;
+    if (!d || !v) return;
+    const colors = tagColors(d);
+    for (const m of d.scene.meshes) v.setItemColor(m.id, on ? (colors.get(m.id) ?? null) : null);
+  }
+
+  /** 스타일의 외곽선·태그 색을 따른다(기억하지 않은 값은 그대로). 큰 모형은 외곽선을 처음에 끈다(그물을 한 번 더 그린다) */
+  private applyStyleLooks(style: SkpStyleMeta | null | undefined, first: boolean): void {
+    const d = this.doc;
+    if (typeof style?.profileWidth === 'number') this.profileWidth = Math.min(5, Math.max(1, style.profileWidth));
+    if (typeof style?.profiles === 'boolean') this.setProfiles(style.profiles && !(first && d && isBigScene(d)));
+    else if (first) this.setProfiles(false);
+    if (typeof style?.backEdges === 'boolean') this.setBackEdges(style.backEdges);
+    else if (first) this.setBackEdges(false);
+    if (typeof style?.colorByTag === 'boolean') this.setColorByTag(style.colorByTag);
+    else if (first) this.setColorByTag(false);
+  }
+
+  /**
+   * 라벨 가림: 음영 방식에서 라벨 기준점의 화면 자리에서 고른 형상(불투명 면, 또는 면에 붙은 모서리 — 코어는 선을 면보다 앞세운다)이
+   * 기준점보다 앞에 있으면 가렸다. 단면에 잘린 쪽·숨긴 항목은 코어가 고르지 않는다. 반투명 면(유리)과 주석 선(치수선·지시선)은 가리지 않는다
+   */
+  private labelOccluded(p: readonly number[], x: number, y: number, f: ViewFrame): boolean {
+    const v = this.viewer;
+    const d = this.doc;
+    if (!v || !d || !SHADED_MODES.has(this.renderMode)) return false;
+    const hit = v.pick(x, y);
+    if (!hit || hit.section || hit.kind === 'point') return false;
+    if (hit.kind === 'mesh') {
+      const k = d.meshIndex.get(hit.id);
+      const mesh = k === undefined ? undefined : d.scene.meshes[k];
+      if (!mesh || mesh.color[3] < 0.999) return false;
+    } else if (d.annotationKind.has(hit.id) || d.extras?.soft.has(hit.id)) return false;
+    const b = d.scene.bounds;
+    const diag = b ? Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) : 0;
+    return occludedBy(f, p, hit.point, diag * 0.002);
   }
 
   // 격자·뷰 큐브·좌표축 상태는 뷰어가 들고 있다(뷰어를 만들기 전에는 뷰어 기본값 켜짐)
@@ -1649,6 +2312,8 @@ export class SkpViewerApp implements PanelHost {
   private setMeasureMode(mode: MeasureMode | null): void {
     const t = this.measureTool;
     if (!t || !this.doc) return;
+    // 측정은 궤도 보기에서(걷기의 끌기는 둘러보기다)
+    if (mode && this.walking) this.setWalk(false);
     t.setMode(mode);
     if (!mode) this.doc.measure = null;
     this.panel.refreshSelection();
@@ -1663,11 +2328,12 @@ export class SkpViewerApp implements PanelHost {
     const v = this.viewer;
     if (!v || !this.doc) return;
     // 축 단면은 파일 단면을 대신한다
-    this.doc.fileSection = null;
+    this.doc.fileSections = [];
+    this.doc.sectionSkipped = { scope: 0, limit: 0 };
     if (!axis) v.setSection(null);
     else {
       const cur = v.section;
-      v.setSectionAxis(axis, cur && cur.axis === axis ? cur.t : 0.5, { caps: 'closed', outline: true, plane: true });
+      v.setSectionAxis(axis, cur && cur.axis === axis ? cur.t : 0.5, { caps: this.caps, outline: true, plane: true });
     }
     this.refreshToolbar();
   }
@@ -1675,6 +2341,27 @@ export class SkpViewerApp implements PanelHost {
   flipSection(): void {
     this.viewer?.flipSection();
     this.refreshToolbar();
+  }
+
+  /** 잘린 면 채우기(닫힌 입체만): 처음엔 파일 스타일을 따르고, 사용자가 켜고 끈다 */
+  private sectionFill = true;
+
+  /** 코어 단면 채우기 선택 */
+  private get caps(): 'closed' | 'none' {
+    return this.sectionFill ? 'closed' : 'none';
+  }
+
+  setSectionFill(on: boolean): void {
+    this.sectionFill = on;
+    this.applySectionFill();
+    this.refreshToolbar();
+  }
+
+  /** 지금 단면 평면 모두에 채우기 선택을 다시 건다 */
+  private applySectionFill(): void {
+    const v = this.viewer;
+    if (!v) return;
+    v.sections.forEach((_, i) => v.setSectionOptions({ caps: this.caps }, i));
   }
 
   setPanelOpen(on: boolean): void {
@@ -1788,23 +2475,30 @@ export class SkpViewerApp implements PanelHost {
     });
   }
 
-  async savePng(): Promise<void> {
-    const v = this.viewer;
-    const d = this.doc;
-    if (!v || !d) return;
-    try {
-      const b = await v.toBlob('image/png');
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(b);
-      a.download = `${stripExtension(d.name)}.png`;
-      document.body.append(a);
-      a.click();
-      a.remove();
-      trackExport('png');
-      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-    } catch (e) {
-      this.showNotice('error', '그림을 저장하지 못했습니다', errorText(e));
+  /** 그림 저장 창(크기·투명 배경·글 넣기, 저장·공유·인쇄). 이미 열려 있으면 닫는다 */
+  savePng(): void {
+    if (!this.viewer || !this.doc) return;
+    const x = this.exportDialog;
+    if (!x) return;
+    if (x.isOpen) x.close();
+    else {
+      this.closeMenu();
+      x.open();
     }
+  }
+
+  /** 그림 내보내기 맥락: 뷰어·덧그림·라벨과 3D 테마 밝기(투명 배경 두 장은 배경만 바꾼다) */
+  private exportContext(): ExportContext | null {
+    const v = this.viewer;
+    if (!v || !this.doc) return null;
+    const bg = this.backdrop;
+    return {
+      viewer: v,
+      overlay: this.overlay,
+      labels: this.labels,
+      base: bg ? (isLightBackground(bg) ? 'light' : 'dark') : this.theme,
+      restoreTheme: () => this.applyTheme(),
+    };
   }
 
   private toggleViewMenu(btn: HTMLButtonElement): void {
@@ -1844,6 +2538,7 @@ export class SkpViewerApp implements PanelHost {
         run: () => this.setSectionAxis(a),
       })),
       { label: '자르는 쪽 뒤집기', icon: 'flip', sep: true, disabled: !sec, run: () => this.flipSection() },
+      { label: '잘린 면 채우기', checked: this.sectionFill, toggle: true, run: () => this.setSectionFill(!this.sectionFill) },
     ]);
   }
 
@@ -1856,16 +2551,32 @@ export class SkpViewerApp implements PanelHost {
       if (same) return;
     }
     if (!this.viewer || !this.doc) return;
+    // 휴대폰: 넓은 화면 도구 막대에만 있는 단추(이전·다음 보기, 투영, 그리기 방식, 격자·뷰 큐브·좌표축·배경, 그림 저장)도
+    const phone = !!this.phoneQuery?.matches;
+    const narrowItems: MenuItem[] = phone
+      ? [
+          { label: '이전 보기', icon: 'back', disabled: !this.history.canBack(), run: () => this.viewBack() },
+          { label: '다음 보기', icon: 'forward', disabled: !this.history.canForward(), run: () => this.viewForward() },
+          { label: '원근 투영', checked: this.projection === 'perspective', sep: true, run: () => this.setProjection('perspective') },
+          { label: '평행 투영', checked: this.projection === 'orthographic', run: () => this.setProjection('orthographic') },
+          ...RENDER_MODES.map(([m, label], i): MenuItem => ({ label, checked: this.renderMode === m, sep: i === 0, run: () => this.setRenderMode(m) })),
+          { label: '격자', checked: this.gridOn, toggle: true, sep: true, run: () => this.toggleGrid() },
+          { label: '뷰 큐브', checked: this.cubeOn, toggle: true, run: () => this.toggleCube() },
+          { label: '좌표축', checked: this.axesOn, toggle: true, run: () => this.toggleAxes() },
+          { label: '파일 배경 색', checked: this.fileBg, toggle: true, run: () => this.setFileBackground(!this.fileBg) },
+        ]
+      : [];
     this.openMenu(btn, '보기 설정', [
-      { label: '이전 보기', icon: 'back', disabled: !this.history.canBack(), run: () => this.viewBack() },
-      { label: '다음 보기', icon: 'forward', disabled: !this.history.canForward(), run: () => this.viewForward() },
-      { label: '원근 투영', checked: this.projection === 'perspective', sep: true, run: () => this.setProjection('perspective') },
-      { label: '평행 투영', checked: this.projection === 'orthographic', run: () => this.setProjection('orthographic') },
-      ...RENDER_MODES.map(([m, label], i): MenuItem => ({ label, checked: this.renderMode === m, sep: i === 0, run: () => this.setRenderMode(m) })),
-      { label: '격자', checked: this.gridOn, toggle: true, sep: true, run: () => this.toggleGrid() },
-      { label: '뷰 큐브', checked: this.cubeOn, toggle: true, run: () => this.toggleCube() },
-      { label: '좌표축', checked: this.axesOn, toggle: true, run: () => this.toggleAxes() },
-      { label: 'PNG 저장', icon: 'image', sep: true, run: () => void this.savePng() },
+      ...narrowItems,
+      { label: '외곽선(윤곽 굵게)', checked: this.profilesOn, toggle: true, sep: true, run: () => this.setProfiles(!this.profilesOn) },
+      { label: '뒤 모서리(숨은 선에서 점선)', checked: this.backEdgesOn, toggle: true, run: () => this.setBackEdges(!this.backEdgesOn) },
+      { label: '태그 색으로 칠하기', checked: this.colorByTag, toggle: true, run: () => this.setColorByTag(!this.colorByTag) },
+      { label: '그림자(파일의 날짜·시각·위치)', checked: this.shadowsOn, toggle: true, sep: true, run: () => this.setShadows(!this.shadowsOn) },
+      { label: '안개', checked: this.fogOn, toggle: true, run: () => this.setFogOn(!this.fogOn) },
+      { label: '걷기(1인칭)', icon: 'walk', checked: this.walking, toggle: true, sep: true, run: () => this.setWalk(!this.walking) },
+      { label: '2점 투시', checked: this.twoPointOn, toggle: true, run: () => this.setTwoPoint(!this.twoPointOn) },
+      { label: '시야각·카메라 띠…', icon: 'camera', run: () => this.openCamBar() },
+      ...(phone ? [{ label: '그림 저장…', icon: 'image', sep: true, run: () => this.savePng() }] : []),
     ]);
   }
 
@@ -1958,6 +2669,7 @@ export class SkpViewerApp implements PanelHost {
   // ───────────────────────── 키 ─────────────────────────
 
   private onKey(ev: KeyboardEvent): void {
+    if (this.sliding && !['Shift', 'Control', 'Alt', 'Meta'].includes(ev.key)) this.stopSlideshow();
     if (this.menu && ev.key === 'Escape') {
       ev.preventDefault();
       ev.stopPropagation();
@@ -1992,6 +2704,8 @@ export class SkpViewerApp implements PanelHost {
       measureMode: !!tool?.active,
       busy: this.busy,
       hasPages: !!this.doc?.pages.length,
+      walking: this.walking,
+      inList: inList(ev.target),
     });
     if (!act) return;
     if (act.kind === 'open') {
@@ -2037,6 +2751,12 @@ export class SkpViewerApp implements PanelHost {
       this.toggleMeasure();
       return;
     }
+    if (act.kind === 'walkOff') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.setWalk(false);
+      return;
+    }
     // F·1~7·Esc(측정 지우기)는 뷰어 규칙대로. 캡처 단계에서 처리했으면 캔버스의 같은 키 처리까지 가지 않게 막는다.
     // 전체 보기·표준 뷰 키는 그 전에 넓힌 시야각을 되돌린다
     if (isViewKey({ key: ev.key, ctrl: ev.ctrlKey, meta: ev.metaKey, alt: ev.altKey })) this.unwidenScene();
@@ -2062,10 +2782,25 @@ export class SkpViewerApp implements PanelHost {
     this.setThemeChoice(this.theme === 'dark' ? 'light' : 'dark');
   }
 
+  /** 3D 보기에 쓰는 파일 배경(설정이 꺼졌거나 스타일에 없으면 null) */
+  private get backdrop(): Rgb | null {
+    return this.fileBg && this.doc ? this.styleBg : null;
+  }
+
+  /** 파일·장면 스타일의 배경 색으로 볼지(기억한다) */
+  setFileBackground(on: boolean): void {
+    this.fileBg = on;
+    storeFileBackground(safeStorage(), on);
+    this.applyTheme();
+    this.refreshToolbar();
+  }
+
   private applyTheme(): void {
     document.documentElement.dataset.theme = this.theme;
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', this.theme === 'dark' ? '#1b2027' : '#f4f5f7');
-    this.viewer?.setTheme(this.theme);
+    this.viewer?.setTheme(viewerTheme(this.theme, this.backdrop));
+    // 하늘·지면은 파일 배경을 쓸 때만
+    this.viewer?.setBackground(this.fileBg && this.doc ? this.styleSky : null);
     if (this.els) {
       const choice = themeChoiceOf(this.themeStored);
       const label = THEME_CHOICES.find((c) => c.choice === choice)!.label;
@@ -2138,6 +2873,7 @@ export class SkpViewerApp implements PanelHost {
     for (const [p, b] of e.projBtns) press(b, this.projection === p);
     for (const [m, b] of e.modeBtns) press(b, this.renderMode === m);
     press(e.gridBtn, this.gridOn);
+    press(e.bgBtn, this.fileBg);
     press(e.cubeBtn, this.cubeOn);
     press(e.axesBtn, this.axesOn);
     press(e.measureBtn, this.measureTool?.mode === 'tape');
@@ -2155,6 +2891,8 @@ export class SkpViewerApp implements PanelHost {
     e.secRange.disabled = !has || !sec;
     e.secFlip.disabled = !has || !sec;
     press(e.secFlip, !!sec?.flip);
+    e.secFill.disabled = !has || !sec;
+    press(e.secFill, this.sectionFill);
     if (sec) e.secRange.value = String(Math.round(Math.min(1, Math.max(0, sec.t)) * 1000));
   }
 
@@ -2163,7 +2901,7 @@ export class SkpViewerApp implements PanelHost {
     if (!e) return;
     const d = this.doc;
     if (!d) {
-      e.stMain.textContent = '파일을 열면 여기에 모형 정보가 보입니다 · SketchUp 7~2026(.skp)';
+      e.stMain.textContent = '파일을 열면 여기에 모형 정보가 보입니다 · SketchUp 6~2026(.skp)';
       e.stWarn.hidden = true;
       e.stSel.textContent = '';
       return;
@@ -2182,13 +2920,16 @@ export class SkpViewerApp implements PanelHost {
     e.stWarn.hidden = !w;
     e.stWarn.textContent = `경고 ${w}`;
     let sel = '';
+    let picked = false;
     if (d.measure) sel = measureText(d.measure, d.units, mmPerSceneUnit(d.scene.units));
     else if (this.measuring) sel = this.measureHint ?? '측정: 점을 누르세요';
     else {
-      const t = selectionText(d, d.selection, d.pick);
-      if (t) sel = `고른 것: ${t}`;
+      sel = selectionText(d, d.selection, d.pick);
+      picked = !!sel;
     }
-    e.stSel.textContent = sel;
+    // "고른 것"과 설명은 따로 둔다: 한 글로 두면 다른 언어에서 "고른 것: {0}"이 설명 전체를 그대로 잡아 한국어로 남는다
+    if (picked) e.stSel.replaceChildren(h('span', {}, '고른 것'), ': ', h('span', {}, sel));
+    else e.stSel.textContent = sel;
     e.stSel.title = sel;
     this.refreshMeasureBar();
     this.refreshSelBar();
@@ -2198,7 +2939,8 @@ export class SkpViewerApp implements PanelHost {
   private refreshSelBar(): void {
     const e = this.els;
     const d = this.doc;
-    const on = !!d && !!d.selection && !this.measuring && !this.panelOpen;
+    // 카메라 띠가 열려 있으면 그 자리를 쓴다
+    const on = !!d && !!d.selection && !this.measuring && !this.panelOpen && e.camBar.hidden;
     e.selBar.hidden = !on;
     if (!on || !d) return;
     const info = entityInfo(selectionEntity(d), d.units, mmPerSceneUnit(d.scene.units));
@@ -2207,6 +2949,11 @@ export class SkpViewerApp implements PanelHost {
     const head = h('b', { class: 'mb-value' }, info.title, name ? h('span', { class: 'mb-name', 'data-i18n-skip': '' }, name) : null);
     const facts = cardRows(info).map((r) => h('span', { class: 'mb-fact' }, h('span', { class: 'mb-k' }, r.label), h('span', { 'data-i18n-skip': '' }, r.value)));
     e.selText.replaceChildren(head, ...(facts.length ? [h('span', { class: 'mb-sub' }, ...facts)] : []));
+    const part = partOfPick(d);
+    e.selPart.hidden = !part;
+    const label = e.selPart.querySelector('.mb-part');
+    if (label) label.textContent = part === 'edge' ? '모서리만' : '면만';
+    e.selPart.title = part === 'edge' ? '누른 모서리 하나의 길이(곡선이면 곡선 전체)만 보기' : '누른 면 하나의 넓이만 보기';
   }
 
   /** 측정 띠: 결과(거리와 축별 길이·각도)나 다음에 누를 곳 안내 */
@@ -2227,6 +2974,11 @@ export class SkpViewerApp implements PanelHost {
       if (axes) t.append(h('span', { class: 'mb-sub' }, ...axes.split(' · ').map((x) => h('span', { class: 'mb-fact mb-axis' }, x))));
     } else t.append(h('span', { class: 'mb-hint' }, this.measureHint ?? ''));
     e.measureClear.disabled = !d.measure && !tool.pointCount;
+    e.measureCopy.disabled = !d.measure;
+    e.measureLogBtn.disabled = !this.measureLog.length;
+    e.measureLogBtn.title = this.measureLog.length ? `최근 측정 기록 ${this.measureLog.length}개` : '최근 측정 기록';
+    if (!this.measureLog.length) e.measureLog.hidden = true;
+    this.renderMeasureLog();
   }
 
   // ───────────────────────── 자동 확인용 ─────────────────────────
@@ -2270,11 +3022,36 @@ export class SkpViewerApp implements PanelHost {
       camera: this.viewer?.getCamera() ?? null,
       pages: d?.pages.length ?? 0,
       page: d?.page ?? null,
-      fileSection: d?.fileSection ?? null,
+      fileSection: d?.fileSections[0] ?? null,
+      fileSections: d ? [...d.fileSections] : [],
+      sectionPlanes: this.viewer?.sections.length ?? 0,
       hiddenTags: d ? d.tags.filter((t) => tagHidden(d, t.name)).map((t) => t.name) : [],
       hiddenNodes: d?.hiddenNodes.size ?? 0,
       labels: this.labels?.size ?? 0,
+      labelsOccluded: this.labels?.occludedCount ?? 0,
       measureMode: this.measureTool?.mode ?? null,
+      selectionKind: d?.selection?.kind ?? null,
+      slideshow: this.sliding,
+      fileBackground: this.fileBg,
+      background: this.backdrop ? cssHex(this.backdrop) : null,
+      sectionFill: this.sectionFill,
+      sky: !!this.viewer?.background,
+      shadows: this.shadowsOn,
+      fog: this.fogOn,
+      lit: !!this.viewer?.lighting,
+      walking: this.walking,
+      navigation: this.viewer?.navigation ?? 'orbit',
+      fov: this.viewer ? Math.round(this.viewer.fov * 10) / 10 : null,
+      twoPoint: this.twoPointOn,
+      camBar: !this.els.camBar.hidden,
+      joystick: !this.stick.el.hidden,
+      sun: (() => {
+        const sun = sunForShadow(shadowOrDefault(this.activeShadow));
+        return sun ? { elevation: sun.elevation, azimuth: sun.azimuth } : null;
+      })(),
+      profiles: this.profilesOn,
+      backEdges: this.backEdgesOn,
+      colorByTag: this.colorByTag,
     };
   }
 
@@ -2284,13 +3061,70 @@ export class SkpViewerApp implements PanelHost {
 
   /** 처음 주소 인자 처리 */
   async launch(req: LaunchRequest): Promise<void> {
+    // 열다 멈춘 탭이 남긴 공유 받은 큰 파일 사본은 지운다(지금 열 것은 둔다)
+    void this.recent.sweepShared(req.kind === 'shared' ? req.key : null);
     if (req.kind === 'sample') await this.openSample();
     else if (req.kind === 'url') await this.openUrl(req.url, req.name);
+    else if (req.kind === 'shared') await this.openShared(req.key);
     else if (req.kind === 'error') this.showNotice('error', '주소의 파일을 열 수 없습니다', req.message);
+  }
+
+  /** 홈 화면 앱이 공유 받은 파일(서비스 워커가 이 브라우저의 최근 문서에 넣었다)을 연다. 주소의 ?shared는 지운다(다시 읽어도 또 열지 않게) */
+  async openShared(key: string): Promise<void> {
+    try {
+      const u = new URL(location.href);
+      u.searchParams.delete('shared');
+      history.replaceState(history.state, '', u.pathname + u.search + u.hash);
+    } catch {
+      /* 주소를 못 바꾸면 그대로 */
+    }
+    if (key === ':none' || key === ':error') {
+      this.showNotice(
+        'error',
+        '공유 받은 파일을 열지 못했습니다',
+        key === ':none' ? '공유에 파일이 없었습니다. .skp 파일을 공유해 주세요.' : '이 브라우저에 파일을 저장하지 못했습니다(저장 공간 부족·비공개 창 등). 파일을 저장한 뒤 "열기"로 골라 주세요.',
+      );
+      return;
+    }
+    const name = nameOfRecentId(key);
+    if (!key.startsWith('shared:')) {
+      await this.openRecent({ id: key, name });
+      return;
+    }
+    // 60 MB보다 커서 최근 목록에 넣지 않은 파일: 한 번 꺼내 열고 지운다
+    const attempt = beginOpen('local', 'skp');
+    const seq = ++this.openSeq;
+    this.setBusy(name, 0.005, '파일 읽는 중');
+    const data = await this.recent.take(key);
+    if (seq !== this.openSeq) return;
+    if (!data) {
+      this.setBusy(null);
+      attempt.error('read_error');
+      this.showNotice('error', `"${name}" 파일을 찾지 못했습니다`, '공유 받은 사본이 지워졌습니다. 다시 공유하거나 "열기"로 골라 주세요.');
+      return;
+    }
+    await this.openBuffer(name, data, seq, attempt);
+  }
+
+  /** 새 판 알림(서비스 워커): 새로 고치면 새 판으로 다시 읽는다(열어 둔 파일은 최근 문서에서 다시 연다) */
+  offerUpdate(apply: () => void): void {
+    const n = this.els.updateBar;
+    n.hidden = false;
+    const ok = n.querySelector<HTMLButtonElement>('.upd-apply')!;
+    ok.onclick = () => {
+      ok.disabled = true;
+      apply();
+    };
   }
 }
 
 /** 문서가 쓰던 그림 Blob 주소와 워커가 넘긴 무늬 ImageBitmap을 푼다(뷰어는 이미 다음 장면으로 바꿨다) */
+/** 키 대상이 화살표·PageUp·PageDown을 스스로 쓰는 곳(패널 목록·메뉴·장면 탭·패널 크기 손잡이·슬라이더 등 입력)인지 */
+function inList(t: EventTarget | null): boolean {
+  const el = t as Element | null;
+  return !!el && typeof el.closest === 'function' && !!el.closest('.panel, .menu, .scene-tabs, .resizer, .measure-log, input, select, [role="tree"], [role="listbox"]');
+}
+
 function revokeImages(d: SkpDoc): void {
   for (const u of d.images?.urls ?? [])
     try {

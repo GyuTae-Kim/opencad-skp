@@ -1,6 +1,6 @@
 /**
  * SketchUp 2020 이하(머리 뒤 MFC CArchive 객체 직렬화) → 중간 모형(SkpModel, 2021+ 해석기와 같은 꼴).
- * SketchUp 7·8·2013~2020(CSketchUpModel 스키마 21~29)을 읽고, SketchUp 3~6은 분명한 까닭과 함께 거절한다(MfcRefused).
+ * SketchUp 6(CSketchUpModel 스키마 18)·7·8·2013~2020(21~29)을 읽고, SketchUp 3~5는 분명한 까닭과 함께 거절한다(MfcRefused).
  * 형식 지식은 MFC 직렬화 규칙(Microsoft TN002)과, 사용자가 허락한 2026-10 PRISME 엔진(SketchUp C API를 비교 기준으로 맞춘 해석기)의
  * legacy 해석기·문서에서 옮긴 것이다(docs/formats/skp.md). 코드는 opencad-skp 꼴로 새로 썼다.
  *
@@ -37,6 +37,7 @@ import {
   type SkpPage,
   type SkpTag,
   type SkpTagFolder,
+  type SkpTextureMap,
 } from './model';
 import { annotationReaders, elementFlags } from './mfcannot';
 import {
@@ -59,6 +60,8 @@ import { animationFromOptions, ifcGuid, lengthUnitCode, unitsFromOptions, type S
 /** 읽는 CSketchUpModel 스키마: SketchUp 7(21) ~ 2020(29) */
 const MIN_MODEL_SCHEMA = 21;
 const MAX_MODEL_SCHEMA = 29;
+/** SketchUp 6(CSketchUpModel 18): 머리에 설정 묶음·모형 속성이 없고 설정 묶음은 뿌리 요소 뒤에 온다 */
+const SU6_MODEL_SCHEMA = 18;
 /** 칸(클래스·객체) 수 한도 — 브라우저 메모리 보호 */
 export const MFC_MAX_RECORDS = 60_000_000;
 const MAX_DEFINITIONS = 1_000_000;
@@ -69,7 +72,7 @@ const DEFAULT_LAYER_NAMES = new Set(['Layer0', 'Untagged']);
 const UNSET_LAYER_COLOR: [number, number, number] = [64, 64, 64];
 const SNAP_TO = ['any', 'horizontal', 'vertical', 'sloped'] as const;
 
-/** SketchUp 3~6처럼 읽지 않는 옛 판 */
+/** SketchUp 3~5처럼 읽지 않는 옛 판 */
 export class MfcRefused extends Error {
   readonly modelSchema: number;
   readonly renderingSchema: number;
@@ -203,12 +206,13 @@ class Decoder {
     s.readObject(C.VERSION_MAP);
     const model = this.st.schemas.get('CSketchUpModel') ?? -1;
     const rendering = this.st.schemas.get('CRenderingOptions') ?? -1;
-    if (!(model >= MIN_MODEL_SCHEMA && model <= MAX_MODEL_SCHEMA) || !(rendering in RENDERING_BLOCK)) {
-      const old = model >= 0 && model < MIN_MODEL_SCHEMA;
+    const known = (model >= MIN_MODEL_SCHEMA && model <= MAX_MODEL_SCHEMA) || model === SU6_MODEL_SCHEMA;
+    if (!known || !(rendering in RENDERING_BLOCK)) {
+      const old = model >= 0 && model < SU6_MODEL_SCHEMA;
       throw new MfcRefused(
         old
-          ? `SketchUp ${this.header.version} 파일은 SketchUp 3~6의 아주 옛 형식(모형 스키마 ${model})이라 아직 읽지 못합니다. SketchUp 7 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.`
-          : `SketchUp ${this.header.version} 파일의 형식(모형 스키마 ${model}, 렌더링 스키마 ${rendering})은 확인한 SketchUp 7~2020 형식과 달라 읽지 못합니다.`,
+          ? `SketchUp ${this.header.version} 파일은 SketchUp 3~5의 아주 옛 형식(모형 스키마 ${model})이라 아직 읽지 못합니다. SketchUp 6 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.`
+          : `SketchUp ${this.header.version} 파일의 형식(모형 스키마 ${model}, 렌더링 스키마 ${rendering})은 확인한 SketchUp 6~2020 형식과 달라 읽지 못합니다.`,
         model,
         rendering,
       );
@@ -240,8 +244,15 @@ class Decoder {
     if (schema >= 26) s.skip(8); // 다음 영구 번호
     const thumb = s.readObject(C.DIB);
     if (isDib(thumb)) this.image('model', '모형 미리보기', thumb);
-    s.skip(schema >= 26 ? 15 : 14);
+    s.skip(schema >= 26 ? 15 : schema >= MIN_MODEL_SCHEMA ? 14 : 10);
     const description = s.cstr();
+    if (schema < MIN_MODEL_SCHEMA) {
+      const camera = s.readObject(C.CAMERA) as SkpCamera | null;
+      const block = this.view.renderingBlock(false);
+      const out: ReturnType<Decoder['readModelHead']> = { description, options: new Map(), block };
+      if (camera) out.camera = camera;
+      return out;
+    }
     const options = this.options();
     // SketchUp 자신의 기록 사전(ModelProperties 등) — 2021+의 모형 속성 절(0x0209)과 같다
     const props = s.readObject(C.ATTRIBUTE_CONTAINER) as AttrContainer | null;
@@ -269,7 +280,7 @@ class Decoder {
   }
 
   /** 설정 묶음: u32, 묶음 수 × (이름, 열쇠 + 형 있는 값 … 빈 열쇠) */
-  private options(): SkpOptions {
+  options(): SkpOptions {
     const s = this.s;
     s.u32();
     const out: SkpOptions = new Map();
@@ -377,7 +388,8 @@ class Decoder {
       if (!key) break;
       put(entries, key, this.st.typedValue());
     }
-    s.u32();
+    // SketchUp 6(CAttributeNamed 0)은 끝 u32가 없다
+    if ((this.st.schemas.get('CAttributeNamed') ?? 1) >= 1) s.u32();
     return { name, entries };
   }
 
@@ -404,18 +416,35 @@ class Decoder {
 
   // ── 재질·태그 ───────────────────────────────────────────────────
 
-  /** 재질 칸(태그 색에도 줄 안에 쓴다): 이름, u8 무늬, [CTexture: 앞머리, CDib, 너비, 높이, 경로, 평균 RGBA], u8, RGBA, 표시 이름, u32 꼴, u32 색 입히기, f64 투명도, u8 알파 쓰기 */
-  private materialBody(): { name: string; display: string; rgb: [number, number, number]; colorAlpha: number; alpha: number; textured: boolean; translucent: boolean; texture?: { dib: DibRef; path: string } } {
+  /**
+   * 재질 칸(태그 색에도 줄 안에 쓴다): 이름, u8 무늬, [CTexture: 앞머리, CDib, 너비, 높이(인치), 경로, 평균 RGBA], u8, RGBA, 표시 이름,
+   * u32 꼴(0 색 · 1 무늬 · 2 색을 바꾼 무늬), u32 색 바꾸기 방식(0 shift · 1 tint), f64 투명도, u8 알파 쓰기
+   */
+  private materialBody(): {
+    name: string;
+    display: string;
+    rgb: [number, number, number];
+    colorAlpha: number;
+    alpha: number;
+    textured: boolean;
+    translucent: boolean;
+    /** 무늬 한 장 크기(인치)·원래 그림 평균색(무늬 재질이면) */
+    tile?: { width: number; height: number; average: [number, number, number] };
+    texture?: { dib: DibRef; path: string };
+    colorize?: 'shift' | 'tint';
+  } {
     const s = this.s;
     const name = s.cstr();
     const textured = s.u8() !== 0;
     let avg: Uint8Array = new Uint8Array([0, 0, 0, 255]);
     let texture: { dib: DibRef; path: string } | undefined;
+    let width = 0;
+    let height = 0;
     if (textured) {
       this.st.preamble();
       const d = s.readObject(C.DIB);
-      s.f64();
-      s.f64();
+      width = s.f64();
+      height = s.f64();
       const path = s.cstr();
       avg = s.bytes(4);
       if (isDib(d)) texture = { dib: d, path };
@@ -426,8 +455,8 @@ class Decoder {
     // 색을 정하지 않은 무늬 재질은 무늬 평균색
     if (!c[3] && textured) rgb = [avg[0]!, avg[1]!, avg[2]!];
     const display = s.cstr();
-    s.u32();
-    s.u32();
+    const type = s.u32();
+    const colorize = s.u32();
     const transparency = s.f64();
     const useAlpha = s.u8() !== 0;
     const opacity = useAlpha && Number.isFinite(transparency) ? Math.max(0, Math.min(1, 1 - transparency)) : 1;
@@ -440,7 +469,14 @@ class Decoder {
       textured,
       translucent: avg[3]! < 255 || opacity < 1,
     };
+    // 무늬 크기: 2021+ material.xml의 xScale·yScale과 같은 뜻(인치). 0·음수·수가 아니면 1인치(2021+ 읽기와 같게)
+    if (textured) {
+      const size = (v: number): number => (Number.isFinite(v) && v > 0 ? v : 1);
+      out.tile = { width: size(width), height: size(height), average: [avg[0]!, avg[1]!, avg[2]!] };
+    }
     if (texture) out.texture = texture;
+    // 색을 바꾼 무늬(꼴 2): 재질 색이 바꾼 색, 평균색이 원래 그림 평균색(2021+ type 2와 같다)
+    if (textured && type === 2) out.colorize = colorize === 1 ? 'tint' : 'shift';
     return out;
   }
 
@@ -456,6 +492,13 @@ class Decoder {
     // 2021+ material.xml 읽기와 같게: 알파를 쓰고 0 < 불투명도 < 1이면 그 값(너무 옅으면 0.15)
     const alpha = m.alpha < 1 && m.alpha > 0 ? Math.max(0.15, m.alpha) : 1;
     const info: SkpMaterialInfo = { name: m.display || m.name || key, color: [m.rgb[0] / 255, m.rgb[1] / 255, m.rgb[2] / 255, alpha], textured: m.textured };
+    // 무늬: 크기·평균색(그림 바이트는 readSkpImages가 이 재질 열쇠를 폴더로 꺼낸다 — 무늬 좌표는 skpToScene의 textures로 입힌다)
+    if (m.tile) {
+      info.texture = { width: m.tile.width, height: m.tile.height, average: m.tile.average };
+      const file = m.texture ? baseName(m.texture.path) : '';
+      if (file) info.texture.file = file;
+    }
+    if (m.colorize) info.colorize = m.colorize;
     this.materials.push({ key, info, translucent: m.translucent });
     if (m.texture) this.image('material', baseName(m.texture.path) || key, m.texture.dib, key);
     return index;
@@ -551,8 +594,10 @@ class Decoder {
     rec.description = s.cstr();
     s.cstr();
     s.u32();
-    const block = s.bytes(st.entityPids ? 43 : 42);
-    rec.behavior = behavior(block, st.entityPids ? 1 : 0);
+    // 동작 덩어리: CComponentBehavior 5(SketchUp 7+) 42바이트, 4(SketchUp 6) 38바이트(늘이지 않음 마스크가 없다)
+    const old = (st.schemas.get('CComponentBehavior') ?? 5) < 5;
+    const block = s.bytes((old ? 38 : 42) + (st.entityPids ? 1 : 0));
+    rec.behavior = behavior(block, st.entityPids ? 1 : 0, old);
     const thumb = s.readObject(C.THUMBNAIL);
     if (isDib(thumb)) this.image('component', rec.name || `정의 ${index + 1}`, thumb);
     return index;
@@ -726,23 +771,38 @@ class Decoder {
     if (d.layer >= 0) f.layer = d.layer;
     if (pre.pid !== undefined) f.pid = pre.pid;
     if (pre.attrs) f.attrs = pre.attrs;
+    // 무늬 위치(CFaceTextureCoords): 그쪽 재질이 무늬 재질이고 깃발 비트 0(위치 정함)이 있을 때만(2021+ 읽기와 같게 —
+    // 무늬를 지운 재질의 면에도 남아 있다). 쪽마다 f64 12개 중 앞 9개가 2021+와 같은 열 우선 3×3 행렬이다(엔진 legacy 해석기)
+    const t = pre.texture;
+    if (t) {
+      const map = (v: readonly number[], flags: number, mat: number | undefined): SkpTextureMap | undefined => {
+        if (!(flags & 1) || mat === undefined || !this.materials[mat]?.info.texture) return undefined;
+        const m = v.slice(0, 9);
+        return m.length === 9 && m.every(Number.isFinite) ? { kind: 0, matrix: Float64Array.from(m) } : undefined;
+      };
+      const fm = map(t.front, t.frontFlags, f.front);
+      const bm = map(t.back, t.backFlags, f.back);
+      if (fm) f.frontMap = fm;
+      if (bm) f.backMap = bm;
+    }
     c.faces.push(f);
     return pack(c.cid, c.faces.length - 1);
   }
 }
 
 /** 정의 동작 덩어리: 붙기 27, 구멍 뚫기 28, 붙는 면 29, 카메라 보기·해 그림자 33(비트 0·1), 늘이지 않음 34(+1: 2017+) */
-function behavior(block: Uint8Array, shift: number): SkpBehavior {
+function behavior(block: Uint8Array, shift: number, noMask = false): SkpBehavior {
   const glue = block[27 + shift]!;
   const snap = block[29 + shift]!;
   const cam = block[33 + shift]!;
-  return {
+  const out: SkpBehavior = {
     alwaysFaceCamera: (cam & 1) !== 0,
     cutsOpening: block[28 + shift] !== 0,
     shadowsFaceSun: (cam & 2) !== 0,
     snapTo: glue ? (SNAP_TO[snap] ?? 'any') : 'none',
-    noScaleMask: block[34 + shift]!,
   };
+  if (!noMask) out.noScaleMask = block[34 + shift]!;
+  return out;
 }
 
 // ── 맞추기(모형 전체를 읽은 뒤) ───────────────────────────────────────
@@ -1027,6 +1087,8 @@ function assemble(dec: Decoder, head: ReturnType<Decoder['readModelHead']>): { m
     model.rendering = rendering;
   }
   if (view.defaults) model.annotationDefaults = view.defaults;
+  if (view.shadow) model.shadowInfo = view.shadow;
+  if (view.axesValue) model.axes = view.axesValue;
   if (view.pages.length) {
     model.pages = finishPages(dec, view.pages, final, animation);
     if (view.activePage !== undefined) model.activePage = view.activePage;
@@ -1115,7 +1177,7 @@ const isDamage = (e: unknown): boolean => !(e instanceof MfcError) || e.kind ===
 
 /**
  * 2020 이하 SKP 바이트 → 중간 모형. 머리가 MFC 꼴이어야 한다(readSkpHeader의 container = 'mfc').
- * SketchUp 3~6이나 모르는 스키마는 MfcRefused, 형상 앞에서 멈추면 그 까닭의 Error를 던진다.
+ * SketchUp 3~5나 모르는 스키마는 MfcRefused, 형상 앞에서 멈추면 그 까닭의 Error를 던진다.
  * onProgress는 읽은 바이트 위치로 진행(0~1)을 알린다.
  */
 export function readMfcModel(bytes: Uint8Array, header: SkpHeader, onProgress?: (fraction: number) => void): MfcResult {
@@ -1153,7 +1215,8 @@ export function readMfcModel(bytes: Uint8Array, header: SkpHeader, onProgress?: 
   }
   if (geometry)
     try {
-      dec.view.readTail();
+      // SketchUp 6은 설정 묶음(단위·장면 넘기기)을 머리가 아니라 꼬리(축 뒤)에 쓴다
+      dec.view.readTail(dec.st.schema('CSketchUpModel') < MIN_MODEL_SCHEMA ? () => (head.options = dec.options()) : undefined);
     } catch (e) {
       // 뿌리 요소 뒤는 보기 자료(위치·장면·스타일)뿐이다 — 형상은 다 읽었다
       dec.view.pages.length = 0;
@@ -1168,21 +1231,35 @@ export function readMfcModel(bytes: Uint8Array, header: SkpHeader, onProgress?: 
 // ── 그림(readSkpImages가 다시 풀지 않게, 장면을 만들 때 모은 자리를 잠깐 둔다) ─────────────
 
 const imageCache = new WeakMap<Uint8Array, MfcImageRef[]>();
+/** readSkpImages가 그림 자리를 얻으려고 읽은 모형(바로 이어 부르는 skpToScene이 다시 읽지 않게 한 번만 쓴다) */
+const resultCache = new WeakMap<Uint8Array, MfcResult>();
 
 /** skpToScene이 읽으며 모은 그림 자리를 둔다(같은 바이트로 readSkpImages를 부르면 다시 풀지 않는다) */
 export function rememberMfcImages(bytes: Uint8Array, refs: MfcImageRef[]): void {
   imageCache.set(bytes, refs);
 }
 
-/** 그림 자리: 둔 것이 있으면 그것(한 번 쓰고 버린다), 없으면 파일을 다시 읽는다. 형상 앞에서 멈추는 파일은 빈 목록 */
-export function mfcImageRefs(bytes: Uint8Array, header: SkpHeader): MfcImageRef[] {
+/** readSkpImages가 먼저 읽어 둔 모형(있으면 꺼내고 버린다) — 무늬를 입히려고 그림을 먼저 꺼내는 순서(워커)에서 두 번 읽지 않는다 */
+export function takeMfcResult(bytes: Uint8Array): MfcResult | undefined {
+  const r = resultCache.get(bytes);
+  if (r) resultCache.delete(bytes);
+  return r;
+}
+
+/**
+ * 그림 자리: 둔 것이 있으면 그것(한 번 쓰고 버린다), 없으면 파일을 읽는다(그 모형은 skpToScene이 쓰게 둔다).
+ * 형상 앞에서 멈추는 파일은 빈 목록. onProgress는 읽은 바이트 위치(0~1)
+ */
+export function mfcImageRefs(bytes: Uint8Array, header: SkpHeader, onProgress?: (fraction: number) => void): MfcImageRef[] {
   const known = imageCache.get(bytes);
   if (known) {
     imageCache.delete(bytes);
     return known;
   }
   try {
-    return readMfcModel(bytes, header).images;
+    const res = readMfcModel(bytes, header, onProgress);
+    resultCache.set(bytes, res);
+    return res.images;
   } catch {
     return [];
   }

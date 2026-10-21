@@ -5,7 +5,7 @@
  * 부르는 쪽(model.ts)이 절마다 try/catch로 감싼다 — 여기서 던진 예외는 그 절만 버리게 한다.
  */
 
-import type { SkpAnimation, SkpAnnotationDefaults, SkpAttrDicts, SkpCamera, SkpFont, SkpPage, SkpRenderingRaw, SkpTag, SkpTagFolder } from './model';
+import type { SkpAnimation, SkpAnnotationDefaults, SkpAttrDicts, SkpAxes, SkpCamera, SkpFont, SkpPage, SkpRenderingRaw, SkpShadowInfo, SkpTag, SkpTagFolder } from './model';
 import type { TlvNode, TlvReader } from './tlv';
 import { arrowName, leaderName, readAttrList, readHeaderAttrs, rgbOf, textAlignmentName, type Warn } from './vffcommon';
 import { TAG } from './vfftags';
@@ -54,6 +54,85 @@ export function readCamera(r: TlvReader, cam: TlvNode, warn: Warn): SkpCamera | 
   const aspect = num(TAG.CAMERA_ASPECT);
   if (aspect) out.aspect = aspect;
   return out;
+}
+
+// ── 위치·그림자·그리기 축 ─────────────────────────────────────────
+
+/** 위치·그림자 글 길이 한도 */
+const PLACE_CHARS = 256;
+
+/**
+ * 위치·그림자 6590(엔진 read_shadow_info와 같은 칸): 크기가 다르거나 수가 아닌 칸은 빠진다(보기 설정이라 모형을 거절하지 않는다)
+ */
+export function readShadowInfo(r: TlvReader, rec: TlvNode): SkpShadowInfo {
+  const out: SkpShadowInfo = {};
+  const at = (tag: number): TlvNode | undefined => r.firstSafe(rec, tag);
+  const t = at(TAG.SHADOW_TIME);
+  if (t && t.end - t.start === 4) out.time = r.uint(t)!;
+  const text = (tag: number): string | undefined => {
+    const n = at(tag);
+    const v = n && n.end - n.start <= PLACE_CHARS * 4 ? r.str(n) : undefined;
+    return v ? v.slice(0, PLACE_CHARS) : undefined;
+  };
+  const city = text(TAG.SHADOW_CITY);
+  if (city) out.city = city;
+  const country = text(TAG.SHADOW_COUNTRY);
+  if (country) out.country = country;
+  const real = (tag: number): number | undefined => {
+    const v = r.f64Exact(at(tag));
+    return v !== undefined && Number.isFinite(v) ? v : undefined;
+  };
+  const lat = real(TAG.SHADOW_LATITUDE);
+  if (lat !== undefined) out.latitude = lat;
+  const lon = real(TAG.SHADOW_LONGITUDE);
+  if (lon !== undefined) out.longitude = lon;
+  const tz = real(TAG.SHADOW_TZ);
+  if (tz !== undefined) out.tz = tz;
+  const north = r.vec3(at(TAG.SHADOW_NORTH));
+  if (north && north.every(Number.isFinite)) out.north = north;
+  const int = (tag: number): number | undefined => r.i32Exact(at(tag));
+  const light = int(TAG.SHADOW_LIGHT);
+  if (light !== undefined) out.light = light;
+  const dark = int(TAG.SHADOW_DARK);
+  if (dark !== undefined) out.dark = dark;
+  const flag = (tag: number): boolean | undefined => {
+    const n = at(tag);
+    return n && n.end - n.start === 1 ? r.b[n.start] !== 0 : undefined;
+  };
+  const display = flag(TAG.SHADOW_DISPLAY);
+  if (display !== undefined) out.display = display;
+  const onFaces = flag(TAG.SHADOW_ON_FACES);
+  if (onFaces !== undefined) out.onFaces = onFaces;
+  const onGround = flag(TAG.SHADOW_ON_GROUND);
+  if (onGround !== undefined) out.onGround = onGround;
+  const useSun = flag(TAG.SHADOW_USE_SUN);
+  if (useSun !== undefined) out.useSun = useSun;
+  return out;
+}
+
+/** 그리기 축 4650: 원점·x·y·z(f64×3씩). 칸이 모자라거나 축이 0이면 undefined, 기본 축(원점 0, 단위 축)이면 undefined */
+export function readAxes(r: TlvReader, rec: TlvNode): SkpAxes | undefined {
+  const v = (tag: number): [number, number, number] | undefined => {
+    const x = r.vec3(r.firstSafe(rec, tag));
+    return x && x.every(Number.isFinite) ? x : undefined;
+  };
+  return axesOf(v(TAG.AXES_ORIGIN), v(TAG.AXES_X), v(TAG.AXES_Y), v(TAG.AXES_Z));
+}
+
+/** 원점·세 축 → 축(단위 벡터로). 모자라거나 축 길이가 0이면, 또는 기본 축이면 undefined */
+export function axesOf(origin?: [number, number, number], x?: [number, number, number], y?: [number, number, number], z?: [number, number, number]): SkpAxes | undefined {
+  if (!origin || !x || !y || !z) return undefined;
+  const unit = (a: [number, number, number]): [number, number, number] | null => {
+    const l = Math.hypot(a[0], a[1], a[2]);
+    return l > 1e-12 && Number.isFinite(l) ? [a[0] / l, a[1] / l, a[2] / l] : null;
+  };
+  const ux = unit(x);
+  const uy = unit(y);
+  const uz = unit(z);
+  if (!ux || !uy || !uz) return undefined;
+  const near = (a: readonly number[], b: readonly number[]): boolean => Math.abs(a[0]! - b[0]!) + Math.abs(a[1]! - b[1]!) + Math.abs(a[2]! - b[2]!) < 1e-12;
+  if (near(origin, [0, 0, 0]) && near(ux, [1, 0, 0]) && near(uy, [0, 1, 0]) && near(uz, [0, 0, 1])) return undefined;
+  return { origin, x: ux, y: uy, z: uz };
 }
 
 // ── 선 종류·태그·태그 폴더 ─────────────────────────────────────────
@@ -314,6 +393,12 @@ function readPage(r: TlvReader, n: TlvNode, layers: LayerSet, styles: StyleSet, 
   if (delay !== undefined) page.delay = delay;
   const inAnim = r.first(n, TAG.PAGE_IN_ANIMATION);
   page.includeInAnimation = !inAnim || inAnim.end === inAnim.start || r.b[inAnim.start] !== 0;
+  // 이 장면이 기억하는 그림자 설정(깃발 0x004)
+  if (page.flags & 0x004) {
+    const holder = r.first(n, TAG.PAGE_SHADOW);
+    const rec = holder && r.first(holder, TAG.SHADOW_INFO);
+    if (rec) page.shadowInfo = readShadowInfo(r, rec);
+  }
   const thumb = r.first(n, TAG.PAGE_THUMBNAIL);
   const path = thumb && r.first(thumb, TAG.TEXTURE_PATH);
   if (path && path.end - path.start <= THUMB_PATH_LIMIT) {
