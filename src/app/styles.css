@@ -1411,6 +1411,35 @@ button.scene-card.sel {
   background: var(--accent);
 }
 
+/* 장면 재생에서 뺀 장면 */
+.scene-tab.no-play:not(.on) {
+  font-style: italic;
+  opacity: 0.8;
+}
+
+/* 장면 재생(▶/■) */
+.scene-play {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.scene-play:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.scene-play.on {
+  color: var(--accent);
+}
+
 /* 태그 폴더·태그 색·단면 견본 */
 .prow.folder .name {
   font-weight: 600;
@@ -2002,6 +2031,11 @@ html:lang(zh-CN) { --font: -apple-system, "PingFang SC", "Microsoft YaHei", sans
     min-height: 38px;
     padding: 0 12px;
     font-size: 13px;
+  }
+
+  .scene-play {
+    width: 40px;
+    min-height: 38px;
   }
 }
 

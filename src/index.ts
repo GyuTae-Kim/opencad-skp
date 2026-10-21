@@ -395,6 +395,8 @@ function extrasMeta(
   } catch (e) {
     warnings.push(`장면 목록을 풀지 못했습니다(${e instanceof Error ? e.message : String(e)})`);
   }
+  if (model.animation?.loop !== undefined) out.animation = { loop: model.animation.loop };
+  if (parts.revealItems?.length) out.revealItems = parts.revealItems;
   if (model.tagFolders?.length) out.tagFolders = model.tagFolders.map((f) => ({ name: f.name, visible: f.visible !== false, parent: f.parent }));
   if (model.name) out.modelName = model.name;
   if (model.description) out.modelDescription = model.description;

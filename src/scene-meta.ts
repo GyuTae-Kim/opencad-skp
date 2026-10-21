@@ -138,6 +138,8 @@ export function pagesMeta(model: SkpModel, scale: number, ctx: PagesContext = {}
     const dl = clampTime(clampTime(p.delay, Infinity) ?? anim?.sceneDelay, MAX_DELAY_S);
     if (dl !== undefined) out.delay = dl;
     if (p.thumbnail) out.thumbnail = p.thumbnail;
+    // 장면 재생(슬라이드 쇼)에서 뺀 장면만 적는다
+    if (p.includeInAnimation === false) out.includeInAnimation = false;
     pages.push(out);
   }
   const res: { pages: SkpPageMeta[]; activePage?: number } = { pages };

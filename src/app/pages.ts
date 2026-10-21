@@ -398,6 +398,7 @@ export function readPage(v: unknown, index: number): SkpPageMeta {
   const delay = seconds(o.delay);
   if (delay !== undefined) page.delay = delay;
   if (typeof o.thumbnail === 'string' && o.thumbnail) page.thumbnail = o.thumbnail;
+  if (o.includeInAnimation === false) page.includeInAnimation = false;
   return page;
 }
 
@@ -670,6 +671,32 @@ export function stepPage(count: number, current: number | null, dir: 1 | -1, wra
   const next = current + dir;
   if (next >= 0 && next < count) return next;
   return wrap ? (next + count) % count : null;
+}
+
+// ───────────────────────── 장면 재생(슬라이드 쇼) ─────────────────────────
+
+/** 재생할 장면 차례: "장면 재생에 넣기"를 끈 장면은 뺀다(모두 껐으면 모든 장면) */
+export function slideshowOrder(pages: readonly Pick<SkpPageMeta, 'includeInAnimation'>[]): number[] {
+  const order = pages.map((_, i) => i).filter((i) => pages[i]!.includeInAnimation !== false);
+  return order.length ? order : pages.map((_, i) => i);
+}
+
+/**
+ * 다음 재생 장면: 지금 장면 다음(지금 장면이 재생 목록에 없으면 처음). 끝에서 loop면 처음으로, 아니면 null(멈춤).
+ * started: 이번 재생에서 이미 넘긴 장면 수(처음 부를 때 0) — 되풀이하지 않는 재생은 목록을 한 바퀴 돌면 멈춘다
+ */
+export function nextSlide(order: readonly number[], current: number | null, loop: boolean, started = 0): number | null {
+  if (!order.length) return null;
+  const at = current === null ? -1 : order.indexOf(current);
+  if (at < 0) return order[0]!;
+  if (at + 1 < order.length) return order[at + 1]!;
+  return loop || started === 0 ? order[0]! : null;
+}
+
+/** 장면 하나를 보이는 시간(ms): 전환 시간(카메라 옮기기, 앱은 4초에서 자른다) + 지연 시간(없으면 1초) */
+export function slideDurationMs(page: Pick<SkpPageMeta, 'delay'>, transitionS: number): number {
+  const t = Number.isFinite(transitionS) && transitionS > 0 ? Math.min(transitionS, 4) : 0;
+  return Math.round((t + delaySeconds(page)) * 1000);
 }
 
 /** 부드럽게 시작하고 멈추는 진행(0~1) */

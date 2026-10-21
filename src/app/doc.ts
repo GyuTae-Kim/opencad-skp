@@ -170,6 +170,10 @@ export interface SkpDoc {
   lineIndex: Map<string, number>;
   /** 면 경계·곡선 번호(meta.faceRuns·segmentCurves) */
   faceIndex: FaceIndex;
+  /** 모형에서 숨겼지만 장면이 다시 보이는 노드의 보통 색 항목(meta.revealItems): 항목 id → 노드 */
+  revealOf: Map<string, number>;
+  /** 지금 장면이 다시 보이게 한 노드(처음엔 없음 — 숨긴 개체를 기억하는 장면을 고르면 바뀐다) */
+  revealNodes: Set<number>;
   /** 여러 단계 나무(meta.tree, 없으면 null — 윗단계 목록만) */
   tree: TreeView | null;
   /** 윗단계 나무 노드 → outline 차례 */
@@ -452,6 +456,29 @@ export const KIND_LABEL: Record<OutlineRow['kind'], string> = { group: '그룹',
 
 let serial = 0;
 
+/** meta.revealItems → 항목 id → 노드(꼴이 다르거나 장면에 없는 id는 뺀다) */
+export function readReveal(scene: Scene3d): Map<string, number> {
+  const list = meta(scene).revealItems;
+  const out = new Map<string, number>();
+  if (!Array.isArray(list)) return out;
+  const known = new Set<string>([...scene.meshes.map((m) => m.id), ...scene.lines.map((l) => l.id)]);
+  for (const r of list) {
+    if (!r || typeof r !== 'object') continue;
+    const o = r as Record<string, unknown>;
+    if (!Number.isInteger(o.node) || (o.node as number) < 0 || !Array.isArray(o.ids)) continue;
+    for (const id of o.ids) if (typeof id === 'string' && known.has(id)) out.set(id, o.node as number);
+  }
+  return out;
+}
+
+/** 장면 계획의 숨긴 노드 목록 → 다시 보일 노드(모형 숨김 노드 가운데 그 장면이 숨기지 않는 것). 숨긴 개체를 기억하지 않는 장면은 null(그대로) */
+export function revealNodesFor(d: Pick<SkpDoc, 'revealOf'>, hiddenNodes: ReadonlySet<number> | null): Set<number> | null {
+  if (!hiddenNodes) return null;
+  const out = new Set<number>();
+  for (const n of d.revealOf.values()) if (!hiddenNodes.has(n)) out.add(n);
+  return out;
+}
+
 /** meta.extraItems → 부드러운·숨긴 형상 */
 export function readExtras(scene: Scene3d): DocExtras | null {
   const x = meta(scene).extraItems as Record<string, unknown> | undefined;
@@ -533,6 +560,8 @@ export function createDoc(name: string, size: number, res: ParseResult, opts: { 
     meshIndex: new Map(scene.meshes.map((m, i) => [m.id, i])),
     lineIndex: new Map(scene.lines.map((l, i) => [l.id, i])),
     faceIndex: readFaceIndex(scene),
+    revealOf: readReveal(scene),
+    revealNodes: new Set(),
     tree,
     nodeOutline,
     extras: readExtras(scene),
@@ -870,6 +899,21 @@ export function hiddenNodeRanges(d: SkpDoc): Map<number, IndexRange[]> {
   return mergeNodeRanges(t, d.scene, nodes);
 }
 
+/**
+ * 장면이 다시 보이게 한 노드의 반투명 숨긴 형상 구간(숨긴 형상 보기를 켰을 때 보통 색 그림과 겹치지 않게 숨긴다).
+ * 항목 차례 → 구간, 숨긴 형상 항목(extras.hidden)만
+ */
+export function revealGhostRanges(d: SkpDoc): Map<number, IndexRange[]> {
+  const t = d.tree;
+  if (!t || !d.revealNodes.size || !d.showHidden || !d.extras || t.runsDropped) return new Map();
+  const out = new Map<number, IndexRange[]>();
+  for (const [item, list] of mergeNodeRanges(t, d.scene, d.revealNodes)) {
+    const id = item < d.scene.meshes.length ? d.scene.meshes[item]?.id : d.scene.lines[item - d.scene.meshes.length]?.id;
+    if (id && d.extras.hidden.has(id)) out.set(item, list);
+  }
+  return out;
+}
+
 /** 주석 종류가 지금 켜져 있는지 */
 export function annotationShown(d: Pick<SkpDoc, 'showTexts' | 'showDimensions' | 'showGuides' | 'showSectionPlanes'>, kind: AnnotationKind): boolean {
   return kind === 'dimensions' ? d.showDimensions : kind === 'leaders' ? d.showTexts : kind === 'guides' ? d.showGuides : d.showSectionPlanes;
@@ -880,6 +924,18 @@ export function itemVisible(d: SkpDoc, item: number): boolean {
   const s = d.scene;
   const id = item < s.meshes.length ? s.meshes[item]?.id : s.lines[item - s.meshes.length]?.id;
   if (id === undefined) return false;
+  // 장면이 다시 보이는 숨김 인스턴스: 그 장면을 고른 동안만, 그 노드·조상을 숨기지 않았을 때
+  const rn = d.revealOf.get(id);
+  if (rn !== undefined) {
+    if (!d.revealNodes.has(rn)) return false;
+    if (d.tree && d.tree.parent[rn] !== undefined && d.tree.parent[rn]! >= 0 && hiddenByNodes(d.tree, d.hiddenNodes, d.tree.parent[rn]!)) return false;
+    if (d.hiddenNodes.has(rn)) return false;
+    if (d.tree && d.hiddenOutline.size) {
+      const o = d.nodeOutline.get(nodePath(d.tree, rn)[0]!);
+      if (o !== undefined && d.hiddenOutline.has(o)) return false;
+    }
+    return true;
+  }
   const ak = d.annotationKind.get(id);
   if (ak) {
     if (!annotationShown(d, ak)) return false;

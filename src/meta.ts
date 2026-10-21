@@ -88,6 +88,8 @@ export interface SkpPageMeta {
   delay?: number;
   /** 장면 미리보기 그림의 ZIP 경로(readSkpImages의 scenes[].name과 같음) */
   thumbnail?: string;
+  /** 장면 재생(슬라이드 쇼)에서 뺀 장면이면 false(넣는 장면은 칸이 없다) */
+  includeInAnimation?: boolean;
 }
 
 /** 태그 폴더 */
@@ -227,6 +229,13 @@ export interface SkpMetaExtras {
   faceRuns?: Uint32Array[];
   /** 모서리 묶음마다(scene.lines 차례) 선분의 놓인 곡선 번호(-1 = 곡선 아님, 같은 수 = 같은 곡선의 한 배치). 곡선이 없는 묶음·주석은 null */
   segmentCurves?: (Int32Array | null)[];
+  /** Model Info > Animation: 장면 재생을 되풀이할지(loop) */
+  animation?: { loop?: boolean };
+  /**
+   * 모형에서 숨겼지만 어떤 장면(숨긴 개체를 기억하는)에서는 보이는 인스턴스: 나무 노드마다 그 안쪽을 보통 색으로 따로 그린 항목 id.
+   * 화면은 처음에 숨기고, 그 노드를 숨기지 않는 장면을 고르면 보인다(숨긴 형상 보기의 반투명 그물과는 따로)
+   */
+  revealItems?: { node: number; ids: string[] }[];
   /** 속성 사전 모음(같은 것은 한 번만): 모형 속성은 modelAttrs 차례 */
   attributes?: SkpAttrDictsMeta[];
   modelAttrs?: number;

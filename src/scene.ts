@@ -55,7 +55,7 @@ import type {
   Vec3,
 } from './meta';
 import * as A from './scene-annotations';
-import { AttrPool } from './scene-meta';
+import { AttrPool, PAGE_USE_HIDDEN_OBJECTS } from './scene-meta';
 import { cornerNormals, faceUnitNormal } from './scene-smooth';
 import { applyFaceUvq, faceUvq, planeAxes } from './projection';
 
@@ -89,6 +89,9 @@ export const MAX_SPLIT_ITEMS = 3000;
 export const MAX_TREE_RUNS = 2_000_000;
 /** 무늬 좌표를 다는 정점 수 한도(넘으면 그 뒤 그물은 무늬 없이 평균색 — 정점마다 8~12바이트가 더 든다) */
 export const MAX_UV_VERTICES = 6_000_000;
+/** 장면이 다시 보이는 모형 숨김 인스턴스(revealItems): 노드 수·정점 수 한도(한 번 더 그리는 형상이라 작게) */
+export const MAX_REVEAL_NODES = 200;
+export const MAX_REVEAL_VERTICES = 2_000_000;
 
 /**
  * 큰 좌표 기준(인치): 덧붙이는 형상(배치 하나의 한 묶음)의 첫 정점이 원점에서 이보다 멀면(어느 축이든),
@@ -764,6 +767,8 @@ export interface SceneParts {
   /** 속성 사전 모음(meta.attributes)과 모형 속성 차례 */
   attributes?: SkpAttrDictsMeta[];
   modelAttrs?: number;
+  /** 모형에서 숨겼지만 장면이 다시 보이는 인스턴스 노드와 그 안쪽을 보통 색으로 그린 항목(meta.revealItems) */
+  revealItems?: { node: number; ids: string[] }[];
 }
 
 /** 넓이 우선으로 모은 나무(펼치기 전) */
@@ -1077,7 +1082,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   let lastRunSerial = -1;
   let lastRunNode = -2;
   const addRun = (serial: number, start: number, node: number): void => {
-    if (!T || runsDropped) return;
+    // REVEAL_NODE: 장면이 다시 보이는 숨김 인스턴스의 두 번째 그림 — 나무 구간에 넣지 않는다(고르기는 그 항목 그대로)
+    if (!T || runsDropped || node < -1) return;
     if (serial === lastRunSerial && node === lastRunNode) return;
     if (runItem.n >= maxRuns) {
       runsDropped = true;
@@ -1628,6 +1634,95 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     }
   };
 
+  // ── 장면이 다시 보이는 모형 숨김 인스턴스: 숨긴 개체를 기억하는 장면 중 하나라도 숨기지 않는 인스턴스(영구 번호)는
+  //    숨긴 형상(반투명 extras)과 따로 보통 색으로 한 번 더 그려 둔다(화면은 그 장면에서만 보인다). 나무가 있을 때만(노드로 잇는다)
+  const revealPids = new Set<number>();
+  if (extras && T && model.pages?.length) {
+    const hiddenPids: number[] = [];
+    const scanHidden = (e: SkpEntities): void => {
+      for (const inst of e.instances) if (inst.flags & FLAG_HIDDEN && inst.pid !== undefined) hiddenPids.push(inst.pid);
+    };
+    scanHidden(model.root);
+    for (const d of model.definitions.values()) scanHidden(d.entities);
+    if (hiddenPids.length)
+      for (const pg of model.pages) {
+        if (!(Number.isFinite(pg.flags) && pg.flags & PAGE_USE_HIDDEN_OBJECTS)) continue;
+        const shown = new Set(pg.hiddenIds ?? []);
+        for (const pid of hiddenPids) if (!shown.has(pid)) revealPids.add(pid);
+      }
+  }
+  const REVEAL_NODE = -2;
+  const REVEAL_SLOT = Number.MAX_SAFE_INTEGER;
+  const revealFaces = new Map<string, Bucket & { node: number }>();
+  const revealLines = new Map<string, LineBucket & { node: number }>();
+  const revealNodes = new Set<number>();
+  let revealVerts = 0;
+  let revealLimited = false;
+  /** 다시 보일 숨김 인스턴스 안쪽(그 안에서 또 숨긴 인스턴스는 빼고)을 노드 몫 묶음에 보통 색으로 덧붙인다 */
+  let revealPlacement = -1;
+  const reveal = (ents: SkpEntities, m: Float64Array, inhMat: number | undefined, inhLayer: number | undefined, depth: number, stack: Set<SkpEntities>, node: number): void => {
+    if (revealLimited) return;
+    const p = prep(ents);
+    const layerHere = inhLayer ?? model.defaultLayer ?? -1;
+    const matOf = (b: Batch): number | undefined => (b.mat >= 0 ? b.mat : (inhMat ?? (b.mat <= -2 ? -(b.mat + 2) : undefined)));
+    const L = linearOf(m);
+    for (const b of p.batches) {
+      const nv = b.pos.length / 3;
+      if (revealVerts + nv > MAX_REVEAL_VERTICES) {
+        revealLimited = true;
+        return;
+      }
+      revealVerts += nv;
+      const layer = b.layer >= 0 ? b.layer : layerHere;
+      const mat = matOf(b);
+      const far = farCell(b.pos, m);
+      const key = `${node}|${layer}|${mat ?? 'd'}${far ? far.key : ''}`;
+      let bk = revealFaces.get(key);
+      if (!bk)
+        revealFaces.set(
+          key,
+          (bk = {
+            serial: -1,
+            slot: REVEAL_SLOT,
+            // 0이 아닌 갈래: 장면 범위(bounds)에 넣지 않는다(숨긴 형상처럼)
+            cls: 2,
+            layer,
+            mat,
+            pos: new F32(),
+            idx: new U32(),
+            faces: 0,
+            area: 0,
+            origin: far ? far.origin : null,
+            uv: mat !== undefined && texMap?.has(mat) ? new F32() : null,
+            uvStride: 2,
+            fs: new U32(64),
+            node,
+          }),
+        );
+      appendFaces(bk, b, m, REVEAL_NODE, L, inhMat);
+    }
+    const placement = revealPlacement--;
+    for (const l of p.lines) {
+      const layer = l.layer >= 0 ? l.layer : layerHere;
+      const far = farCell(l.pos, m);
+      const key = `${node}|${layer}${far ? far.key : ''}`;
+      let lb = revealLines.get(key);
+      if (!lb) revealLines.set(key, (lb = { serial: -1, slot: REVEAL_SLOT, cls: 2, layer, pos: new F32(), origin: far ? far.origin : null, curves: null, node }));
+      appendLines(lb, l, m, REVEAL_NODE, ents, placement);
+    }
+    if (depth >= MAX_DEPTH) return;
+    stack.add(ents);
+    for (const inst of ents.instances) {
+      if (inst.flags & FLAG_HIDDEN) continue;
+      const def = model.definitions.get(inst.definition);
+      if (!def || stack.has(def.entities)) continue;
+      const layer = inst.layer !== undefined && inst.layer !== model.defaultLayer ? inst.layer : inhLayer;
+      reveal(def.entities, mul4(m, inst.matrix), inst.material ?? inhMat, layer, depth + 1, stack, node);
+      if (revealLimited) break;
+    }
+    stack.delete(ents);
+  };
+
   /**
    * 요소 묶음 하나를 놓는다. node: 이 배치를 맡는 나무 노드(목록에 없는 깊은 배치는 목록에 든 조상, -1 = 모형).
    * hiddenSub: 숨긴 인스턴스 안쪽(extras일 때만 온다)
@@ -1755,7 +1850,16 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
         runFirst![child] = runItem.n;
       }
       const layer = inst.layer !== undefined && inst.layer !== model.defaultLayer ? inst.layer : inhLayer;
-      emit(def.entities, mul4(m, inst.matrix), inst.material ?? inhMat, layer, depth + 1, stack, childSlot, child, hiddenSub || hiddenInst);
+      const placed = mul4(m, inst.matrix);
+      emit(def.entities, placed, inst.material ?? inhMat, layer, depth + 1, stack, childSlot, child, hiddenSub || hiddenInst);
+      // 모형에서 숨겼지만 어떤 장면에서는 보이는 인스턴스: 그 노드 몫으로 보통 색 그림을 하나 더(숨긴 안쪽의 안쪽은 이미 숨김 그대로)
+      if (hiddenInst && !hiddenSub && own && inst.pid !== undefined && revealPids.has(inst.pid) && !revealLimited) {
+        if (revealNodes.size >= MAX_REVEAL_NODES && !revealNodes.has(child)) revealLimited = true;
+        else {
+          revealNodes.add(child);
+          reveal(def.entities, placed, inst.material ?? inhMat, layer, depth + 1, new Set(stack), child);
+        }
+      }
       if (own) {
         runEnd![child] = runItem.n;
         if (childSlot !== slot) nodeSlotEnd![child] = slotNode.length;
@@ -1883,6 +1987,28 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     ss.faces += bk.faces;
     ss.area += bk.area;
   }
+  // 장면이 다시 보이는 숨김 인스턴스의 보통 색 그림(통계·나무 구간에는 넣지 않는다 — 노드 몫 항목 id만 meta.revealItems에)
+  const revealIds = new Map<number, string[]>();
+  const revealId = (node: number, id: string): void => {
+    const list = revealIds.get(node);
+    if (list) list.push(id);
+    else revealIds.set(node, [id]);
+  };
+  for (const bk of [...revealFaces.values()].sort((a, b) => a.node - b.node || a.layer - b.layer || (a.mat ?? -1) - (b.mat ?? -1))) {
+    if (!bk.idx.n) continue;
+    const stored = bk.mat !== undefined ? model.materials.get(bk.mat) : undefined;
+    const matName = bk.mat === undefined ? '기본 재질' : stored !== undefined ? (materials.get(stored)?.name ?? stored) : `재질 ${bk.mat}`;
+    const tag = layerName(bk.layer);
+    const id = `skp-reveal-${meshes.length}`;
+    const mesh: Mesh3d = { id, name: `장면에서 보이는 숨긴 개체 · ${matName} · ${tag}`, positions: bk.pos.done(), indices: bk.idx.done(), color: colorOf(bk.mat), group: tag, doubleSided: true };
+    if (bk.nrm) mesh.normals = bk.nrm.done();
+    if (bk.origin) mesh.origin = bk.origin;
+    withTexture(mesh, bk);
+    meshes.push(mesh);
+    meshSlots.push(REVEAL_SLOT);
+    faceRuns.push(bk.fs.done());
+    revealId(bk.node, id);
+  }
   const lines: LineSet3d[] = [];
   const lineSlots: number[] = [];
   /** 모서리 묶음마다 선분의 놓인 곡선 번호(곡선 선분이 없는 묶음·주석 선분은 null) — meta.segmentCurves */
@@ -1923,6 +2049,20 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     tagStat(tag).edges += n;
     slotStat(lb.slot).edges += n;
   }
+
+  for (const lb of [...revealLines.values()].sort((a, b) => a.node - b.node || a.layer - b.layer)) {
+    if (!lb.pos.n) continue;
+    const tag = layerName(lb.layer);
+    const id = `skp-reveal-edges-${lines.length}`;
+    const l: LineSet3d = { id, name: `장면에서 보이는 숨긴 개체 모서리 · ${tag}`, positions: lb.pos.done(), color: EDGE_COLOR, group: tag };
+    if (dashedTags.has(tag)) l.dashed = true;
+    if (lb.origin) l.origin = lb.origin;
+    lines.push(l);
+    lineSlots.push(REVEAL_SLOT);
+    segmentCurves.push(lb.curves ? lb.curves.done() : null);
+    revealId(lb.node, id);
+  }
+  if (revealLimited) warnings.push(`장면에서 다시 보이는 숨긴 개체가 너무 많아(노드 ${MAX_REVEAL_NODES}개·정점 ${MAX_REVEAL_VERTICES.toLocaleString('en-US')}개 한도) 일부는 장면에서도 숨긴 채 둡니다`);
 
   // ── 주석 선분·보조점(형상 모서리 뒤에 붙인다 — 나무 항목 차례는 그대로) ──
   const points: PointSet3d[] = [];
@@ -2246,5 +2386,6 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   }
   if (outlineSkipped) parts.outlineSkipped = outlineSkipped;
   if (pool.list.length) parts.attributes = pool.list;
+  if (revealIds.size) parts.revealItems = [...revealIds].map(([node, ids]) => ({ node, ids }));
   return parts;
 }

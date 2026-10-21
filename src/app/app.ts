@@ -34,6 +34,9 @@ import {
   initialView,
   openingPage,
   pagePlan,
+  nextSlide,
+  slideDurationMs,
+  slideshowOrder,
   refitSceneCamera,
   renderModeForStyle,
   restoreSceneCamera,
@@ -61,6 +64,8 @@ import {
   nodeSelection,
   pickDeepest,
   releaseName,
+  revealGhostRanges,
+  revealNodesFor,
   selectedNode,
   selectionForPick,
   selectionIds,
@@ -87,7 +92,7 @@ import { RecentStore, canKeepRecent, recentTimeText, type RecentEntry } from './
 import { errorText, sceneHasGeometry } from './protocol';
 import { deviceHints, textureLimitsFor, type TextureLimits } from './texlimits';
 import { THEME_CHOICES, applyThemeChoice, readStoredTheme, resolveTheme, storeTheme, systemPrefersDark, themeChoiceOf, type ThemeChoice, type ThemeName } from './theme';
-import { childrenOf, isAncestor, isSplit, nodeBox, nodePath, type PickMode } from './tree';
+import { childrenOf, isAncestor, isSplit, nodeBox, nodePath, normalizeRanges, type PickMode } from './tree';
 import { cameraForBox, keepViewOnHeightChange } from './view';
 import { cssHex, isLightBackground, loadFileBackground, safeStorage, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
 import type { Rgb } from '../meta';
@@ -166,6 +171,8 @@ export interface AppSnapshot {
   measureMode: MeasureMode | null;
   /** 고른 것의 종류(outline·node·material·item·face·edge, 없으면 null) */
   selectionKind: Selection['kind'] | null;
+  /** 장면 재생 중인지 */
+  slideshow: boolean;
   /** 파일·장면 스타일 배경 색 쓰기(사용자 설정)와 지금 3D 배경(파일 색이면 #rrggbb, 앱 테마면 null) */
   fileBackground: boolean;
   background: string | null;
@@ -884,6 +891,7 @@ export class SkpViewerApp implements PanelHost {
       return Promise.resolve();
     }
     this.closeNotice();
+    this.stopSlideshow();
     this.exportDialog?.close();
     // 앞 장면이 세로 화면에 맞춰 넓힌 시야각은 원래대로(새 문서의 전체 보기·카메라가 넓은 시야각을 물려받지 않게)
     const fov = this.sceneBaseFov(v);
@@ -1026,13 +1034,18 @@ export class SkpViewerApp implements PanelHost {
     let down: { x: number; y: number } | null = null;
     cv.addEventListener('pointerdown', (e) => {
       down = { x: e.clientX, y: e.clientY };
+      // 3D를 만지면 장면 재생을 멈춘다(SketchUp처럼)
+      this.stopSlideshow();
     });
     cv.addEventListener('pointermove', (e) => {
       // 코어와 같은 끌기 시작 거리(터치 10화소): 그 안의 손가락 떨림은 누르기라 보기를 움직이지 않는다
       if (down && e.buttons && Math.hypot(e.clientX - down.x, e.clientY - down.y) >= dragStartPx(e.pointerType)) this.userMoved = true;
     });
     cv.addEventListener('pointerup', () => (down = null));
-    cv.addEventListener('wheel', () => (this.userMoved = true), { passive: true });
+    cv.addEventListener('wheel', () => {
+      this.userMoved = true;
+      this.stopSlideshow();
+    }, { passive: true });
     // 뷰 큐브를 누르면 표준 뷰 + 전체 보기
     const cube = v.host.querySelector<HTMLElement>('.v3d-cube');
     cube?.addEventListener('pointerdown', () => (this.userMoved = false));
@@ -1391,11 +1404,13 @@ export class SkpViewerApp implements PanelHost {
    * 장면(페이지) 적용: 장면이 기억하는 것만 바꾼다(카메라·숨긴 태그·숨긴 개체·단면·스타일).
    * 카메라는 장면 전환 시간(없으면 2초) 동안 부드럽게 옮긴다.
    */
-  applyPage(index: number): void {
+  applyPage(index: number, fromSlideshow = false): number {
     const d = this.doc;
     const v = this.viewer;
     const page = d?.pages[index];
-    if (!d || !v || !page) return;
+    if (!d || !v || !page) return 0;
+    // 사용자가 장면을 고르면 재생을 멈춘다
+    if (!fromSlideshow) this.stopSlideshow();
     const plan = pagePlan(page, { sectionPlanes: d.sectionPlanesRaw, viewerFovY: this.sceneBaseFov(v), viewAspect: this.viewAspect(v) });
     if (plan.hiddenTags) d.hiddenTags = new Set([...plan.hiddenTags].filter((t) => d.tags.some((x) => x.name === t)));
     if (plan.hiddenNodes) {
@@ -1404,6 +1419,8 @@ export class SkpViewerApp implements PanelHost {
       d.hiddenOutline.clear();
       for (const n of plan.hiddenNodes) if (canHideNode(d, n)) d.hiddenNodes.add(n);
       this.isolatedOn = false;
+      // 모형에서 숨겼지만 이 장면은 숨기지 않는 개체는 보인다
+      d.revealNodes = revealNodesFor(d, plan.hiddenNodes) ?? d.revealNodes;
     }
     if (plan.setsSection) {
       if (plan.section) v.setSection({ normal: plan.section.normal, offset: plan.section.offset }, { caps: 'closed' });
@@ -1440,6 +1457,50 @@ export class SkpViewerApp implements PanelHost {
     this.panel.rerender();
     this.refreshToolbar();
     this.refreshStatus();
+    return plan.camera ? plan.seconds : 0;
+  }
+
+  // ───────────────────────── 장면 재생(슬라이드 쇼) ─────────────────────────
+
+  private slideTimer = 0;
+  private sliding = false;
+  private slides = 0;
+
+  /** 장면 재생 켜고 끄기(▶ 단추) */
+  toggleSlideshow(): void {
+    if (this.sliding) this.stopSlideshow();
+    else this.startSlideshow();
+  }
+
+  /** 지금 장면 다음부터 "장면 재생에 넣기" 장면을 전환 + 지연 시간마다 넘긴다(모형 설정이 되풀이를 끄면 한 바퀴) */
+  startSlideshow(): void {
+    const d = this.doc;
+    if (!d || !d.pages.length || !this.viewer) return;
+    this.sliding = true;
+    this.slides = 0;
+    this.slideNext();
+  }
+
+  stopSlideshow(): void {
+    if (!this.sliding) return;
+    this.sliding = false;
+    clearTimeout(this.slideTimer);
+    this.slideTimer = 0;
+    this.renderSceneTabs();
+  }
+
+  private slideNext(): void {
+    const d = this.doc;
+    if (!this.sliding || !d) return;
+    const loop = (d.scene.meta as { animation?: { loop?: boolean } } | undefined)?.animation?.loop !== false;
+    const next = nextSlide(slideshowOrder(d.pages), d.page, loop, this.slides);
+    if (next === null) {
+      this.stopSlideshow();
+      return;
+    }
+    this.slides++;
+    const seconds = this.applyPage(next, true);
+    this.slideTimer = window.setTimeout(() => this.slideNext(), slideDurationMs(d.pages[next]!, seconds));
   }
 
   /** 장면 탭 줄을 다시 그린다(장면이 없으면 숨김) */
@@ -1449,11 +1510,22 @@ export class SkpViewerApp implements PanelHost {
     el.innerHTML = '';
     el.hidden = !d || !d.pages.length;
     if (!d) return;
+    // 장면 재생(▶/■)
+    const play = h('button', {
+      class: `scene-play${this.sliding ? ' on' : ''}`,
+      type: 'button',
+      title: this.sliding ? '장면 재생 멈추기' : '장면 재생: 장면을 전환 시간과 지연 시간마다 차례로 넘깁니다(3D를 누르거나 장면을 고르면 멈춤)',
+      'aria-label': this.sliding ? '장면 재생 멈추기' : '장면 재생',
+      'aria-pressed': this.sliding ? 'true' : 'false',
+      html: icon(this.sliding ? 'stop' : 'play', 16),
+    });
+    play.addEventListener('click', () => this.toggleSlideshow());
+    el.append(play);
     d.pages.forEach((pg, i) => {
       const on = d.page === i;
       const b = h(
         'button',
-        { class: `scene-tab${on ? ' on' : ''}`, type: 'button', role: 'tab', 'aria-selected': on ? 'true' : 'false', title: [pg.name, pg.description].filter(Boolean).join('\n') },
+        { class: `scene-tab${on ? ' on' : ''}${pg.includeInAnimation === false ? ' no-play' : ''}`, type: 'button', role: 'tab', 'aria-selected': on ? 'true' : 'false', title: [pg.name, pg.description].filter(Boolean).join('\n') },
         pg.name || `장면 ${i + 1}`,
       );
       b.addEventListener('click', () => this.applyPage(i));
@@ -1621,6 +1693,11 @@ export class SkpViewerApp implements PanelHost {
     }
     // 나누지 않은 깊은 노드 숨김: 항목마다 구간을 합쳐 한 번에 넘기고, 더는 숨길 것이 없는 항목은 푼다
     this.hiddenRanges = hiddenNodeRanges(d);
+    // 장면이 다시 보이게 한 숨김 개체: 반투명 숨긴 형상은 숨긴다(보통 색 그림과 겹치지 않게)
+    for (const [item, list] of revealGhostRanges(d)) {
+      const cur = this.hiddenRanges.get(item);
+      this.hiddenRanges.set(item, cur ? normalizeRanges([...cur, ...list]) : list);
+    }
     const next = new Set<string>();
     for (const [item, list] of this.hiddenRanges) {
       const id = this.itemId(item);
@@ -2068,6 +2145,7 @@ export class SkpViewerApp implements PanelHost {
   // ───────────────────────── 키 ─────────────────────────
 
   private onKey(ev: KeyboardEvent): void {
+    if (this.sliding && !['Shift', 'Control', 'Alt', 'Meta'].includes(ev.key)) this.stopSlideshow();
     if (this.menu && ev.key === 'Escape') {
       ev.preventDefault();
       ev.stopPropagation();
@@ -2406,6 +2484,7 @@ export class SkpViewerApp implements PanelHost {
       labelsOccluded: this.labels?.occludedCount ?? 0,
       measureMode: this.measureTool?.mode ?? null,
       selectionKind: d?.selection?.kind ?? null,
+      slideshow: this.sliding,
       fileBackground: this.fileBg,
       background: this.backdrop ? cssHex(this.backdrop) : null,
     };
