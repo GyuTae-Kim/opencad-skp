@@ -242,6 +242,11 @@ export interface SkpTreeInfo {
   definitionAttrs: Int32Array;
   /** 정의마다 항상 카메라 보기(동작 0x1B5D, 1 = 켜짐) */
   definitionFaceCamera?: Uint8Array;
+  /**
+   * 노드마다 SketchUp 입체(닫힌 껍질, 면 방향이 맞고 떠 있는 모서리·안쪽 그룹이 없음)면 부피(장면 단위³), 아니면 NaN.
+   * 입체 노드가 하나도 없으면 칸이 없다
+   */
+  volume?: Float64Array;
 }
 
 /**

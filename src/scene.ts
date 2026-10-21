@@ -58,6 +58,7 @@ import * as A from './scene-annotations';
 import { AttrPool, PAGE_USE_HIDDEN_OBJECTS } from './scene-meta';
 import { cornerNormals, faceUnitNormal } from './scene-smooth';
 import { applyFaceUvq, faceUvq, planeAxes } from './projection';
+import { solidInfo } from './solid';
 
 export const DEFAULT_FACE_COLOR: Rgba = [0.82, 0.82, 0.8, 1];
 export const EDGE_COLOR: Rgba = [0.12, 0.12, 0.12, 1];
@@ -186,6 +187,10 @@ interface Prepared {
   hiddenBatches: Batch[];
   /** 부드러운·숨긴 모서리(extras일 때만) */
   extraLines: LineBatch[];
+  /** 보통 면이 닫힌 껍질(숨긴 면·삼각화 못 한 면 없음) — 단면 채우기 묶음(capGroup)에 넣는다 */
+  closed: boolean;
+  /** SketchUp 입체면 부피(로컬 인치³, solid.ts) */
+  volume?: number;
 }
 
 class F32 {
@@ -351,6 +356,7 @@ function prepare(
   const cn = smooth ? cornerNormals(ents) : null;
   const fu = new Float64Array(3);
   let k = 0;
+  let failedHere = 0;
   for (let fi = 0; fi < ents.faces.length; fi++) {
     const f = ents.faces[fi]!;
     if (onFaces && ++k % 2048 === 0) onFaces(2048);
@@ -386,6 +392,7 @@ function prepare(
     const tri0 = g.idx.length;
     if (!triangulateFace(ents.points, f.loops, f.normal, g.pos, g.idx)) {
       if (!isHidden) counter.failed++;
+      failedHere++;
       continue;
     }
     g.faces++;
@@ -499,7 +506,11 @@ function prepare(
   const extraLines: LineBatch[] = [];
   for (const [layer, g] of softGroups) extraLines.push(batchOf(layer, g, 1));
   for (const [layer, g] of hiddenLines) extraLines.push(batchOf(layer, g, 2));
-  return { batches: toBatches(groups), lines, hiddenBatches: toBatches(hidden), extraLines };
+  // 닫힌 입체: 단면에서 잘린 면을 채울 수 있다(삼각화하지 못한 면이 있으면 그물에 틈이 생기므로 빼고)
+  const solid = solidInfo(ents);
+  const out: Prepared = { batches: toBatches(groups), lines, hiddenBatches: toBatches(hidden), extraLines, closed: solid.closed && !failedHere };
+  if (solid.volume !== undefined) out.volume = solid.volume;
+  return out;
 }
 
 /** 열 우선 4×4 곱 a·b */
@@ -979,7 +990,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
         if (visiting.has(e)) return s;
         visiting.add(e);
         const p = prep(e);
-        for (const b of p.batches) s.add(`f${b.mat}|${b.layer}`);
+        for (const b of p.batches) s.add(`f${b.mat}|${b.layer}${p.closed ? 'c' : ''}`);
         for (const b of p.hiddenBatches) s.add(`h${b.mat}|${b.layer}`);
         for (const l of p.lines) s.add(`l${l.layer}`);
         for (const l of p.extraLines) s.add(`x${l.cls}|${l.layer}`);
@@ -1033,6 +1044,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     uvStride: 2 | 3;
     /** 면마다 첫 삼각형 차례(SketchUp 면 하나 = 이어진 삼각형 구간) */
     fs: U32;
+    /** 닫힌 입체 배치만 모은 묶음(단면 채우기 묶음 capGroup = 칸마다 하나) */
+    closed: boolean;
   }
   interface LineBucket {
     serial: number;
@@ -1074,6 +1087,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   const ownFaces = T ? new Float64Array(T.n) : null;
   const ownEdges = T ? new Float64Array(T.n) : null;
   const ownArea = T ? new Float64Array(T.n) : null;
+  /** 노드마다 SketchUp 입체면 부피(장면 단위³ — 정의 부피 × 배치 변환 행렬식), 아니면 NaN */
+  const nodeVolume = T ? new Float64Array(T.n).fill(NaN) : null;
   const runItem = new U32(T ? 4096 : 1);
   const runStart = new U32(T ? 4096 : 1);
   const runNode1 = new U32(T ? 4096 : 1);
@@ -1147,9 +1162,9 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     dst.n = n;
   };
 
-  const faceBucket = (slot: number, cls: number, layer: number, mat: number | undefined, far: ReturnType<typeof farCell>): Bucket => {
-    // 보통(가까운) 형상의 열쇠는 예전과 같다(기본 호출 출력이 바뀌지 않게). 먼 형상은 칸 열쇠를 붙인다
-    const key = (cls ? `${slot}|h|${layer}|${mat ?? 'd'}` : `${slot}|${layer}|${mat ?? 'd'}`) + (far ? far.key : '');
+  const faceBucket = (slot: number, cls: number, layer: number, mat: number | undefined, far: ReturnType<typeof farCell>, closed = false): Bucket => {
+    // 보통(가까운) 형상의 열쇠는 예전과 같다(기본 호출 출력이 바뀌지 않게). 닫힌 입체는 따로(|c), 먼 형상은 칸 열쇠를 붙인다
+    const key = (cls ? `${slot}|h|${layer}|${mat ?? 'd'}` : `${slot}|${layer}|${mat ?? 'd'}`) + (closed ? '|c' : '') + (far ? far.key : '');
     let bk = buckets.get(key);
     if (!bk)
       buckets.set(
@@ -1168,6 +1183,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
           uv: mat !== undefined && texMap?.has(mat) ? new F32() : null,
           uvStride: 2,
           fs: new U32(64),
+          closed,
         }),
       );
     return bk;
@@ -1696,6 +1712,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
             uv: mat !== undefined && texMap?.has(mat) ? new F32() : null,
             uvStride: 2,
             fs: new U32(64),
+            closed: false,
             node,
           }),
         );
@@ -1750,6 +1767,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     if (annotate && hasAnnotations(ents)) collectAnnotations(ents, m, layerHere, node, hiddenSub);
     const matOf = (b: Batch): number | undefined => (b.mat >= 0 ? b.mat : (inhMat ?? (b.mat <= -2 ? -(b.mat + 2) : undefined)));
     const L = linearOf(m);
+    // 닫힌 입체는 따로 모은다(단면 채우기). 반투명 재질이 든 배치는 코어가 채우기에서 빼므로 홀짝이 어긋나지 않게 보통 묶음으로
+    const closedHere = p.closed && !hiddenSub && p.batches.every((b) => colorOf(matOf(b))[3] >= 0.999);
     // 보통 면(숨긴 인스턴스 안쪽이면 숨긴 면으로)
     for (const b of p.batches) {
       const nv = b.pos.length / 3;
@@ -1767,7 +1786,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
         truncated = true;
         return;
       }
-      const area = appendFaces(faceBucket(slot, 0, layer, matOf(b), farCell(b.pos, m)), b, m, node, L, inhMat);
+      const area = appendFaces(faceBucket(slot, 0, layer, matOf(b), farCell(b.pos, m), closedHere), b, m, node, L, inhMat);
       outVerts += nv;
       if (node >= 0) {
         ownFaces![node]! += b.faces;
@@ -1851,6 +1870,10 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       }
       const layer = inst.layer !== undefined && inst.layer !== model.defaultLayer ? inst.layer : inhLayer;
       const placed = mul4(m, inst.matrix);
+      if (own) {
+        const vol = prep(def.entities).volume;
+        if (vol !== undefined) nodeVolume![child] = vol * Math.abs(linearOf(placed).det);
+      }
       emit(def.entities, placed, inst.material ?? inhMat, layer, depth + 1, stack, childSlot, child, hiddenSub || hiddenInst);
       // 모형에서 숨겼지만 어떤 장면에서는 보이는 인스턴스: 그 노드 몫으로 보통 색 그림을 하나 더(숨긴 안쪽의 안쪽은 이미 숨김 그대로)
       if (hiddenInst && !hiddenSub && own && inst.pid !== undefined && revealPids.has(inst.pid) && !revealLimited) {
@@ -1925,7 +1948,9 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     mesh.uvs = bk.uv.done();
     mesh.texture = t.id;
   };
-  const sorted = [...buckets.values()].sort((a, b) => a.slot - b.slot || a.cls - b.cls || a.layer - b.layer || (a.mat ?? -1) - (b.mat ?? -1));
+  const sorted = [...buckets.values()].sort(
+    (a, b) => a.slot - b.slot || a.cls - b.cls || a.layer - b.layer || (a.mat ?? -1) - (b.mat ?? -1) || Number(a.closed) - Number(b.closed),
+  );
   for (const bk of sorted) {
     const stored = bk.mat !== undefined ? model.materials.get(bk.mat) : undefined;
     // 표시 이름은 material.xml의 원래 이름(model.dat에는 '<Black>'이 '_Black_'처럼 바뀌어 있다)
@@ -1955,7 +1980,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       hiddenFaces += bk.faces;
       continue;
     }
-    // SKP는 면이 닫힌 입체인지 모르므로 closed는 두지 않는다(단면에서 잘린 면은 채우지 않고 테두리만)
+    // 닫힌 입체 배치만 모은 묶음은 칸마다 같은 채우기 묶음(capGroup): 재질·태그로 나뉜 그물이 함께 하나의 입체를 이룬다.
+    // 나머지(열린 면·얇은 판)는 채우지 않고 단면 테두리만
     const mesh: Mesh3d = {
       id: `skp-mesh-${meshes.length}`,
       name: `${matName} · ${tag}`,
@@ -1967,6 +1993,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     };
     if (bk.nrm) mesh.normals = bk.nrm.done();
     if (bk.origin) mesh.origin = bk.origin;
+    if (bk.closed) mesh.capGroup = `skp-solid-${bk.slot}`;
     withTexture(mesh, bk);
     triangles += mesh.indices!.length / 3;
     meshes.push(mesh);
@@ -2352,6 +2379,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       definitionAttrs: Int32Array.from(definitionNames, (_, k) => pool.add(defOfIndex[k]?.entities.attrs)),
       definitionFaceCamera: Uint8Array.from(definitionNames, (_, k) => (defOfIndex[k]?.behavior?.alwaysFaceCamera ? 1 : 0)),
     };
+    if (nodeVolume!.some(Number.isFinite)) info.volume = nodeVolume!;
     parts.treeInfo = info;
 
     if (!outlineSkipped) {

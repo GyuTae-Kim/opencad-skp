@@ -504,6 +504,15 @@ export function renderModeForStyle(style: SkpStyleMeta | null | undefined): Rend
   return null;
 }
 
+/**
+ * 단면에서 잘린 면을 채울지(스타일 "단면 채우기"). 스타일이 값을 가지면 그것, 없으면 SketchUp 2018(채우기가 생긴 판) 이상이면 채운다.
+ * 판을 모르면 채운다(앱의 X·Y·Z 단면도 같은 값을 쓴다)
+ */
+export function sectionFillOf(style: Pick<SkpStyleMeta, 'sectionFill'> | null | undefined, major: number | null | undefined): boolean {
+  if (typeof style?.sectionFill === 'boolean') return style.sectionFill;
+  return !(isNum(major) && major < 18);
+}
+
 // ───────────────────────── 태그 ─────────────────────────
 
 interface TagStatLike {

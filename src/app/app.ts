@@ -42,6 +42,7 @@ import {
   refitSceneCamera,
   renderModeForStyle,
   restoreSceneCamera,
+  sectionFillOf,
   sameSceneFit,
   sectionToViewer,
   stepPage,
@@ -180,6 +181,8 @@ export interface AppSnapshot {
   /** 파일·장면 스타일 배경 색 쓰기(사용자 설정)와 지금 3D 배경(파일 색이면 #rrggbb, 앱 테마면 null) */
   fileBackground: boolean;
   background: string | null;
+  /** 잘린 면 채우기(닫힌 입체) */
+  sectionFill: boolean;
 }
 
 interface Els {
@@ -202,6 +205,7 @@ interface Els {
   secBtns: Map<SectionAxis | 'off', HTMLButtonElement>;
   secRange: HTMLInputElement;
   secFlip: HTMLButtonElement;
+  secFill: HTMLButtonElement;
   workspace: HTMLElement;
   viewHost: HTMLElement;
   start: HTMLElement;
@@ -394,7 +398,7 @@ export class SkpViewerApp implements PanelHost {
     const protractorBtn = tbtn('각도기', 'protractor', '각도기: 중심 → 기준 방향 → 잴 방향(Shift = 평면 고정) · Esc 지우기', () => this.toggleProtractor());
     const pngBtn = tbtn('그림 저장', 'image', '지금 화면을 그림으로 저장·공유·인쇄(크기·투명 배경·글과 측정 넣기)', () => this.savePng(), 'compact wide-only');
     const panelBtn = tbtn('패널', 'panel', '패널 열기·닫기', () => this.setPanelOpen(!this.panelOpen));
-    // 단면 보기: 끔·X·Y·Z, 위치 슬라이더(장면 범위 안 0~1), 뒤집기. 잘린 면은 채우지 않고 테두리만(SKP는 입체 여부를 모른다)
+    // 단면 보기: 끔·X·Y·Z, 위치 슬라이더(장면 범위 안 0~1), 뒤집기, 잘린 면 채우기(해석기가 닫힌 입체로 가린 그물만 — capGroup)
     const axisBtn = (axis: SectionAxis): HTMLButtonElement => {
       const b = h('button', { class: 'tbtn sec-axis', type: 'button', title: `${axis.toUpperCase()}축에 수직인 단면(+${axis.toUpperCase()} 쪽을 잘라 냄)`, 'aria-label': `${axis.toUpperCase()}축 단면` }, axis.toUpperCase());
       b.addEventListener('click', () => this.setSectionAxis(axis));
@@ -409,6 +413,7 @@ export class SkpViewerApp implements PanelHost {
     const secRange = h('input', { class: 'sec-range', type: 'range', min: '0', max: '1000', step: '1', value: '500', 'aria-label': '단면 위치', title: '단면 위치(장면 범위 안)' });
     secRange.addEventListener('input', () => this.viewer?.setSectionPosition(Number(secRange.value) / 1000));
     const secFlip = tbtn('뒤집기', 'flip', '자르는 쪽 뒤집기', () => this.flipSection(), 'icon-only sec-flip');
+    const secFill = tbtn('채우기', 'fill', '잘린 면 채우기(닫힌 입체 — 파일 스타일의 단면 채우기를 따름)', () => this.setSectionFill(!this.sectionFill), 'icon-only sec-fill');
     // 좁은 화면(휴대폰): 보기·측정에 쓰는 단추만 한 줄에 두고, 단면 축과 나머지 보기 설정은 메뉴로 모은다
     const menuBtn = (label: string, ico: string, title: string): HTMLButtonElement =>
       h('button', { class: 'tbtn narrow-only', type: 'button', title, 'aria-label': title, 'aria-haspopup': 'menu', 'aria-expanded': 'false', html: `${icon(ico)}<span class="lbl">${label}</span>` });
@@ -431,7 +436,7 @@ export class SkpViewerApp implements PanelHost {
       sep(),
       h('div', { class: 'tgroup' }, measureBtn, protractorBtn, pngBtn),
       sep(),
-      h('div', { class: 'tgroup sec-group', role: 'group', 'aria-label': '단면 보기' }, secMenuBtn, h('div', { class: 'tgroup seg wide-only' }, ...secBtns.values()), secRange, secFlip),
+      h('div', { class: 'tgroup sec-group', role: 'group', 'aria-label': '단면 보기' }, secMenuBtn, h('div', { class: 'tgroup seg wide-only' }, ...secBtns.values()), secRange, secFlip, secFill),
       moreBtn,
       h('span', { class: 'spacer' }),
       h('div', { class: 'tgroup' }, panelBtn),
@@ -557,6 +562,7 @@ export class SkpViewerApp implements PanelHost {
       secBtns,
       secRange,
       secFlip,
+      secFill,
       workspace,
       viewHost,
       start,
@@ -986,9 +992,11 @@ export class SkpViewerApp implements PanelHost {
       this.renderMode = mode;
       v.setRenderMode(mode);
     }
+    // 잘린 면 채우기: 모형 스타일의 단면 채우기(장면 스타일이 바꿀 수 있다)
+    this.sectionFill = sectionFillOf(d.style, d.info.major);
     const sec = initialSection(d.scene.meta);
     if (sec) {
-      v.setSection({ normal: sec.normal, offset: sec.offset }, { caps: 'closed' });
+      v.setSection({ normal: sec.normal, offset: sec.offset }, { caps: this.caps });
       d.fileSection = sec.index;
     }
     const first = initialView(d.scene.meta, d.scene.bounds, v.canvas.clientWidth, v.canvas.clientHeight, v.getCamera().fovY);
@@ -1548,8 +1556,13 @@ export class SkpViewerApp implements PanelHost {
       // 모형에서 숨겼지만 이 장면은 숨기지 않는 개체는 보인다
       d.revealNodes = revealNodesFor(d, plan.hiddenNodes) ?? d.revealNodes;
     }
+    // 장면 스타일의 단면 채우기(기억하는 장면만) — 단면을 바꾸지 않는 장면이면 지금 단면에 바로
+    if (typeof plan.style?.sectionFill === 'boolean' && plan.style.sectionFill !== this.sectionFill) {
+      this.sectionFill = plan.style.sectionFill;
+      if (!plan.setsSection) this.applySectionFill();
+    }
     if (plan.setsSection) {
-      if (plan.section) v.setSection({ normal: plan.section.normal, offset: plan.section.offset }, { caps: 'closed' });
+      if (plan.section) v.setSection({ normal: plan.section.normal, offset: plan.section.offset }, { caps: this.caps });
       else v.setSection(null);
       d.fileSection = plan.section?.index ?? null;
     }
@@ -1675,7 +1688,7 @@ export class SkpViewerApp implements PanelHost {
     if (!d || !v) return;
     const sp = index === null ? null : d.sectionPlanes.find((p) => p.index === index);
     const s = sp ? sectionToViewer(sp.plane) : null;
-    if (s) v.setSection(s, { caps: 'closed' });
+    if (s) v.setSection(s, { caps: this.caps });
     else v.setSection(null);
     d.fileSection = s ? index : null;
     this.refreshAnnotations();
@@ -1972,7 +1985,7 @@ export class SkpViewerApp implements PanelHost {
     if (!axis) v.setSection(null);
     else {
       const cur = v.section;
-      v.setSectionAxis(axis, cur && cur.axis === axis ? cur.t : 0.5, { caps: 'closed', outline: true, plane: true });
+      v.setSectionAxis(axis, cur && cur.axis === axis ? cur.t : 0.5, { caps: this.caps, outline: true, plane: true });
     }
     this.refreshToolbar();
   }
@@ -1980,6 +1993,27 @@ export class SkpViewerApp implements PanelHost {
   flipSection(): void {
     this.viewer?.flipSection();
     this.refreshToolbar();
+  }
+
+  /** 잘린 면 채우기(닫힌 입체만): 처음엔 파일 스타일을 따르고, 사용자가 켜고 끈다 */
+  private sectionFill = true;
+
+  /** 코어 단면 채우기 선택 */
+  private get caps(): 'closed' | 'none' {
+    return this.sectionFill ? 'closed' : 'none';
+  }
+
+  setSectionFill(on: boolean): void {
+    this.sectionFill = on;
+    this.applySectionFill();
+    this.refreshToolbar();
+  }
+
+  /** 지금 단면 평면 모두에 채우기 선택을 다시 건다 */
+  private applySectionFill(): void {
+    const v = this.viewer;
+    if (!v) return;
+    v.sections.forEach((_, i) => v.setSectionOptions({ caps: this.caps }, i));
   }
 
   setPanelOpen(on: boolean): void {
@@ -2156,6 +2190,7 @@ export class SkpViewerApp implements PanelHost {
         run: () => this.setSectionAxis(a),
       })),
       { label: '자르는 쪽 뒤집기', icon: 'flip', sep: true, disabled: !sec, run: () => this.flipSection() },
+      { label: '잘린 면 채우기', checked: this.sectionFill, toggle: true, run: () => this.setSectionFill(!this.sectionFill) },
     ]);
   }
 
@@ -2483,6 +2518,8 @@ export class SkpViewerApp implements PanelHost {
     e.secRange.disabled = !has || !sec;
     e.secFlip.disabled = !has || !sec;
     press(e.secFlip, !!sec?.flip);
+    e.secFill.disabled = !has || !sec;
+    press(e.secFill, this.sectionFill);
     if (sec) e.secRange.value = String(Math.round(Math.min(1, Math.max(0, sec.t)) * 1000));
   }
 
@@ -2618,6 +2655,7 @@ export class SkpViewerApp implements PanelHost {
       slideshow: this.sliding,
       fileBackground: this.fileBg,
       background: this.backdrop ? cssHex(this.backdrop) : null,
+      sectionFill: this.sectionFill,
     };
   }
 

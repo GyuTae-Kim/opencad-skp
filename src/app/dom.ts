@@ -50,6 +50,7 @@ const ICONS: Record<string, string> = {
   chevron: '<path d="m6 9 6 6 6-6"/>',
   twisty: '<path d="m9 6 6 6-6 6"/>',
   section: '<path d="M12 3 20 7.5v9L12 21l-8-4.5v-9L12 3Z" stroke-opacity=".55"/><path d="M3 13.5 21 9" stroke-width="2.2"/><path d="m4 7.5 8 4.5 8-4.5" stroke-opacity=".55"/>',
+  fill: '<path d="M4 9.5 12 5l8 4.5-8 4.5-8-4.5Z" fill="currentColor" fill-opacity=".45"/><path d="M4 9.5v6.5l8 4.5 8-4.5V9.5" stroke-opacity=".55"/>',
   flip: '<path d="M8 4v16M8 20l-3-3M8 20l3-3M16 20V4M16 4l-3 3M16 4l3 3"/>',
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
   system: '<rect x="3.5" y="4.5" width="17" height="12" rx="1.5"/><path d="M9 20h6M12 16.5V20"/>',

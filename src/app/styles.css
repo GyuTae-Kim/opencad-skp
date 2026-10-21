@@ -1763,7 +1763,8 @@ button.scene-card.sel {
   }
 
   .sec-group:not(.sec-on) .sec-range,
-  .sec-group:not(.sec-on) .sec-flip {
+  .sec-group:not(.sec-on) .sec-flip,
+  .sec-group .sec-fill {
     display: none;
   }
 

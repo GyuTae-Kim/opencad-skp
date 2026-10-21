@@ -164,6 +164,23 @@ describe('나무 노드 → 정보 입력', () => {
     expect(m['인스턴스']).toBeUndefined();
   });
 
+  it('입체 노드: 제목이 "입체 그룹·입체 컴포넌트"이고 부피 행(모형 부피 단위), 입체가 아니면(NaN) 행이 없다', () => {
+    const solid = { ...info, volume: Float64Array.from([Number.NaN, 2.5e8, Number.NaN]) };
+    const e = nodeEntity(t, 1, solid, attributes)!;
+    expect(e.volume).toBe(2.5e8);
+    const ei = entityInfo(e, u({ volumeUnit: 'cubic_m', volumePrecision: 3 }), 1);
+    expect(ei.title).toBe('입체 컴포넌트');
+    expect(rowMap(ei.rows)['부피']).toBe('0.250 m³');
+    expect(ei.rows.findIndex((r) => r.label === '부피')).toBe(ei.rows.findIndex((r) => r.label === '면 넓이 합') + 1);
+    // 인치 장면: 부피는 세제곱으로 바꾼다
+    expect(rowMap(entityInfo({ kind: 'group', volume: 1 }, u({ volumeUnit: 'cubic_cm', volumePrecision: 2 }), 25.4).rows)['부피']).toBe('~ 16.39 cm³');
+    expect(entityTitle({ kind: 'group', volume: 0 })).toBe('입체 그룹');
+    const plain = nodeEntity(t, 2, solid, attributes)!;
+    expect(plain.volume).toBeUndefined();
+    expect(entityInfo(plain, DEFAULT_UNITS, 1).title).toBe('컴포넌트');
+    expect(cardRows(entityInfo(e, DEFAULT_UNITS, 1)).map((r) => r.label)).toEqual(['크기', '부피', '면 넓이 합', '태그']);
+  });
+
   it('treeInfo가 없으면 나무에서 아는 것만, 범위 밖 노드는 null', () => {
     const e = nodeEntity(t, 0, null, null, { hidden: true })!;
     expect(e).toMatchObject({ kind: 'group', name: '집', path: null, tag: 'Untagged', faces: 100, hidden: true });

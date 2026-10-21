@@ -27,6 +27,7 @@ import {
   sameSceneFit,
   sameSkpCamera,
   sceneCoverageScale,
+  sectionFillOf,
   sectionToViewer,
   stepPage,
   transitionCamera,
@@ -189,6 +190,16 @@ describe('단면', () => {
     expect(initialSection({ sectionPlanes: planes })!.index).toBe(1);
     expect(initialSection({ sectionPlanes: planes, style: { sectionCuts: false } })).toBeNull();
     expect(initialSection({ sectionPlanes: [{ ...planes[1], active: false }] })).toBeNull();
+  });
+});
+
+describe('단면 채우기(스타일)', () => {
+  it('스타일 값이 먼저, 없으면 SketchUp 2018 이상(또는 판을 모르면)만 채운다', () => {
+    expect(sectionFillOf({ sectionFill: false }, 26)).toBe(false);
+    expect(sectionFillOf({ sectionFill: true }, 8)).toBe(true);
+    expect(sectionFillOf({}, 17)).toBe(false);
+    expect(sectionFillOf(null, 18)).toBe(true);
+    expect(sectionFillOf(undefined, null)).toBe(true);
   });
 });
 
