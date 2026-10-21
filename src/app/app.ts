@@ -21,12 +21,27 @@ import {
   type ViewName,
 } from 'opencad-viewer3d';
 import { lerpCamera, type CameraState } from 'opencad-viewer3d/camera';
+import { dragStartPx } from 'opencad-viewer3d/pointer';
 import { ParseClient } from './client';
 import { AnnotationLabels } from './annotations';
-import { HISTORY_SETTLE_MS, ViewHistory } from './history';
+import { HISTORY_LIMIT, HISTORY_SETTLE_MS, ViewHistory } from './history';
 import { beginOpen, showAnalyticsSettings, trackExport, type OpenAttempt } from './analytics';
 import { MeasureTool, type MeasureMode, type MeasureToolResult } from './measure';
-import { initialCamera, initialSection, openingPage, pagePlan, renderModeForStyle, sectionToViewer, stepPage } from './pages';
+import {
+  baseFovOf,
+  initialSection,
+  initialView,
+  openingPage,
+  pagePlan,
+  refitSceneCamera,
+  renderModeForStyle,
+  restoreSceneCamera,
+  sameSceneFit,
+  sectionToViewer,
+  stepPage,
+  unwidenSceneCamera,
+  type SceneFit,
+} from './pages';
 import { DEFAULT_UNITS, mmPerSceneUnit } from './units';
 import { Overlay } from './overlay';
 import { cardName, cardRows, entityInfo } from './entity';
@@ -59,10 +74,11 @@ import {
   type SkpDoc,
 } from './doc';
 import { MAX_FILE_BYTES, SKP_ACCEPT, baseName, fmtCount, formatBytes, formatMs, stripExtension } from './format';
-import { VIEW_KEY_OF, VIEW_MENU, isEditableTarget, keyAction } from './keys';
+import { VIEW_KEY_OF, VIEW_MENU, isEditableTarget, isViewKey, keyAction } from './keys';
 import type { LaunchRequest } from './launch';
 import { PANEL_WIDTH_DEFAULT, SHEET_DEFAULT, clampPanelWidth, clampSheetFraction, readLayout, storeLayout, type StoredLayout } from './layout';
 import { Panel, type PanelHost } from './panel';
+import { RecentStore, canKeepRecent, recentTimeText, type RecentEntry } from './recent';
 import { errorText, sceneHasGeometry } from './protocol';
 import { deviceHints, textureLimitsFor, type TextureLimits } from './texlimits';
 import { THEME_CHOICES, applyThemeChoice, readStoredTheme, resolveTheme, storeTheme, systemPrefersDark, themeChoiceOf, type ThemeChoice, type ThemeName } from './theme';
@@ -230,6 +246,12 @@ export class SkpViewerApp implements PanelHost {
   /** 나눠 올리기가 끝나면 부를 것(새 문서로 바뀌면 바로 부른다) */
   private uploadDone: (() => void) | null = null;
   private camAnim = 0;
+  /** 옮기는 중인 카메라 움직임이 끝나면 부를 것(그만둘 때도 부른다 — 보기 기록이 '옮기는 중'에 머물지 않게) */
+  private camAnimDone: (() => void) | null = null;
+  /** 장면 카메라를 지금 3D 보기 종횡비에 맞춘 상태(세로 화면이면 장면의 가로 범위를 지키게 넓힘 — 휴대폰을 돌리면 다시 맞춘다) */
+  private sceneFit: SceneFit | null = null;
+  /** 장면 전환 중에 화면을 돌렸으면 전환이 끝난 뒤 다시 맞춘다 */
+  private refitLater = false;
   /** 3D 위 덧그림 층(문자·치수 라벨, 측정 표시) */
   private overlay: Overlay | null = null;
   /** 문자·치수 라벨 */
@@ -238,8 +260,8 @@ export class SkpViewerApp implements PanelHost {
   private measureTool: MeasureTool | null = null;
   /** 측정 도구 안내 글(상태 막대·패널 아래 띠) */
   measureHint: string | null = null;
-  /** 이전·다음 보기 기록 */
-  private readonly history = new ViewHistory();
+  /** 이전·다음 보기 기록(칸마다 그때의 장면 맞춤 — 되돌릴 때 지금 화면 방향에 다시 맞춘다) */
+  private readonly history = new ViewHistory<SceneFit>(HISTORY_LIMIT, sameSceneFit);
   private historyTimer = 0;
   /** 분리해서 보기 중인지(다시 누르면 모두 보이기) */
   private isolatedOn = false;
@@ -249,6 +271,10 @@ export class SkpViewerApp implements PanelHost {
   private notice: AppSnapshot['notice'] = null;
   private menu: HTMLElement | null = null;
   private dragDepth = 0;
+  /** 최근 문서(이 브라우저의 IndexedDB에만) — 시작 화면 카드 */
+  private readonly recent = new RecentStore();
+  private readonly recentCard = h('section', { class: 'recent', 'aria-labelledby': 'recent-title', hidden: true });
+  private readonly recentList = h('ul', { class: 'recent-list' });
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -283,7 +309,7 @@ export class SkpViewerApp implements PanelHost {
     const title = h(
       'header',
       { class: 'titlebar' },
-      h('a', { class: 'brand', href: './', title: `${APP_TITLE} 처음 화면` }, h('span', { class: 'logo', html: icon('logo', 22) }), h('span', { class: 'brand-text' }, h('b', {}, 'OpenCAD'), ' SketchUp 뷰어')),
+      h('a', { class: 'brand', href: './', title: `${APP_TITLE} 처음 화면` }, h('span', { class: 'logo', html: icon('logo', 22) }), h('span', { class: 'brand-text' }, h('b', {}, 'OpenCAD'), h('span', { class: 'brand-sub' }, ' SketchUp 뷰어'))),
       docName,
       h('span', { class: 'spacer' }),
       tbtn('열기', 'open', 'SketchUp 파일 열기 (.skp)', () => this.chooseFile(), 'primary'),
@@ -295,7 +321,10 @@ export class SkpViewerApp implements PanelHost {
 
     // 보기 도구 막대
     const sep = (): HTMLElement => h('span', { class: 'tsep', 'aria-hidden': 'true' });
-    const fitBtn = tbtn('전체 보기', 'fit', '전체 보기 (F)', () => this.viewer?.fit());
+    const fitBtn = tbtn('전체 보기', 'fit', '전체 보기 (F)', () => {
+      this.unwidenScene();
+      this.viewer?.fit();
+    });
     const backBtn = tbtn('이전 보기', 'back', '이전 보기(카메라 기록)', () => this.viewBack(), 'icon-only wide-only');
     const fwdBtn = tbtn('다음 보기', 'forward', '다음 보기(카메라 기록)', () => this.viewForward(), 'icon-only wide-only');
     const viewBtn = h('button', {
@@ -514,6 +543,7 @@ export class SkpViewerApp implements PanelHost {
         h('h1', {}, 'SketchUp 파일을 브라우저에서 3D로 보기'),
         h('p', { class: 'lead' }, '설치 없이 SketchUp(.skp) 모형을 열어 돌려 보고, 태그를 켜고 끄고, 재질과 그룹·컴포넌트를 살펴보세요.'),
         zone,
+        this.buildRecent(),
         h(
           'ul',
           { class: 'facts' },
@@ -535,6 +565,70 @@ export class SkpViewerApp implements PanelHost {
         ),
       ),
     );
+  }
+
+  /** 시작 화면의 최근 문서 카드(비었으면 숨김) */
+  private buildRecent(): HTMLElement {
+    const clear = h('button', { class: 'recent-clear', type: 'button', title: '최근 문서 목록을 모두 지웁니다(원래 파일은 그대로)' }, '모두 지우기');
+    clear.addEventListener('click', () => void this.recent.clear().then(() => this.refreshRecent()));
+    this.recentCard.append(
+      h('div', { class: 'recent-head' }, h('h2', { id: 'recent-title' }, '최근 문서'), clear),
+      this.recentList,
+      h('p', { class: 'recent-note' }, '파일은 이 기기의 이 브라우저에만 저장되고, 서버로 보내지 않습니다.'),
+    );
+    void this.refreshRecent();
+    return this.recentCard;
+  }
+
+  /** 최근 문서 목록을 다시 그린다 */
+  private async refreshRecent(): Promise<void> {
+    const list = await this.recent.list();
+    const now = Date.now();
+    this.recentList.replaceChildren(...list.map((e) => this.recentRow(e, now)));
+    this.recentCard.hidden = !list.length;
+  }
+
+  private recentRow(e: RecentEntry, now: number): HTMLElement {
+    const open = h(
+      'button',
+      { class: 'recent-open', type: 'button' },
+      h('span', { class: 'recent-icon', html: icon('open', 18) }),
+      h('span', { class: 'recent-name', translate: 'no' }, e.name),
+      // 크기와 시각은 따로 번역되게 나눈다(독일어 "vor 3 Min."이 크기 앞으로 가지 않게)
+      h('span', { class: 'recent-meta' }, formatBytes(e.size), ' · ', h('span', {}, recentTimeText(e.time, now))),
+    );
+    open.addEventListener('click', () => void this.openRecent(e));
+    const del = h('button', { class: 'recent-del', type: 'button', title: '목록에서 지우기', 'aria-label': `최근 문서에서 지우기: ${e.name}`, html: icon('close', 16) });
+    del.addEventListener('click', () => void this.recent.remove(e.id).then(() => this.refreshRecent()));
+    return h('li', { class: 'recent-row' }, open, del);
+  }
+
+  /** 최근 문서 다시 열기(저장한 바이트로) */
+  async openRecent(e: Pick<RecentEntry, 'id' | 'name'>): Promise<void> {
+    const attempt = beginOpen('local', 'skp');
+    const seq = ++this.openSeq;
+    this.setBusy(e.name, 0.005, '파일 읽는 중');
+    const got = await this.recent.open(e.id);
+    if (seq !== this.openSeq) return;
+    if (!got) {
+      this.setBusy(null);
+      attempt.error('read_error');
+      this.showNotice('error', `"${e.name}" 파일을 찾지 못했습니다`, '이 브라우저에 저장해 둔 사본이 지워졌습니다. 파일을 다시 골라 여세요.');
+      void this.refreshRecent();
+      return;
+    }
+    await this.openBuffer(got.entry.name, got.data, seq, attempt);
+    void this.refreshRecent();
+  }
+
+  /** 고르거나 끌어다 놓아 연 파일을 최근 문서에 저장(바이트는 워커로 넘어갔으므로 파일에서 다시 읽는다) */
+  private async keepRecent(file: File, name: string): Promise<void> {
+    if (!canKeepRecent(file.size)) return;
+    try {
+      if (await this.recent.add(name, await file.arrayBuffer())) await this.refreshRecent();
+    } catch {
+      /* 다시 못 읽으면 저장하지 않는다 */
+    }
   }
 
   private bindWindow(): void {
@@ -586,9 +680,12 @@ export class SkpViewerApp implements PanelHost {
     // 휴대폰 주소 막대가 숨고 나타날 때(높이만 바뀜)는 열린 메뉴를 닫지 않는다
     let lastWidth = window.innerWidth;
     window.addEventListener('resize', () => {
-      if (window.innerWidth !== lastWidth) this.closeMenu();
+      const turned = window.innerWidth !== lastWidth;
+      if (turned) this.closeMenu();
       lastWidth = window.innerWidth;
       this.applyLayout();
+      // 폭이 바뀌면(휴대폰을 돌림) 장면 맞춤을 새 종횡비로 — 높이만 바뀌는 주소 막대·시트는 건드리지 않는다
+      if (turned) requestAnimationFrame(() => this.refitScene());
     });
     // 휴대폰(좁은 화면·낮은 가로 화면)에서는 뷰 큐브를 줄인다
     this.phoneQuery?.addEventListener('change', () => this.viewer?.setViewCubeSize(this.viewCubeSize()));
@@ -621,7 +718,8 @@ export class SkpViewerApp implements PanelHost {
       return;
     }
     if (seq !== this.openSeq) return;
-    await this.openBuffer(baseName(file.name), buf, seq, attempt);
+    const name = baseName(file.name);
+    if (await this.openBuffer(name, buf, seq, attempt)) void this.keepRecent(file, name);
   }
 
   /** 같은 출처 주소의 파일 열기(?open=) */
@@ -680,8 +778,8 @@ export class SkpViewerApp implements PanelHost {
 
   private parsingSeq = 0;
 
-  /** 바이트 해석(buf는 워커로 이전된다). seq가 더 새 요청에 밀리면 결과를 버린다 */
-  private async openBuffer(name: string, buf: ArrayBuffer, seq: number, attempt: OpenAttempt): Promise<void> {
+  /** 바이트 해석(buf는 워커로 이전된다). seq가 더 새 요청에 밀리면 결과를 버린다. 열어 보였으면 true */
+  private async openBuffer(name: string, buf: ArrayBuffer, seq: number, attempt: OpenAttempt): Promise<boolean> {
     const size = buf.byteLength;
     this.setBusy(name, 0.01, '해석 준비 중');
     // 앞 파일을 아직 해석 중이면 멈추고(동기 해석이라 기다리면 늦어진다) 새 파일을 읽는다
@@ -696,7 +794,7 @@ export class SkpViewerApp implements PanelHost {
         },
         { textureLimit: this.texLimits.limit },
       );
-      if (seq !== this.openSeq) return;
+      if (seq !== this.openSeq) return false;
       const old = unsupportedVersion(res.scene);
       if (old) {
         attempt.error('unsupported');
@@ -705,29 +803,32 @@ export class SkpViewerApp implements PanelHost {
           `아직 읽지 못하는 판입니다: ${releaseName(old)} (${old})`,
           `"${name}" 파일은 SketchUp 3~6의 아주 옛 형식으로 저장되어 있습니다. 이 뷰어는 SketchUp 7·8·2013~2026 파일을 읽습니다. SketchUp 7 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.`,
         );
-        return;
+        return false;
       }
       if (!sceneHasGeometry(res.scene)) {
         attempt.error('empty');
         const why = res.scene.warnings?.[0] ?? '그릴 면이나 모서리를 찾지 못했습니다.';
         this.showNotice('error', `"${name}" 파일을 열지 못했습니다`, why);
-        return;
+        return false;
       }
       // GPU에 올리기: 작은 모형은 한 번에(그 전에 단계 글을 한 번 그린다), 큰 모형은 프레임마다 나눠 올리며 실제 진행을 보인다
       this.setBusy(name, isBigScene(res) ? 0 : 0.99, '화면에 올리는 중');
       await new Promise<void>((r) => requestAnimationFrame(() => setTimeout(r, 0)));
-      if (seq !== this.openSeq) return;
+      if (seq !== this.openSeq) return false;
       const doc = createDoc(name, size, res, { makeUrl: (b, mime) => URL.createObjectURL(new Blob([b as BlobPart], { type: mime })) });
       const uploaded = this.setDoc(doc, (done, total) => {
         if (seq === this.openSeq) this.setBusy(name, total ? done / total : 1, `화면에 올리는 중 · 묶음 ${fmtCount(done)}/${fmtCount(total)}`);
       });
       this.noticeDamage(doc);
       await uploaded;
-      if (seq === this.openSeq) attempt.success();
+      if (seq !== this.openSeq || this.doc !== doc) return false;
+      attempt.success();
+      return true;
     } catch (e) {
-      if (seq !== this.openSeq) return;
+      if (seq !== this.openSeq) return false;
       this.showNotice('error', `"${name}" 파일을 열지 못했습니다`, errorText(e));
       attempt.error('parse_error');
+      return false;
     } finally {
       if (this.parsingSeq === seq) this.parsingSeq = 0;
       if (seq === this.openSeq) this.setBusy(null);
@@ -745,6 +846,10 @@ export class SkpViewerApp implements PanelHost {
       return Promise.resolve();
     }
     this.closeNotice();
+    // 앞 장면이 세로 화면에 맞춰 넓힌 시야각은 원래대로(새 문서의 전체 보기·카메라가 넓은 시야각을 물려받지 않게)
+    const fov = this.sceneBaseFov(v);
+    if (fov !== v.getCamera().fovY) v.setCamera({ ...v.getCamera(), fovY: fov });
+    this.sceneFit = null;
     const old = this.doc;
     this.doc = d;
     // 앞 문서의 나눠 올리기를 기다리던 것은 끝낸다
@@ -794,10 +899,11 @@ export class SkpViewerApp implements PanelHost {
       v.setSection({ normal: sec.normal, offset: sec.offset }, { caps: 'closed' });
       d.fileSection = sec.index;
     }
-    const cam = initialCamera(d.scene.meta, d.scene.bounds, v.canvas.clientWidth, v.canvas.clientHeight, v.getCamera().fovY);
-    if (cam) {
-      v.setCamera(cam);
-      this.projection = cam.projection;
+    const first = initialView(d.scene.meta, d.scene.bounds, v.canvas.clientWidth, v.canvas.clientHeight, v.getCamera().fovY);
+    if (first) {
+      v.setCamera(first.camera);
+      this.sceneFit = first.fit;
+      this.projection = first.camera.projection;
       this.userMoved = true;
     }
     d.page = openingPage(d.scene.meta);
@@ -878,12 +984,43 @@ export class SkpViewerApp implements PanelHost {
       down = { x: e.clientX, y: e.clientY };
     });
     cv.addEventListener('pointermove', (e) => {
-      if (down && e.buttons && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) this.userMoved = true;
+      // 코어와 같은 끌기 시작 거리(터치 10화소): 그 안의 손가락 떨림은 누르기라 보기를 움직이지 않는다
+      if (down && e.buttons && Math.hypot(e.clientX - down.x, e.clientY - down.y) >= dragStartPx(e.pointerType)) this.userMoved = true;
     });
     cv.addEventListener('pointerup', () => (down = null));
     cv.addEventListener('wheel', () => (this.userMoved = true), { passive: true });
     // 뷰 큐브를 누르면 표준 뷰 + 전체 보기
-    v.host.querySelector('.v3d-cube')?.addEventListener('pointerdown', () => (this.userMoved = false));
+    const cube = v.host.querySelector<HTMLElement>('.v3d-cube');
+    cube?.addEventListener('pointerdown', () => (this.userMoved = false));
+    // 뷰 큐브 누르기·가운데 단추 두 번 누르기(코어의 표준 뷰·전체 보기)도 넓힌 시야각을 먼저 되돌린다.
+    // 코어보다 먼저 받도록 보기 바탕의 캡처 단계에서 본다(코어와 같은 문턱: 큐브 끌기 3화소, 가운데 두 번 420 ms·8화소)
+    let cubeDown: { x: number; y: number } | null = null;
+    let middle = { t: -Infinity, x: 0, y: 0 };
+    v.host.addEventListener(
+      'pointerdown',
+      (e) => {
+        if (cube && cube.contains(e.target as Node)) {
+          cubeDown = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
+          return;
+        }
+        if (e.pointerType !== 'mouse' || e.button !== 1) return;
+        const t = performance.now();
+        if (t - middle.t < 420 && Math.hypot(e.clientX - middle.x, e.clientY - middle.y) < 8) {
+          middle.t = -Infinity;
+          this.unwidenScene();
+        } else middle = { t, x: e.clientX, y: e.clientY };
+      },
+      true,
+    );
+    v.host.addEventListener(
+      'pointerup',
+      (e) => {
+        const d = cubeDown;
+        cubeDown = null;
+        if (d && cube?.contains(e.target as Node) && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 3) this.unwidenScene();
+      },
+      true,
+    );
   }
 
   /** 3D 고르기: Alt = 가장 안쪽, 두 번째 누르기(e.clicks = 2) = 고른 그룹에 한 단계 들어가기 */
@@ -970,6 +1107,7 @@ export class SkpViewerApp implements PanelHost {
     const d = this.doc;
     const v = this.viewer;
     if (!d || !v) return;
+    this.unwidenScene();
     const sel = d.selection;
     if (sel?.kind === 'node' && d.tree && !isSplit(d.tree, sel.index)) {
       const box = nodeBox(d.tree, d.scene, sel.index, (item) => v.isVisible(this.itemId(item)), this.hiddenRanges);
@@ -981,31 +1119,106 @@ export class SkpViewerApp implements PanelHost {
     if (ids.length) v.fitItems(ids);
   }
 
-  /** 카메라를 부드럽게 옮긴다(뷰어의 맞춰 보기 움직임과 비슷한 시간) */
+  private viewAspect(v: Viewer3d): number {
+    return v.canvas.clientWidth / Math.max(1, v.canvas.clientHeight);
+  }
+
+  /** 지금 시야각에서 세로 화면 맞춤을 뺀 것(맞춘 뒤 사용자가 시야각을 바꾸지 않았을 때만 장면의 원래 시야각) */
+  private sceneBaseFov(v: Viewer3d): number {
+    return baseFovOf(v.getCamera(), this.sceneFit);
+  }
+
+  /** 이전·다음 보기로 갈 카메라: 장면 맞춤으로 적은 칸은 지금 화면 방향에 다시 맞추고, 그 맞춤을 이어 간다 */
+  private restoreView(c: CameraState): CameraState {
+    const v = this.viewer;
+    const r = restoreSceneCamera(c, this.history.tag, v ? this.viewAspect(v) : 1);
+    this.sceneFit = r.fit;
+    return r.camera;
+  }
+
+  /**
+   * 전체 보기·표준 뷰·맞춰 보기 전에: 장면이 세로 화면에서 넓힌 시야각을 원래대로(넓은 시야각의 전체 보기는 가장자리가 늘어난다).
+   * 이 보기들은 장면 보기가 아니므로 장면 맞춤도 끝낸다(돌려도 다시 넓히지 않는다)
+   */
+  private unwidenScene(): void {
+    const v = this.viewer;
+    const f = this.sceneFit;
+    if (!v || !f) return;
+    this.sceneFit = null;
+    // 장면 전환·이전 보기 중이면 그만 옮긴다(전체 보기가 그 위에서 시작한다)
+    this.refitLater = false;
+    this.stopCameraAnim();
+    const c = v.getCamera();
+    const u = unwidenSceneCamera(c, f);
+    if (u !== c) v.setCamera(u);
+  }
+
+  /** 휴대폰을 돌린 뒤: 장면 맞춤을 새 종횡비로(보기를 돌리거나 옮긴 것은 그대로, 사용자가 투영을 바꿨으면 그만 따라간다) */
+  private refitScene(): void {
+    const v = this.viewer;
+    const f = this.sceneFit;
+    if (!v || !f || !this.doc) return;
+    if (this.camAnim) {
+      this.refitLater = true;
+      return;
+    }
+    const cur = v.getCamera();
+    const r = refitSceneCamera(cur, f, this.viewAspect(v));
+    this.sceneFit = r?.fit ?? null;
+    // 더 따라갈 수 없으면(그 사이 평행 투영으로 바꿈 등) 넓힌 시야각을 원래대로 — 다시 원근으로 와도 넓은 시야각이 남지 않게
+    const next = r ? r.camera : unwidenSceneCamera(cur, f);
+    if (next !== cur) {
+      v.setCamera(next);
+      // 시야각만 바뀌면 코어가 카메라 변화를 알리지 않는다 — 기록의 마지막 카메라·맞춤을 직접 새로 한다
+      this.onCamera(v.getCamera());
+    }
+  }
+
+  /** 옮기는 중인 카메라 움직임을 그만둔다(끝났을 때 부를 것도 부른다 — 이전·다음 보기면 보기 기록의 '옮기는 중'을 푼다) */
+  private stopCameraAnim(): void {
+    cancelAnimationFrame(this.camAnim);
+    this.camAnim = 0;
+    const done = this.camAnimDone;
+    this.camAnimDone = null;
+    done?.();
+  }
+
+  /** 카메라를 부드럽게 옮긴다(뷰어의 맞춰 보기 움직임과 비슷한 시간). 앞의 움직임은 그만두고 그 done을 먼저 부른다 */
   private animateCamera(to: CameraState, ms = 320, done?: () => void): void {
     const v = this.viewer;
     if (!v) return;
-    cancelAnimationFrame(this.camAnim);
+    this.stopCameraAnim();
     const from = v.getCamera();
     if (!(ms > 0)) {
       v.setCamera(to);
       done?.();
       return;
     }
+    this.camAnimDone = done ?? null;
     const t0 = performance.now();
     const step = (now: number): void => {
       const k = Math.min(1, (now - t0) / ms);
       const e = 1 - (1 - k) ** 3;
       v.setCamera(lerpCamera(from, to, e));
-      if (k < 1) this.camAnim = requestAnimationFrame(step);
-      else done?.();
+      if (k < 1) {
+        this.camAnim = requestAnimationFrame(step);
+        return;
+      }
+      this.camAnim = 0;
+      this.camAnimDone = null;
+      done?.();
+      // 옮기는 동안 휴대폰을 돌렸으면 다 옮긴 뒤 다시 맞춘다
+      if (this.refitLater) {
+        this.refitLater = false;
+        this.refitScene();
+      }
     };
     this.camAnim = requestAnimationFrame(step);
   }
 
-  /** 카메라가 바뀔 때: 보기 기록(멈추면 한 칸) */
+  /** 카메라가 바뀔 때: 보기 기록(멈추면 한 칸, 그때의 장면 맞춤과 함께) */
   private onCamera(c: CameraState): void {
-    this.history.observe(c, performance.now());
+    this.history.observe(c, performance.now(), this.sceneFit);
     clearTimeout(this.historyTimer);
     this.historyTimer = window.setTimeout(() => {
       if (this.history.settle(performance.now())) this.refreshToolbar();
@@ -1013,22 +1226,25 @@ export class SkpViewerApp implements PanelHost {
   }
 
   viewBack(): void {
+    // 앞의 이전·다음 보기 움직임을 먼저 끝낸다(그 done이 기록의 '옮기는 중'을 풀므로 새로 옮기기 전에)
+    this.stopCameraAnim();
     const c = this.history.back(performance.now());
     if (!c) return;
     this.userMoved = true;
     this.projection = c.projection;
-    this.animateCamera(c, 280, () => {
+    this.animateCamera(this.restoreView(c), 280, () => {
       this.history.done();
       this.refreshToolbar();
     });
   }
 
   viewForward(): void {
+    this.stopCameraAnim();
     const c = this.history.forward();
     if (!c) return;
     this.userMoved = true;
     this.projection = c.projection;
-    this.animateCamera(c, 280, () => {
+    this.animateCamera(this.restoreView(c), 280, () => {
       this.history.done();
       this.refreshToolbar();
     });
@@ -1106,7 +1322,7 @@ export class SkpViewerApp implements PanelHost {
     const v = this.viewer;
     const page = d?.pages[index];
     if (!d || !v || !page) return;
-    const plan = pagePlan(page, { sectionPlanes: d.sectionPlanesRaw, viewerFovY: v.getCamera().fovY });
+    const plan = pagePlan(page, { sectionPlanes: d.sectionPlanesRaw, viewerFovY: this.sceneBaseFov(v), viewAspect: this.viewAspect(v) });
     if (plan.hiddenTags) d.hiddenTags = new Set([...plan.hiddenTags].filter((t) => d.tags.some((x) => x.name === t)));
     if (plan.hiddenNodes) {
       // 숨긴 개체 목록은 저장 당시 전체 상태다: 보기에서 숨긴 것은 버리고 장면 목록으로 바꾼다
@@ -1134,6 +1350,7 @@ export class SkpViewerApp implements PanelHost {
     this.refreshAnnotations();
     if (plan.camera) {
       const to = plan.camera;
+      this.sceneFit = plan.fit;
       this.userMoved = true;
       // 평행·원근도 장면을 따른다(도구 막대도 맞춘다)
       this.projection = to.projection;
@@ -1477,7 +1694,13 @@ export class SkpViewerApp implements PanelHost {
     if (!v) return;
     const h1 = this.els.viewHost.clientHeight;
     if (!this.userMoved) {
-      requestAnimationFrame(() => requestAnimationFrame(() => this.viewer?.fit(false)));
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          // 뷰 큐브를 끌어 돌린 뒤 등(움직였다고 적지 않은 경우)에도 넓힌 시야각으로 전체 보기를 하지 않게
+          this.unwidenScene();
+          this.viewer?.fit(false);
+        }),
+      );
       return;
     }
     if (h0 > 0 && h1 > 0 && h0 !== h1) v.setCamera(keepViewOnHeightChange(v.getCamera(), h0, h1));
@@ -1728,6 +1951,7 @@ export class SkpViewerApp implements PanelHost {
 
   setView(v: ViewName): void {
     this.userMoved = false;
+    this.unwidenScene();
     this.viewer?.setView(v);
   }
 
@@ -1813,7 +2037,9 @@ export class SkpViewerApp implements PanelHost {
       this.toggleMeasure();
       return;
     }
-    // F·1~7·Esc(측정 지우기)는 뷰어 규칙대로. 캡처 단계에서 처리했으면 캔버스의 같은 키 처리까지 가지 않게 막는다
+    // F·1~7·Esc(측정 지우기)는 뷰어 규칙대로. 캡처 단계에서 처리했으면 캔버스의 같은 키 처리까지 가지 않게 막는다.
+    // 전체 보기·표준 뷰 키는 그 전에 넓힌 시야각을 되돌린다
+    if (isViewKey({ key: ev.key, ctrl: ev.ctrlKey, meta: ev.metaKey, alt: ev.altKey })) this.unwidenScene();
     if (v.handleKey(ev)) {
       ev.stopPropagation();
       if (ev.key !== 'Escape') this.userMoved = false;

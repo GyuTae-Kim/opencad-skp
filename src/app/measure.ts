@@ -9,9 +9,10 @@
  *   4. 창 keydown·keyup(캡처 단계): `tool.handleKey(e)`가 true면 처리 끝. Esc keydown에서 false면(지울 것이 없음) 앱이 도구를 끈다.
  *   5. 앱을 닫을 때 `tool.dispose()`.
  *
- * 입력: 캔버스 포인터 이벤트를 엿본다(막지 않는다). 왼쪽 단추·탭을 4화소 안에서 떼면 점 찍기, 끌기·오른쪽·가운데 단추·
- * 두 손가락은 코어 궤도·이동·확대 그대로. 터치는 추정 반경을 넓힌다(커서 표식은 탭한 점에 남긴다).
- * 정밀 조준(터치): 한 손가락을 움직이지 않고 AIM_HOLD_MS 동안 누르면 손가락 위 AIM_OFFSET_PX에 십자선을 띄우고,
+ * 입력: 캔버스 포인터 이벤트를 엿본다(막지 않는다). 왼쪽 단추·탭을 코어의 끌기 시작 거리(tapSlopPx — 마우스·펜 4화소,
+ * 터치 10화소) 안에서 떼면 점 찍기, 끌기·오른쪽·가운데 단추·두 손가락은 코어 궤도·이동·확대 그대로(그 거리 안의 손가락 떨림은
+ * 코어도 돌리지 않고 누르기로 본다). 터치는 추정 반경을 넓힌다(커서 표식은 탭한 점에 남긴다).
+ * 정밀 조준(터치): 한 손가락을 끌기 시작 거리 안에서 AIM_HOLD_MS 동안 누르고 있으면 손가락 위 AIM_OFFSET_PX에 십자선을 띄우고,
  *   끌면 궤도 대신 십자선이 따라가며 마우스처럼 추정·고무줄·툴팁을 보인다. 떼면 십자선 자리에 점을 찍는다.
  *   그동안의 움직임은 캔버스 부모의 캡처 단계에서 막아 코어가 돌리지 않게 한다(떼기는 코어에 넘겨 끌기 상태를 끝낸다).
  * 줄자: 두 점 → { kind: 'tape', a, b, distance, dx, dy, dz }(장면 단위).
@@ -21,6 +22,7 @@
  * 그리기는 덧그림 층의 SVG 묶음(g.measure)과 DOM 라벨(div.measure-layer)로 하고, 숫자 글은 모형 단위(units.ts)로 쓴다.
  */
 import type { Viewer3d } from 'opencad-viewer3d';
+import { dragStartPx } from 'opencad-viewer3d/pointer';
 import type { Scene3d } from 'opencad-viewer3d/types';
 import { projectToScreen, screenRay, viewDepth, worldPerPixel, type ViewFrame } from 'opencad-viewer3d/camera';
 import type { V3 } from 'opencad-viewer3d/math';
@@ -86,8 +88,11 @@ export type MeasureViewer = Pick<Viewer3d, 'canvas' | 'pick' | 'getCamera' | 'on
 /** 이 도구가 쓰는 덧그림 기능 */
 export type MeasureOverlay = Pick<Overlay, 'svg' | 'labels' | 'set' | 'frame' | 'invalidate'>;
 
-/** 누르기로 볼 최대 움직임(화소, 코어 끌기 시작과 같다) */
-export const TAP_SLOP_PX = 4;
+/**
+ * 누르기로 볼 최대 움직임(화소): 코어 끌기 시작 거리와 같다(마우스·펜 DRAG_START_PX 4, 터치 TOUCH_DRAG_START_PX 10).
+ * 이보다 덜 움직였으면 코어도 돌리지 않으므로, 손가락이 몇 화소 떨려도 점을 찍고 정밀 조준 타이머도 이어 간다
+ */
+export const tapSlopPx = (pointerType: string): number => dragStartPx(pointerType);
 /** 이만큼(ms) 움직이지 않고 누르고 있으면 정밀 조준 */
 export const AIM_HOLD_MS = 350;
 /** 정밀 조준 십자선을 손가락 위로 띄우는 거리(화소) — 손가락에 가리지 않게 */
@@ -225,6 +230,9 @@ function planeBasis(n: readonly number[]): [V3, V3] {
 interface Press {
   x: number;
   y: number;
+  /** 마지막 자리(떨린 만큼 — 정밀 조준 십자선을 지금 손가락 위에 띄운다) */
+  lx: number;
+  ly: number;
   button: number;
   type: string;
   moved: boolean;
@@ -460,7 +468,7 @@ export class MeasureTool {
       this.cancelAim();
       this.cancelTap = true;
     }
-    this.presses.set(e.pointerId, { x: p.x, y: p.y, button: e.button, type, moved: false });
+    this.presses.set(e.pointerId, { x: p.x, y: p.y, lx: p.x, ly: p.y, button: e.button, type, moved: false });
     // 한 손가락을 그대로 누르고 있으면 정밀 조준
     if (type === 'touch' && this.presses.size === 1) {
       const id = e.pointerId;
@@ -473,7 +481,9 @@ export class MeasureTool {
     const p = this.local(e);
     const pr = this.presses.get(e.pointerId);
     if (pr) {
-      if (!pr.moved && Math.hypot(p.x - pr.x, p.y - pr.y) >= TAP_SLOP_PX) {
+      pr.lx = p.x;
+      pr.ly = p.y;
+      if (!pr.moved && Math.hypot(p.x - pr.x, p.y - pr.y) >= tapSlopPx(pr.type)) {
         pr.moved = true;
         this.stopAimTimer();
         // 궤도·이동 중에는 커서 표식을 숨긴다
@@ -534,7 +544,7 @@ export class MeasureTool {
     if (!this.modeValue || !pr || pr.moved || this.cancelTap || this.presses.size !== 1) return;
     this.aimId = id;
     this.dragging = false;
-    this.cursor = { ...aimPoint(pr.x, pr.y), type: 'aim' };
+    this.cursor = { ...aimPoint(pr.lx, pr.ly), type: 'aim' };
     this.hoverDirty = true;
     // 짧은 떨림으로 조준이 시작됐음을 알린다(지원하는 기기만)
     try {

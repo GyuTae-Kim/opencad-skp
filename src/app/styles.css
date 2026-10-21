@@ -76,6 +76,8 @@ body {
   font: 13px/1.45 var(--font);
   -webkit-font-smoothing: antialiased;
   -webkit-text-size-adjust: 100%;
+  /* 제목 막대·상태 막대를 아래로 끌어도 새로 고침(당겨서 새로 고침)되지 않게 — 패널·시트 목록은 그 안에서 그대로 스크롤된다 */
+  overscroll-behavior-y: none;
 }
 
 button,
@@ -433,6 +435,142 @@ input[type='checkbox'] {
 
 .btn.primary:hover {
   background: var(--accent-strong);
+}
+
+/* 최근 문서(recent.ts — 이 브라우저에만 저장한 파일) */
+.recent {
+  margin: 14px 0 0;
+  padding: 10px 12px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: var(--bg-elev);
+}
+
+.recent-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.recent-head h2 {
+  flex: 1 1 auto;
+  margin: 0;
+  font-size: 14px;
+}
+
+.recent-clear {
+  flex: none;
+  min-height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.recent-clear:hover {
+  background: var(--bg-hover);
+}
+
+.recent-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.recent-row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  min-width: 0;
+}
+
+.recent-open {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 36px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.recent-open:hover,
+.recent-del:hover {
+  background: var(--bg-hover);
+}
+
+.recent-icon {
+  display: flex;
+  color: var(--accent);
+}
+
+.recent-name {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-meta {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.recent-del {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.recent-note {
+  margin: 6px 0 0;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+@media (pointer: coarse) {
+  .recent-open,
+  .recent-clear {
+    min-height: 44px;
+  }
+
+  .recent-del {
+    width: 44px;
+    min-height: 44px;
+  }
+}
+
+/* 아주 좁은 화면: 크기·시간을 이름 아래 줄로 */
+@media (max-width: 400px) {
+  .recent-open {
+    grid-template-columns: auto minmax(0, 1fr);
+    row-gap: 0;
+  }
+
+  .recent-meta {
+    grid-column: 2;
+  }
 }
 
 .facts {
@@ -1767,4 +1905,65 @@ html:lang(zh-CN) { --font: -apple-system, "PingFang SC", "Microsoft YaHei", sans
 }
 @media (max-width: 767px) {
   .titlebar .docname, .titlebar .tbtn .lbl { display: none; }
+}
+
+/*
+ * 손가락 기기: 제목 막대 단추는 폭 40px 이상, 장면 탭은 높이 38px(탭 줄 안쪽 여백은 줄여 3D 보기를 많이 덮지 않게).
+ * 언어 단추 규칙(위, 767px 이하 36px)을 덮어야 해서 맨 끝 가까이에 둔다.
+ */
+@media (pointer: coarse) {
+  .titlebar .tbtn {
+    min-width: 40px;
+  }
+
+  /* 넓어진 단추 때문에 좁은 휴대폰에서 이름이 "OpenC…"로 잘리지 않게 "OpenCAD"만 남긴다 */
+  @media (max-width: 400px) {
+    .brand {
+      padding-right: 2px;
+    }
+
+    .brand-sub {
+      display: none;
+    }
+  }
+
+  .language-control {
+    flex-basis: 40px;
+    width: 40px;
+  }
+
+  .language-trigger {
+    width: 40px;
+    height: 38px;
+  }
+
+  .scene-tabs {
+    gap: 2px;
+    padding: 2px;
+  }
+
+  .scene-tab {
+    min-width: 44px;
+    min-height: 38px;
+    padding: 0 12px;
+    font-size: 13px;
+  }
+}
+
+/*
+ * 홈 화면 앱(standalone): 상태 표시줄 밑까지 그리므로(apple-mobile-web-app-status-bar-style black-translucent)
+ * 제목 막대가 노치·상태 표시줄 밑에 깔리지 않게 위 안전 영역만큼 내린다(휴대폰 제목 막대는 padding을 0으로 덮어쓰므로 맨 끝에 둔다).
+ * 상태 표시줄 글은 흰색이라, 밝은 테마에서는 그 띠만 어둡게 칠한다.
+ */
+@media (display-mode: standalone) {
+  .titlebar {
+    padding-top: env(safe-area-inset-top, 0px);
+    background:
+      linear-gradient(var(--statusbar-bg, var(--bg-bar)) 0 0) top / 100% env(safe-area-inset-top, 0px) no-repeat,
+      var(--bg-bar);
+  }
+
+  :root[data-theme='light'] {
+    --statusbar-bg: #1b2027;
+  }
 }

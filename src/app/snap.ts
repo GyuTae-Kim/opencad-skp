@@ -15,6 +15,7 @@
 import type { LineSet3d, Mesh3d, Pick3d } from 'opencad-viewer3d/types';
 import { projectToScreen, screenRay, viewDepth, worldPerPixel, type ViewFrame } from 'opencad-viewer3d/camera';
 import type { V3 } from 'opencad-viewer3d/math';
+import { PICK_TOLERANCE_PX } from 'opencad-viewer3d/pointer';
 
 /**
  * 그물 정점 → 세계 점: 묶음 원점(origin)을 더한 뒤 배치 행렬(matrix, 4×4 열 우선)을 곱한다(코어 math의 modelMatrix·transformPoint와 같은 계산).
@@ -58,14 +59,21 @@ export interface SnapScene {
   lines: readonly LineSet3d[];
 }
 
-/** 추정 반경(화면 화소) */
+/** 추정 반경(화면 화소) — 코어가 측정 점을 끝점에 붙잡는 거리(SNAP_PX)와 같다 */
 export const SNAP_RADIUS_PX = 10;
-/** 터치 추정 반경(손가락이 가리므로 넓게) */
+/**
+ * 터치 추정 반경(손가락이 가리므로 넓게). 코어의 터치 누르기 허용 거리(TOUCH_PICK_TOLERANCE_PX 14, 붙잡기 14)보다 넓어,
+ * 코어가 터치로 고를 선·끝점은 이 도구도 모두 후보로 본다
+ */
 export const TOUCH_SNAP_RADIUS_PX = 22;
-/** 정밀 조준(길게 눌러 십자선을 보며 옮기기) 추정 반경: 보면서 맞추므로 마우스보다 조금 넓게 */
+/** 정밀 조준(길게 눌러 십자선을 보며 옮기기) 추정 반경: 보면서 맞추므로 마우스보다 넓게(코어 터치 허용 거리와 같다) */
 export const AIM_SNAP_RADIUS_PX = 14;
-/** 코어 고르기 허용 거리(Viewer3d pickTolerance 기본값) */
-export const CORE_PICK_TOLERANCE_PX = 6;
+/**
+ * 가운데·둘레 고르기에 쓰는 코어 허용 거리: 포인터 종류 없이 부른 viewer.pick(x, y)의 마우스 값(PICK_TOLERANCE_PX 6).
+ * 터치에서도 가운데는 이 좁은 값으로 골라 손가락 밑 면(각도기 평면 법선)을 지키고, 둘레 고르기로 추정 반경 안의 선을 찾는다
+ * (터치 허용 거리 14로 고르면 14화소 안의 모서리가 손가락 밑 면을 덮는다)
+ */
+export const CORE_PICK_TOLERANCE_PX = PICK_TOLERANCE_PX;
 /** 축 고정 화면 각(도) */
 export const AXIS_LOCK_DEG = 6;
 /** 시작점에서 이만큼(화소) 떨어져야 축 고정을 본다(가까우면 각이 흔들린다) */

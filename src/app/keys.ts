@@ -69,6 +69,12 @@ export function keyAction(k: KeyInput): KeyAction | null {
   return { kind: 'viewer' };
 }
 
+/** 뷰어의 전체 보기(F)·표준 뷰(1~7) 키인지(수정 키 없이) — 앱이 그 전에 넓힌 시야각을 되돌린다 */
+export function isViewKey(k: Pick<KeyInput, 'key' | 'ctrl' | 'meta' | 'alt'>): boolean {
+  if (k.ctrl || k.meta || k.alt) return false;
+  return k.key === 'f' || k.key === 'F' || Object.prototype.hasOwnProperty.call(VIEW_KEYS, k.key);
+}
+
 /** 이벤트 대상이 글을 넣는 곳인지 */
 export function isEditableTarget(t: EventTarget | null): boolean {
   if (!t || typeof (t as HTMLElement).tagName !== 'string') return false;
