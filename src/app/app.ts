@@ -2141,6 +2141,8 @@ export class SkpViewerApp implements PanelHost {
     if (!e) return;
     const touch = !!this.coarseQuery?.matches;
     this.stick?.setVisible(this.walking && touch && !!this.doc);
+    // 조이스틱은 카메라 띠 위에(띠 높이는 화면 폭·글 줄 수에 따라 다르다)
+    if (this.stick && !this.stick.el.hidden) this.stick.el.style.bottom = `${(e.camBar.hidden ? 0 : e.camBar.offsetHeight) + 22}px`;
     if (e.camBar.hidden || !v) return;
     const fov = v.fov;
     e.fovRange.value = String(Math.round(fov));
@@ -2165,6 +2167,7 @@ export class SkpViewerApp implements PanelHost {
             : '평행 투영에서는 시야각을 쓰지 않습니다',
       ),
     );
+    if (this.stick && !this.stick.el.hidden) this.stick.el.style.bottom = `${e.camBar.offsetHeight + 22}px`;
   }
 
   // ───────────────────────── 해 조명·그림자·안개 ─────────────────────────
