@@ -1178,6 +1178,28 @@ export function measureText(m: MeasureToolResult, units: UnitsDisplay, mmPerUnit
   return m.kind === 'tape' ? `거리 ${formatLength(m.distance * mmPerUnit, units)}` : `각도 ${formatAngle(m.angle, units)}`;
 }
 
+/** 측정 기록 한 줄(복사용): "거리 1234 mm (dx … · dy … · dz …)" 또는 "각도 45.0°" */
+export function measureLine(m: MeasureToolResult, units: UnitsDisplay, mmPerUnit: number): string {
+  const axes = measureAxes(m, units, mmPerUnit);
+  return axes ? `${measureText(m, units, mmPerUnit)} (${axes})` : measureText(m, units, mmPerUnit);
+}
+
+/** 측정 기록 칸 수 */
+export const MEASURE_LOG_LIMIT = 10;
+
+/** 측정 기록에 결과를 더한다(새것이 앞, 바로 앞과 같은 결과는 다시 넣지 않는다, MEASURE_LOG_LIMIT개까지) */
+export function pushMeasure(log: readonly MeasureToolResult[], m: MeasureToolResult | null): MeasureToolResult[] {
+  if (!m) return [...log];
+  const last = log[0];
+  const same =
+    !!last &&
+    last.kind === m.kind &&
+    (m.kind === 'tape'
+      ? last.kind === 'tape' && [...last.a, ...last.b].every((v, i) => v === [...m.a, ...m.b][i])
+      : last.kind === 'protractor' && [...last.center, ...last.a, ...last.b].every((v, i) => v === [...m.center, ...m.a, ...m.b][i]));
+  return same ? [...log] : [m, ...log].slice(0, MEASURE_LOG_LIMIT);
+}
+
 /** 줄자 결과의 축 성분(모형 단위, 각도기는 null) */
 export function measureAxes(m: MeasureToolResult, units: UnitsDisplay, mmPerUnit: number): string | null {
   if (m.kind !== 'tape') return null;

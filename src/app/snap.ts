@@ -1,8 +1,12 @@
 /**
  * 측정 도구의 추정(스냅, 순수 함수): 커서 둘레에서 SketchUp처럼 붙을 점을 고른다.
  *
- * - 차례: 끝점(초록 원) → 중간점(청록 원) → 모서리 위(빨강 사각형) → 그물 삼각형 꼭짓점(끝점) → 면 위(파랑 마름모).
+ * - 차례: 끝점(초록 원)·호의 중심(초록 원) → 중간점(청록 원) → 수직(자홍, 시작점에서 모서리에 내린 발) → 모서리 위(빨강 사각형)
+ *   → 그물 삼각형 꼭짓점(끝점) → 면에 수직(자홍, 시작점에서 커서 밑 면 평면에 내린 발) → 면 위(파랑 마름모).
  *   같은 차례면 커서에 가까운 것. 추정 반경은 화면 10화소(터치는 넓게).
+ * - 호·원의 중심: 커서 밑(둘레 포함) 곡선 선분의 중심(부른 쪽이 curveCenter로 잰다)과, 앞서 지나간 곡선의 중심(centers —
+ *   SketchUp처럼 호를 한 번 훑고 가운데로 가면 붙는다).
+ * - 수직: 시작점(from)이 있을 때만 — 모서리 직선에 내린 발이 선분 안이면, 면은 커서 밑 면의 평면에 내린 발(벽과 벽 사이 거리).
  * - 시작점(from)이 있고 결과가 면 위·빈 곳이면, 커서가 시작점에서 축 방향(화면 각 6° 안)으로 가면 그 축 위로 고정한다
  *   (빨강 X · 초록 Y · 파랑 Z).
  * - 아무것도 없으면 시작점(없으면 anchor)을 지나 화면과 나란한 평면 위의 빈 점(free).
@@ -32,7 +36,7 @@ function placePoint(matrix: ArrayLike<number> | undefined, origin: readonly numb
   return [(m[0]! * x + m[4]! * y + m[8]! * z + m[12]!) * iw, (m[1]! * x + m[5]! * y + m[9]! * z + m[13]!) * iw, (m[2]! * x + m[6]! * y + m[10]! * z + m[14]!) * iw];
 }
 
-export type SnapKind = 'endpoint' | 'midpoint' | 'onEdge' | 'onFace' | 'axis' | 'free';
+export type SnapKind = 'endpoint' | 'midpoint' | 'center' | 'perpendicular' | 'onEdge' | 'onFace' | 'axis' | 'free';
 export type Axis = 'x' | 'y' | 'z';
 
 /** 추정 결과(좌표는 세계 = 장면 단위) */
@@ -59,6 +63,9 @@ export interface SnapScene {
   lines: readonly LineSet3d[];
 }
 
+/** 면에 수직 추정 글(모서리에 수직은 SNAP_LABELS.perpendicular) */
+export const FACE_PERPENDICULAR_LABEL = '면에 수직';
+
 /** 추정 반경(화면 화소) — 코어가 측정 점을 끝점에 붙잡는 거리(SNAP_PX)와 같다 */
 export const SNAP_RADIUS_PX = 10;
 /**
@@ -82,6 +89,8 @@ export const AXIS_LOCK_MIN_PX = 12;
 export const SNAP_LABELS: Readonly<Record<SnapKind, string>> = Object.freeze({
   endpoint: '끝점',
   midpoint: '중간점',
+  center: '중심',
+  perpendicular: '모서리에 수직',
   onEdge: '모서리에',
   onFace: '면에',
   axis: '',
@@ -92,6 +101,8 @@ export const AXIS_LABELS: Readonly<Record<Axis, string>> = Object.freeze({ x: '�
 export const SNAP_COLORS: Readonly<Record<SnapKind, string>> = Object.freeze({
   endpoint: '#00a000',
   midpoint: '#00b4b4',
+  center: '#00a000',
+  perpendicular: '#c800c8',
   onEdge: '#dc0000',
   onFace: '#1e46dc',
   axis: '#808080',
@@ -285,10 +296,14 @@ export interface SnapInput {
   visible?: ((p: V3) => boolean) | null;
   /** 축 고정을 볼지(기본 true) */
   axes?: boolean;
+  /** 선 고르기 → 그 선분이 든 호·원의 중심(세계, 곡선이 아니거나 한 원 위가 아니면 null) */
+  curveCenter?: ((pick: Pick3d) => V3 | null) | null;
+  /** 앞서 지나간 곡선의 중심(세계) — 커서가 그 가까이 오면 붙는다 */
+  centers?: readonly V3[];
 }
 
 interface Cand {
-  kind: 'endpoint' | 'midpoint' | 'onEdge';
+  kind: 'endpoint' | 'midpoint' | 'center' | 'perpendicular' | 'onEdge';
   point: V3;
   rank: number;
   dist: number;
@@ -296,6 +311,22 @@ interface Cand {
   id: string;
   /** 코어가 이미 보이는 것으로 고른 점(가림 판정 생략) */
   trusted: boolean;
+}
+
+/** 점 p에서 직선(a, b)에 내린 발과 그 매개변수(a = 0, b = 1). 선분 길이가 0이면 null */
+export function footOnLine(p: readonly number[], a: readonly number[], b: readonly number[]): { point: V3; t: number } | null {
+  const u = sub(b, a);
+  const uu = dot(u, u);
+  if (!(uu > 0)) return null;
+  const t = dot(sub(p, a), u) / uu;
+  return { point: along(a, u, t), t };
+}
+
+/** 점 p에서 평면(지나는 점 q, 법선 n)에 내린 발. 법선이 0이면 null */
+export function footOnPlane(p: readonly number[], q: readonly number[], n: readonly number[]): V3 | null {
+  const nn = dot(n, n);
+  if (!(nn > 0)) return null;
+  return along(p, n, -dot(sub(p, q), n) / nn);
 }
 
 /** 커서 밑 추정 고르기 */
@@ -327,9 +358,19 @@ export function chooseSnap(o: SnapInput): Snap {
     push({ kind: 'endpoint', point: a, rank: 0, edge: seg, id: p.id, trusted: false });
     push({ kind: 'endpoint', point: b, rank: 0, edge: seg, id: p.id, trusted: false });
     push({ kind: 'midpoint', point: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2], rank: 1, edge: seg, id: p.id, trusted: false });
+    // 시작점에서 이 모서리에 내린 발(선분 안일 때만)
+    if (o.from) {
+      const foot = footOnLine(o.from, a, b);
+      if (foot && foot.t > 1e-9 && foot.t < 1 - 1e-9) push({ kind: 'perpendicular', point: foot.point, rank: 1.5, edge: seg, id: p.id, trusted: false });
+    }
+    // 이 선분이 호·원이면 그 중심
+    const c = o.curveCenter?.(p) ?? null;
+    if (c) push({ kind: 'center', point: c, rank: 0, id: p.id, trusted: false });
     const center = p === pick;
     push({ kind: 'onEdge', point: center ? [...p.point] : rayClosestOnSegment(ray, a, b), rank: 2, edge: seg, id: p.id, trusted: center });
   }
+  // 앞서 지나간 곡선의 중심
+  for (const c of o.centers ?? []) push({ kind: 'center', point: [c[0], c[1], c[2]], rank: 0, id: '', trusted: false });
   // 점 묶음(있으면 끝점처럼)
   if (pick && pick.kind === 'point') push({ kind: 'endpoint', point: [...pick.point], rank: 0, id: pick.id, trusted: true });
   // 커서 밑 면의 삼각형 꼭짓점(삼각형 변은 SketchUp 모서리가 아니라 중간점·모서리 위로 쓰지 않는다)
@@ -346,11 +387,18 @@ export function chooseSnap(o: SnapInput): Snap {
     if (c.edge) snap.edge = c.edge;
     break;
   }
+  // 면에 수직: 시작점에서 커서 밑 면의 평면에 내린 발이 추정 반경 안이면(맞은편 벽까지의 거리)
+  if (!snap && pick && pick.kind === 'mesh' && !pick.section && o.from && pick.normal) {
+    const foot = footOnPlane(o.from, pick.point, pick.normal);
+    const s = foot ? projectToScreen(f, foot) : null;
+    if (foot && s && Math.hypot(s[0] - o.x, s[1] - o.y) <= R && Math.hypot(...sub(foot, o.from)) > 0 && (!o.visible || o.visible(foot)))
+      snap = { kind: 'perpendicular', point: foot, label: FACE_PERPENDICULAR_LABEL, id: pick.id, normal: [...pick.normal] };
+  }
   if (!snap && pick && pick.kind === 'mesh') {
     snap = { kind: 'onFace', point: [...pick.point], label: pick.section ? '단면에' : SNAP_LABELS.onFace, id: pick.id };
     if (pick.section) snap.section = true;
   }
-  // 축 고정: 면 위·빈 곳보다 앞선다(점·선 추정보다는 뒤)
+  // 축 고정: 면 위·빈 곳보다 앞선다(점·선 추정·면에 수직보다는 뒤)
   if (o.from && o.axes !== false && (!snap || snap.kind === 'onFace')) {
     const lock = axisLock(f, o.from, o.x, o.y);
     if (lock) snap = { kind: 'axis', point: lock.point, axis: lock.axis, label: AXIS_LABELS[lock.axis] };

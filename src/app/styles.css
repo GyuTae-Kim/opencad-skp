@@ -2174,3 +2174,88 @@ html:lang(zh-CN) { --font: -apple-system, "PingFang SC", "Microsoft YaHei", sans
     margin: 12mm;
   }
 }
+
+/* 최근 측정(측정 띠 위 목록·패널 아래 띠) */
+.measure-log {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  left: 0;
+  box-sizing: border-box;
+  min-width: 260px;
+  max-height: 50vh;
+  padding: 8px;
+  overflow: auto;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+
+.ml-head {
+  margin: 0 2px 4px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.ml-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 40px;
+  padding: 4px 8px;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border-soft);
+  cursor: pointer;
+}
+
+.ml-row:hover {
+  background: var(--bg-hover);
+}
+
+.ml-acts {
+  margin: 6px 0 0;
+}
+
+.measure-flash {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  padding: 4px 10px;
+  color: var(--bg-elev);
+  font-size: 12px;
+  white-space: nowrap;
+  background: var(--text);
+  border-radius: 8px;
+  transform: translateX(-50%);
+}
+
+.measure-history > summary {
+  margin-top: 4px;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ml-line {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ml-copy-btn {
+  height: 22px;
+  padding: 0 6px;
+}
+

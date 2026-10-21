@@ -7,6 +7,7 @@
  * 노드가 아주 많아도 화면이 느려지지 않게 자식은 처음 CHILD_LIMIT개만 그리고 "더 보기"로 늘린다.
  */
 import { h, icon } from './dom';
+import type { MeasureToolResult } from './measure';
 import {
   KIND_LABEL,
   boundsSize,
@@ -15,6 +16,7 @@ import {
   docLabel,
   folderHidden,
   measureAxes,
+  measureLine,
   measureText,
   folderTags,
   materialImage,
@@ -63,6 +65,10 @@ export interface PanelHost {
   readonly isolated: boolean;
   /** 측정 도구 안내 글(없으면 null) */
   readonly measureHint: string | null;
+  /** 최근 측정(새것이 앞) */
+  readonly measureLogList: readonly MeasureToolResult[];
+  copyMeasure(which: number | 'all' | 'current'): void;
+  clearMeasureLog(): void;
   select(sel: Selection | null): void;
   /** 마지막으로 3D에서 누른 자리의 면·모서리 하나를 고른다(그룹을 고른 뒤 누른 면의 넓이를 볼 때) */
   selectPickedPart(): void;
@@ -94,6 +100,8 @@ export class Panel {
   private readonly body: HTMLElement;
   private readonly foot: HTMLElement;
   private doc: SkpDoc | null = null;
+  /** 최근 측정 목록을 펼쳐 두었는지(다시 그려도 지킨다) */
+  private logOpen = false;
 
   constructor(private readonly host: PanelHost) {
     this.tabsEl = h('div', { class: 'ptabs', role: 'tablist', 'aria-label': '패널 탭' });
@@ -873,6 +881,23 @@ export class Panel {
       const axes = measureAxes(m, d.units, mm);
       lines.push(h('div', {}, h('b', {}, `${measureText(m, d.units, mm)} `), axes ? h('span', { class: 'dim' }, axes) : null));
     } else if (this.host.measuring) lines.push(h('div', { class: 'dim' }, this.host.measureHint ?? '측정: 점을 누르세요 · Esc = 지우기, 한 번 더 = 끄기'));
+    // 최근 측정(새것부터): 줄마다 복사, 모두 복사·기록 지우기
+    const log = this.host.measureLogList;
+    if (log.length) {
+      const mm = mmPerSceneUnit(d.scene.units);
+      const rows = log.map((m, i) => {
+        const b = h('button', { class: 'mini-btn ml-copy-btn', type: 'button', title: '이 결과 글 복사', 'aria-label': '이 결과 글 복사', html: icon('copy', 13) });
+        b.addEventListener('click', () => this.host.copyMeasure(i));
+        return h('div', { class: 'ml-line' }, h('span', { 'data-i18n-skip': '' }, measureLine(m, d.units, mm)), b);
+      });
+      const all = h('button', { class: 'mini-btn', type: 'button' }, '모두 복사');
+      all.addEventListener('click', () => this.host.copyMeasure('all'));
+      const clear = h('button', { class: 'mini-btn', type: 'button' }, '기록 지우기');
+      clear.addEventListener('click', () => this.host.clearMeasureLog());
+      lines.push(h('details', { class: 'measure-history', open: this.logOpen ? true : undefined }, h('summary', {}, `최근 측정 ${fmtCount(log.length)}개`), ...rows, h('div', { class: 'pbar' }, all, clear)));
+      const det = lines[lines.length - 1] as HTMLDetailsElement;
+      det.addEventListener('toggle', () => (this.logOpen = det.open));
+    }
     f.hidden = !lines.length;
     f.append(...lines);
   }

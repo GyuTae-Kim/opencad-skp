@@ -81,7 +81,12 @@ export interface MeasureToolOptions {
   onHint?: (text: string | null) => void;
   /** 손가락이 주인 기기인지: 안내에서 키(Esc·Shift) 설명을 빼고 길게 누르기를 알린다 */
   touch?: () => boolean;
+  /** 선분(묶음 id, 선분 번호)이 든 호·원의 중심(세계, 곡선이 아니면 null) — "중심" 추정 */
+  curveCenter?: (id: string, seg: number) => V3 | null;
 }
+
+/** 기억해 두는 지나간 곡선 중심 수 */
+export const RECENT_CENTERS = 4;
 
 /** 이 도구가 쓰는 뷰어 기능(시험에서 가짜로 바꿀 수 있게) */
 export type MeasureViewer = Pick<Viewer3d, 'canvas' | 'pick' | 'getCamera' | 'onCameraChange' | 'getRenderMode' | 'section'>;
@@ -267,6 +272,8 @@ export class MeasureTool {
   private aimId: number | null = null;
   private aimTimer: ReturnType<typeof setTimeout> | null = null;
   private lastHint: string | null = null;
+  /** 앞서 커서가 지나간 호·원의 중심(새것이 앞) */
+  private centers: V3[] = [];
   private readonly g: SVGGElement;
   private readonly layer: HTMLDivElement;
   private readonly tip: HTMLDivElement;
@@ -360,6 +367,7 @@ export class MeasureTool {
   clear(): void {
     this.pts = [];
     this.normal = null;
+    this.centers = [];
     this.dropResult();
     this.hoverDirty = true;
     this.refreshHint();
@@ -429,6 +437,15 @@ export class MeasureTool {
             return viewDepth(f, k.point) >= dp - Math.max(1e-6 * Math.abs(dp), worldPerPixel(f, dp) * 1.5);
           }
         : null;
+    // 곡선 중심: 커서 둘레 곡선 선분의 중심을 재고 기억한다(가운데로 옮기면 붙게)
+    const cc = this.opts.curveCenter;
+    const curveCenter = cc
+      ? (p: Parameters<NonNullable<Parameters<typeof chooseSnap>[0]['curveCenter']>>[0]): V3 | null => {
+          const c = cc(p.id, p.raw ?? p.index);
+          if (c) this.rememberCenter(c);
+          return c;
+        }
+      : null;
     return chooseSnap({
       frame: f,
       x,
@@ -441,7 +458,15 @@ export class MeasureTool {
       anchor: v.getCamera().target,
       kept,
       visible,
+      curveCenter,
+      centers: this.centers,
     });
+  }
+
+  /** 지나간 곡선 중심 기억(같은 점은 앞으로 옮기고, RECENT_CENTERS개까지) */
+  private rememberCenter(c: V3): void {
+    const same = (a: V3): boolean => Math.abs(a[0] - c[0]) + Math.abs(a[1] - c[1]) + Math.abs(a[2] - c[2]) < 1e-9 * (1 + Math.abs(c[0]) + Math.abs(c[1]) + Math.abs(c[2]));
+    this.centers = [c, ...this.centers.filter((x) => !same(x))].slice(0, RECENT_CENTERS);
   }
 
   dispose(): void {
@@ -675,6 +700,7 @@ export class MeasureTool {
   private reset(): void {
     this.pts = [];
     this.normal = null;
+    this.centers = [];
     this.planeLock = null;
     this.hoverPlane = null;
     this.hover = null;
@@ -838,7 +864,7 @@ export class MeasureTool {
     this.g.append(svgEl('circle', { class: 'measure-point', cx: s[0], cy: s[1], r: 3.5, fill: 'currentColor', stroke: '#ffffff', 'stroke-width': 1 }));
   }
 
-  /** 추정 표식: 끝점 초록 원, 중간점 청록 원, 모서리 위 빨강 사각형, 면 위 파랑 마름모, 축 위 축 색 작은 사각형 */
+  /** 추정 표식: 끝점 초록 원, 중간점 청록 원, 중심 초록 원과 십자, 수직 자홍 직각 표, 모서리 위 빨강 사각형, 면 위 파랑 마름모, 축 위 축 색 작은 사각형 */
   private marker(f: ViewFrame, snap: Snap): void {
     const s = screenPoint(f, snap.point, 20);
     if (!s) return;
@@ -847,7 +873,14 @@ export class MeasureTool {
     const base = { class: `measure-snap measure-snap-${snap.kind}`, 'data-kind': snap.kind, fill: color, stroke: '#ffffff', 'stroke-width': 1.25 };
     let el: SVGElement;
     if (snap.kind === 'endpoint' || snap.kind === 'midpoint') el = svgEl('circle', { ...base, cx: x, cy: y, r: 5 });
-    else if (snap.kind === 'onFace') el = svgEl('polygon', { ...base, points: `${x},${y - 6.5} ${x + 6.5},${y} ${x},${y + 6.5} ${x - 6.5},${y}` });
+    else if (snap.kind === 'center') {
+      el = svgEl('g', { class: base.class, 'data-kind': snap.kind });
+      el.append(svgEl('circle', { cx: x, cy: y, r: 6, fill: 'none', stroke: '#ffffff', 'stroke-width': 3 }), svgEl('circle', { cx: x, cy: y, r: 6, fill: 'none', stroke: color, 'stroke-width': 1.75 }));
+      el.append(svgEl('path', { d: `M${x - 3.5},${y}h7M${x},${y - 3.5}v7`, stroke: color, 'stroke-width': 1.5 }));
+    } else if (snap.kind === 'perpendicular') {
+      // 직각 표(ㄴ 모양)
+      el = svgEl('path', { class: base.class, 'data-kind': snap.kind, d: `M${x - 6},${y - 6}v12h12`, fill: 'none', stroke: color, 'stroke-width': 2.5, 'stroke-linejoin': 'round' });
+    } else if (snap.kind === 'onFace') el = svgEl('polygon', { ...base, points: `${x},${y - 6.5} ${x + 6.5},${y} ${x},${y + 6.5} ${x - 6.5},${y}` });
     else {
       const h = snap.kind === 'onEdge' ? 4.5 : 3.5;
       el = svgEl('rect', { ...base, x: x - h, y: y - h, width: 2 * h, height: 2 * h });

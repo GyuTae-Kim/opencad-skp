@@ -25,6 +25,8 @@ import { dragStartPx } from 'opencad-viewer3d/pointer';
 import { ParseClient } from './client';
 import { AnnotationLabels, occludedBy } from './annotations';
 import { ExportDialog, type ExportContext } from './exporter';
+import { edgeGeometry } from './faces';
+import { copyText } from './clipboard';
 import { HISTORY_LIMIT, HISTORY_SETTLE_MS, ViewHistory } from './history';
 import { beginOpen, showAnalyticsSettings, trackExport, type OpenAttempt } from './analytics';
 import { MeasureTool, type MeasureMode, type MeasureToolResult } from './measure';
@@ -74,7 +76,9 @@ import {
   selectionText,
   selectionEntity,
   measureAxes,
+  measureLine,
   measureText,
+  pushMeasure,
   nodeHiddenForLabels,
   annotationShown,
   tagHidden,
@@ -218,6 +222,10 @@ interface Els {
   measureBar: HTMLElement;
   measureText: HTMLElement;
   measureClear: HTMLButtonElement;
+  measureCopy: HTMLButtonElement;
+  measureLogBtn: HTMLButtonElement;
+  measureLog: HTMLElement;
+  measureFlash: HTMLElement;
   selBar: HTMLElement;
   selText: HTMLElement;
   selPart: HTMLButtonElement;
@@ -269,6 +277,11 @@ export class SkpViewerApp implements PanelHost {
   private rangedIds = new Set<string>();
   /** 그림 저장 창 */
   private exportDialog: ExportDialog | null = null;
+  /** 최근 측정(새것이 앞)·측정 띠 알림 타이머 */
+  private measureLog: MeasureToolResult[] = [];
+  private flashTimer = 0;
+  /** 곡선(묶음 차례#곡선 번호) → 중심(측정 "중심" 추정, 문서마다) */
+  private curveCenters = new Map<string, [number, number, number] | null>();
   /** 파일·장면 스타일 배경 쓰기(사용자 설정)와 지금 스타일의 배경 색 */
   private fileBg = loadFileBackground(safeStorage());
   private styleBg: Rgb | null = null;
@@ -451,7 +464,21 @@ export class SkpViewerApp implements PanelHost {
     measureClear.addEventListener('click', () => this.measureTool?.clear());
     const measureClose = h('button', { class: 'mb-btn icon', type: 'button', title: '측정 끝내기', 'aria-label': '측정 끝내기', html: icon('close', 16) });
     measureClose.addEventListener('click', () => this.setMeasureMode(null));
-    const measureBar = h('div', { class: 'measure-bar', role: 'status', hidden: true }, measureText, h('div', { class: 'mb-acts' }, measureClear, measureClose));
+    // 지금 결과 복사·최근 측정 기록(새것부터 10개, 줄마다 복사)
+    const measureCopy = h('button', { class: 'mb-btn icon', type: 'button', title: '지금 결과 글 복사', 'aria-label': '지금 결과 글 복사', html: icon('copy', 16) });
+    measureCopy.addEventListener('click', () => this.copyMeasure('current'));
+    const measureLogBtn = h('button', { class: 'mb-btn icon', type: 'button', title: '최근 측정 기록', 'aria-label': '최근 측정 기록', html: icon('list', 16) });
+    measureLogBtn.addEventListener('click', () => this.toggleMeasureLog());
+    const measureLogEl = h('div', { class: 'measure-log', hidden: true });
+    const measureFlash = h('div', { class: 'measure-flash', role: 'status', hidden: true });
+    const measureBar = h(
+      'div',
+      { class: 'measure-bar', role: 'status', hidden: true },
+      measureText,
+      h('div', { class: 'mb-acts' }, measureCopy, measureLogBtn, measureClear, measureClose),
+      measureLogEl,
+      measureFlash,
+    );
     // 고른 것 카드(휴대폰·터치): 패널을 열지 않고 고른 그룹·컴포넌트의 크기·태그를 보이고, 자세히(선택 탭)·선택 해제 단추를 둔다
     const selText = h('div', { class: 'mb-text' });
     // 그룹을 고른 뒤 누른 면·모서리 하나만(면 넓이·모서리 길이) — 휴대폰에서 패널을 열지 않고
@@ -539,6 +566,10 @@ export class SkpViewerApp implements PanelHost {
       measureBar,
       measureText,
       measureClear,
+      measureCopy,
+      measureLogBtn,
+      measureLog: measureLogEl,
+      measureFlash,
       selBar,
       selText,
       selPart,
@@ -893,6 +924,8 @@ export class SkpViewerApp implements PanelHost {
     this.closeNotice();
     this.stopSlideshow();
     this.exportDialog?.close();
+    this.curveCenters.clear();
+    this.measureLog = [];
     // 앞 장면이 세로 화면에 맞춰 넓힌 시야각은 원래대로(새 문서의 전체 보기·카메라가 넓은 시야각을 물려받지 않게)
     const fov = this.sceneBaseFov(v);
     if (fov !== v.getCamera().fovY) v.setCamera({ ...v.getCamera(), fovY: fov });
@@ -1014,6 +1047,7 @@ export class SkpViewerApp implements PanelHost {
           this.panel.refreshSelection();
         },
         touch: () => !!this.coarseQuery?.matches,
+        curveCenter: (id, seg) => this.curveCenter(id, seg),
       });
       return v;
     } catch (e) {
@@ -1128,8 +1162,65 @@ export class SkpViewerApp implements PanelHost {
     const d = this.doc;
     if (!d) return;
     d.measure = m;
+    this.measureLog = pushMeasure(this.measureLog, m);
     this.panel.refreshSelection();
     this.refreshStatus();
+  }
+
+  /** 최근 측정(새것이 앞, PanelHost) */
+  get measureLogList(): readonly MeasureToolResult[] {
+    return this.measureLog;
+  }
+
+  /** 측정 결과 글 복사: 차례(기록 안), 'all'(기록 전부, 한 줄씩), 'current'(지금 결과) */
+  copyMeasure(which: number | 'all' | 'current'): void {
+    const d = this.doc;
+    if (!d) return;
+    const mm = mmPerSceneUnit(d.scene.units);
+    const list = which === 'all' ? this.measureLog : which === 'current' ? (d.measure ? [d.measure] : []) : this.measureLog.slice(which, which + 1);
+    if (!list.length) return;
+    const text = list.map((m) => measureLine(m, d.units, mm)).join('\n');
+    void copyText(text).then((ok) => this.flashMeasure(ok ? '복사했습니다' : '복사하지 못했습니다'));
+  }
+
+  clearMeasureLog(): void {
+    this.measureLog = [];
+    this.els.measureLog.hidden = true;
+    this.panel.refreshSelection();
+    this.refreshStatus();
+  }
+
+  /** 측정 띠에 잠깐 알림(복사 등) */
+  private flashMeasure(text: string): void {
+    const el = this.els.measureFlash;
+    el.textContent = text;
+    el.hidden = false;
+    clearTimeout(this.flashTimer);
+    this.flashTimer = window.setTimeout(() => (el.hidden = true), 1600);
+  }
+
+  /** 측정 기록 펼치기(측정 띠 위 목록) */
+  private toggleMeasureLog(): void {
+    const el = this.els.measureLog;
+    el.hidden = !el.hidden;
+    if (!el.hidden) this.renderMeasureLog();
+  }
+
+  private renderMeasureLog(): void {
+    const d = this.doc;
+    const el = this.els.measureLog;
+    if (!d || el.hidden) return;
+    const mm = mmPerSceneUnit(d.scene.units);
+    const rows = this.measureLog.map((m, i) => {
+      const b = h('button', { class: 'ml-row', type: 'button', title: '눌러서 이 결과 복사' }, h('span', { 'data-i18n-skip': '' }, measureLine(m, d.units, mm)), h('span', { class: 'ml-copy', html: icon('copy', 14) }));
+      b.addEventListener('click', () => this.copyMeasure(i));
+      return b;
+    });
+    const all = h('button', { class: 'mini-btn', type: 'button' }, '모두 복사');
+    all.addEventListener('click', () => this.copyMeasure('all'));
+    const clear = h('button', { class: 'mini-btn', type: 'button' }, '기록 지우기');
+    clear.addEventListener('click', () => this.clearMeasureLog());
+    el.replaceChildren(h('div', { class: 'ml-head' }, h('b', {}, `최근 측정 ${fmtCount(this.measureLog.length)}개`)), ...rows, h('div', { class: 'pbar ml-acts' }, all, clear));
   }
 
   /** 목록에서 고르기(PanelHost) */
@@ -1160,6 +1251,24 @@ export class SkpViewerApp implements PanelHost {
   private itemId(item: number): string {
     const s = this.doc!.scene;
     return item < s.meshes.length ? s.meshes[item]!.id : (s.lines[item - s.meshes.length]?.id ?? '');
+  }
+
+  /** 측정 도구 "중심" 추정: 선분이 든 호·원의 중심(곡선 번호마다 한 번 재어 둔다 — 곡선 선분을 모으려고 묶음 전체를 훑는다) */
+  private curveCenter(id: string, seg: number): [number, number, number] | null {
+    const d = this.doc;
+    const item = d?.lineIndex.get(id);
+    if (!d || item === undefined) return null;
+    const curves = d.faceIndex.segmentCurves[item];
+    const no = curves?.[seg];
+    if (!curves || no === undefined || no < 0) return null;
+    const key = `${item}#${no}`;
+    let c = this.curveCenters.get(key);
+    if (c === undefined) {
+      const line = d.scene.lines[item];
+      c = (line ? edgeGeometry(line, curves, seg)?.center : null) ?? null;
+      this.curveCenters.set(key, c);
+    }
+    return c;
   }
 
   /** 마지막으로 3D에서 누른 자리의 면·모서리 하나를 고른다(PanelHost, 고른 것 카드) */
@@ -2434,6 +2543,11 @@ export class SkpViewerApp implements PanelHost {
       if (axes) t.append(h('span', { class: 'mb-sub' }, ...axes.split(' · ').map((x) => h('span', { class: 'mb-fact mb-axis' }, x))));
     } else t.append(h('span', { class: 'mb-hint' }, this.measureHint ?? ''));
     e.measureClear.disabled = !d.measure && !tool.pointCount;
+    e.measureCopy.disabled = !d.measure;
+    e.measureLogBtn.disabled = !this.measureLog.length;
+    e.measureLogBtn.title = this.measureLog.length ? `최근 측정 기록 ${this.measureLog.length}개` : '최근 측정 기록';
+    if (!this.measureLog.length) e.measureLog.hidden = true;
+    this.renderMeasureLog();
   }
 
   // ───────────────────────── 자동 확인용 ─────────────────────────
