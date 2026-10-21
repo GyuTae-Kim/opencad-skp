@@ -1,7 +1,8 @@
 /**
  * 그림 내보내기(DOM·캔버스): 3D 캔버스(코어 toBlob)에 화면의 덧그림(문자·치수 라벨, 줄자·각도기 선·글)을 합쳐 PNG로 만든다.
  * 2배 크기는 코어가 그릴 때 읽는 기기 화소 비율을 잠깐 2로 두고 그린다(코어 화소 비율 상한 2 안 — 코어에 내보내기 배율이 생기면 그것으로).
- * 투명 배경은 배경만 검정·흰색으로 바꿔 두 번 그려 차이 매트로 푼다(exportimage.ts unmatte).
+ * 투명 배경은 배경만 검정·흰색으로 바꿔 두 번 그려 차이 매트로 푼다(exportimage.ts unmatte). 하늘·땅 기울기 바탕(코어 setBackground)은
+ * 테마와 상관없이 그려지므로 두 장을 찍는 동안 끄고 되돌린다(matteShots).
  * 저장(내려받기)·공유(Web Share, 파일을 받는 브라우저만)·인쇄(인쇄 전용 쪽에 그림 한 장)를 고르는 작은 창도 여기에 있다.
  */
 import type { Viewer3d } from 'opencad-viewer3d';
@@ -56,6 +57,26 @@ async function blobPixels(b: Blob): Promise<ImageData> {
   return ctx.getImageData(0, 0, c.width, c.height);
 }
 
+/**
+ * 투명 배경 두 장: 바탕만 검정·흰색으로 바꿔 찍는다. 하늘·땅 기울기 바탕(파일 스타일의 하늘·지면)은 테마 바탕 위에 그려져
+ * 두 장에서 같으므로(불투명으로 남는다) 찍는 동안 끄고, 끝나면 바탕과 테마를 되돌린다
+ */
+export async function matteShots<T>(ctx: Pick<ExportContext, 'viewer' | 'base' | 'restoreTheme'>, shoot: () => Promise<T>): Promise<[T, T]> {
+  const v = ctx.viewer;
+  const sky = v.background;
+  try {
+    if (sky) v.setBackground(null);
+    v.setTheme({ base: ctx.base, background: '#000000' });
+    const black = await shoot();
+    v.setTheme({ base: ctx.base, background: '#ffffff' });
+    const white = await shoot();
+    return [black, white];
+  } finally {
+    if (sky) v.setBackground(sky);
+    ctx.restoreTheme();
+  }
+}
+
 /** 3D 캔버스 그림(불투명 또는 투명 배경) */
 async function viewerCanvas(ctx: ExportContext, o: ExportOptions): Promise<HTMLCanvasElement> {
   const v = ctx.viewer;
@@ -70,16 +91,7 @@ async function viewerCanvas(ctx: ExportContext, o: ExportOptions): Promise<HTMLC
     bmp.close();
     return c;
   }
-  let black: ImageData;
-  let white: ImageData;
-  try {
-    v.setTheme({ base: ctx.base, background: '#000000' });
-    black = await blobPixels(await shot());
-    v.setTheme({ base: ctx.base, background: '#ffffff' });
-    white = await blobPixels(await shot());
-  } finally {
-    ctx.restoreTheme();
-  }
+  const [black, white] = await matteShots(ctx, async () => blobPixels(await shot()));
   // 화면 캔버스를 지금 크기·테마로 다시 그린다(내보내려고 키운 화소 비율이 남지 않게)
   v.renderNow();
   c.width = black.width;

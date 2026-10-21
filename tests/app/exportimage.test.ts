@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
 import { MAX_EXPORT_RATIO, exportFileName, exportSizes, labelBoxOrigin, labelOps, unmatte } from '../../src/app/exportimage';
-import { ExportDialog } from '../../src/app/exporter';
+import { ExportDialog, matteShots, type ExportContext } from '../../src/app/exporter';
 import type { AnnotationItem, Placement } from '../../src/app/annotations';
 
 describe('그림 내보내기 셈', () => {
@@ -25,6 +25,49 @@ describe('그림 내보내기 셈', () => {
     expect(Array.from(out.slice(4, 8))).toEqual([0, 0, 0, 0]);
     expect(out[11]).toBe(128);
     expect(out[10]).toBe(255);
+  });
+
+  it('투명 배경: 하늘·땅 바탕을 쓰는 보기도 바탕이 투명해지고, 찍은 뒤 바탕·테마를 되돌린다', async () => {
+    // 가짜 뷰어: 화소 0 = 모형(불투명 빨강), 화소 1 = 바탕(하늘·땅이 있으면 하늘 색, 없으면 테마 바탕)
+    const sky = { sky: '#87ceeb', ground: '#8b7d6b' };
+    let bg: typeof sky | null = sky;
+    let theme = '#1b2027';
+    const calls: string[] = [];
+    const hex = (c: string): number[] => [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16));
+    const viewer = {
+      get background() {
+        return bg ? { ...bg } : null;
+      },
+      setBackground: (o: typeof sky | null) => {
+        calls.push(`bg ${o ? 'sky' : 'none'}`);
+        bg = o;
+      },
+      setTheme: (t: { background: string }) => {
+        calls.push(`theme ${t.background}`);
+        theme = t.background;
+      },
+    };
+    const restoreTheme = vi.fn(() => {
+      theme = '#1b2027';
+    });
+    const ctx = { viewer: viewer as unknown as ExportContext['viewer'], base: 'dark' as const, restoreTheme };
+    const shoot = async (): Promise<Uint8ClampedArray> => Uint8ClampedArray.from([255, 0, 0, 255, ...hex(bg ? bg.sky : theme), 255]);
+    const [black, white] = await matteShots(ctx, shoot);
+    const out = new Uint8ClampedArray(8);
+    unmatte(black, white, out);
+    expect(Array.from(out.slice(0, 4))).toEqual([255, 0, 0, 255]);
+    expect(out[7]).toBe(0);
+    // 바탕(하늘·땅)과 테마를 되돌렸다
+    expect(bg).toEqual(sky);
+    expect(restoreTheme).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual(['bg none', 'theme #000000', 'theme #ffffff', 'bg sky']);
+    // 찍다가 실패해도 되돌린다, 하늘·땅이 없는 보기는 바탕을 건드리지 않는다
+    await expect(matteShots(ctx, async () => Promise.reject(new Error('x')))).rejects.toThrow('x');
+    expect(bg).toEqual(sky);
+    bg = null;
+    calls.length = 0;
+    await matteShots(ctx, shoot);
+    expect(calls).toEqual(['theme #000000', 'theme #ffffff']);
   });
 
   it('라벨 명령: 같은 자리·정렬·돌림, 글꼴(굵게·기울임·크기)·색·테두리, 흐린 라벨', () => {
