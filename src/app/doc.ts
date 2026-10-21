@@ -26,6 +26,7 @@ import { edgeGeometry, faceBox, faceGeometry, faceOfTriangle, readFaceIndex, seg
 import type { MeasureToolResult } from './measure';
 import { readActivePage, readPages, readSectionPlane } from './pages';
 import { formatAngle, formatArea, formatLength, mmPerSceneUnit, readUnits, type UnitsDisplay } from './units';
+import { fmtCount } from './format';
 import type { ParseResult } from './protocol';
 import {
   deepestNodeAt,
@@ -95,6 +96,8 @@ export interface MaterialRow {
   /** 3D에 입힌 무늬 그림 id(Scene3d.textures에 있을 때만, 없으면 평균색) */
   texture: string | null;
   faces: number | null;
+  /** 이 재질을 뒷면에만 칠한 면 수(없으면 0) */
+  backFaces: number;
   /** 이 재질 면의 넓이 합(장면 단위², 모르면 null) */
   area: number | null;
   meshIds: string[];
@@ -402,6 +405,7 @@ export function materialRows(scene: Scene3d): MaterialRow[] {
         textured: o.textured === true,
         texture: tex !== null && texIds.has(tex) ? tex : null,
         faces: num(o.faces),
+        backFaces: num(o.backFaces) ?? 0,
         area: num(o.area),
         meshIds,
       });
@@ -411,12 +415,19 @@ export function materialRows(scene: Scene3d): MaterialRow[] {
     for (const m of scene.meshes) {
       const name = (m.name ?? '').split(' · ')[0] || '기본 재질';
       let r = map.get(name);
-      if (!r) map.set(name, (r = { name, folder: null, color: [m.color[0], m.color[1], m.color[2], m.color[3]], textured: false, texture: null, faces: null, area: null, meshIds: [] }));
+      if (!r) map.set(name, (r = { name, folder: null, color: [m.color[0], m.color[1], m.color[2], m.color[3]], textured: false, texture: null, faces: null, backFaces: 0, area: null, meshIds: [] }));
       r.meshIds.push(m.id);
     }
     rows.push(...map.values());
   }
-  return rows.sort((a, b) => (b.faces ?? 0) - (a.faces ?? 0) || a.name.localeCompare(b.name, 'ko'));
+  return rows.sort((a, b) => (b.faces ?? 0) - (a.faces ?? 0) || b.backFaces - a.backFaces || a.name.localeCompare(b.name, 'ko'));
+}
+
+/** 재질 목록 줄의 수: 면 수, 뒷면에 칠한 면이 있으면 "뒷면 n"(뒷면만이면 그것만) */
+export function materialCount(m: Pick<MaterialRow, 'faces' | 'backFaces'>): string {
+  const back = m.backFaces > 0 ? `뒷면 ${fmtCount(m.backFaces)}` : '';
+  if (m.faces === null || (m.faces === 0 && back)) return back;
+  return back ? `면 ${fmtCount(m.faces)} · ${back}` : `면 ${fmtCount(m.faces)}`;
 }
 
 /** 윗단계 그룹·컴포넌트 목록(meta.outline) */

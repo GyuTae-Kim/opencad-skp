@@ -162,6 +162,7 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
     warnings.push('모형 스타일을 풀지 못했습니다');
   }
   const front = style?.front;
+  const back = style?.back;
   let parts: ReturnType<typeof buildSceneParts>;
   try {
     progress(0.65, '면 삼각화·인스턴스 펼치는 중');
@@ -170,6 +171,8 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
       extras: !!opts.extras,
       smooth: !!opts.smooth,
       ...(front && front.every(Number.isFinite) ? { defaultFaceColor: [front[0], front[1], front[2], 1] as const } : {}),
+      // 앞·뒤 재질이 다른 면은 뒷면 색·무늬를 따로(재질 없는 뒷면은 스타일 뒷면 색)
+      ...(back && back.every(Number.isFinite) ? { defaultBackColor: [back[0], back[1], back[2], 1] as const } : {}),
       onProgress: (f) => progress(0.65 + 0.3 * f, '면 삼각화·인스턴스 펼치는 중'),
     };
     if (sceneTex.size) build.textures = sceneTex;
@@ -209,7 +212,10 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
   // 그물이 쓰는 무늬만 장면에 넣는다
   if (sceneTex.size) {
     const used = new Set<string>();
-    for (const m of scene.meshes) if (m.texture) used.add(m.texture);
+    for (const m of scene.meshes) {
+      if (m.texture) used.add(m.texture);
+      if (m.backTexture) used.add(m.backTexture);
+    }
     const textures: Texture3d[] = [];
     const infos: SkpTextureInfo[] = [];
     for (const [id, t] of sceneTex) {

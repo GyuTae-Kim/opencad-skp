@@ -5,6 +5,7 @@ import {
   definitionCounts,
   docLabel,
   majorOf,
+  materialCount,
   materialRows,
   outlineRows,
   panelTabs,
@@ -104,6 +105,29 @@ describe('패널 목록', () => {
     expect(glass.color[3]).toBeCloseTo(0.35);
     const ids = new Set(s.meshes.map((m) => m.id));
     expect(rows.every((r) => r.meshIds.length > 0 && r.meshIds.every((id) => ids.has(id)))).toBe(true);
+  });
+
+  it('재질: 뒷면에 칠한 면 수(뒷면만이면 그것만)', () => {
+    const s: Scene3d = {
+      name: 'x',
+      units: 'mm',
+      meshes: [{ id: 'a', positions: new Float32Array(9), color: [1, 1, 1, 1], backColor: [0, 0, 1, 1] }],
+      lines: [],
+      meta: {
+        materialStats: [
+          { name: '기본 재질', color: [1, 1, 1, 1], faces: 3, meshIds: ['a'] },
+          { name: '파랑', color: [0, 0, 1, 1], faces: 0, backFaces: 3, meshIds: ['a'] },
+          { name: '빨강', color: [1, 0, 0, 1], faces: 2, backFaces: 1, meshIds: ['a'] },
+        ],
+      },
+    };
+    const rows = materialRows(s);
+    expect(rows.map((r) => [r.name, materialCount(r)])).toEqual([
+      ['기본 재질', '면 3'],
+      ['빨강', '면 2 · 뒷면 1'],
+      ['파랑', '뒷면 3'],
+    ]);
+    expect(materialCount({ faces: null, backFaces: 0 })).toBe('');
   });
 
   it('재질: meta가 없으면 그물 이름에서', () => {

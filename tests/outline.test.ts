@@ -109,8 +109,9 @@ describe('outline(윗단계 그룹·컴포넌트 나누기)', () => {
   it('끄면(기본) 예전처럼 (태그, 재질)마다 하나로 모은다', () => {
     const s = skpToScene(skpFile(outlineModel(), { materials: MATS }));
     expect(s.meta!.outline).toBeUndefined();
-    // 바로 놓인 면(초록) + 컴포넌트(초록)는 한 그물, 빨강 하나, 그룹(Walls, 기본색) 하나
+    // 바로 놓인 면(초록) + 컴포넌트(초록)는 한 그물, 빨강 하나, 그룹(Walls, 기본색) 하나 — 이 파일은 스타일 뒷면 색이 없어 재질 없는 뒷면은 앞면과 같다
     expect(s.meshes.map((m) => m.name).sort()).toEqual(['기본 재질 · Walls', '빨강 · Layer0', '초록 · Layer0']);
+    expect(s.meshes.every((m) => !m.backColor)).toBe(true);
     expect(s.lines.map((l) => l.group)).toEqual(['Layer0', 'Walls']);
   });
 

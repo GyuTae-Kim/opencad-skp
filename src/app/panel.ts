@@ -19,6 +19,7 @@ import {
   measureLine,
   measureText,
   folderTags,
+  materialCount,
   materialImage,
   panelTabs,
   partOfPick,
@@ -351,7 +352,7 @@ export class Panel {
             )
           : null,
         m.color[3] < 0.999 ? h('span', { class: 'chip', title: '반투명 재질' }, '투명') : null,
-        h('span', { class: 'count' }, m.faces !== null ? `면 ${fmtCount(m.faces)}` : ''),
+        h('span', { class: 'count' }, materialCount(m)),
       );
       b.addEventListener('click', () => this.host.select(selKey(d.selection) === selKey(sel) ? null : sel));
       mlist.append(b);
