@@ -1908,6 +1908,49 @@ html:lang(zh-CN) { --font: -apple-system, "PingFang SC", "Microsoft YaHei", sans
 }
 
 /*
+ * 손가락 기기: 제목 막대 단추는 폭 40px 이상, 장면 탭은 높이 38px(탭 줄 안쪽 여백은 줄여 3D 보기를 많이 덮지 않게).
+ * 언어 단추 규칙(위, 767px 이하 36px)을 덮어야 해서 맨 끝 가까이에 둔다.
+ */
+@media (pointer: coarse) {
+  .titlebar .tbtn {
+    min-width: 40px;
+  }
+
+  /* 넓어진 단추 때문에 좁은 휴대폰에서 이름이 "OpenC…"로 잘리지 않게 "OpenCAD"만 남긴다 */
+  @media (max-width: 400px) {
+    .brand {
+      padding-right: 2px;
+    }
+
+    .brand-sub {
+      display: none;
+    }
+  }
+
+  .language-control {
+    flex-basis: 40px;
+    width: 40px;
+  }
+
+  .language-trigger {
+    width: 40px;
+    height: 38px;
+  }
+
+  .scene-tabs {
+    gap: 2px;
+    padding: 2px;
+  }
+
+  .scene-tab {
+    min-width: 44px;
+    min-height: 38px;
+    padding: 0 12px;
+    font-size: 13px;
+  }
+}
+
+/*
  * 홈 화면 앱(standalone): 상태 표시줄 밑까지 그리므로(apple-mobile-web-app-status-bar-style black-translucent)
  * 제목 막대가 노치·상태 표시줄 밑에 깔리지 않게 위 안전 영역만큼 내린다(휴대폰 제목 막대는 padding을 0으로 덮어쓰므로 맨 끝에 둔다).
  * 상태 표시줄 글은 흰색이라, 밝은 테마에서는 그 띠만 어둡게 칠한다.

@@ -292,7 +292,7 @@ export class SkpViewerApp implements PanelHost {
     const title = h(
       'header',
       { class: 'titlebar' },
-      h('a', { class: 'brand', href: './', title: `${APP_TITLE} 처음 화면` }, h('span', { class: 'logo', html: icon('logo', 22) }), h('span', { class: 'brand-text' }, h('b', {}, 'OpenCAD'), ' SketchUp 뷰어')),
+      h('a', { class: 'brand', href: './', title: `${APP_TITLE} 처음 화면` }, h('span', { class: 'logo', html: icon('logo', 22) }), h('span', { class: 'brand-text' }, h('b', {}, 'OpenCAD'), h('span', { class: 'brand-sub' }, ' SketchUp 뷰어'))),
       docName,
       h('span', { class: 'spacer' }),
       tbtn('열기', 'open', 'SketchUp 파일 열기 (.skp)', () => this.chooseFile(), 'primary'),
