@@ -53,6 +53,7 @@ import {
   faceOrEdgeSelection,
   partBox,
   partOfPick,
+  selectedDefinitionNodes,
   docLabel,
   hiddenNodeRanges,
   isBigScene,
@@ -99,6 +100,8 @@ export const NARROW_WIDTH = 760;
 /** 뷰 큐브 한 변(CSS 화소): 넓은 화면 · 좁은 화면 */
 export const VIEW_CUBE_WIDE = 112;
 export const VIEW_CUBE_NARROW = 76;
+/** 정의의 인스턴스 모두에 맞춰 볼 때 범위를 셀 노드 수 한도 */
+const MAX_FIT_NODES = 5000;
 
 const RENDER_MODES: [RenderMode, string, string][] = [
   ['shaded', '음영', 'shaded'],
@@ -1162,6 +1165,22 @@ export class SkpViewerApp implements PanelHost {
     const pb = partBox(d, sel);
     if (pb) {
       this.animateCamera(cameraForBox(v.getCamera(), pb, v.canvas.clientWidth / Math.max(1, v.canvas.clientHeight)));
+      return;
+    }
+    // 정의의 인스턴스 모두: 보이는 노드 범위를 합친다(많으면 앞의 MAX_FIT_NODES개)
+    const defNodes = selectedDefinitionNodes(d, sel);
+    if (defNodes.length && d.tree) {
+      const lo: [number, number, number] = [Infinity, Infinity, Infinity];
+      const hi: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+      for (const n of defNodes.slice(0, MAX_FIT_NODES)) {
+        const b = nodeBox(d.tree, d.scene, n, (item) => v.isVisible(this.itemId(item)), this.hiddenRanges);
+        if (!b) continue;
+        for (let k = 0; k < 3; k++) {
+          lo[k] = Math.min(lo[k]!, b.min[k]!);
+          hi[k] = Math.max(hi[k]!, b.max[k]!);
+        }
+      }
+      if (lo[0] <= hi[0]) this.animateCamera(cameraForBox(v.getCamera(), { min: lo, max: hi }, v.canvas.clientWidth / Math.max(1, v.canvas.clientHeight)));
       return;
     }
     if (sel?.kind === 'node' && d.tree && !isSplit(d.tree, sel.index)) {

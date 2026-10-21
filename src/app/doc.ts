@@ -18,6 +18,7 @@ import type {
   SkpTreeInfo,
 } from '../meta';
 import { nodeEntity, type EntityInput } from './entity';
+import { definitionNodes } from './search';
 import { edgeGeometry, faceBox, faceGeometry, faceOfTriangle, readFaceIndex, segmentsBox, triangleCount, type FaceIndex, type PartBox } from './faces';
 import type { MeasureToolResult } from './measure';
 import { readActivePage, readPages, readSectionPlane } from './pages';
@@ -121,7 +122,8 @@ export type Selection =
   | { kind: 'material'; name: string }
   | { kind: 'item'; id: string }
   | { kind: 'face'; item: number; start: number; count: number }
-  | { kind: 'edge'; item: number; seg: number };
+  | { kind: 'edge'; item: number; seg: number }
+  | { kind: 'definition'; name: string };
 
 /** 부드러운·숨긴 형상(해석기 extras) */
 export interface DocExtras {
@@ -194,6 +196,8 @@ export interface SkpDoc {
   childLimit: Map<number, number>;
   /** 3D 고르기 방식: open = 펼친 단계, deepest = 가장 안쪽, face = 면·모서리 하나 */
   pickMode: PickMode;
+  /** 구성 탭 찾기 글(빈 글이면 나무 그대로) */
+  outlineQuery: string;
   showSoft: boolean;
   showHidden: boolean;
   selection: Selection | null;
@@ -542,6 +546,7 @@ export function createDoc(name: string, size: number, res: ParseResult, opts: { 
     expanded: new Set(),
     childLimit: new Map(),
     pickMode: 'open',
+    outlineQuery: '',
     showSoft: false,
     showHidden: false,
     selection: null,
@@ -748,7 +753,34 @@ export function selectionIds(d: SkpDoc, sel: Selection | null): string[] {
   if (sel.kind === 'material') return d.materials.find((m) => m.name === sel.name)?.meshIds ?? [];
   // 면·모서리 하나는 항목 통째가 아니라 구간으로 강조한다(selectionRanges)
   if (sel.kind === 'face' || sel.kind === 'edge') return [];
+  if (sel.kind === 'definition') {
+    // 정의의 인스턴스 모두: 나무가 있으면 따로 나눈 노드의 항목(나누지 않은 노드는 구간 강조), 없으면 윗단계 항목
+    if (!d.tree) return d.outline.filter((r) => r.definition === sel.name && r.kind === 'component').flatMap((r) => r.ids);
+    const ids = new Set<string>();
+    for (const n of definitionNodes(d.tree, sel.name)) if (isSplit(d.tree, n)) for (const id of nodeItemIds(d.tree, d.scene, n)) ids.add(id);
+    return [...ids];
+  }
   return [sel.id];
+}
+
+/** 고른 컴포넌트의 정의와 그 정의가 놓인 수(둘 이상일 때만 — "이 정의 모두 고르기"용). 그 밖에는 null */
+export function selectionDefinition(d: SkpDoc, sel: Selection | null): { name: string; count: number } | null {
+  let name: string | null = null;
+  const n = selectedNode(d, sel);
+  if (d.tree && n !== null && n >= 0) {
+    if (d.tree.kind[n] === 1) name = nodeDefinition(d.tree, n);
+  } else if (sel?.kind === 'outline') {
+    const r = d.outline[sel.index];
+    if (r?.kind === 'component' && r.definition) name = r.definition;
+  }
+  if (!name) return null;
+  const count = d.tree ? definitionNodes(d.tree, name).length : d.outline.filter((r) => r.kind === 'component' && r.definition === name).length;
+  return count >= 2 ? { name, count } : null;
+}
+
+/** 정의를 고른 것의 인스턴스 노드(나무가 없으면 빈 목록) */
+export function selectedDefinitionNodes(d: SkpDoc, sel: Selection | null): number[] {
+  return sel?.kind === 'definition' && d.tree ? definitionNodes(d.tree, sel.name) : [];
 }
 
 /** 고른 면·모서리의 범위 상자(맞춰 보기용, 다른 고른 것은 null) */
@@ -798,6 +830,16 @@ export function selectionRanges(d: SkpDoc, sel: Selection | null): Map<string, I
     const line = d.scene.lines[sel.item];
     const e = selectedEdge(d, sel);
     return line && e ? new Map([[line.id, e.ranges]]) : null;
+  }
+  if (sel?.kind === 'definition' && d.tree) {
+    // 나누지 않은 인스턴스 노드: 면·모서리 구간 모두(모서리 구간은 코어가 굵게 강조한다)
+    const deep = selectedDefinitionNodes(d, sel).filter((n) => !isSplit(d.tree!, n));
+    const out = new Map<string, IndexRange[]>();
+    for (const [it, list] of mergeNodeRanges(d.tree, d.scene, deep)) {
+      const id = it < d.scene.meshes.length ? d.scene.meshes[it]?.id : d.scene.lines[it - d.scene.meshes.length]?.id;
+      if (id) out.set(id, list);
+    }
+    return out.size ? out : null;
   }
   if (!sel || sel.kind !== 'node' || !d.tree || isSplit(d.tree, sel.index)) return null;
   const out = new Map<string, IndexRange[]>();
@@ -899,6 +941,10 @@ export function selectionText(d: SkpDoc, sel: Selection | null, pick: Pick3d | n
     const m = d.materials.find((x) => x.name === sel.name);
     return m ? `재질 ${m.name}${m.faces !== null ? ` · 면 ${m.faces.toLocaleString('ko-KR')}` : ''}` : '';
   }
+  if (sel.kind === 'definition') {
+    const n = d.tree ? selectedDefinitionNodes(d, sel).length : d.outline.filter((r) => r.definition === sel.name && r.kind === 'component').length;
+    return `컴포넌트 정의 ${sel.name} · 놓인 수 ${n.toLocaleString('ko-KR')}개`;
+  }
   if (sel.kind === 'face' || sel.kind === 'edge') {
     const e = selectionEntity(d);
     const k = mmPerSceneUnit(d.scene.units);
@@ -993,6 +1039,33 @@ export function selectionEntity(d: SkpDoc): EntityInput {
       const g = faceGeometry(mesh, sel.start, sel.count);
       return { kind: 'face', area: g.area, material: d.meshMaterial.get(mesh.id) ?? null, tag: mesh.group ?? null, path: pickPath(d) };
     }
+  }
+  if (sel?.kind === 'definition') {
+    const t = d.tree;
+    const nodes = selectedDefinitionNodes(d, sel);
+    const rows = t ? [] : d.outline.filter((r) => r.definition === sel.name && r.kind === 'component');
+    const count = t ? nodes.length : rows.length;
+    const e: EntityInput = { kind: 'component', count, definition: sel.name, instances: count };
+    if (t) {
+      let faces = 0;
+      let area = 0;
+      for (const n of nodes) {
+        faces += t.faces[n] ?? 0;
+        area += d.treeInfo?.area[n] ?? 0;
+      }
+      e.faces = faces;
+      if (d.treeInfo) e.area = area;
+      const first = nodes[0];
+      if (first !== undefined && d.treeInfo) {
+        const def = t.definition[first]!;
+        e.description = d.treeInfo.definitionDescription[def] || null;
+        e.definitionGuid = d.treeInfo.definitionGuid[def] || null;
+      }
+    } else {
+      e.faces = rows.reduce((s, r) => s + r.faces, 0);
+      e.area = rows.reduce((s, r) => s + (r.area ?? 0), 0);
+    }
+    return e;
   }
   if (sel?.kind === 'edge') {
     const line = d.scene.lines[sel.item];

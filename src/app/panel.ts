@@ -20,6 +20,7 @@ import {
   materialImage,
   panelTabs,
   partOfPick,
+  selectionDefinition,
   selectionEntity,
   releaseName,
   selectionText,
@@ -36,7 +37,8 @@ import {
 import { fmtCount, fmtNum, fmtPt, formatBytes, formatMs, rgbCss } from './format';
 import { entityInfo } from './entity';
 import { mmPerSceneUnit, unitsLabel } from './units';
-import { NODE_HIDDEN, NODE_MORE, childrenOf, hiddenByNodes, isSplit, nodeDefinition, nodeName, nodeTag, treeDefinitionCounts, type PickMode, type TreeView } from './tree';
+import { NODE_HIDDEN, NODE_MORE, childrenOf, hiddenByNodes, isSplit, nodeDefinition, nodeName, nodePath, nodeTag, treeDefinitionCounts, type PickMode, type TreeView } from './tree';
+import { normalizeQuery, parentPath, searchOutline, searchTree } from './search';
 
 /** 패널이 부르는 앱 기능 */
 export interface PanelHost {
@@ -79,6 +81,12 @@ const TREE_ROW_LIMIT = 4000;
 const row = (k: string, v: string): HTMLElement => h('div', { class: 'prop-row' }, h('span', { class: 'k' }, k), h('span', { class: 'v', title: v }, v));
 const section = (title: string, ...children: (Node | null)[]): HTMLElement =>
   h('section', { class: 'psec' }, h('h3', {}, title), ...children);
+
+/** 찾은 수 글 */
+function foundText(total: number, shown: number): string {
+  if (!total) return '찾은 항목이 없습니다.';
+  return total > shown ? `찾은 항목 ${fmtCount(total)}개 중 처음 ${fmtCount(shown)}개` : `찾은 항목 ${fmtCount(total)}개`;
+}
 
 export class Panel {
   readonly el: HTMLElement;
@@ -363,16 +371,32 @@ export class Panel {
       return;
     }
     const list = h('div', { class: 'plist' });
-    for (const r of d.outline.slice(0, LIST_LIMIT)) list.append(this.outlineRow(d, r));
+    const found = h('p', { class: 'hint search-note', hidden: true, 'aria-live': 'polite' });
+    const cut = h('p', { class: 'hint', hidden: true }, `처음 ${LIST_LIMIT}개만 보입니다.`);
+    const fill = (): void => {
+      list.innerHTML = '';
+      const q = normalizeQuery(d.outlineQuery);
+      const res = q ? searchOutline(d.outline, d.outlineQuery) : null;
+      const rows = res ? res.rows : d.outline.slice(0, LIST_LIMIT);
+      for (const r of rows) list.append(this.outlineRow(d, r));
+      found.hidden = !res;
+      if (res) found.textContent = foundText(res.total, res.rows.length);
+      cut.hidden = !!res || d.outline.length <= LIST_LIMIT;
+      this.refreshSelection();
+      this.refreshVisibility();
+    };
+    fill();
     const groups = d.outline.filter((r) => r.kind === 'group').length;
     const comps = d.outline.filter((r) => r.kind === 'component').length;
     this.body.append(
       section(
         `모형 바로 아래 ${fmtCount(d.outline.length)}개`,
         this.pickBar(d),
+        this.searchBox(d, fill),
         h('p', { class: 'hint' }, `그룹 ${fmtCount(groups)} · 컴포넌트 ${fmtCount(comps)}. 누르면 강조하고, 두 번 누르면 그쪽으로 확대합니다.`),
+        found,
         list,
-        d.outline.length > LIST_LIMIT ? h('p', { class: 'hint' }, `처음 ${LIST_LIMIT}개만 보입니다.`) : null,
+        cut,
       ),
     );
     this.renderDefinitions(d, definitionCounts(d.outline).filter((x) => x.kind === 'component'), '컴포넌트 정의별 개수');
@@ -450,8 +474,8 @@ export class Panel {
     const bar = this.pickBar(d, true);
 
     const list = h('div', { class: 'plist tree', role: 'tree', 'aria-label': '그룹·컴포넌트 나무' });
-    const loose = d.outline.find((r) => r.kind === 'loose');
-    if (loose) list.append(this.outlineRow(d, loose));
+    const found = h('p', { class: 'hint search-note', hidden: true, 'aria-live': 'polite' });
+    const cutNote = h('p', { class: 'hint', hidden: true }, `처음 ${fmtCount(TREE_ROW_LIMIT)}줄만 보입니다. 펼친 노드를 접어 보세요.`);
     let rows = 0;
     let cut = false;
     const addChildren = (parent: number): void => {
@@ -477,7 +501,30 @@ export class Panel {
         if (d.expanded.has(n)) addChildren(n);
       }
     };
-    addChildren(-1);
+    // 찾는 글이 있으면 맞는 노드만 한 줄씩(경로와 함께), 없으면 나무
+    const fill = (): void => {
+      list.innerHTML = '';
+      rows = 0;
+      cut = false;
+      if (normalizeQuery(d.outlineQuery)) {
+        const res = searchTree(t, d.outlineQuery);
+        list.setAttribute('role', 'list');
+        for (const n of res.nodes) list.append(this.searchRow(d, t, n));
+        found.hidden = false;
+        found.textContent = foundText(res.total, res.nodes.length);
+        cutNote.hidden = true;
+      } else {
+        list.setAttribute('role', 'tree');
+        found.hidden = true;
+        const loose = d.outline.find((r) => r.kind === 'loose');
+        if (loose) list.append(this.outlineRow(d, loose));
+        addChildren(-1);
+        cutNote.hidden = !cut;
+      }
+      this.refreshSelection();
+      this.refreshVisibility();
+    };
+    fill();
 
     const groups = countKind(t, 0);
     const images = countKind(t, 2);
@@ -489,16 +536,66 @@ export class Panel {
     else if (t.splitDepth < t.listedDepth)
       notes.push(`그리기가 느려지지 않게 ${t.splitDepth}단계까지만 따로 그물을 나누고, 더 깊은 항목은 그물 안 구간으로 숨기고 강조합니다.`);
     if (t.runsDropped) notes.push('항목이 너무 많아 3D에서 깊은 단계를 눌러 고르지는 못합니다.');
-    this.body.append(
-      section(
-        `그룹·컴포넌트 ${fmtCount(t.count)}개`,
-        bar,
-        h('p', { class: 'hint' }, notes.join(' ')),
-        list,
-        cut ? h('p', { class: 'hint' }, `처음 ${fmtCount(TREE_ROW_LIMIT)}줄만 보입니다. 펼친 노드를 접어 보세요.`) : null,
-      ),
-    );
+    this.body.append(section(`그룹·컴포넌트 ${fmtCount(t.count)}개`, bar, this.searchBox(d, fill), h('p', { class: 'hint' }, notes.join(' ')), found, list, cutNote));
     this.renderDefinitions(d, treeDefinitionCounts(t), '컴포넌트 정의별 개수(모든 단계)');
+  }
+
+  /** 구성 찾기 칸: 이름·정의·태그로 거른다(글자를 칠 때마다 목록만 다시 그린다, Esc로 지운다) */
+  private searchBox(d: SkpDoc, refill: () => void): HTMLElement {
+    const input = h('input', {
+      class: 'search-input',
+      type: 'search',
+      placeholder: '이름·정의·태그로 찾기',
+      'aria-label': '그룹·컴포넌트 찾기(이름·정의·태그)',
+      value: d.outlineQuery,
+      autocomplete: 'off',
+      spellcheck: 'false',
+    });
+    let timer = 0;
+    input.addEventListener('input', () => {
+      d.outlineQuery = input.value;
+      clearTimeout(timer);
+      timer = window.setTimeout(refill, 120);
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || !input.value) return;
+      e.preventDefault();
+      e.stopPropagation();
+      input.value = '';
+      d.outlineQuery = '';
+      refill();
+    });
+    return h('div', { class: 'search-box', role: 'search' }, input);
+  }
+
+  /** 찾은 노드 한 줄: 종류·이름(정의·태그)·위치 경로·면 수 — 누르면 고르고 조상을 펼친다, 두 번 누르면 확대 */
+  private searchRow(d: SkpDoc, t: TreeView, n: number): HTMLElement {
+    const sel = nodeSelection(d, n);
+    const name = nodeName(t, n);
+    const def = nodeDefinition(t, n);
+    const tag = nodeTag(t, n);
+    const path = parentPath(t, n);
+    const kind = t.kind[n] === 0 ? 'group' : t.kind[n] === 2 ? 'image' : 'component';
+    const sub = [def && def !== name ? def : null, tag].filter(Boolean).join(' · ');
+    const cb = h('input', { type: 'checkbox', 'aria-label': `${name} 보이기`, title: '보이기·숨기기' });
+    cb.checked = !d.hiddenNodes.has(n);
+    cb.disabled = !(isSplit(t, n) || !t.runsDropped);
+    cb.addEventListener('change', () => this.host.setNodeVisible(n, cb.checked));
+    cb.addEventListener('click', (e) => e.stopPropagation());
+    const item = h(
+      'div',
+      { class: 'prow pick trow search-row', role: 'listitem', tabindex: '0', 'data-sel': selKey(sel), 'data-node': String(n), title: `${name}${path ? ` — ${path}` : ''}` },
+      cb,
+      h('span', { class: `kind k-${kind}` }, KIND_LABEL[kind]),
+      h('span', { class: 'name' }, name, sub ? h('small', {}, ` ${sub}`) : null, path ? h('small', { class: 'path' }, path) : null),
+      h('span', { class: 'count' }, `면 ${fmtCount(t.faces[n]!)}`),
+    );
+    // 찾은 항목을 고르면 나무에서도 보이게(찾기를 지웠을 때) 조상을 펼친다
+    item.addEventListener('click', () => {
+      for (const a of nodePath(t, n).slice(0, -1)) d.expanded.add(a);
+    });
+    this.bindPick(item, d, sel);
+    return item;
   }
 
   private nodeRow(d: SkpDoc, t: TreeView, n: number): HTMLElement {
@@ -574,16 +671,24 @@ export class Panel {
     const tbody = h('tbody');
     for (const x of defs.slice(0, 500)) {
       const img = componentImage(d, x.name);
-      tbody.append(
-        h(
-          'tr',
-          {},
-          h('td', {}, h('span', { class: 'def-cell' }, img ? h('img', { class: 'thumb', src: img, alt: '', loading: 'lazy', decoding: 'async', title: `${x.name} 미리보기` }) : null, x.name)),
-          h('td', { class: 'num' }, fmtCount(x.count)),
-        ),
+      // 누르면 이 정의의 인스턴스를 모두 고른다(SketchUp 컴포넌트 창의 "인스턴스 고르기"), 두 번 누르면 그것들에 맞춰 본다
+      const sel: Selection = { kind: 'definition', name: x.name };
+      const tr = h(
+        'tr',
+        { class: 'pick', tabindex: '0', 'data-sel': selKey(sel), title: `누르면 "${x.name}" 인스턴스 ${fmtCount(x.count)}개를 모두 고릅니다 · 두 번 누르면 맞춰 보기` },
+        h('td', {}, h('span', { class: 'def-cell' }, img ? h('img', { class: 'thumb', src: img, alt: '', loading: 'lazy', decoding: 'async', title: `${x.name} 미리보기` }) : null, x.name)),
+        h('td', { class: 'num' }, fmtCount(x.count)),
       );
+      this.bindPick(tr, d, sel);
+      tbody.append(tr);
     }
-    this.body.append(section(title, h('table', { class: 'ptable' }, h('thead', {}, h('tr', {}, h('th', {}, '정의'), h('th', { class: 'num' }, '개수'))), tbody)));
+    this.body.append(
+      section(
+        title,
+        h('p', { class: 'hint' }, '줄을 누르면 그 정의의 인스턴스를 모두 고르고, 두 번 누르면 그것들에 맞춰 봅니다.'),
+        h('table', { class: 'ptable' }, h('thead', {}, h('tr', {}, h('th', {}, '정의'), h('th', { class: 'num' }, '개수'))), tbody),
+      ),
+    );
   }
 
   // ───────────────────────── 선택(엔티티 정보) ─────────────────────────
@@ -603,12 +708,19 @@ export class Panel {
       pickPart = h('button', { class: 'mini-btn', type: 'button', title: '3D에서 누른 면 하나(넓이)나 모서리 하나(길이)만 고릅니다' }, part === 'face' ? '누른 면만 고르기' : '누른 모서리만 고르기');
       pickPart.addEventListener('click', () => this.host.selectPickedPart());
     }
+    // 고른 컴포넌트와 같은 정의의 인스턴스 모두(SketchUp "인스턴스 고르기")
+    const def = selectionDefinition(d, d.selection);
+    let allOfDef: HTMLElement | null = null;
+    if (def) {
+      allOfDef = h('button', { class: 'mini-btn', type: 'button', title: `"${def.name}" 정의의 인스턴스 ${fmtCount(def.count)}개를 모두 고릅니다` }, `같은 정의 모두 고르기(${fmtCount(def.count)}개)`);
+      allOfDef.addEventListener('click', () => this.host.select({ kind: 'definition', name: def.name }));
+    }
     this.body.append(
       section(
         e.title,
         this.pickBar(d),
         ...rows,
-        pickPart ? h('div', { class: 'pbar' }, pickPart) : null,
+        pickPart || allOfDef ? h('div', { class: 'pbar' }, pickPart, allOfDef) : null,
         !d.selection ? h('p', { class: 'hint' }, '3D나 구성 목록에서 그룹·컴포넌트·재질을 고르면 그 정보를 보입니다. "면·모서리"로 누르면 면 하나의 넓이·모서리 하나의 길이를 봅니다.') : null,
       ),
     );
@@ -790,6 +902,8 @@ export function selKey(sel: Selection | null): string {
       return `f:${sel.item}:${sel.start}`;
     case 'edge':
       return `e:${sel.item}:${sel.seg}`;
+    case 'definition':
+      return `d:${sel.name}`;
     default:
       return `i:${sel.id}`;
   }
