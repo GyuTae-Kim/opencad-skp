@@ -1135,8 +1135,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     key: string;
     origin: [number, number, number];
     front: [number, number, number];
-    /** 그 배치의 보통 모서리(세계 좌표 — 첫 그물의 윤곽선으로 함께 돌린다) */
-    edges: number[];
+    /** 그 배치의 보통 모서리(세계 좌표, 태그마다 — 같은 태그의 첫 그물, 없으면 첫 그물의 윤곽선으로 함께 돌린다) */
+    edges: Map<number, number[]>;
   }
   interface LineBucket {
     serial: number;
@@ -1979,7 +1979,9 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       if (bb) {
         const tmp = new F32();
         put(tmp, l.pos, m, true, null);
-        for (let i = 0; i < tmp.n; i++) bb.edges.push(tmp.a[i]!);
+        let list = bb.edges.get(layer);
+        if (!list) bb.edges.set(layer, (list = []));
+        for (let i = 0; i < tmp.n; i++) list.push(tmp.a[i]!);
         bbEdgeCount.set(layerName(layer), (bbEdgeCount.get(layerName(layer)) ?? 0) + ns);
         continue;
       }
@@ -2038,7 +2040,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       // "항상 카메라 보기" 컴포넌트: 그 배치(안쪽 포함)를 따로 모아 코어가 Z축 둘레로 돌리게(안쪽의 같은 깃발은 바깥 배치를 따른다)
       let childBb = bb;
       if (!bb && !hiddenSub && !hiddenInst && def.behavior?.alwaysFaceCamera) {
-        if (billboards < MAX_BILLBOARDS) childBb = { key: `|bb${billboards++}`, origin: A.xfPoint(placed, [0, 0, 0]), front: frontOf(placed), edges: [] };
+        if (billboards < MAX_BILLBOARDS) childBb = { key: `|bb${billboards++}`, origin: A.xfPoint(placed, [0, 0, 0]), front: frontOf(placed), edges: new Map() };
         else billboardsSkipped++;
         if (childBb) billboardList.push(childBb);
       }
@@ -2140,10 +2142,29 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   };
   /** 같은 칸·재질 묶음의 차례: 뒷면 없음 → 스타일 뒷면 색 → 뒷면 재질 번호 */
   const backRank = (bk: Bucket): number => (!bk.back ? -2 : (bk.back.mat ?? -1));
-  const bbDone = new Set<Billboard>();
   const sorted = [...buckets.values()].sort(
     (a, b) => a.slot - b.slot || a.cls - b.cls || a.layer - b.layer || (a.mat ?? -1) - (b.mat ?? -1) || Number(a.closed) - Number(b.closed) || backRank(a) - backRank(b),
   );
+  // 카메라를 보는 배치의 모서리를 실을 그물: 태그마다 그 태그의 첫 그물(태그를 숨기면 모서리도 함께 숨게), 그 태그의 그물이 없으면 첫 그물
+  const bbEdgeHost = new Map<Bucket, number[]>();
+  {
+    const first = new Map<Billboard, Bucket>();
+    const byTag = new Map<Billboard, Map<number, Bucket>>();
+    for (const bk of sorted) {
+      if (!bk.bb || bk.cls) continue;
+      if (!first.has(bk.bb)) first.set(bk.bb, bk);
+      let m = byTag.get(bk.bb);
+      if (!m) byTag.set(bk.bb, (m = new Map()));
+      if (!m.has(bk.layer)) m.set(bk.layer, bk);
+    }
+    for (const [bb, host] of first)
+      for (const [layer, e] of bb.edges) {
+        const to = byTag.get(bb)?.get(layer) ?? host;
+        const list = bbEdgeHost.get(to);
+        if (list) for (const v of e) list.push(v);
+        else bbEdgeHost.set(to, [...e]);
+      }
+  }
   for (const bk of sorted) {
     const stored = bk.mat !== undefined ? model.materials.get(bk.mat) : undefined;
     // 표시 이름은 material.xml의 원래 이름(model.dat에는 '<Black>'이 '_Black_'처럼 바뀌어 있다)
@@ -2189,10 +2210,10 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     if (bk.closed) mesh.capGroup = `skp-solid-${bk.slot}`;
     if (bk.bb) {
       mesh.billboard = { origin: bk.bb.origin, axis: 'z', front: bk.bb.front };
-      // 그 배치의 모서리는 첫 그물의 윤곽선으로(함께 돈다)
-      if (!bbDone.has(bk.bb) && bk.bb.edges.length) {
-        bbDone.add(bk.bb);
-        const e = Float32Array.from(bk.bb.edges);
+      // 그 배치의 모서리는 같은 태그 그물의 윤곽선으로(함께 돈다)
+      const own = bbEdgeHost.get(bk);
+      if (own?.length) {
+        const e = Float32Array.from(own);
         if (bk.origin) for (let i = 0; i < e.length; i += 3) for (let c = 0; c < 3; c++) e[i + c]! -= bk.origin[c]!;
         mesh.edges = e;
         slotStat(bk.slot).edges += e.length / 6;

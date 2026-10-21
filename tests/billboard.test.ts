@@ -84,4 +84,34 @@ describe('"항상 카메라 보기" 컴포넌트(코어 billboard)', () => {
     expect(t.meshFirst[yard]).toBeLessThanOrEqual(t.meshFirst[deep]!);
     expect(t.meshEnd[yard]).toBeGreaterThanOrEqual(t.meshEnd[deep]!);
   });
+
+  it('모서리는 같은 태그의 그물에 실어 태그를 숨기면 함께 숨는다(그 태그의 그물이 없으면 첫 그물)', () => {
+    // 판 둘: 왼쪽 판·모서리는 Layer0, 오른쪽 판·모서리는 Glass, 모서리 하나는 면 없는 Lines 태그
+    const pts = Float64Array.from([0, 0, 0, 2, 0, 0, 2, 0, 3, 0, 0, 3, 3, 0, 0, 5, 0, 0, 5, 0, 3, 3, 0, 3, 0, 0, 4, 5, 0, 4]);
+    const quad = (o: number, layer: number): SkpFace => ({ loops: [[o, o + 1, o + 2, o + 3]], normal: [0, -1, 0], flags: 0, layer });
+    const ring = (o: number, layer: number): SkpEdge[] => [0, 1, 2, 3].map((i) => ({ a: o + i, b: o + ((i + 1) % 4), flags: 0, layer }));
+    const ents: SkpEntities = { points: pts, faces: [quad(0, 1), quad(4, 2)], edges: [...ring(0, 1), ...ring(4, 2), { a: 8, b: 9, flags: 0, layer: 3 }], instances: [] };
+    const m: SkpModel = {
+      materials: new Map(),
+      layers: new Map([
+        [1, 'Layer0'],
+        [2, 'Glass'],
+        [3, 'Lines'],
+      ]),
+      defaultLayer: 1,
+      definitions: new Map([[1, { id: 1, name: 'Sign', entities: ents, behavior: { alwaysFaceCamera: true, cutsOpening: false, shadowsFaceSun: true } }]]),
+      root: { points: new Float64Array(), faces: [], edges: [], instances: [{ definition: 1, matrix: placeAt(0, 0, 0), flags: 0, kind: 'component' }] },
+      counts: { vertices: 0, edges: 0, faces: 0, instances: 1 },
+      warnings: [],
+    };
+    const p = buildSceneParts(m, NO_MATS, 1, { outline: true });
+    const bbs = p.meshes.filter((x) => x.billboard);
+    expect(bbs.map((x) => x.group).sort()).toEqual(['Glass', 'Layer0']);
+    const of = (tag: string) => bbs.find((x) => x.group === tag)!;
+    // Glass 판의 모서리 넷은 Glass 그물에, Layer0 넷과 면 없는 Lines 하나는 첫 그물(Layer0)에
+    expect(of('Glass').edges!.length / 6).toBe(4);
+    expect(of('Layer0').edges!.length / 6).toBe(5);
+    expect(Math.min(...Array.from(of('Glass').edges!).filter((_, i) => i % 3 === 0))).toBe(3);
+    expect(p.tags.find((t) => t.name === 'Glass')!.edges).toBe(4);
+  });
 });
