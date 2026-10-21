@@ -28,6 +28,8 @@ export interface RecentBackend {
   /** 항목만 바꾼다(시간 새로) */
   touch(entry: RecentEntry): Promise<void>;
   data(id: string): Promise<ArrayBuffer | null>;
+  /** 바이트 저장소의 열쇠들(최근 문서 id와 한 번 쓸 자리 shared:…) */
+  dataKeys(): Promise<string[]>;
   remove(ids: readonly string[]): Promise<void>;
   clear(): Promise<void>;
 }
@@ -46,6 +48,18 @@ export function nameOfRecentId(id: string): string {
   if (id.startsWith('shared:')) return id.replace(/^shared:\d+:/, '') || 'shared.skp';
   const i = id.lastIndexOf(':');
   return (i > 0 && /^\d+$/.test(id.slice(i + 1)) ? id.slice(0, i) : id) || 'shared.skp';
+}
+
+/** 한 번 쓸 자리(공유 받은 큰 파일 shared:시각:이름)를 버리는 나이: 앱이 열면 곧바로 꺼내 지우므로, 이만큼 남은 것은 열다 멈춘 탭의 사본이다 */
+export const SHARED_MAX_AGE_MS = 10 * 60_000;
+
+/** 버릴 한 번 쓸 자리: 지금 열 것(keep)은 두고, 시각이 maxAge보다 멀거나(앞뒤 모두) 읽을 수 없는 것 */
+export function staleSharedKeys(keys: readonly string[], keep: string | null, now: number, maxAge = SHARED_MAX_AGE_MS): string[] {
+  return keys.filter((k) => {
+    if (typeof k !== 'string' || !k.startsWith('shared:') || k === keep) return false;
+    const t = Number(/^shared:(\d+):/.exec(k)?.[1]);
+    return !Number.isFinite(t) || Math.abs(now - t) > maxAge;
+  });
 }
 
 /** 저장할 수 있는 크기인지(빈 파일·60 MB 초과는 아님) */
@@ -130,6 +144,18 @@ export class RecentStore {
       return data;
     } catch {
       return null;
+    }
+  }
+
+  /** 앱을 열 때: 남은 한 번 쓸 자리(열다 멈춘 탭의 공유 받은 큰 파일 사본)를 지운다. keep = 지금 열 열쇠. 지운 수 */
+  async sweepShared(keep: string | null, now = Date.now()): Promise<number> {
+    if (!this.backend) return 0;
+    try {
+      const stale = staleSharedKeys(await this.backend.dataKeys(), keep, now);
+      if (stale.length) await this.backend.remove(stale);
+      return stale.length;
+    } catch {
+      return 0;
     }
   }
 
@@ -228,6 +254,10 @@ export function idbBackend(given?: IDBFactory): RecentBackend | null {
       const t = (await open()).transaction(RECENT_DATA_STORE, 'readonly');
       const v = await done(t.objectStore(RECENT_DATA_STORE).get(id));
       return v instanceof ArrayBuffer ? v : null;
+    },
+    async dataKeys() {
+      const t = (await open()).transaction(RECENT_DATA_STORE, 'readonly');
+      return ((await done(t.objectStore(RECENT_DATA_STORE).getAllKeys())) as IDBValidKey[]).filter((k): k is string => typeof k === 'string');
     },
     async remove(ids) {
       const t = (await open()).transaction(both, 'readwrite');

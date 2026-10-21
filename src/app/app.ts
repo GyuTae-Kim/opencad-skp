@@ -3046,6 +3046,8 @@ export class SkpViewerApp implements PanelHost {
 
   /** 처음 주소 인자 처리 */
   async launch(req: LaunchRequest): Promise<void> {
+    // 열다 멈춘 탭이 남긴 공유 받은 큰 파일 사본은 지운다(지금 열 것은 둔다)
+    void this.recent.sweepShared(req.kind === 'shared' ? req.key : null);
     if (req.kind === 'sample') await this.openSample();
     else if (req.kind === 'url') await this.openUrl(req.url, req.name);
     else if (req.kind === 'shared') await this.openShared(req.key);

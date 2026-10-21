@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { parseLaunch } from '../../src/app/launch';
 import { canUseServiceWorker, consumeLaunchFiles, registerServiceWorker, type SwRegistration, type SwWorker } from '../../src/app/pwa';
-import { RecentStore, nameOfRecentId, type RecentBackend, type RecentEntry } from '../../src/app/recent';
+import { RecentStore, SHARED_MAX_AGE_MS, nameOfRecentId, staleSharedKeys, type RecentBackend, type RecentEntry } from '../../src/app/recent';
 import { precacheList, serviceWorkerSource } from '../../tools/sw-plugin.mjs';
 
 describe('서비스 워커 등록·새 판 알림', () => {
@@ -90,12 +90,41 @@ describe('공유 받은 파일', () => {
       put: async () => {},
       touch: async () => {},
       data: async (id) => data.get(id) ?? null,
+      dataKeys: async () => [...data.keys()],
       remove: async (ids) => ids.forEach((i) => data.delete(i)),
       clear: async () => data.clear(),
     };
     const store = new RecentStore(backend);
     expect((await store.take('shared:1:x.skp'))!.byteLength).toBe(4);
     expect(await store.take('shared:1:x.skp')).toBeNull();
+  });
+
+  it('앱을 열 때 열다 멈춘 탭이 남긴 큰 파일 사본(shared:…)을 지운다: 지금 열 것·방금 받은 것·최근 문서는 둔다', async () => {
+    const now = 1_700_000_000_000;
+    const old = `shared:${now - SHARED_MAX_AGE_MS - 1}:old.skp`;
+    const fresh = `shared:${now - 1000}:fresh.skp`;
+    const opening = `shared:${now - 3 * SHARED_MAX_AGE_MS}:opening.skp`;
+    const future = `shared:${now + 2 * SHARED_MAX_AGE_MS}:clock.skp`;
+    const data = new Map<string, ArrayBuffer>([old, fresh, opening, future, 'shared:bad', '집.skp:120'].map((k) => [k, new ArrayBuffer(4)]));
+    const removed: string[] = [];
+    const backend: RecentBackend = {
+      entries: async () => [{ id: '집.skp:120', name: '집.skp', size: 120, time: now - 1e9 }],
+      put: async () => {},
+      touch: async () => {},
+      data: async (id) => data.get(id) ?? null,
+      dataKeys: async () => [...data.keys()],
+      remove: async (ids) => ids.forEach((i) => (removed.push(i), data.delete(i))),
+      clear: async () => data.clear(),
+    };
+    const store = new RecentStore(backend);
+    expect(await store.sweepShared(opening, now)).toBe(3);
+    expect(removed.sort()).toEqual([old, future, 'shared:bad'].sort());
+    expect([...data.keys()].sort()).toEqual(['집.skp:120', fresh, opening].sort());
+    // 열 것이 없으면(보통 시작) 오래된 것만
+    expect(await store.sweepShared(null, now + SHARED_MAX_AGE_MS + 2000)).toBe(2);
+    expect([...data.keys()]).toEqual(['집.skp:120']);
+    expect(staleSharedKeys(['shared:5:a.skp', 'x:1'], null, 5)).toEqual([]);
+    expect(await new RecentStore(null).sweepShared(null)).toBe(0);
   });
 });
 

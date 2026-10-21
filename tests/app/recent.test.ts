@@ -32,6 +32,7 @@ function memory(): RecentBackend & { rows: Map<string, RecentEntry>; bytes: Map<
       m.dataReads++;
       return bytes.get(id) ?? null;
     },
+    dataKeys: async () => [...bytes.keys()],
     remove: async (ids: readonly string[]) => {
       for (const id of ids) {
         rows.delete(id);
@@ -135,8 +136,9 @@ describe('RecentStore', () => {
     const fail = async (): Promise<never> => {
       throw new Error('blocked');
     };
-    const broken: RecentBackend = { entries: fail, put: fail, touch: fail, data: fail, remove: fail, clear: fail };
+    const broken: RecentBackend = { entries: fail, put: fail, touch: fail, data: fail, dataKeys: fail, remove: fail, clear: fail };
     const s = new RecentStore(broken);
+    expect(await s.sweepShared(null)).toBe(0);
     expect(await s.list()).toEqual([]);
     expect(await s.add('a.skp', buf(1))).toBe(false);
     expect(await s.open('a.skp:1')).toBeNull();
