@@ -231,7 +231,7 @@ npm run preview
 시험은 표본 파일 없이 `tests/build.ts`(본체는 `src/app/skpwrite.ts`)와 `tests/mfcwrite.ts`(2020 이하 꼴)로 만든 작은 바이트로 돌립니다. 표본 파일은 저장소에 넣지 않습니다.
 확인용 표본·임시 파일은 `.runtime/`(git 무시)에만 둡니다.
 `SKP_BIG=1 npx vitest run tests/large.test.ts`는 수십만 면 합성 모형으로 해석 시간을 재고 `.runtime/tmp/`에 파일을 씁니다(확인 뒤 지우세요).
-3D 뷰어 코어는 `github:GyuTae-Kim/opencad-viewer3d#v0.6.0`(단면 보기·묶음 원점·무늬, 터치 끌기 문턱 10화소·터치 고르기 허용 14화소)으로 받습니다.
+3D 뷰어 코어는 `github:GyuTae-Kim/opencad-viewer3d#v0.7.0`(단면 보기·묶음 원점·무늬, 터치 끌기 문턱 10화소·터치 고르기 허용 14화소, 0.7.0의 여러 단면·잘린 면 묶음 채우기·숨은 선·단색·해 조명·그림자·안개·하늘 바탕·걷기·마주 보는 그물·뒷면 재질·렌즈 이동)으로 받습니다.
 측정 도구의 누르기 문턱은 코어의 `dragStartPx`(마우스·펜 4, 터치 10화소)를, 추정의 가운데·둘레 고르기는 코어 마우스 허용 거리(6화소)를 그대로 씁니다(터치 추정 반경 22화소가 코어 터치 허용 거리 14화소를 덮습니다).
 의존을 올릴 때는 `npm install "opencad-viewer3d@github:GyuTae-Kim/opencad-viewer3d#<태그>"`로 받아야 잠금 파일의 커밋이 바뀝니다.
 

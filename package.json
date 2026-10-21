@@ -27,7 +27,7 @@
   },
   "dependencies": {
     "earcut": "^3.2.4",
-    "opencad-viewer3d": "github:GyuTae-Kim/opencad-viewer3d#v0.6.0"
+    "opencad-viewer3d": "github:GyuTae-Kim/opencad-viewer3d#v0.7.0"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
