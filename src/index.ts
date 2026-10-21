@@ -157,7 +157,7 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
   // 모형 스타일(렌더링 설정 + 그 스타일의 style.xml): 재질 없는 면은 스타일 앞면 색으로 칠한다(SketchUp 기본 화면처럼)
   let style: ReturnType<typeof styleFor>;
   try {
-    style = styleFor(model.rendering, styles);
+    style = styleFor(model.rendering, styles, u.scale);
   } catch {
     warnings.push('모형 스타일을 풀지 못했습니다');
   }

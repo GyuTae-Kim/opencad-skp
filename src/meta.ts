@@ -51,6 +51,8 @@ export interface SkpStyleMeta {
   /** 모서리 보이기(EdgeDisplayMode) */
   edges?: boolean;
   profiles?: boolean;
+  /** 윤곽선 굵기(화소, SilhouetteWidth) */
+  profileWidth?: number;
   backEdges?: boolean;
   background?: Rgb;
   /** 하늘·지면(켜져 있을 때만 색, 꺼져 있으면 null) */
@@ -69,6 +71,12 @@ export interface SkpStyleMeta {
   sectionCuts?: boolean;
   sectionFill?: boolean;
   colorByTag?: boolean;
+  /** 안개 켜짐(DisplayFog)·색(FogColor, 배경 색을 쓰면 fogUseBackground)·시작·끝 거리(장면 단위, −1 = SketchUp 기본 — 모형 크기를 따름) */
+  fog?: boolean;
+  fogColor?: Rgb;
+  fogUseBackground?: boolean;
+  fogStart?: number;
+  fogEnd?: number;
 }
 
 /**

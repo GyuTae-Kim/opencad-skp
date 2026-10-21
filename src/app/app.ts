@@ -41,6 +41,7 @@ import {
   slideshowOrder,
   refitSceneCamera,
   renderModeForStyle,
+  SHADED_MODES,
   restoreSceneCamera,
   sectionFillOf,
   sameSceneFit,
@@ -57,6 +58,9 @@ import {
   canHideNode,
   createDoc,
   faceOrEdgeSelection,
+  EDGE_STUB,
+  hiddenSelection,
+  tagColors,
   partBox,
   partOfPick,
   selectedDefinitionNodes,
@@ -100,7 +104,7 @@ import { THEME_CHOICES, applyThemeChoice, readStoredTheme, resolveTheme, storeTh
 import { childrenOf, isAncestor, isSplit, nodeBox, nodePath, normalizeRanges, type PickMode } from './tree';
 import { cameraForBox, keepViewOnHeightChange } from './view';
 import { cssHex, isLightBackground, loadFileBackground, safeStorage, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
-import type { Rgb } from '../meta';
+import type { Rgb, SkpStyleMeta } from '../meta';
 
 export const APP_TITLE = 'OpenCAD SketchUp 뷰어';
 const TOOLS_URL = 'https://gyutae-kim.github.io/opencad';
@@ -116,6 +120,9 @@ const MAX_FIT_NODES = 5000;
 const RENDER_MODES: [RenderMode, string, string][] = [
   ['shaded', '음영', 'shaded'],
   ['shadedEdges', '음영+모서리', 'shadedEdges'],
+  ['noTexture', '무늬 없음', 'noTexture'],
+  ['monochrome', '단색', 'monochrome'],
+  ['hiddenLine', '숨은 선', 'hiddenLine'],
   ['wireframe', '와이어프레임', 'wireframe'],
   ['xray', 'X-ray', 'xray'],
 ];
@@ -183,6 +190,9 @@ export interface AppSnapshot {
   background: string | null;
   /** 잘린 면 채우기(닫힌 입체) */
   sectionFill: boolean;
+  /** 외곽선·태그 색으로 칠하기 */
+  profiles: boolean;
+  colorByTag: boolean;
 }
 
 interface Els {
@@ -421,7 +431,9 @@ export class SkpViewerApp implements PanelHost {
     const secBadge = h('b', { class: 'sec-badge', hidden: true });
     secMenuBtn.append(secBadge);
     secMenuBtn.addEventListener('click', () => this.toggleSectionMenu());
-    const moreBtn = menuBtn('보기 설정', 'sliders', '보기 설정');
+    // 보기 설정: 외곽선·태그 색·그림자·안개·걷기·시야각·2점 투시(넓은 화면도), 휴대폰은 도구 막대에 없는 보기 단추까지
+    const moreBtn = menuBtn('보기 설정', 'sliders', '보기 설정(외곽선·태그 색·그림자·안개·걷기·시야각·2점 투시)');
+    moreBtn.classList.remove('narrow-only');
     moreBtn.addEventListener('click', () => this.toggleMoreMenu());
     const toolbar = h(
       'div',
@@ -974,6 +986,8 @@ export class SkpViewerApp implements PanelHost {
         },
       });
     else v.setScene(d.scene);
+    // 해석기 그물에는 윤곽선이 없어(SketchUp 모서리는 선분 묶음) 붙인 길이 0 윤곽선을 늘 숨긴다 — 숨은 선·와이어프레임에서 삼각형 변을 그리지 않게
+    for (const id of d.stubEdges) v.setHiddenRanges(id, { prims: [], edges: EDGE_STUB });
     v.setRenderMode(this.renderMode);
     v.highlight(null);
     v.highlightRanges(null);
@@ -992,6 +1006,8 @@ export class SkpViewerApp implements PanelHost {
       this.renderMode = mode;
       v.setRenderMode(mode);
     }
+    // 스타일의 외곽선·태그 색(장면을 올리면 겉모습이 풀린다)
+    this.applyStyleLooks(d.style, true);
     // 잘린 면 채우기: 모형 스타일의 단면 채우기(장면 스타일이 바꿀 수 있다)
     this.sectionFill = sectionFillOf(d.style, d.info.major);
     const sec = initialSection(d.scene.meta);
@@ -1574,6 +1590,7 @@ export class SkpViewerApp implements PanelHost {
       if (st.sectionPlanes !== undefined) d.showSectionPlanes = st.sectionPlanes;
     }
     if (plan.renderMode) this.setRenderMode(plan.renderMode);
+    if (plan.style) this.applyStyleLooks(plan.style, false);
     // 장면 스타일의 배경 색
     const bg = styleBackground(plan.style);
     if (bg) {
@@ -1837,13 +1854,18 @@ export class SkpViewerApp implements PanelHost {
       const cur = this.hiddenRanges.get(item);
       this.hiddenRanges.set(item, cur ? normalizeRanges([...cur, ...list]) : list);
     }
+    // 길이 0 윤곽선을 단 그물은 그 윤곽선을 늘 숨긴 채로(hiddenSelection)
     const next = new Set<string>();
     for (const [item, list] of this.hiddenRanges) {
       const id = this.itemId(item);
       next.add(id);
-      v.setHiddenRanges(id, list);
+      v.setHiddenRanges(id, hiddenSelection(d, item, list));
     }
-    for (const id of this.rangedIds) if (!next.has(id)) v.setHiddenRanges(id, null);
+    for (const id of this.rangedIds) {
+      if (next.has(id)) continue;
+      const item = d.meshIndex.get(id) ?? (d.lineIndex.has(id) ? d.scene.meshes.length + d.lineIndex.get(id)! : -1);
+      v.setHiddenRanges(id, item >= 0 ? hiddenSelection(d, item, null) : null);
+    }
     this.rangedIds = next;
     if (d.selection?.kind === 'node') this.applySelection(d.selection, false);
   }
@@ -1906,6 +1928,38 @@ export class SkpViewerApp implements PanelHost {
     this.refreshToolbar();
   }
 
+  /** 외곽선(스타일 "윤곽선" — 코어 화면 공간 외곽선) */
+  private profilesOn = false;
+  private profileWidth = 2;
+
+  setProfiles(on: boolean): void {
+    this.profilesOn = on;
+    this.viewer?.setRenderOptions({ profiles: on ? { width: this.profileWidth } : null });
+    this.refreshToolbar();
+  }
+
+  /** 태그 색으로 칠하기(스타일 "태그 색으로" — 코어 setItemColor, 장면을 올리면 풀리므로 다시 건다) */
+  private colorByTag = false;
+
+  setColorByTag(on: boolean): void {
+    this.colorByTag = on;
+    const d = this.doc;
+    const v = this.viewer;
+    if (!d || !v) return;
+    const colors = tagColors(d);
+    for (const m of d.scene.meshes) v.setItemColor(m.id, on ? (colors.get(m.id) ?? null) : null);
+  }
+
+  /** 스타일의 외곽선·태그 색을 따른다(기억하지 않은 값은 그대로). 큰 모형은 외곽선을 처음에 끈다(그물을 한 번 더 그린다) */
+  private applyStyleLooks(style: SkpStyleMeta | null | undefined, first: boolean): void {
+    const d = this.doc;
+    if (typeof style?.profileWidth === 'number') this.profileWidth = Math.min(5, Math.max(1, style.profileWidth));
+    if (typeof style?.profiles === 'boolean') this.setProfiles(style.profiles && !(first && d && isBigScene(d)));
+    else if (first) this.setProfiles(false);
+    if (typeof style?.colorByTag === 'boolean') this.setColorByTag(style.colorByTag);
+    else if (first) this.setColorByTag(false);
+  }
+
   /**
    * 라벨 가림: 음영 방식에서 라벨 기준점의 화면 자리에서 고른 형상(불투명 면, 또는 면에 붙은 모서리 — 코어는 선을 면보다 앞세운다)이
    * 기준점보다 앞에 있으면 가렸다. 단면에 잘린 쪽·숨긴 항목은 코어가 고르지 않는다. 반투명 면(유리)과 주석 선(치수선·지시선)은 가리지 않는다
@@ -1913,7 +1967,7 @@ export class SkpViewerApp implements PanelHost {
   private labelOccluded(p: readonly number[], x: number, y: number, f: ViewFrame): boolean {
     const v = this.viewer;
     const d = this.doc;
-    if (!v || !d || (this.renderMode !== 'shaded' && this.renderMode !== 'shadedEdges')) return false;
+    if (!v || !d || !SHADED_MODES.has(this.renderMode)) return false;
     const hit = v.pick(x, y);
     if (!hit || hit.section || hit.kind === 'point') return false;
     if (hit.kind === 'mesh') {
@@ -2203,17 +2257,26 @@ export class SkpViewerApp implements PanelHost {
       if (same) return;
     }
     if (!this.viewer || !this.doc) return;
+    // 휴대폰: 넓은 화면 도구 막대에만 있는 단추(이전·다음 보기, 투영, 그리기 방식, 격자·뷰 큐브·좌표축·배경, 그림 저장)도
+    const phone = !!this.phoneQuery?.matches;
+    const narrowItems: MenuItem[] = phone
+      ? [
+          { label: '이전 보기', icon: 'back', disabled: !this.history.canBack(), run: () => this.viewBack() },
+          { label: '다음 보기', icon: 'forward', disabled: !this.history.canForward(), run: () => this.viewForward() },
+          { label: '원근 투영', checked: this.projection === 'perspective', sep: true, run: () => this.setProjection('perspective') },
+          { label: '평행 투영', checked: this.projection === 'orthographic', run: () => this.setProjection('orthographic') },
+          ...RENDER_MODES.map(([m, label], i): MenuItem => ({ label, checked: this.renderMode === m, sep: i === 0, run: () => this.setRenderMode(m) })),
+          { label: '격자', checked: this.gridOn, toggle: true, sep: true, run: () => this.toggleGrid() },
+          { label: '뷰 큐브', checked: this.cubeOn, toggle: true, run: () => this.toggleCube() },
+          { label: '좌표축', checked: this.axesOn, toggle: true, run: () => this.toggleAxes() },
+          { label: '파일 배경 색', checked: this.fileBg, toggle: true, run: () => this.setFileBackground(!this.fileBg) },
+        ]
+      : [];
     this.openMenu(btn, '보기 설정', [
-      { label: '이전 보기', icon: 'back', disabled: !this.history.canBack(), run: () => this.viewBack() },
-      { label: '다음 보기', icon: 'forward', disabled: !this.history.canForward(), run: () => this.viewForward() },
-      { label: '원근 투영', checked: this.projection === 'perspective', sep: true, run: () => this.setProjection('perspective') },
-      { label: '평행 투영', checked: this.projection === 'orthographic', run: () => this.setProjection('orthographic') },
-      ...RENDER_MODES.map(([m, label], i): MenuItem => ({ label, checked: this.renderMode === m, sep: i === 0, run: () => this.setRenderMode(m) })),
-      { label: '격자', checked: this.gridOn, toggle: true, sep: true, run: () => this.toggleGrid() },
-      { label: '뷰 큐브', checked: this.cubeOn, toggle: true, run: () => this.toggleCube() },
-      { label: '좌표축', checked: this.axesOn, toggle: true, run: () => this.toggleAxes() },
-      { label: '파일 배경 색', checked: this.fileBg, toggle: true, run: () => this.setFileBackground(!this.fileBg) },
-      { label: '그림 저장…', icon: 'image', sep: true, run: () => this.savePng() },
+      ...narrowItems,
+      { label: '외곽선(윤곽 굵게)', checked: this.profilesOn, toggle: true, sep: true, run: () => this.setProfiles(!this.profilesOn) },
+      { label: '태그 색으로 칠하기', checked: this.colorByTag, toggle: true, run: () => this.setColorByTag(!this.colorByTag) },
+      ...(phone ? [{ label: '그림 저장…', icon: 'image', sep: true, run: () => this.savePng() }] : []),
     ]);
   }
 
@@ -2656,6 +2719,8 @@ export class SkpViewerApp implements PanelHost {
       fileBackground: this.fileBg,
       background: this.backdrop ? cssHex(this.backdrop) : null,
       sectionFill: this.sectionFill,
+      profiles: this.profilesOn,
+      colorByTag: this.colorByTag,
     };
   }
 

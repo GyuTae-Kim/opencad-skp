@@ -3,7 +3,7 @@
  * 해석기가 scene.meta에 적은 것(판·단위·통계·tagStats·materialStats·outline·tree·extraItems)을 안전하게 읽어 화면용 꼴로 바꾼다.
  * meta가 비었거나 옛 꼴이어도 장면(그물 이름·묶음)에서 최소한의 목록을 만든다.
  */
-import type { IndexRange, Pick3d, Scene3d } from 'opencad-viewer3d';
+import type { IndexRange, Pick3d, RangeSelection, Scene3d } from 'opencad-viewer3d';
 import type { SkpImages } from '../images';
 import type {
   SkpAnnotationItems,
@@ -176,6 +176,8 @@ export interface SkpDoc {
   lineIndex: Map<string, number>;
   /** 면 경계·곡선 번호(meta.faceRuns·segmentCurves) */
   faceIndex: FaceIndex;
+  /** 늘 숨기는 길이 0 윤곽선을 단 그물 id(addEdgeStubs — 숨은 선·와이어프레임에서 삼각형 변을 그리지 않게) */
+  stubEdges: Set<string>;
   /** 모형에서 숨겼지만 장면이 다시 보이는 노드의 보통 색 항목(meta.revealItems): 항목 id → 노드 */
   revealOf: Map<string, number>;
   /** 지금 장면이 다시 보이게 한 노드(처음엔 없음 — 숨긴 개체를 기억하는 장면을 고르면 바뀐다) */
@@ -578,6 +580,7 @@ export function createDoc(name: string, size: number, res: ParseResult, opts: { 
     meshIndex: new Map(scene.meshes.map((m, i) => [m.id, i])),
     lineIndex: new Map(scene.lines.map((l, i) => [l.id, i])),
     faceIndex: readFaceIndex(scene),
+    stubEdges: addEdgeStubs(scene),
     revealOf: readReveal(scene),
     revealNodes: new Set(),
     tree,
@@ -608,6 +611,56 @@ export function createDoc(name: string, size: number, res: ParseResult, opts: { 
     if (f.visible === false) doc.hiddenFolders.add(i);
   });
   return doc;
+}
+
+/** 늘 숨기는 길이 0 윤곽선의 구간(코어 setHiddenRanges의 edges) */
+export const EDGE_STUB: readonly IndexRange[] = [{ start: 0, count: 1 }];
+
+/**
+ * 윤곽선(Mesh3d.edges)이 없는 그물에 길이 0 윤곽선 하나(첫 정점)를 달고 그 id를 돌려준다(장면을 뷰어에 올리기 전에).
+ * 코어 숨은 선·와이어프레임 모드는 윤곽선이 없는 그물의 삼각형 변을 그리는데, SketchUp 모서리는 따로 선분 묶음이라
+ * 삼각형 대각선이 보이게 된다 — 윤곽선을 두고 앱이 늘 숨기면(EDGE_STUB) 그물에서는 아무 선도 그리지 않는다
+ */
+export function addEdgeStubs(scene: Scene3d): Set<string> {
+  const ids = new Set<string>();
+  for (const m of scene.meshes) {
+    if (m.edges && m.edges.length >= 6) continue;
+    const p = m.positions;
+    if (p.length < 3) continue;
+    m.edges = Float32Array.of(p[0]!, p[1]!, p[2]!, p[0]!, p[1]!, p[2]!);
+    ids.add(m.id);
+  }
+  return ids;
+}
+
+/**
+ * 태그 색으로 칠하기(스타일 "태그 색으로", 코어 setItemColor): 그물 id → 그 태그(묶음) 색. 태그 색을 모르면 넣지 않는다.
+ * 불투명도는 태그 색과 그물 색(숨긴 형상은 반투명) 가운데 작은 것
+ */
+export function tagColors(d: Pick<SkpDoc, 'scene' | 'tags'>): Map<string, [number, number, number, number]> {
+  const byTag = new Map<string, [number, number, number, number]>();
+  for (const t of d.tags) if (t.color) byTag.set(t.name, t.color);
+  const out = new Map<string, [number, number, number, number]>();
+  for (const m of d.scene.meshes) {
+    const c = m.group !== undefined ? byTag.get(m.group) : undefined;
+    if (c) out.set(m.id, [c[0], c[1], c[2], Math.min(c[3], m.color[3])]);
+  }
+  return out;
+}
+
+/**
+ * 항목의 숨길 구간(코어 setHiddenRanges): 삼각형·선분 구간에 더해, 길이 0 윤곽선을 단 그물은 그 윤곽선을 늘 숨기고,
+ * 카메라를 보는 그물(윤곽선 = 그 배치의 모서리)은 삼각형을 모두 숨기면 윤곽선도 숨긴다. 숨길 것이 없으면 null(숨김 풀기)
+ */
+export function hiddenSelection(d: Pick<SkpDoc, 'scene' | 'stubEdges'>, item: number, prims: readonly IndexRange[] | null): RangeSelection | null {
+  const mesh = item < d.scene.meshes.length ? d.scene.meshes[item] : undefined;
+  if (mesh && d.stubEdges.has(mesh.id)) return { prims: prims ?? [], edges: EDGE_STUB };
+  if (!prims?.length) return null;
+  if (mesh?.edges && mesh.edges.length >= 6) {
+    const tris = triangleCount(mesh);
+    if (prims.length === 1 && prims[0]!.start <= 0 && prims[0]!.start + prims[0]!.count >= tris) return { prims, edges: [{ start: 0, count: Math.floor(mesh.edges.length / 6) }] };
+  }
+  return prims;
 }
 
 /** 태그 폴더가 (자신이나 조상이) 숨었는지 */

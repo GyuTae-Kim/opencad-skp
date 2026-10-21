@@ -353,8 +353,10 @@ const STYLE_FLAGS = [
   'sectionCuts',
   'sectionFill',
   'colorByTag',
+  'fog',
+  'fogUseBackground',
 ] as const;
-const STYLE_COLORS = ['background', 'front', 'back', 'edgeColor'] as const;
+const STYLE_COLORS = ['background', 'front', 'back', 'edgeColor', 'fogColor'] as const;
 
 /** 스타일(모르는 꼴이어도 안전하게). 알아본 칸만 남긴다 — 객체가 아니면 null */
 export function readStyle(v: unknown): SkpStyleMeta | null {
@@ -368,6 +370,8 @@ export function readStyle(v: unknown): SkpStyleMeta | null {
     const c = rgb(o[k]);
     if (c) out[k] = c;
   }
+  for (const k of ['fogStart', 'fogEnd'] as const) if (isNum(o[k])) out[k] = o[k] as number;
+  if (isNum(o.profileWidth) && o.profileWidth > 0) out.profileWidth = o.profileWidth;
   for (const k of ['sky', 'ground'] as const) {
     if (o[k] === null) out[k] = null;
     else {
@@ -489,20 +493,27 @@ export function initialSection(meta: unknown): PageSection | null {
 
 /**
  * 스타일 → 코어 그리기 방식. 모르면 null(지금 방식 그대로).
- * - 와이어프레임 → 'wireframe'(면이 없으니 X-ray보다 먼저)
+ * - 와이어프레임(RenderMode 0) → 'wireframe'(면이 없으니 X-ray보다 먼저)
  * - X-ray → 'xray'
- * - 은선(hiddenLine)·음영·무늬 음영·단색 → 모서리 보이기(edges)가 꺼졌으면 'shaded', 아니면 'shadedEdges'
- *   (코어에 은선·단색·무늬 끄기가 없어 음영으로 가깝게 그린다)
+ * - 은선(RenderMode 1) → 'hiddenLine'(면을 배경 색으로 채워 뒤 모서리를 가린다), 단색(5) → 'monochrome',
+ *   무늬를 끈 음영(Texture 꺼짐) → 'noTexture'
+ * - 무늬 음영 → 모서리 보이기(edges)가 꺼졌으면 'shaded', 아니면 'shadedEdges'
  * - 면 스타일이 없고 모서리 보이기만 있으면 그것만 따른다.
  */
 export function renderModeForStyle(style: SkpStyleMeta | null | undefined): RenderMode | null {
   if (!style) return null;
   if (style.faceStyle === 'wireframe') return 'wireframe';
   if (style.xray === true) return 'xray';
+  if (style.faceStyle === 'hiddenLine') return 'hiddenLine';
+  if (style.faceStyle === 'monochrome') return 'monochrome';
+  if (style.faceStyle === 'shaded') return 'noTexture';
   if (style.faceStyle) return style.edges === false ? 'shaded' : 'shadedEdges';
   if (typeof style.edges === 'boolean') return style.edges ? 'shadedEdges' : 'shaded';
   return null;
 }
+
+/** 음영 계열 그리기 방식(면이 불투명하게 앞을 가린다 — 라벨 가림·채우기) */
+export const SHADED_MODES: ReadonlySet<RenderMode> = new Set(['shaded', 'shadedEdges', 'hiddenLine', 'monochrome', 'noTexture']);
 
 /**
  * 단면에서 잘린 면을 채울지(스타일 "단면 채우기"). 스타일이 값을 가지면 그것, 없으면 SketchUp 2018(채우기가 생긴 판) 이상이면 채운다.

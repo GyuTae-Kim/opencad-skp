@@ -210,8 +210,11 @@ describe('스타일 → 그리기 방식', () => {
     expect(renderModeForStyle({ faceStyle: 'wireframe', xray: true })).toBe('wireframe');
     expect(renderModeForStyle({ faceStyle: 'shaded', xray: true })).toBe('xray');
     expect(renderModeForStyle({ faceStyle: 'textured' })).toBe('shadedEdges');
-    expect(renderModeForStyle({ faceStyle: 'monochrome', edges: false })).toBe('shaded');
-    expect(renderModeForStyle({ faceStyle: 'hiddenLine' })).toBe('shadedEdges');
+    expect(renderModeForStyle({ faceStyle: 'textured', edges: false })).toBe('shaded');
+    // 은선(1)·단색(5)·무늬 끈 음영은 코어 0.7.0 모드로
+    expect(renderModeForStyle({ faceStyle: 'monochrome', edges: false })).toBe('monochrome');
+    expect(renderModeForStyle({ faceStyle: 'hiddenLine' })).toBe('hiddenLine');
+    expect(renderModeForStyle({ faceStyle: 'shaded' })).toBe('noTexture');
     expect(renderModeForStyle({ edges: false })).toBe('shaded');
   });
 });
@@ -284,7 +287,7 @@ describe('장면 적용 계획', () => {
     expect([...p.hiddenNodes!]).toEqual([4, 9]);
     expect(p.setsSection).toBe(true);
     expect(p.section!.index).toBe(0);
-    expect(p.renderMode).toBe('shaded');
+    expect(p.renderMode).toBe('noTexture');
     // 단면을 기억하지만 모형 단면이 없으면 끈다
     const off = pagePlan({ name: '노드 단면', sectionPlanes: [1] }, { sectionPlanes: planes });
     expect(off.setsSection).toBe(true);

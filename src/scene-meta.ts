@@ -109,10 +109,10 @@ export function cameraMeta(c: SkpCamera | undefined, scale: number): SkpCameraMe
 }
 
 /** 렌더링 레코드 + 꾸러미 style.xml 모음(폴더 = 스타일 이름) → 화면용 스타일. 레코드도 스타일 글도 없거나 빈 결과면 없음 */
-export function styleFor(raw: SkpRenderingRaw | undefined, styles: ReadonlyMap<string, Map<number, string>> | undefined): SkpStyleMeta | undefined {
+export function styleFor(raw: SkpRenderingRaw | undefined, styles: ReadonlyMap<string, Map<number, string>> | undefined, scale = 1): SkpStyleMeta | undefined {
   const items = raw?.styleName !== undefined ? styles?.get(raw.styleName) : undefined;
   if (!raw && !items) return undefined;
-  const s = resolveStyle(raw, items);
+  const s = resolveStyle(raw, items, scale);
   return s && typeof s === 'object' && Object.keys(s).length ? s : undefined;
 }
 
@@ -156,7 +156,7 @@ export function pagesMeta(model: SkpModel, scale: number, ctx: PagesContext = {}
       if (cam) out.camera = cam;
     }
     if (flags & PAGE_USE_STYLE) {
-      const st = styleFor(p.rendering, ctx.styles);
+      const st = styleFor(p.rendering, ctx.styles, scale);
       if (st) out.style = st;
     }
     if (flags & PAGE_USE_HIDDEN_TAGS && model.tags) {
