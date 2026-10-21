@@ -21,11 +21,14 @@ function post(msg: ParseResponse, transfer: Transferable[] = []): void {
 async function open(req: ParseRequest): Promise<ParseResult> {
   const id = req.id;
   let last = 0;
+  // 진행은 뒤로 가지 않는다(2020 이하는 그림을 꺼내며 모형을 먼저 다 읽고, 해석기는 그 모형을 이어 쓰며 앞 단계 값을 다시 알린다)
+  let high = 0;
   const progress = (fraction: number, stage: string): void => {
     const now = performance.now();
     if (fraction < 1 && now - last < 40) return;
     last = now;
-    post({ id, type: 'progress', fraction: Math.max(0, Math.min(1, fraction)), stage });
+    high = Math.max(high, Math.max(0, Math.min(1, fraction)));
+    post({ id, type: 'progress', fraction: high, stage });
   };
   const t0 = performance.now();
   const bytes = new Uint8Array(req.bytes);
@@ -33,8 +36,8 @@ async function open(req: ParseRequest): Promise<ParseResult> {
   progress(0.01, '그림 꺼내는 중');
   let images: SkpImages | undefined;
   try {
-    // 개수·한 장·전체 크기 한도는 readSkpImages 기본값(images.ts)
-    images = readSkpImages(bytes);
+    // 개수·한 장·전체 크기 한도는 readSkpImages 기본값(images.ts). 2020 이하는 여기서 모형을 다 읽는다(해석기가 이어 쓴다)
+    images = readSkpImages(bytes, { onProgress: (f) => progress(0.02 + 0.6 * f, '모형 요소 읽는 중') });
   } catch {
     /* 그림은 없어도 된다 */
   }

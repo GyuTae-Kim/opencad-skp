@@ -311,8 +311,10 @@ export interface MfcFaceSpec {
   hidden?: boolean;
   pid?: number;
   attrs?: MfcDicts;
-  /** 앞면 무늬 위치(CFaceTextureCoords, 읽기만 하는지 본다) */
-  textureCoords?: boolean;
+  /**
+   * 무늬 위치(CFaceTextureCoords): true면 단위 행렬·앞면 깃발 1(예전 시험), 객체면 쪽마다 f64 12개(앞 9개 = 열 우선 3×3)와 깃발
+   */
+  textureCoords?: boolean | { front?: number[]; back?: number[]; frontFlags?: number; backFlags?: number };
 }
 
 export interface MfcInstanceSpec {
@@ -636,7 +638,8 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
   const styleSlots: (number | undefined)[] = [];
   let rootSlots = emptySlots();
 
-  const pre = (attrs?: MfcDicts, pid?: number, texture = false): void => {
+  type TexCoords = MfcFaceSpec['textureCoords'];
+  const pre = (attrs?: MfcDicts, pid?: number, texture: TexCoords = false): void => {
     if (attrs?.length || texture) container(attrs ?? [], texture);
     else w.nil();
     if (pids) {
@@ -658,7 +661,7 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
       }
     }
   };
-  const container = (dicts: MfcDicts, texture = false): void => {
+  const container = (dicts: MfcDicts, texture: TexCoords = false): void => {
     w.obj('CAttributeContainer', () => {
       pre();
       for (const [name, entries] of dicts)
@@ -675,14 +678,17 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
         });
       if (texture)
         w.obj('CFaceTextureCoords', () => {
+          const t = texture === true ? {} : texture;
+          const id12 = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
           pre();
           w.u32(0);
-          w.f64(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0);
+          w.f64(...(t.front ?? id12), ...(t.back ?? id12));
+          // 쪽마다 핀 수 × 32바이트(앞 하나, 뒤 없음 — 해석기는 건너뛴다)
           w.u32(1);
           w.zeros(32);
           w.u32(0);
-          w.u32(1);
-          w.u32(0);
+          w.u32(t.frontFlags ?? 1);
+          w.u32(t.backFlags ?? 0);
         });
       w.nil();
     });
@@ -939,7 +945,7 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
     (e.faces ?? []).forEach((f, i) =>
       list.push(() => {
         slots.faces[i] = w.obj('CFace', () => {
-          pre(f.attrs, f.pid, !!f.textureCoords);
+          pre(f.attrs, f.pid, f.textureCoords ?? false);
           drawing(f.front, f, f.layer);
           w.f64(...f.plane);
           w.u32(f.loops.length);

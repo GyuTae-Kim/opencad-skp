@@ -37,6 +37,7 @@ import {
   type SkpPage,
   type SkpTag,
   type SkpTagFolder,
+  type SkpTextureMap,
 } from './model';
 import { annotationReaders, elementFlags } from './mfcannot';
 import {
@@ -404,18 +405,35 @@ class Decoder {
 
   // ── 재질·태그 ───────────────────────────────────────────────────
 
-  /** 재질 칸(태그 색에도 줄 안에 쓴다): 이름, u8 무늬, [CTexture: 앞머리, CDib, 너비, 높이, 경로, 평균 RGBA], u8, RGBA, 표시 이름, u32 꼴, u32 색 입히기, f64 투명도, u8 알파 쓰기 */
-  private materialBody(): { name: string; display: string; rgb: [number, number, number]; colorAlpha: number; alpha: number; textured: boolean; translucent: boolean; texture?: { dib: DibRef; path: string } } {
+  /**
+   * 재질 칸(태그 색에도 줄 안에 쓴다): 이름, u8 무늬, [CTexture: 앞머리, CDib, 너비, 높이(인치), 경로, 평균 RGBA], u8, RGBA, 표시 이름,
+   * u32 꼴(0 색 · 1 무늬 · 2 색을 바꾼 무늬), u32 색 바꾸기 방식(0 shift · 1 tint), f64 투명도, u8 알파 쓰기
+   */
+  private materialBody(): {
+    name: string;
+    display: string;
+    rgb: [number, number, number];
+    colorAlpha: number;
+    alpha: number;
+    textured: boolean;
+    translucent: boolean;
+    /** 무늬 한 장 크기(인치)·원래 그림 평균색(무늬 재질이면) */
+    tile?: { width: number; height: number; average: [number, number, number] };
+    texture?: { dib: DibRef; path: string };
+    colorize?: 'shift' | 'tint';
+  } {
     const s = this.s;
     const name = s.cstr();
     const textured = s.u8() !== 0;
     let avg: Uint8Array = new Uint8Array([0, 0, 0, 255]);
     let texture: { dib: DibRef; path: string } | undefined;
+    let width = 0;
+    let height = 0;
     if (textured) {
       this.st.preamble();
       const d = s.readObject(C.DIB);
-      s.f64();
-      s.f64();
+      width = s.f64();
+      height = s.f64();
       const path = s.cstr();
       avg = s.bytes(4);
       if (isDib(d)) texture = { dib: d, path };
@@ -426,8 +444,8 @@ class Decoder {
     // 색을 정하지 않은 무늬 재질은 무늬 평균색
     if (!c[3] && textured) rgb = [avg[0]!, avg[1]!, avg[2]!];
     const display = s.cstr();
-    s.u32();
-    s.u32();
+    const type = s.u32();
+    const colorize = s.u32();
     const transparency = s.f64();
     const useAlpha = s.u8() !== 0;
     const opacity = useAlpha && Number.isFinite(transparency) ? Math.max(0, Math.min(1, 1 - transparency)) : 1;
@@ -440,7 +458,14 @@ class Decoder {
       textured,
       translucent: avg[3]! < 255 || opacity < 1,
     };
+    // 무늬 크기: 2021+ material.xml의 xScale·yScale과 같은 뜻(인치). 0·음수·수가 아니면 1인치(2021+ 읽기와 같게)
+    if (textured) {
+      const size = (v: number): number => (Number.isFinite(v) && v > 0 ? v : 1);
+      out.tile = { width: size(width), height: size(height), average: [avg[0]!, avg[1]!, avg[2]!] };
+    }
     if (texture) out.texture = texture;
+    // 색을 바꾼 무늬(꼴 2): 재질 색이 바꾼 색, 평균색이 원래 그림 평균색(2021+ type 2와 같다)
+    if (textured && type === 2) out.colorize = colorize === 1 ? 'tint' : 'shift';
     return out;
   }
 
@@ -456,6 +481,13 @@ class Decoder {
     // 2021+ material.xml 읽기와 같게: 알파를 쓰고 0 < 불투명도 < 1이면 그 값(너무 옅으면 0.15)
     const alpha = m.alpha < 1 && m.alpha > 0 ? Math.max(0.15, m.alpha) : 1;
     const info: SkpMaterialInfo = { name: m.display || m.name || key, color: [m.rgb[0] / 255, m.rgb[1] / 255, m.rgb[2] / 255, alpha], textured: m.textured };
+    // 무늬: 크기·평균색(그림 바이트는 readSkpImages가 이 재질 열쇠를 폴더로 꺼낸다 — 무늬 좌표는 skpToScene의 textures로 입힌다)
+    if (m.tile) {
+      info.texture = { width: m.tile.width, height: m.tile.height, average: m.tile.average };
+      const file = m.texture ? baseName(m.texture.path) : '';
+      if (file) info.texture.file = file;
+    }
+    if (m.colorize) info.colorize = m.colorize;
     this.materials.push({ key, info, translucent: m.translucent });
     if (m.texture) this.image('material', baseName(m.texture.path) || key, m.texture.dib, key);
     return index;
@@ -726,6 +758,20 @@ class Decoder {
     if (d.layer >= 0) f.layer = d.layer;
     if (pre.pid !== undefined) f.pid = pre.pid;
     if (pre.attrs) f.attrs = pre.attrs;
+    // 무늬 위치(CFaceTextureCoords): 그쪽 재질이 무늬 재질이고 깃발 비트 0(위치 정함)이 있을 때만(2021+ 읽기와 같게 —
+    // 무늬를 지운 재질의 면에도 남아 있다). 쪽마다 f64 12개 중 앞 9개가 2021+와 같은 열 우선 3×3 행렬이다(엔진 legacy 해석기)
+    const t = pre.texture;
+    if (t) {
+      const map = (v: readonly number[], flags: number, mat: number | undefined): SkpTextureMap | undefined => {
+        if (!(flags & 1) || mat === undefined || !this.materials[mat]?.info.texture) return undefined;
+        const m = v.slice(0, 9);
+        return m.length === 9 && m.every(Number.isFinite) ? { kind: 0, matrix: Float64Array.from(m) } : undefined;
+      };
+      const fm = map(t.front, t.frontFlags, f.front);
+      const bm = map(t.back, t.backFlags, f.back);
+      if (fm) f.frontMap = fm;
+      if (bm) f.backMap = bm;
+    }
     c.faces.push(f);
     return pack(c.cid, c.faces.length - 1);
   }
@@ -1168,21 +1214,35 @@ export function readMfcModel(bytes: Uint8Array, header: SkpHeader, onProgress?: 
 // ── 그림(readSkpImages가 다시 풀지 않게, 장면을 만들 때 모은 자리를 잠깐 둔다) ─────────────
 
 const imageCache = new WeakMap<Uint8Array, MfcImageRef[]>();
+/** readSkpImages가 그림 자리를 얻으려고 읽은 모형(바로 이어 부르는 skpToScene이 다시 읽지 않게 한 번만 쓴다) */
+const resultCache = new WeakMap<Uint8Array, MfcResult>();
 
 /** skpToScene이 읽으며 모은 그림 자리를 둔다(같은 바이트로 readSkpImages를 부르면 다시 풀지 않는다) */
 export function rememberMfcImages(bytes: Uint8Array, refs: MfcImageRef[]): void {
   imageCache.set(bytes, refs);
 }
 
-/** 그림 자리: 둔 것이 있으면 그것(한 번 쓰고 버린다), 없으면 파일을 다시 읽는다. 형상 앞에서 멈추는 파일은 빈 목록 */
-export function mfcImageRefs(bytes: Uint8Array, header: SkpHeader): MfcImageRef[] {
+/** readSkpImages가 먼저 읽어 둔 모형(있으면 꺼내고 버린다) — 무늬를 입히려고 그림을 먼저 꺼내는 순서(워커)에서 두 번 읽지 않는다 */
+export function takeMfcResult(bytes: Uint8Array): MfcResult | undefined {
+  const r = resultCache.get(bytes);
+  if (r) resultCache.delete(bytes);
+  return r;
+}
+
+/**
+ * 그림 자리: 둔 것이 있으면 그것(한 번 쓰고 버린다), 없으면 파일을 읽는다(그 모형은 skpToScene이 쓰게 둔다).
+ * 형상 앞에서 멈추는 파일은 빈 목록. onProgress는 읽은 바이트 위치(0~1)
+ */
+export function mfcImageRefs(bytes: Uint8Array, header: SkpHeader, onProgress?: (fraction: number) => void): MfcImageRef[] {
   const known = imageCache.get(bytes);
   if (known) {
     imageCache.delete(bytes);
     return known;
   }
   try {
-    return readMfcModel(bytes, header).images;
+    const res = readMfcModel(bytes, header, onProgress);
+    resultCache.set(bytes, res);
+    return res.images;
   } catch {
     return [];
   }

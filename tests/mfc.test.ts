@@ -819,6 +819,104 @@ describe('장면 출력과 그림', () => {
   });
 });
 
+describe('무늬(2020 이하: CTexture·CFaceTextureCoords)', () => {
+  /** 열 우선 3×3(무늬 인치 → 평면 틀): 2배 늘리고 x로 5인치 옮김. 쪽마다 f64 12개(뒤 3개는 해석기가 쓰지 않는다) */
+  const moved = [2, 0, 0, 0, 2, 0, 5, 0, 1, 0, 0, 0];
+  const spec = (face: Partial<NonNullable<MfcEntitiesSpec['faces']>[number]>, extra: Partial<MfcSpec> = {}): MfcSpec => ({
+    schemas: 'v15',
+    materials: [
+      { name: '벽돌', color: [180, 60, 40] },
+      { name: '나무', color: [0, 0, 0, 0], texture: { image: tiny, path: 'C:\\maps\\wood.png', width: 20, height: 10, avg: [140, 100, 60, 255] } },
+      { name: '색 바꾼 돌', color: [30, 90, 200], type: 2, texture: { image: tiny, path: 'stone.png', width: 0, height: -3 } },
+    ],
+    root: squareEntities({ faces: [{ ...squareEntities().faces![0]!, ...face }] }),
+    ...extra,
+  });
+  const uvs = (s: ReturnType<typeof skpToScene>): number[][] => {
+    const m = s.meshes.find((x) => x.uvs)!;
+    const stride = m.uvs!.length / (m.positions.length / 3);
+    const out: number[][] = [];
+    for (let i = 0; i < m.positions.length / 3; i++) out.push([m.positions[3 * i]!, m.positions[3 * i + 1]!, m.uvs![stride * i]!, m.uvs![stride * i + 1]!]);
+    return out;
+  };
+
+  it('재질 무늬 크기(인치)·평균색·색 바꾸기(꼴 2)를 2021+ material.xml과 같은 꼴로 읽는다', () => {
+    const r = read(spec({ front: 1 }));
+    expect(r.materials.get('나무')!.texture).toEqual({ width: 20, height: 10, average: [140, 100, 60], file: 'wood.png' });
+    expect(r.materials.get('나무')!.colorize).toBeUndefined();
+    // 크기가 0·음수면 1인치(2021+ 읽기와 같게), 꼴 2는 색 바꾸기(방식 0 = shift)
+    expect(r.materials.get('색 바꾼 돌')!.texture).toMatchObject({ width: 1, height: 1 });
+    expect(r.materials.get('색 바꾼 돌')!.colorize).toBe('shift');
+    expect(r.materials.get('벽돌')!.texture).toBeUndefined();
+  });
+
+  it('면 무늬 위치: 그쪽 재질이 무늬 재질이고 깃발 비트 0이 있을 때만 앞 9개를 열 우선 행렬로', () => {
+    const face = (f: Parameters<typeof spec>[0]) => model(spec(f)).root.faces[0]!;
+    const fm = face({ front: 1, back: 0, textureCoords: { front: moved, back: moved, frontFlags: 1, backFlags: 1 } });
+    expect(fm.frontMap).toEqual({ kind: 0, matrix: Float64Array.from(moved.slice(0, 9)) });
+    // 뒤 재질(벽돌)은 무늬가 없다 — 남아 있는 위치를 읽지 않는다
+    expect(fm.backMap).toBeUndefined();
+    expect(face({ front: 1, textureCoords: { front: moved, frontFlags: 0 } }).frontMap).toBeUndefined();
+    expect(face({ front: 0, textureCoords: { front: moved, frontFlags: 1 } }).frontMap).toBeUndefined();
+    expect(face({ back: 1, textureCoords: { back: moved, backFlags: 1, frontFlags: 0 } }).backMap?.matrix[6]).toBe(5);
+  });
+
+  it('readSkpImages의 그림을 넘기면 무늬 좌표·무늬 id·장면 무늬를 둔다(저장된 위치, 없으면 기본 투영)', () => {
+    const stored = mfcFile(spec({ front: 1, textureCoords: { front: moved, frontFlags: 1 } }));
+    const s = skpToScene(stored, { textures: readSkpImages(stored).materials });
+    expect(s.textures?.map((t) => t.mime)).toEqual(['image/png']);
+    const meta = s.meta as Record<string, any>;
+    expect(meta.textures[0]).toMatchObject({ material: '나무', folder: '나무', tile: [20, 10] });
+    expect(meta.materialStats.find((m: { folder: string }) => m.folder === '나무').texture).toBe(s.textures![0]!.id);
+    // 저장된 행렬: 무늬 좌표 = M⁻¹·평면 좌표 → 가로 10인치에 u가 10 / 2 / 20 = 0.25 늘어난다
+    const a = uvs(s);
+    const at = (x: number, y: number) => a.find((p) => Math.abs(p[0]! - x * 25.4) < 1e-3 && Math.abs(p[1]! - y * 25.4) < 1e-3) ?? a.find((p) => p[0] === x && p[1] === y)!;
+    expect(at(10, 0)[2]! - at(0, 0)[2]!).toBeCloseTo(0.25);
+    expect(at(0, 10)[3]! - at(0, 0)[3]!).toBeCloseTo(0.5);
+    // 위치가 없는 면은 기본 투영: u = x / 20, v = y / 10
+    const plain = mfcFile(spec({ front: 1 }));
+    const b = uvs(skpToScene(plain, { textures: readSkpImages(plain).materials }));
+    const bt = (x: number, y: number) => b.find((p) => Math.abs(p[0]! - x * 25.4) < 1e-3 && Math.abs(p[1]! - y * 25.4) < 1e-3) ?? b.find((p) => p[0] === x && p[1] === y)!;
+    expect(bt(10, 0)[2]! - bt(0, 0)[2]!).toBeCloseTo(0.5);
+    expect(bt(0, 10)[3]! - bt(0, 0)[3]!).toBeCloseTo(1);
+    // 그림을 넘기지 않으면 예전처럼 평균색만
+    const none = skpToScene(plain);
+    expect(none.textures).toBeUndefined();
+    expect(none.meshes.some((m) => m.uvs)).toBe(false);
+  });
+
+  it('색 바꾼 무늬는 meta.textures에 색 바꾸기를 적고, maxTextures를 넘는 재질은 평균색으로 경고한다', () => {
+    const bytes = mfcFile(
+      spec(
+        { front: 2 },
+        { root: squareEntities({ faces: [{ ...squareEntities().faces![0]!, front: 2 }, { ...squareEntities().faces![0]!, plane: [0, 0, -1, 0], front: 1 }] }) },
+      ),
+    );
+    const s = skpToScene(bytes, { textures: readSkpImages(bytes).materials });
+    const t = (s.meta as Record<string, any>).textures.find((x: { folder: string }) => x.folder === '색 바꾼 돌');
+    expect(t.colorize).toEqual({ type: 'shift', color: [30, 90, 200], average: [128, 128, 128] });
+    const limited = skpToScene(bytes, { textures: readSkpImages(bytes).materials, maxTextures: 1 });
+    expect(limited.textures?.length).toBe(1);
+    expect(limited.warnings?.some((w) => w.includes('1개 한도'))).toBe(true);
+  });
+
+  it('그림을 먼저 꺼내면(워커 차례) 그때 읽은 모형을 skpToScene이 이어 써서 두 번 읽지 않는다', async () => {
+    const mod = await import('../src/mfcmodel');
+    const bytes = mfcFile(spec({ front: 1 }));
+    const seen: number[] = [];
+    readSkpImages(bytes, { onProgress: (f) => seen.push(f) });
+    expect(seen.length).toBeGreaterThanOrEqual(0);
+    const kept = mod.takeMfcResult(bytes);
+    expect(kept?.model.root.faces.length).toBe(1);
+    // 꺼낸 것은 한 번만 쓴다
+    expect(mod.takeMfcResult(bytes)).toBeUndefined();
+    // skpToScene 뒤에는 남지 않는다
+    readSkpImages(bytes);
+    skpToScene(bytes);
+    expect(mod.takeMfcResult(bytes)).toBeUndefined();
+  });
+});
+
 describe('성능', () => {
   it('면 2만 개 남짓(격자)을 몇 초 안에', () => {
     const n = 100;
