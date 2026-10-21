@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FILE_BACKGROUND_KEY, cssHex, isLightBackground, loadFileBackground, luminance, storeFileBackground, styleBackground, viewerTheme } from '../../src/app/backdrop';
+import { FILE_BACKGROUND_KEY, cssHex, isLightBackground, loadFileBackground, luminance, skyBackground, storeFileBackground, styleBackground, viewerTheme } from '../../src/app/backdrop';
 import { pagePlan } from '../../src/app/pages';
 import { createDoc } from '../../src/app/doc';
 import { skpToScene } from '../../src/index';
@@ -54,5 +54,26 @@ describe('파일·장면 배경', () => {
     expect(styleBackground(d.style)!.map((x) => Math.round(x * 255))).toEqual([30, 60, 90]);
     const plan = pagePlan(d.pages[0]!);
     expect(styleBackground(plan.style)!.map((x) => Math.round(x * 255))).toEqual([200, 220, 240]);
+  });
+});
+
+describe('하늘·지면 바탕', () => {
+  it('켜진 하늘·지면만 코어 바탕으로(하늘은 지평선 쪽이 밝고, 땅은 지평선 쪽이 하늘에 조금 섞인다)', () => {
+    expect(skyBackground(null)).toBeNull();
+    expect(skyBackground({ sky: null, ground: null })).toBeNull();
+    expect(skyBackground({})).toBeNull();
+    const both = skyBackground({ sky: [0.4, 0.6, 1], ground: [0.2, 0.5, 0.2] })!;
+    expect(both.sky).toEqual([0.4, 0.6, 1, 1]);
+    const h = both.skyHorizon as readonly number[];
+    expect(h[0]).toBeCloseTo(0.4 + 0.6 * 0.55, 9);
+    expect(h[2]).toBe(1);
+    expect(both.ground).toEqual([0.2, 0.5, 0.2, 1]);
+    expect((both.groundHorizon as readonly number[])[0]).toBeCloseTo(0.2 + (h[0]! - 0.2) * 0.3, 9);
+    // 하늘만: 지평선 아래는 배경 그대로(땅을 주지 않는다)
+    const skyOnly = skyBackground({ sky: [0.4, 0.6, 1], ground: null })!;
+    expect(skyOnly.ground).toBeUndefined();
+    const groundOnly = skyBackground({ ground: [0.2, 0.5, 0.2] })!;
+    expect(groundOnly.sky).toBeUndefined();
+    expect(groundOnly.groundHorizon).toEqual([0.2, 0.5, 0.2, 1]);
   });
 });

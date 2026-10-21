@@ -1,10 +1,11 @@
 /**
  * 3D 보기 배경(순수 함수, DOM 없음): SketchUp 파일·장면 스타일의 배경 색으로 그린다(SketchUp·Viewer와 같은 모습).
  * 앱 테마(밝게·어둡게)는 창 둘레만 바꾸고, 3D 보기 안의 격자·뷰 큐브·글 색은 배경 밝기에 맞는 쪽(밝은 배경 → 밝은 테마 색)을 쓴다.
- * 하늘·지면(스타일의 DrawHorizon·DrawGround)은 코어에 배경 그라데이션이 생기면 더한다 — 지금은 배경 색만.
+ * 하늘·지면(스타일의 DrawHorizon·DrawGround)은 코어 setBackground의 하늘·땅 기울기 바탕으로 그린다(지평선은 카메라 앙각을 따른다).
+ * 하늘은 위가 하늘 색이고 지평선 쪽으로 밝아지며, 땅은 지평선 쪽이 하늘 지평선 색에 조금 섞인다(SketchUp 화면처럼).
  * 끄면(사용자 설정) 예전처럼 앱 테마의 배경이다.
  */
-import type { Viewer3dOptions } from 'opencad-viewer3d';
+import type { BackgroundOptions, Viewer3dOptions } from 'opencad-viewer3d';
 import type { Rgb, SkpStyleMeta } from '../meta';
 
 /** 사용자 설정 기억 열쇠 */
@@ -19,6 +20,30 @@ export function styleBackground(style: Pick<SkpStyleMeta, 'background'> | null |
 }
 
 const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
+
+const mix = (a: Rgb, b: Rgb, t: number): Rgb => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+const rgba = (c: Rgb): [number, number, number, number] => [clamp01(c[0]), clamp01(c[1]), clamp01(c[2]), 1];
+
+/**
+ * 스타일의 하늘·지면 → 코어 바탕(setBackground). 둘 다 꺼졌거나 모르면 null(한 색 배경).
+ * 하늘만 켜면 지평선 아래는 배경 색 그대로(코어가 테마 바탕을 쓴다)
+ */
+export function skyBackground(style: Pick<SkpStyleMeta, 'sky' | 'ground'> | null | undefined): BackgroundOptions | null {
+  const sky = isRgb(style?.sky) ? style!.sky! : null;
+  const ground = isRgb(style?.ground) ? style!.ground! : null;
+  if (!sky && !ground) return null;
+  const out: BackgroundOptions = {};
+  const horizon = sky ? mix(sky, [1, 1, 1], 0.55) : null;
+  if (sky && horizon) {
+    out.sky = rgba(sky);
+    out.skyHorizon = rgba(horizon);
+  }
+  if (ground) {
+    out.ground = rgba(ground);
+    out.groundHorizon = rgba(horizon ? mix(ground, horizon, 0.3) : ground);
+  }
+  return out;
+}
 
 /** 0~1 RGB → CSS #rrggbb */
 export function cssHex(c: Rgb): string {

@@ -103,7 +103,8 @@ import { deviceHints, textureLimitsFor, type TextureLimits } from './texlimits';
 import { THEME_CHOICES, applyThemeChoice, readStoredTheme, resolveTheme, storeTheme, systemPrefersDark, themeChoiceOf, type ThemeChoice, type ThemeName } from './theme';
 import { childrenOf, isAncestor, isSplit, nodeBox, nodePath, normalizeRanges, type PickMode } from './tree';
 import { cameraForBox, keepViewOnHeightChange } from './view';
-import { cssHex, isLightBackground, loadFileBackground, safeStorage, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
+import { cssHex, isLightBackground, loadFileBackground, safeStorage, skyBackground, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
+import type { BackgroundOptions } from 'opencad-viewer3d';
 import type { Rgb, SkpStyleMeta } from '../meta';
 
 export const APP_TITLE = 'OpenCAD SketchUp 뷰어';
@@ -190,6 +191,8 @@ export interface AppSnapshot {
   background: string | null;
   /** 잘린 면 채우기(닫힌 입체) */
   sectionFill: boolean;
+  /** 하늘·지면 바탕을 그리는지 */
+  sky: boolean;
   /** 외곽선·태그 색으로 칠하기 */
   profiles: boolean;
   colorByTag: boolean;
@@ -300,6 +303,8 @@ export class SkpViewerApp implements PanelHost {
   /** 파일·장면 스타일 배경 쓰기(사용자 설정)와 지금 스타일의 배경 색 */
   private fileBg = loadFileBackground(safeStorage());
   private styleBg: Rgb | null = null;
+  /** 스타일의 하늘·지면(코어 하늘·땅 기울기 바탕, 없으면 null) */
+  private styleSky: BackgroundOptions | null = null;
   private hiddenRanges = new Map<number, IndexRange[]>();
   /** 나눠 올리기가 끝나면 부를 것(새 문서로 바뀌면 바로 부른다) */
   private uploadDone: (() => void) | null = null;
@@ -401,7 +406,7 @@ export class SkpViewerApp implements PanelHost {
     ]);
     const modeBtns = new Map<RenderMode, HTMLButtonElement>(RENDER_MODES.map(([m, label, ico]) => [m, tbtn(label, ico, `그리기: ${label}`, () => this.setRenderMode(m))]));
     const gridBtn = tbtn('격자', 'grid', '바닥 격자 (F7)', () => this.toggleGrid());
-    const bgBtn = tbtn('배경', 'backdrop', '파일 스타일의 배경 색으로 보기(끄면 앱 테마 배경)', () => this.setFileBackground(!this.fileBg));
+    const bgBtn = tbtn('배경', 'backdrop', '파일 스타일의 배경 색·하늘·지면으로 보기(끄면 앱 테마 배경)', () => this.setFileBackground(!this.fileBg));
     const cubeBtn = tbtn('뷰 큐브', 'cube', '뷰 큐브 보이기', () => this.toggleCube());
     const axesBtn = tbtn('좌표축', 'axes', '좌표축 보이기', () => this.toggleAxes());
     const measureBtn = tbtn('줄자', 'tape', '줄자 (T): 두 점 거리 — 끝점·중간점·모서리·면에 붙고, 축 방향이면 축에 고정 · Esc 지우기', () => this.toggleMeasure());
@@ -1025,6 +1030,7 @@ export class SkpViewerApp implements PanelHost {
     d.page = openingPage(d.scene.meta);
     // 배경: 모형 스타일의 배경 색(장면을 고르면 그 장면 스타일의 색으로 바뀐다)
     this.styleBg = styleBackground(d.style);
+    this.styleSky = skyBackground(d.style);
     this.applyTheme();
     this.labels?.setData(d.texts, d.dimensions, d.scene.units, d.units);
     this.refreshAnnotations();
@@ -1593,8 +1599,11 @@ export class SkpViewerApp implements PanelHost {
     if (plan.style) this.applyStyleLooks(plan.style, false);
     // 장면 스타일의 배경 색
     const bg = styleBackground(plan.style);
-    if (bg) {
-      this.styleBg = bg;
+    // 하늘·지면은 장면 스타일이 켜고 끔을 알 때만(모르면 그대로)
+    const skyKnown = plan.style && (plan.style.sky !== undefined || plan.style.ground !== undefined);
+    if (bg || skyKnown) {
+      if (bg) this.styleBg = bg;
+      if (skyKnown) this.styleSky = skyBackground(plan.style);
       this.applyTheme();
     }
     d.page = index;
@@ -2491,6 +2500,8 @@ export class SkpViewerApp implements PanelHost {
     document.documentElement.dataset.theme = this.theme;
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', this.theme === 'dark' ? '#1b2027' : '#f4f5f7');
     this.viewer?.setTheme(viewerTheme(this.theme, this.backdrop));
+    // 하늘·지면은 파일 배경을 쓸 때만
+    this.viewer?.setBackground(this.fileBg && this.doc ? this.styleSky : null);
     if (this.els) {
       const choice = themeChoiceOf(this.themeStored);
       const label = THEME_CHOICES.find((c) => c.choice === choice)!.label;
@@ -2719,6 +2730,7 @@ export class SkpViewerApp implements PanelHost {
       fileBackground: this.fileBg,
       background: this.backdrop ? cssHex(this.backdrop) : null,
       sectionFill: this.sectionFill,
+      sky: !!this.viewer?.background,
       profiles: this.profilesOn,
       colorByTag: this.colorByTag,
     };
