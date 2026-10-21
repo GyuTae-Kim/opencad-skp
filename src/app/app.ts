@@ -112,6 +112,7 @@ import { childrenOf, isAncestor, isSplit, nodeBox, nodePath, normalizeRanges, ty
 import { cameraForBox, keepViewOnHeightChange } from './view';
 import { cssHex, isLightBackground, loadFileBackground, safeStorage, skyBackground, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
 import type { BackgroundOptions } from 'opencad-viewer3d';
+import { LineContrast, lineColorOverrides } from './linecontrast';
 import type { Rgb, SkpShadowMeta, SkpStyleMeta } from '../meta';
 import { fogFor, lightingForShadow, shadowOrDefault, sunForShadow, usesSun } from './sun';
 import { WalkStick } from './joystick';
@@ -201,6 +202,8 @@ export interface AppSnapshot {
   /** 파일·장면 스타일 배경 색 쓰기(사용자 설정)와 지금 3D 배경(파일 색이면 #rrggbb, 앱 테마면 null) */
   fileBackground: boolean;
   background: string | null;
+  /** 배경에 묻혀 테마 선 색으로 바꿔 그리는 선·점 묶음 수 */
+  lineContrast: number;
   /** 잘린 면 채우기(닫힌 입체) */
   sectionFill: boolean;
   /** 하늘·지면 바탕을 그리는지 */
@@ -337,6 +340,8 @@ export class SkpViewerApp implements PanelHost {
   private styleBg: Rgb | null = null;
   /** 스타일의 하늘·지면(코어 하늘·땅 기울기 바탕, 없으면 null) */
   private styleSky: BackgroundOptions | null = null;
+  /** 배경에 묻히는 선 색 바꾸기(와이어프레임·숨은 선·X-ray, linecontrast.ts) */
+  private readonly lineContrast = new LineContrast();
   private hiddenRanges = new Map<number, IndexRange[]>();
   /** 나눠 올리기가 끝나면 부를 것(새 문서로 바뀌면 바로 부른다) */
   private uploadDone: (() => void) | null = null;
@@ -1055,6 +1060,8 @@ export class SkpViewerApp implements PanelHost {
         },
       });
     else v.setScene(d.scene);
+    // 장면을 올리면 코어가 겉모습(선 색)을 풀었다 — 끝의 applyTheme에서 다시 건다
+    this.lineContrast.reset();
     v.setRenderMode(this.renderMode);
     v.highlight(null);
     v.highlightRanges(null);
@@ -2049,6 +2056,7 @@ export class SkpViewerApp implements PanelHost {
   setRenderMode(m: RenderMode): void {
     this.renderMode = m;
     this.viewer?.setRenderMode(m);
+    this.applyLineContrast();
     // X-ray·와이어프레임은 형상이 글을 가리지 않는다
     this.labels?.resetOcclusion();
     this.refreshToolbar();
@@ -2801,6 +2809,7 @@ export class SkpViewerApp implements PanelHost {
     this.viewer?.setTheme(viewerTheme(this.theme, this.backdrop));
     // 하늘·지면은 파일 배경을 쓸 때만
     this.viewer?.setBackground(this.fileBg && this.doc ? this.styleSky : null);
+    this.applyLineContrast();
     if (this.els) {
       const choice = themeChoiceOf(this.themeStored);
       const label = THEME_CHOICES.find((c) => c.choice === choice)!.label;
@@ -2809,6 +2818,24 @@ export class SkpViewerApp implements PanelHost {
       b.title = `앱 설정 · 테마: ${label}${choice === 'system' ? `(지금 ${this.theme === 'dark' ? '어두움' : '밝음'})` : ''} — 눌러서 바꾸기`;
       b.setAttribute('aria-label', '앱 설정');
     }
+  }
+
+  /**
+   * 와이어프레임·숨은 선·X-ray에서 선 뒤는 배경(숨은 선은 배경 색으로 채운 면)이다. 모서리·주석 선 색이 그 색과 대비가 3:1보다
+   * 모자라면(어두운 테마의 검은 모서리) 테마 선 색으로 그린다. 테마·그리기 방식·파일 배경·문서가 바뀔 때마다 다시 맞춘다
+   */
+  private applyLineContrast(): void {
+    const v = this.viewer;
+    const d = this.doc;
+    if (!v) return;
+    const want = d
+      ? lineColorOverrides(
+          [...d.scene.lines, ...(d.scene.points ?? [])],
+          { mode: this.renderMode, theme: this.theme, backdrop: this.backdrop, sky: this.fileBg ? this.styleSky : null },
+          (id) => d.annotationKind.get(id) === 'sectionPlanes',
+        )
+      : new Map();
+    this.lineContrast.apply(v, want);
   }
 
   // ───────────────────────── 화면 갱신 ─────────────────────────
@@ -3034,6 +3061,7 @@ export class SkpViewerApp implements PanelHost {
       slideshow: this.sliding,
       fileBackground: this.fileBg,
       background: this.backdrop ? cssHex(this.backdrop) : null,
+      lineContrast: this.lineContrast.size,
       sectionFill: this.sectionFill,
       sky: !!this.viewer?.background,
       shadows: this.shadowsOn,
