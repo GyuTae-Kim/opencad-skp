@@ -18,9 +18,10 @@ import type {
   SkpTreeInfo,
 } from '../meta';
 import { nodeEntity, type EntityInput } from './entity';
+import { edgeGeometry, faceBox, faceGeometry, faceOfTriangle, readFaceIndex, segmentsBox, triangleCount, type FaceIndex, type PartBox } from './faces';
 import type { MeasureToolResult } from './measure';
 import { readActivePage, readPages, readSectionPlane } from './pages';
-import { formatAngle, formatLength, readUnits, type UnitsDisplay } from './units';
+import { formatAngle, formatArea, formatLength, mmPerSceneUnit, readUnits, type UnitsDisplay } from './units';
 import type { ParseResult } from './protocol';
 import {
   deepestNodeAt,
@@ -110,12 +111,17 @@ export interface OutlineRow {
   ids: string[];
 }
 
-/** 고른 것: outline = 윗단계 항목(바로 놓인 형상 포함), node = 나무의 더 깊은 노드, material = 재질, item = 그물·선 하나 */
+/**
+ * 고른 것: outline = 윗단계 항목(바로 놓인 형상 포함), node = 나무의 더 깊은 노드, material = 재질, item = 그물·선 하나,
+ * face = SketchUp 면 하나(그물 차례 item의 삼각형 구간), edge = 모서리 하나(모서리 묶음 차례 item의 선분 seg — 곡선이면 곡선 전체)
+ */
 export type Selection =
   | { kind: 'outline'; index: number }
   | { kind: 'node'; index: number }
   | { kind: 'material'; name: string }
-  | { kind: 'item'; id: string };
+  | { kind: 'item'; id: string }
+  | { kind: 'face'; item: number; start: number; count: number }
+  | { kind: 'edge'; item: number; seg: number };
 
 /** 부드러운·숨긴 형상(해석기 extras) */
 export interface DocExtras {
@@ -157,6 +163,11 @@ export interface SkpDoc {
   itemOutline: Map<string, number>;
   /** 그물 id → 재질 이름 */
   meshMaterial: Map<string, string>;
+  /** 그물·모서리 묶음 id → 장면 차례(면·모서리 고르기) */
+  meshIndex: Map<string, number>;
+  lineIndex: Map<string, number>;
+  /** 면 경계·곡선 번호(meta.faceRuns·segmentCurves) */
+  faceIndex: FaceIndex;
   /** 여러 단계 나무(meta.tree, 없으면 null — 윗단계 목록만) */
   tree: TreeView | null;
   /** 윗단계 나무 노드 → outline 차례 */
@@ -181,7 +192,7 @@ export interface SkpDoc {
   expanded: Set<number>;
   /** 노드마다 보일 자식 수(아주 많을 때 "더 보기") */
   childLimit: Map<number, number>;
-  /** 3D 고르기 방식: open = 펼친 단계, deepest = 가장 안쪽 */
+  /** 3D 고르기 방식: open = 펼친 단계, deepest = 가장 안쪽, face = 면·모서리 하나 */
   pickMode: PickMode;
   showSoft: boolean;
   showHidden: boolean;
@@ -515,6 +526,9 @@ export function createDoc(name: string, size: number, res: ParseResult, opts: { 
     outlineSkipped: skipped,
     itemOutline,
     meshMaterial,
+    meshIndex: new Map(scene.meshes.map((m, i) => [m.id, i])),
+    lineIndex: new Map(scene.lines.map((l, i) => [l.id, i])),
+    faceIndex: readFaceIndex(scene),
     tree,
     nodeOutline,
     extras: readExtras(scene),
@@ -674,11 +688,46 @@ export function pickDeepest(d: SkpDoc, p: Pick3d | null): number | null {
 }
 
 /**
- * 고르기 결과 → 고른 것. 나무가 있으면 펼친 단계(또는 deepest면 가장 안쪽)의 노드를,
+ * 고른 그물 삼각형·모서리 선분 → 면 하나·모서리 하나(곡선이면 그 곡선). 면 경계가 없는 그물(옛 장면), 주석 선분,
+ * 단면의 잘린 면은 null(부른 쪽이 그룹 고르기로 돌아간다)
+ */
+export function faceOrEdgeSelection(d: SkpDoc, p: Pick3d | null): Selection | null {
+  if (!p || p.section) return null;
+  const at = p.raw ?? p.index;
+  if (p.kind === 'mesh') {
+    const item = d.meshIndex.get(p.id);
+    const mesh = item === undefined ? undefined : d.scene.meshes[item];
+    if (item === undefined || !mesh) return null;
+    const f = faceOfTriangle(d.faceIndex.faceRuns[item] ?? null, at, triangleCount(mesh));
+    return f ? { kind: 'face', item, start: f.start, count: f.count } : null;
+  }
+  if (p.kind === 'line') {
+    const item = d.lineIndex.get(p.id);
+    const line = item === undefined ? undefined : d.scene.lines[item];
+    if (item === undefined || !line || d.annotationKind.has(p.id) || !(at >= 0) || at >= line.positions.length / 6) return null;
+    return { kind: 'edge', item, seg: at };
+  }
+  return null;
+}
+
+/** 그룹·컴포넌트를 고른 뒤 누른 자리의 면·모서리 하나를 고를 수 있으면 그 종류(이미 면·모서리를 골랐거나 누른 자리가 없으면 null) */
+export function partOfPick(d: SkpDoc): 'face' | 'edge' | null {
+  const sel = d.selection;
+  if (!sel || sel.kind === 'face' || sel.kind === 'edge' || sel.kind === 'material') return null;
+  const part = faceOrEdgeSelection(d, d.pick);
+  return part?.kind === 'face' ? 'face' : part?.kind === 'edge' ? 'edge' : null;
+}
+
+/**
+ * 고르기 결과 → 고른 것. 면·모서리 방식이면 누른 면·모서리 하나를, 나무가 있으면 펼친 단계(또는 deepest면 가장 안쪽)의 노드를,
  * 없으면 예전처럼 윗단계 항목 전체를 고른다.
  */
 export function selectionForPick(d: SkpDoc, p: Pick3d | null, deepest = false): Selection | null {
   if (!p) return null;
+  if (d.pickMode === 'face' && !deepest) {
+    const fe = faceOrEdgeSelection(d, p);
+    if (fe) return fe;
+  }
   const n = pickDeepest(d, p);
   if (n !== null && d.tree) {
     if (n < 0) {
@@ -697,7 +746,29 @@ export function selectionIds(d: SkpDoc, sel: Selection | null): string[] {
   if (sel.kind === 'outline') return d.outline[sel.index]?.ids ?? [];
   if (sel.kind === 'node') return d.tree ? nodeItemIds(d.tree, d.scene, sel.index) : [];
   if (sel.kind === 'material') return d.materials.find((m) => m.name === sel.name)?.meshIds ?? [];
+  // 면·모서리 하나는 항목 통째가 아니라 구간으로 강조한다(selectionRanges)
+  if (sel.kind === 'face' || sel.kind === 'edge') return [];
   return [sel.id];
+}
+
+/** 고른 면·모서리의 범위 상자(맞춰 보기용, 다른 고른 것은 null) */
+export function partBox(d: SkpDoc, sel: Selection | null): PartBox | null {
+  if (sel?.kind === 'face') {
+    const mesh = d.scene.meshes[sel.item];
+    return mesh ? faceBox(mesh, sel.start, sel.count) : null;
+  }
+  if (sel?.kind === 'edge') {
+    const line = d.scene.lines[sel.item];
+    const e = selectedEdge(d, sel);
+    return line && e ? segmentsBox(line, e.ranges) : null;
+  }
+  return null;
+}
+
+/** 고른 모서리(곡선이면 곡선 전체)의 길이·구간 */
+export function selectedEdge(d: SkpDoc, sel: Extract<Selection, { kind: 'edge' }>): ReturnType<typeof edgeGeometry> {
+  const line = d.scene.lines[sel.item];
+  return line ? edgeGeometry(line, d.faceIndex.segmentCurves[sel.item] ?? null, sel.seg) : null;
 }
 
 /**
@@ -714,8 +785,20 @@ export function selectionSegments(
   return nodeSegments(d.tree, d.scene, sel.index, visible, undefined, hidden);
 }
 
-/** 나누지 않은 깊은 노드를 고르면 면 강조용 구간(그물 항목만 — 항목 id → 삼각형 구간). 그 밖에는 null */
+/**
+ * 구간 강조(코어 highlightRanges, 항목 id → 구간): 면 하나는 그 삼각형 구간, 모서리 하나는 그 선분(곡선이면 곡선 전체),
+ * 나누지 않은 깊은 노드는 면 구간(그물 항목만). 그 밖에는 null
+ */
 export function selectionRanges(d: SkpDoc, sel: Selection | null): Map<string, IndexRange[]> | null {
+  if (sel?.kind === 'face') {
+    const mesh = d.scene.meshes[sel.item];
+    return mesh ? new Map([[mesh.id, [{ start: sel.start, count: sel.count }]]]) : null;
+  }
+  if (sel?.kind === 'edge') {
+    const line = d.scene.lines[sel.item];
+    const e = selectedEdge(d, sel);
+    return line && e ? new Map([[line.id, e.ranges]]) : null;
+  }
   if (!sel || sel.kind !== 'node' || !d.tree || isSplit(d.tree, sel.index)) return null;
   const out = new Map<string, IndexRange[]>();
   for (const [it, list] of nodeRanges(d.tree, d.scene, sel.index)) if (it < d.scene.meshes.length) out.set(d.scene.meshes[it]!.id, list);
@@ -816,6 +899,19 @@ export function selectionText(d: SkpDoc, sel: Selection | null, pick: Pick3d | n
     const m = d.materials.find((x) => x.name === sel.name);
     return m ? `재질 ${m.name}${m.faces !== null ? ` · 면 ${m.faces.toLocaleString('ko-KR')}` : ''}` : '';
   }
+  if (sel.kind === 'face' || sel.kind === 'edge') {
+    const e = selectionEntity(d);
+    const k = mmPerSceneUnit(d.scene.units);
+    const parts: string[] = [];
+    if (e.kind === 'face') parts.push(`면 · 넓이 ${formatArea((e.area ?? 0) * k * k, d.units)}`);
+    else {
+      parts.push(`${e.segments && e.segments > 1 ? '곡선' : '모서리'} · 길이 ${formatLength((e.length ?? 0) * k, d.units)}`);
+      if (e.radius) parts.push(`반지름 ${formatLength(e.radius * k, d.units)}`);
+    }
+    if (e.material) parts.push(`재질 ${e.material}`);
+    if (e.tag) parts.push(`태그 ${e.tag}`);
+    return parts.join(' · ');
+  }
   const mesh = d.scene.meshes.find((m) => m.id === sel.id);
   const line = mesh ? undefined : d.scene.lines.find((l) => l.id === sel.id);
   const item = mesh ?? line;
@@ -882,9 +978,36 @@ function definitionPlacements(d: SkpDoc): Map<string, number> {
   return out;
 }
 
+/** 고른 면·모서리를 낸 나무 노드의 경로(누른 자리가 있을 때) */
+function pickPath(d: SkpDoc): string | null {
+  const n = d.pick ? pickDeepest(d, d.pick) : null;
+  return n !== null && n >= 0 ? nodePathText(d, n) : null;
+}
+
 /** 지금 고른 것(없으면 모형) → 엔티티 정보 입력 */
 export function selectionEntity(d: SkpDoc): EntityInput {
   const sel = d.selection;
+  if (sel?.kind === 'face') {
+    const mesh = d.scene.meshes[sel.item];
+    if (mesh) {
+      const g = faceGeometry(mesh, sel.start, sel.count);
+      return { kind: 'face', area: g.area, material: d.meshMaterial.get(mesh.id) ?? null, tag: mesh.group ?? null, path: pickPath(d) };
+    }
+  }
+  if (sel?.kind === 'edge') {
+    const line = d.scene.lines[sel.item];
+    const e = selectedEdge(d, sel);
+    if (line && e)
+      return {
+        kind: 'edge',
+        length: e.length,
+        radius: e.radius,
+        segments: e.segments,
+        tag: line.group ?? null,
+        path: pickPath(d),
+        extra: e.curve ? [{ label: '곡선', value: e.closed ? '닫힌 곡선' : '열린 곡선' }] : [],
+      };
+  }
   const node = selectedNode(d, sel);
   if (node !== null && node >= 0 && d.tree) {
     const e = nodeEntity(d.tree, node, d.treeInfo, d.attributes, {

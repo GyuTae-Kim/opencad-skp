@@ -56,10 +56,14 @@ export interface EntityInput {
   description?: string | null;
   /** 가로·세로·높이(장면 단위) */
   size?: readonly number[] | null;
-  /** 넓이(장면 단위²) */
+  /** 넓이(장면 단위²). 면 하나면 "넓이", 그룹·컴포넌트·재질·모형처럼 여러 면이면 "면 넓이 합" */
   area?: number | null;
-  /** 길이(장면 단위) */
+  /** 길이(장면 단위) — 모서리 하나, 곡선이면 곡선 전체 */
   length?: number | null;
+  /** 곡선이 한 원 위에 있으면 반지름(장면 단위) */
+  radius?: number | null;
+  /** 곡선의 선분 수 */
+  segments?: number | null;
   faces?: number | null;
   edges?: number | null;
   locked?: boolean | null;
@@ -178,7 +182,13 @@ export function entityInfo(e: EntityInput, units: UnitsDisplay, mmPerUnit: numbe
     const value = length(e.length);
     add('길이', value, units.suppressUnits ? withLengthUnit(value, units) : undefined);
   }
-  if (isNum(e.area) && e.area > 0) add('넓이', formatArea(e.area * k * k, units));
+  if (isNum(e.radius) && e.radius > 0) {
+    const value = length(e.radius);
+    add('반지름', value, units.suppressUnits ? withLengthUnit(value, units) : undefined);
+  }
+  if (isNum(e.segments) && e.segments > 1) add('선분', Math.floor(e.segments).toLocaleString('ko-KR'));
+  // 면 하나의 넓이와 여러 면의 합을 다른 이름으로(그룹을 눌렀을 때 그룹 전체 합을 누른 면의 넓이로 읽지 않게)
+  if (isNum(e.area) && e.area > 0) add(e.kind === 'face' ? '넓이' : '면 넓이 합', formatArea(e.area * k * k, units));
   if (isNum(e.faces) && e.faces >= 0) add('면', Math.floor(e.faces).toLocaleString('ko-KR'));
   if (isNum(e.edges) && e.edges >= 0) add('모서리', Math.floor(e.edges).toLocaleString('ko-KR'));
   const description = text(e.description);
@@ -194,7 +204,7 @@ export function entityInfo(e: EntityInput, units: UnitsDisplay, mmPerUnit: numbe
 }
 
 /** 고른 것 카드(휴대폰)에 보일 행: 치수(크기·길이·넓이)와 놓인 수·태그·재질만, 이 차례로 많아야 CARD_ROWS개 */
-const CARD_LABELS = ['크기', '길이', '넓이', '놓인 수', '태그', '재질'];
+const CARD_LABELS = ['크기', '넓이', '길이', '반지름', '면 넓이 합', '놓인 수', '태그', '재질'];
 const CARD_ROWS = 4;
 
 export function cardRows(info: Pick<EntityInfo, 'rows'>): InfoRow[] {

@@ -19,6 +19,7 @@ import {
   folderTags,
   materialImage,
   panelTabs,
+  partOfPick,
   selectionEntity,
   releaseName,
   selectionText,
@@ -61,6 +62,8 @@ export interface PanelHost {
   /** 측정 도구 안내 글(없으면 null) */
   readonly measureHint: string | null;
   select(sel: Selection | null): void;
+  /** 마지막으로 3D에서 누른 자리의 면·모서리 하나를 고른다(그룹을 고른 뒤 누른 면의 넓이를 볼 때) */
+  selectPickedPart(): void;
   zoomToSelection(): void;
   closePanel(): void;
   readonly measuring: boolean;
@@ -366,6 +369,7 @@ export class Panel {
     this.body.append(
       section(
         `모형 바로 아래 ${fmtCount(d.outline.length)}개`,
+        this.pickBar(d),
         h('p', { class: 'hint' }, `그룹 ${fmtCount(groups)} · 컴포넌트 ${fmtCount(comps)}. 누르면 강조하고, 두 번 누르면 그쪽으로 확대합니다.`),
         list,
         d.outline.length > LIST_LIMIT ? h('p', { class: 'hint' }, `처음 ${LIST_LIMIT}개만 보입니다.`) : null,
@@ -412,29 +416,38 @@ export class Panel {
     });
   }
 
-  private renderTree(d: SkpDoc, t: TreeView): void {
-    // 3D 고르기 방식
+  /** 3D 누르기 방식 막대(나무가 있으면 펼친 단계·가장 안쪽·면·모서리, 없으면 그룹·면·모서리). collapse: 모두 접기 단추도 */
+  private pickBar(d: SkpDoc, collapse = false): HTMLElement {
     const modeBtn = (mode: PickMode, label: string, title: string): HTMLButtonElement => {
       const b = h('button', { class: `seg-btn${d.pickMode === mode ? ' on' : ''}`, type: 'button', title, 'aria-pressed': d.pickMode === mode ? 'true' : 'false' }, label);
       b.addEventListener('click', () => this.host.setPickMode(mode));
       return b;
     };
-    const collapse = h('button', { class: 'mini-btn', type: 'button', title: '펼친 노드를 모두 접습니다(3D 고르기도 윗단계로)' }, '모두 접기');
-    collapse.addEventListener('click', () => this.host.collapseAll());
-    collapse.disabled = !d.expanded.size;
+    const face = modeBtn('face', '면·모서리', '누른 면 하나(넓이)나 모서리 하나(길이, 곡선이면 곡선 전체)를 고릅니다');
+    const modes = d.tree
+      ? [
+          modeBtn('open', '펼친 단계', '모형 바로 아래부터, 펼친 그룹 안이면 그 안의 항목을 고릅니다. 3D에서 두 번 누르면 한 단계 들어갑니다'),
+          modeBtn('deepest', '가장 안쪽', '누른 곳을 품은 가장 안쪽 그룹·컴포넌트를 바로 고릅니다(Alt+누르기도 같음)'),
+          face,
+        ]
+      : [modeBtn('open', '그룹·컴포넌트', '누른 곳의 그룹·컴포넌트(밖이면 모형에 바로 놓인 형상)를 고릅니다'), face];
     const bar = h(
       'div',
       { class: 'pbar tree-bar' },
       h('span', { class: 'bar-label' }, '3D 누르기'),
-      h(
-        'div',
-        { class: 'seg-mini', role: 'group', 'aria-label': '3D에서 누를 때 고르는 단계' },
-        modeBtn('open', '펼친 단계', '모형 바로 아래부터, 펼친 그룹 안이면 그 안의 항목을 고릅니다. 3D에서 두 번 누르면 한 단계 들어갑니다'),
-        modeBtn('deepest', '가장 안쪽', '누른 곳을 품은 가장 안쪽 그룹·컴포넌트를 바로 고릅니다(Alt+누르기도 같음)'),
-      ),
-      h('span', { class: 'spacer' }),
-      collapse,
+      h('div', { class: 'seg-mini', role: 'group', 'aria-label': '3D에서 누를 때 고르는 것' }, ...modes),
     );
+    if (collapse) {
+      const btn = h('button', { class: 'mini-btn', type: 'button', title: '펼친 노드를 모두 접습니다(3D 고르기도 윗단계로)' }, '모두 접기');
+      btn.addEventListener('click', () => this.host.collapseAll());
+      btn.disabled = !d.expanded.size;
+      bar.append(h('span', { class: 'spacer' }), btn);
+    }
+    return bar;
+  }
+
+  private renderTree(d: SkpDoc, t: TreeView): void {
+    const bar = this.pickBar(d, true);
 
     const list = h('div', { class: 'plist tree', role: 'tree', 'aria-label': '그룹·컴포넌트 나무' });
     const loose = d.outline.find((r) => r.kind === 'loose');
@@ -583,7 +596,22 @@ export class Panel {
       if (r.title) el.querySelector('.v')?.setAttribute('title', r.title);
       return el;
     });
-    this.body.append(section(e.title, ...rows, !d.selection ? h('p', { class: 'hint' }, '3D나 구성 목록에서 그룹·컴포넌트·재질을 고르면 그 정보를 보입니다.') : null));
+    // 그룹을 고른 뒤 누른 면·모서리 하나만 다시 고르기(SketchUp에서 그룹에 들어가 면을 누르는 것처럼)
+    const part = partOfPick(d);
+    let pickPart: HTMLElement | null = null;
+    if (part) {
+      pickPart = h('button', { class: 'mini-btn', type: 'button', title: '3D에서 누른 면 하나(넓이)나 모서리 하나(길이)만 고릅니다' }, part === 'face' ? '누른 면만 고르기' : '누른 모서리만 고르기');
+      pickPart.addEventListener('click', () => this.host.selectPickedPart());
+    }
+    this.body.append(
+      section(
+        e.title,
+        this.pickBar(d),
+        ...rows,
+        pickPart ? h('div', { class: 'pbar' }, pickPart) : null,
+        !d.selection ? h('p', { class: 'hint' }, '3D나 구성 목록에서 그룹·컴포넌트·재질을 고르면 그 정보를 보입니다. "면·모서리"로 누르면 면 하나의 넓이·모서리 하나의 길이를 봅니다.') : null,
+      ),
+    );
     if (e.dicts.length) {
       const blocks = e.dicts.map((dict) =>
         h(
@@ -758,6 +786,10 @@ export function selKey(sel: Selection | null): string {
       return `n:${sel.index}`;
     case 'material':
       return `m:${sel.name}`;
+    case 'face':
+      return `f:${sel.item}:${sel.start}`;
+    case 'edge':
+      return `e:${sel.item}:${sel.seg}`;
     default:
       return `i:${sel.id}`;
   }

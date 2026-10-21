@@ -220,6 +220,13 @@ export interface SkpMetaExtras {
   dimensions?: SkpDimensionMeta[];
   sectionPlanes?: SkpSectionPlaneMeta[];
   annotationItems?: SkpAnnotationItems;
+  /**
+   * 그물마다(scene.meshes 차례) 면 경계: 면 k의 삼각형은 [runs[k], runs[k + 1])(마지막 면은 그물 끝까지).
+   * 해석기가 면마다 삼각형을 이어 붙이므로 고른 삼각형(Pick3d.raw)이 든 SketchUp 면 하나를 구간으로 찾는다
+   */
+  faceRuns?: Uint32Array[];
+  /** 모서리 묶음마다(scene.lines 차례) 선분의 놓인 곡선 번호(-1 = 곡선 아님, 같은 수 = 같은 곡선의 한 배치). 곡선이 없는 묶음·주석은 null */
+  segmentCurves?: (Int32Array | null)[];
   /** 속성 사전 모음(같은 것은 한 번만): 모형 속성은 modelAttrs 차례 */
   attributes?: SkpAttrDictsMeta[];
   modelAttrs?: number;

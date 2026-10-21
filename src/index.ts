@@ -196,6 +196,9 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
   if (parts.outlineSkipped) meta.outlineSkipped = parts.outlineSkipped;
   if (parts.tree) meta.tree = parts.tree;
   if (parts.extras) meta.extraItems = parts.extras;
+  // 면·곡선 고르기(화면의 면 넓이·곡선 길이): 그물마다 면 경계, 모서리 묶음마다 선분의 곡선 번호
+  meta.faceRuns = parts.faceRuns;
+  if (parts.segmentCurves) meta.segmentCurves = parts.segmentCurves;
   Object.assign(meta, extrasMeta(model, u.scale, styles, style, parts, warnings));
   // 화면이 알림을 띄울지 가리는 표시: 깨지거나 잘린 곳(damaged), 출력 한도(limited)
   if (damaged || model.damaged) meta.damaged = true;

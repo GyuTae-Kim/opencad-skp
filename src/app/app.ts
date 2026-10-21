@@ -49,6 +49,9 @@ import { h, icon } from './dom';
 import {
   canHideNode,
   createDoc,
+  faceOrEdgeSelection,
+  partBox,
+  partOfPick,
   docLabel,
   hiddenNodeRanges,
   isBigScene,
@@ -153,6 +156,8 @@ export interface AppSnapshot {
   labels: number;
   /** 측정 도구(줄자·각도기, 꺼져 있으면 null) */
   measureMode: MeasureMode | null;
+  /** 고른 것의 종류(outline·node·material·item·face·edge, 없으면 null) */
+  selectionKind: Selection['kind'] | null;
 }
 
 interface Els {
@@ -196,6 +201,7 @@ interface Els {
   measureClear: HTMLButtonElement;
   selBar: HTMLElement;
   selText: HTMLElement;
+  selPart: HTMLButtonElement;
 }
 
 interface MenuItem {
@@ -423,11 +429,14 @@ export class SkpViewerApp implements PanelHost {
     const measureBar = h('div', { class: 'measure-bar', role: 'status', hidden: true }, measureText, h('div', { class: 'mb-acts' }, measureClear, measureClose));
     // 고른 것 카드(휴대폰·터치): 패널을 열지 않고 고른 그룹·컴포넌트의 크기·태그를 보이고, 자세히(선택 탭)·선택 해제 단추를 둔다
     const selText = h('div', { class: 'mb-text' });
+    // 그룹을 고른 뒤 누른 면·모서리 하나만(면 넓이·모서리 길이) — 휴대폰에서 패널을 열지 않고
+    const selPart = h('button', { class: 'mb-btn', type: 'button', title: '누른 면 하나의 넓이(모서리면 길이)만 보기', hidden: true, html: `${icon('face', 16)}<span class="mb-part">면만</span>` });
+    selPart.addEventListener('click', () => this.selectPickedPart());
     const selMore = h('button', { class: 'mb-btn', type: 'button', title: '패널의 선택 탭에서 전체 정보 보기', html: `${icon('panel', 16)}<span>자세히</span>` });
     selMore.addEventListener('click', () => this.showEntityTab());
     const selClose = h('button', { class: 'mb-btn icon', type: 'button', title: '선택 해제', 'aria-label': '선택 해제', html: icon('close', 16) });
     selClose.addEventListener('click', () => this.applySelection(null, false));
-    const selBar = h('div', { class: 'measure-bar sel-bar', role: 'status', hidden: true }, selText, h('div', { class: 'mb-acts' }, selMore, selClose));
+    const selBar = h('div', { class: 'measure-bar sel-bar', role: 'status', hidden: true }, selText, h('div', { class: 'mb-acts' }, selPart, selMore, selClose));
     const stage = h('div', { class: 'stage' }, viewHost, sceneTabs, measureBar, selBar, start, notice, busy);
     const resizer = h('div', {
       class: 'resizer',
@@ -497,6 +506,7 @@ export class SkpViewerApp implements PanelHost {
       measureClear,
       selBar,
       selText,
+      selPart,
     };
 
     this.bindWindow();
@@ -1045,6 +1055,8 @@ export class SkpViewerApp implements PanelHost {
         }
     if (opened && d.panelTab === 'outline') this.panel.rerender();
     this.applySelection(sel, true);
+    // 면·모서리 방식에서 두 번 누르면 그 면·모서리에 맞춰 본다
+    if (e?.clicks === 2 && (sel?.kind === 'face' || sel?.kind === 'edge')) this.zoomToSelection();
   }
 
   /** 3D에서 두 번 누르기: 고른 그룹·컴포넌트를 펼치고, 누른 곳을 품은 바로 안쪽 항목을 고른다. 들어갔으면 true */
@@ -1103,12 +1115,24 @@ export class SkpViewerApp implements PanelHost {
     return item < s.meshes.length ? s.meshes[item]!.id : (s.lines[item - s.meshes.length]?.id ?? '');
   }
 
+  /** 마지막으로 3D에서 누른 자리의 면·모서리 하나를 고른다(PanelHost, 고른 것 카드) */
+  selectPickedPart(): void {
+    const d = this.doc;
+    const part = d ? faceOrEdgeSelection(d, d.pick) : null;
+    if (part) this.applySelection(part, false);
+  }
+
   zoomToSelection(): void {
     const d = this.doc;
     const v = this.viewer;
     if (!d || !v) return;
     this.unwidenScene();
     const sel = d.selection;
+    const pb = partBox(d, sel);
+    if (pb) {
+      this.animateCamera(cameraForBox(v.getCamera(), pb, v.canvas.clientWidth / Math.max(1, v.canvas.clientHeight)));
+      return;
+    }
     if (sel?.kind === 'node' && d.tree && !isSplit(d.tree, sel.index)) {
       const box = nodeBox(d.tree, d.scene, sel.index, (item) => v.isVisible(this.itemId(item)), this.hiddenRanges);
       if (box) this.animateCamera(cameraForBox(v.getCamera(), box, v.canvas.clientWidth / Math.max(1, v.canvas.clientHeight)));
@@ -2207,6 +2231,11 @@ export class SkpViewerApp implements PanelHost {
     const head = h('b', { class: 'mb-value' }, info.title, name ? h('span', { class: 'mb-name', 'data-i18n-skip': '' }, name) : null);
     const facts = cardRows(info).map((r) => h('span', { class: 'mb-fact' }, h('span', { class: 'mb-k' }, r.label), h('span', { 'data-i18n-skip': '' }, r.value)));
     e.selText.replaceChildren(head, ...(facts.length ? [h('span', { class: 'mb-sub' }, ...facts)] : []));
+    const part = partOfPick(d);
+    e.selPart.hidden = !part;
+    const label = e.selPart.querySelector('.mb-part');
+    if (label) label.textContent = part === 'edge' ? '모서리만' : '면만';
+    e.selPart.title = part === 'edge' ? '누른 모서리 하나의 길이(곡선이면 곡선 전체)만 보기' : '누른 면 하나의 넓이만 보기';
   }
 
   /** 측정 띠: 결과(거리와 축별 길이·각도)나 다음에 누를 곳 안내 */
@@ -2275,6 +2304,7 @@ export class SkpViewerApp implements PanelHost {
       hiddenNodes: d?.hiddenNodes.size ?? 0,
       labels: this.labels?.size ?? 0,
       measureMode: this.measureTool?.mode ?? null,
+      selectionKind: d?.selection?.kind ?? null,
     };
   }
 

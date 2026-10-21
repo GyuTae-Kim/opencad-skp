@@ -142,6 +142,8 @@ interface Batch {
   uvStride?: 2 | 3;
   /** 물려받은 무늬 재질용 기본 투영 평면 좌표(인치, 정점마다 2값 — 무늬 크기로 나눠 쓴다) */
   plane?: Float32Array;
+  /** 면마다 삼각형 수(면 차례 — 한 면의 삼각형은 idx 안에서 이어진다) */
+  ft: Uint32Array;
 }
 
 /** 무늬 재질(model.dat 재질 번호 → 무늬 id·무늬 한 장 크기(인치)) */
@@ -168,6 +170,8 @@ interface LineBatch {
   layer: number;
   pos: Float64Array;
   cls: LineCls;
+  /** 선분마다 정의 안 곡선 차례(-1 = 곡선 아님). 곡선 모서리가 없으면 없다 */
+  curve?: Int32Array;
 }
 
 interface Prepared {
@@ -220,6 +224,25 @@ class U32 {
   }
 }
 
+class I32 {
+  a: Int32Array;
+  n = 0;
+  constructor(size = 1024) {
+    this.a = new Int32Array(size);
+  }
+  reserve(k: number): void {
+    if (this.n + k <= this.a.length) return;
+    let size = Math.max(1, this.a.length * 2);
+    while (size < this.n + k) size *= 2;
+    const b = new Int32Array(size);
+    b.set(this.a.subarray(0, this.n));
+    this.a = b;
+  }
+  done(): Int32Array {
+    return this.a.slice(0, this.n);
+  }
+}
+
 /** 면 하나를 삼각화해 (위치, 삼각형) 추가. 실패하면 false */
 export function triangulateFace(
   points: Float64Array,
@@ -266,6 +289,8 @@ interface FaceGroup {
   uv: number[] | null;
   /** 기본 투영 평면 좌표(정점마다 x, y 인치) */
   plane: number[] | null;
+  /** 면마다 삼각형 수 */
+  ft: number[];
   area: number;
   fa: number[];
   fn: number[];
@@ -350,15 +375,18 @@ function prepare(
           smoothed: false,
           uv: own ? [] : null,
           plane: tex?.plane && mat < 0 ? [] : null,
+          ft: [],
         }),
       );
     }
     const before = g.pos.length;
+    const tri0 = g.idx.length;
     if (!triangulateFace(ents.points, f.loops, f.normal, g.pos, g.idx)) {
       if (!isHidden) counter.failed++;
       continue;
     }
     g.faces++;
+    g.ft.push((g.idx.length - tri0) / 3);
     faceUnitNormal(f.normal, fu, 0);
     const area = faceArea(ents.points, f.loops, fu);
     g.area += area;
@@ -405,6 +433,7 @@ function prepare(
         area: g.area,
         fa: Float64Array.from(g.fa),
         fn: Float32Array.from(g.fn),
+        ft: Uint32Array.from(g.ft),
       };
       if (g.nrm) {
         b.nrm = Float32Array.from(g.nrm);
@@ -431,12 +460,17 @@ function prepare(
     return out;
   };
 
-  const lineGroups = new Map<number, number[]>();
-  const softGroups = new Map<number, number[]>();
-  const hiddenLines = new Map<number, number[]>();
+  // 모서리는 태그마다 모은다. 곡선(호·원·곡선) 모서리면 선분마다 정의 안 곡선 차례를 함께 적는다(화면이 고른 선분의 곡선 전체 길이를 잰다)
+  interface LineGroup {
+    pos: number[];
+    curve: number[] | null;
+  }
+  const lineGroups = new Map<number, LineGroup>();
+  const softGroups = new Map<number, LineGroup>();
+  const hiddenLines = new Map<number, LineGroup>();
   const p = ents.points;
   for (const e of ents.edges) {
-    let map: Map<number, number[]>;
+    let map: Map<number, LineGroup>;
     if (e.flags & FLAG_HIDDEN) {
       if (!extras) continue;
       map = hiddenLines;
@@ -445,15 +479,23 @@ function prepare(
       map = softGroups;
     } else map = lineGroups;
     const layer = layerKey(e.layer);
-    let arr = map.get(layer);
-    if (!arr) map.set(layer, (arr = []));
-    arr.push(p[3 * e.a]!, p[3 * e.a + 1]!, p[3 * e.a + 2]!, p[3 * e.b]!, p[3 * e.b + 1]!, p[3 * e.b + 2]!);
+    let g = map.get(layer);
+    if (!g) map.set(layer, (g = { pos: [], curve: null }));
+    const k = e.curve !== undefined && e.curve >= 0 ? e.curve : -1;
+    if (k >= 0 && !g.curve) g.curve = new Array<number>(g.pos.length / 6).fill(-1);
+    g.curve?.push(k);
+    g.pos.push(p[3 * e.a]!, p[3 * e.a + 1]!, p[3 * e.a + 2]!, p[3 * e.b]!, p[3 * e.b + 1]!, p[3 * e.b + 2]!);
   }
+  const batchOf = (layer: number, g: LineGroup, cls: LineCls): LineBatch => {
+    const l: LineBatch = { layer, pos: Float64Array.from(g.pos), cls };
+    if (g.curve) l.curve = Int32Array.from(g.curve);
+    return l;
+  };
   const lines: LineBatch[] = [];
-  for (const [layer, arr] of lineGroups) lines.push({ layer, pos: Float64Array.from(arr), cls: 0 });
+  for (const [layer, g] of lineGroups) lines.push(batchOf(layer, g, 0));
   const extraLines: LineBatch[] = [];
-  for (const [layer, arr] of softGroups) extraLines.push({ layer, pos: Float64Array.from(arr), cls: 1 });
-  for (const [layer, arr] of hiddenLines) extraLines.push({ layer, pos: Float64Array.from(arr), cls: 2 });
+  for (const [layer, g] of softGroups) extraLines.push(batchOf(layer, g, 1));
+  for (const [layer, g] of hiddenLines) extraLines.push(batchOf(layer, g, 2));
   return { batches: toBatches(groups), lines, hiddenBatches: toBatches(hidden), extraLines };
 }
 
@@ -701,6 +743,13 @@ export interface SceneParts {
   limited?: boolean;
   /** 보조점(PointSet3d) */
   points: PointSet3d[];
+  /**
+   * 그물마다(meshes 차례) 면 경계: 면 k의 삼각형은 [runs[k], runs[k + 1])(마지막 면은 그물 끝까지). 면마다 삼각형을 이어 붙이므로
+   * 고른 삼각형이 든 SketchUp 면 하나를 구간으로 찾는다(화면의 면 넓이·강조)
+   */
+  faceRuns: Uint32Array[];
+  /** 모서리 묶음마다(lines 차례) 선분의 놓인 곡선 번호(-1 = 곡선 아님, 같은 수 = 같은 곡선의 한 배치). 곡선이 없는 묶음은 null, 곡선이 하나도 없으면 없다 */
+  segmentCurves?: (Int32Array | null)[];
   /** 주석(모형에 주석이 있을 때만): meta.texts·dimensions·sectionPlanes·annotationItems 꼴 */
   texts?: SkpTextMeta[];
   dimensions?: SkpDimensionMeta[];
@@ -977,6 +1026,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     /** 무늬 재질이면 무늬 좌표(정점마다 uvStride값). 한도에 걸리면 null로 버린다 */
     uv: F32 | null;
     uvStride: 2 | 3;
+    /** 면마다 첫 삼각형 차례(SketchUp 면 하나 = 이어진 삼각형 구간) */
+    fs: U32;
   }
   interface LineBucket {
     serial: number;
@@ -985,6 +1036,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     layer: number;
     pos: F32;
     origin?: [number, number, number] | null;
+    /** 선분마다 놓인 곡선 번호(-1 = 곡선 아님) — 곡선 선분이 처음 들어올 때 만든다 */
+    curves: I32 | null;
   }
   const originLimit = opts.originThreshold ?? LARGE_COORD_INCH * Math.abs(scale);
   const cellSize = originLimit * 10;
@@ -1092,13 +1145,31 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     // 보통(가까운) 형상의 열쇠는 예전과 같다(기본 호출 출력이 바뀌지 않게). 먼 형상은 칸 열쇠를 붙인다
     const key = (cls ? `${slot}|h|${layer}|${mat ?? 'd'}` : `${slot}|${layer}|${mat ?? 'd'}`) + (far ? far.key : '');
     let bk = buckets.get(key);
-    if (!bk) buckets.set(key, (bk = { serial: serials++, slot, cls, layer, mat, pos: new F32(), idx: new U32(), faces: 0, area: 0, origin: far ? far.origin : null, uv: mat !== undefined && texMap?.has(mat) ? new F32() : null, uvStride: 2 }));
+    if (!bk)
+      buckets.set(
+        key,
+        (bk = {
+          serial: serials++,
+          slot,
+          cls,
+          layer,
+          mat,
+          pos: new F32(),
+          idx: new U32(),
+          faces: 0,
+          area: 0,
+          origin: far ? far.origin : null,
+          uv: mat !== undefined && texMap?.has(mat) ? new F32() : null,
+          uvStride: 2,
+          fs: new U32(64),
+        }),
+      );
     return bk;
   };
   const lineBucket = (slot: number, cls: LineCls, layer: number, far: ReturnType<typeof farCell>): LineBucket => {
     const key = (cls === 0 ? `${slot}|${layer}` : `${slot}|${cls === 1 ? 's' : 'x'}|${layer}`) + (far ? far.key : '');
     let lb = lineBuckets.get(key);
-    if (!lb) lineBuckets.set(key, (lb = { serial: serials++, slot, cls, layer, pos: new F32(), origin: far ? far.origin : null }));
+    if (!lb) lineBuckets.set(key, (lb = { serial: serials++, slot, cls, layer, pos: new F32(), origin: far ? far.origin : null, curves: null }));
     return lb;
   };
   /** 묶음의 무늬 좌표를 3값으로 넓힌다(원근 무늬가 처음 들어올 때, q = 1을 끼운다) */
@@ -1212,6 +1283,13 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       if (!bk.nrm && b.smoothed) bk.nrm = backfillNormals(bk, base);
       if (bk.nrm) putNormals(bk.nrm, b.nrm, L);
     }
+    // 면 경계: 이 묶음의 면마다 첫 삼각형 차례(삼각형은 면 차례대로 이어 붙는다)
+    bk.fs.reserve(b.ft.length);
+    let tri = bk.idx.n / 3;
+    for (let i = 0; i < b.ft.length; i++) {
+      bk.fs.a[bk.fs.n++] = tri;
+      tri += b.ft[i]!;
+    }
     bk.idx.reserve(b.idx.length);
     for (let i = 0; i < b.idx.length; i++) bk.idx.a[bk.idx.n++] = base + b.idx[i]!;
     bk.faces += b.faces;
@@ -1230,9 +1308,40 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     bk.area += area;
     return area;
   };
-  const appendLines = (lb: LineBucket, l: LineBatch, m: Float64Array, node: number): void => {
-    addRun(lb.serial, lb.pos.n / 6, node);
+  /** 놓인 곡선 번호: 배치마다 그 정의의 곡선 수만큼 새 번호를 쓴다(같은 정의를 여러 번 놓아도 곡선마다 따로) */
+  let curveSerial = 0;
+  const curveBase = new Map<SkpEntities, number>();
+  const curvePlacement = new Map<SkpEntities, number>();
+  const appendLines = (lb: LineBucket, l: LineBatch, m: Float64Array, node: number, ents: SkpEntities, placement: number): void => {
+    const seg0 = lb.pos.n / 6;
+    addRun(lb.serial, seg0, node);
     put(lb.pos, l.pos, m, lb.cls === 0, lb.origin);
+    const ns = l.pos.length / 6;
+    if (!l.curve && !lb.curves) return;
+    if (!lb.curves) {
+      lb.curves = new I32(Math.max(64, seg0 + ns));
+      lb.curves.a.fill(-1, 0, seg0);
+      lb.curves.n = seg0;
+    }
+    const c = lb.curves;
+    c.reserve(ns);
+    if (!l.curve) {
+      c.a.fill(-1, c.n, c.n + ns);
+      c.n += ns;
+      return;
+    }
+    // 이 배치에서 처음 보는 정의면 그 곡선 수만큼 번호를 잡는다(배치가 바뀌면 새로)
+    let base = curveBase.get(ents);
+    if (base === undefined || curvePlacement.get(ents) !== placement) {
+      base = curveSerial;
+      curveSerial += Math.max(1, ents.curves?.length ?? 0);
+      curveBase.set(ents, base);
+      curvePlacement.set(ents, placement);
+    }
+    for (let i = 0; i < ns; i++) {
+      const k = l.curve[i]!;
+      c.a[c.n++] = k >= 0 ? base + k : -1;
+    }
   };
 
   // ── 정의 로컬 범위(인치, 안쪽 인스턴스 포함 — 단면 기호 크기·나무 정보 크기용, 처음 쓸 때 정의마다 한 번) ──
@@ -1590,7 +1699,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
           continue;
         }
         extraSegs += ns;
-        appendLines(lineBucket(slot, 2, layer, farCell(l.pos, m)), l, m, node);
+        appendLines(lineBucket(slot, 2, layer, farCell(l.pos, m)), l, m, node, ents, placements);
         continue;
       }
       if (outSegs + ns > MAX_OUTPUT_SEGMENTS) {
@@ -1598,7 +1707,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
         break;
       }
       outSegs += ns;
-      appendLines(lineBucket(slot, 0, layer, farCell(l.pos, m)), l, m, node);
+      appendLines(lineBucket(slot, 0, layer, farCell(l.pos, m)), l, m, node, ents, placements);
       if (node >= 0) ownEdges![node]! += ns;
     }
     // 부드러운·숨긴 모서리(숨긴 인스턴스 안의 부드러운 모서리는 그리지 않는다)
@@ -1610,7 +1719,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
         continue;
       }
       extraSegs += ns;
-      appendLines(lineBucket(slot, l.cls, l.layer >= 0 ? l.layer : layerHere, farCell(l.pos, m)), l, m, node);
+      appendLines(lineBucket(slot, l.cls, l.layer >= 0 ? l.layer : layerHere, farCell(l.pos, m)), l, m, node, ents, placements);
     }
     if (depth >= MAX_DEPTH) {
       if (ents.instances.length) cycles++;
@@ -1698,6 +1807,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   const serialItem = new Int32Array(serials);
   const meshes: Mesh3d[] = [];
   const meshSlots: number[] = [];
+  /** 그물마다 면 경계(면마다 첫 삼각형 차례) — meta.faceRuns */
+  const faceRuns: Uint32Array[] = [];
   const softIds: string[] = [];
   const hiddenIds: string[] = [];
   let hiddenFaces = 0;
@@ -1735,6 +1846,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       if (bk.origin) hm.origin = bk.origin;
       withTexture(hm, bk);
       meshes.push(hm);
+      faceRuns.push(bk.fs.done());
       hiddenIds.push(id);
       hiddenFaces += bk.faces;
       continue;
@@ -1754,6 +1866,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     withTexture(mesh, bk);
     triangles += mesh.indices!.length / 3;
     meshes.push(mesh);
+    faceRuns.push(bk.fs.done());
     tagStat(tag).faces += bk.faces;
     let ms = matStats.get(matName);
     if (!ms) {
@@ -1772,6 +1885,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   }
   const lines: LineSet3d[] = [];
   const lineSlots: number[] = [];
+  /** 모서리 묶음마다 선분의 놓인 곡선 번호(곡선 선분이 없는 묶음·주석 선분은 null) — meta.segmentCurves */
+  const segmentCurves: (Int32Array | null)[] = [];
   let segments = 0;
   let softSegments = 0;
   let hiddenSegments = 0;
@@ -1781,6 +1896,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     const n = positions.length / 6;
     serialItem[lb.serial] = meshes.length + lines.length;
     lineSlots.push(lb.slot);
+    segmentCurves.push(lb.curves ? lb.curves.done() : null);
     const withOrigin = <T extends LineSet3d>(l: T): T => {
       if (lb.origin) l.origin = lb.origin;
       return l;
@@ -1877,6 +1993,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     }
     for (const sk of sinks.values()) {
       const id = `skp-${ANNOTATION_ID[sk.kind]}-${lines.length}`;
+      segmentCurves.push(null);
       const l: LineSet3d = { id, name: `${sk.hidden ? '숨긴 ' : ''}${ANNOTATION_LABEL[sk.kind]} · ${sk.tag}`, positions: toF32(sk.pos, sk.origin), color: sk.color, group: sk.tag };
       if (sk.kind === 'guides' || sk.hidden) l.dashed = true;
       if (sk.origin) l.origin = sk.origin;
@@ -1931,7 +2048,9 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     tags: [...tagStats.values()],
     materials: [...matStats.values()],
     points,
+    faceRuns,
   };
+  if (segmentCurves.some((c) => c)) parts.segmentCurves = segmentCurves;
   if (annSeen) {
     parts.texts = texts;
     parts.dimensions = dims;
