@@ -49,6 +49,7 @@ import {
   eyeHeightFor,
   isTwoPoint,
   twoPointCamera,
+  freshDocCamera,
   withFov,
   sameSceneFit,
   stepPage,
@@ -1022,9 +1023,10 @@ export class SkpViewerApp implements PanelHost {
     this.twoPointOn = false;
     this.curveCenters.clear();
     this.measureLog = [];
-    // 앞 장면이 세로 화면에 맞춰 넓힌 시야각은 원래대로(새 문서의 전체 보기·카메라가 넓은 시야각을 물려받지 않게)
-    const fov = this.sceneBaseFov(v);
-    if (fov !== v.getCamera().fovY) v.setCamera({ ...v.getCamera(), fovY: fov });
+    // 앞 장면이 세로 화면에 맞춰 넓힌 시야각은 원래대로, 앞 문서의 굴림·렌즈 이동(2점 투시)은 없앤다
+    // (카메라가 없는 새 문서의 전체 보기가 넓은 시야각·기운 화면·옮긴 렌즈를 물려받지 않게)
+    const fresh = freshDocCamera(v.getCamera(), this.sceneBaseFov(v));
+    if (fresh) v.setCamera(fresh);
     this.sceneFit = null;
     const old = this.doc;
     this.doc = d;

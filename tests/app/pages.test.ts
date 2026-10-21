@@ -14,6 +14,7 @@ import {
   isTwoPoint,
   rollFromUp,
   twoPointCamera,
+  freshDocCamera,
   withFov,
   fitSceneCamera,
   effectiveTagHidden,
@@ -110,6 +111,24 @@ describe('SketchUp 카메라 → 코어 카메라', () => {
     expect(rollFromUp(0, 0, [1e-6, 0, 1])).toBe(0);
     expect(rollFromUp(0, 0, [0.2, 0, -1])).toBe(0);
     expect(cameraFromSkp(cam({}))!.roll).toBeUndefined();
+  });
+
+  it('새 문서 카메라: 앞 문서의 굴림·렌즈 이동(2점 투시)을 없애고 시야각을 되돌린다', () => {
+    const c: CameraState = { target: [10, 20, 0], distance: 100, yaw: 0.3, pitch: 0.4, projection: 'perspective', fovY: 0.7 };
+    // 2점 투시·굴림이 남은 앞 문서 카메라: 카메라가 없는 새 문서가 기운·옮긴 화면으로 열리지 않게
+    const tilted = { ...twoPointCamera(c)!, roll: 0.2 };
+    expect(tilted.shiftY).toBeTruthy();
+    const f = freshDocCamera(tilted, 0.7)!;
+    expect(f.roll).toBeUndefined();
+    expect(f.shiftX).toBeUndefined();
+    expect(f.shiftY).toBeUndefined();
+    expect(f).toMatchObject({ target: tilted.target, distance: tilted.distance, yaw: tilted.yaw, pitch: 0, fovY: 0.7 });
+    // 세로 화면에 맞춰 넓힌 시야각만 다르면 시야각만
+    expect(freshDocCamera({ ...c, fovY: 1.2 }, 0.7)).toEqual({ ...c, fovY: 0.7 });
+    expect(freshDocCamera({ ...c, shiftX: 0.1, shiftY: 0 }, 0.7)).toEqual(c);
+    // 바꿀 것이 없으면 null
+    expect(freshDocCamera(c, 0.7)).toBeNull();
+    expect(freshDocCamera({ ...c, roll: 0 }, 0.7)).toBeNull();
   });
 
   it('2점 투시: 앙각 0·눈 자리 그대로, 원래 대상점이 화면 가운데에 남게 렌즈를 위아래로 옮긴다(세로선이 곧다)', () => {

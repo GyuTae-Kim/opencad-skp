@@ -159,6 +159,16 @@ export function twoPointCamera(c: CameraState): CameraState | null {
   return Math.abs(y) > 1e-12 ? { ...out, shiftY: -y } : out;
 }
 
+/**
+ * 새 문서를 열 때의 카메라: 앞 문서의 굴림·렌즈 이동(2점 투시)은 없애고 시야각은 fovY로(세로 화면 맞춤을 뺀 원래 값).
+ * 바꿀 것이 없으면 null(카메라를 다시 넣지 않는다)
+ */
+export function freshDocCamera(c: CameraState, fovY: number): CameraState | null {
+  const { roll, shiftX, shiftY, ...base } = c;
+  if (!roll && !shiftX && !shiftY && fovY === c.fovY) return null;
+  return { ...base, target: [...c.target], fovY };
+}
+
 /** 2점 투시 카메라인지(앙각 0, 렌즈를 위아래로만 옮김) */
 export function isTwoPoint(c: CameraState): boolean {
   return c.projection === 'perspective' && Math.abs(c.pitch) < 1e-9 && !c.roll && !c.shiftX;
