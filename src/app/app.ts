@@ -105,7 +105,8 @@ import { childrenOf, isAncestor, isSplit, nodeBox, nodePath, normalizeRanges, ty
 import { cameraForBox, keepViewOnHeightChange } from './view';
 import { cssHex, isLightBackground, loadFileBackground, safeStorage, skyBackground, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
 import type { BackgroundOptions } from 'opencad-viewer3d';
-import type { Rgb, SkpStyleMeta } from '../meta';
+import type { Rgb, SkpShadowMeta, SkpStyleMeta } from '../meta';
+import { fogFor, lightingForShadow, shadowOrDefault, sunForShadow, usesSun } from './sun';
 
 export const APP_TITLE = 'OpenCAD SketchUp 뷰어';
 const TOOLS_URL = 'https://gyutae-kim.github.io/opencad';
@@ -193,6 +194,11 @@ export interface AppSnapshot {
   sectionFill: boolean;
   /** 하늘·지면 바탕을 그리는지 */
   sky: boolean;
+  /** 그림자·안개를 켰는지, 해 조명을 쓰는지, 지금 해 고도·방위(도) */
+  shadows: boolean;
+  fog: boolean;
+  lit: boolean;
+  sun: { elevation: number; azimuth: number } | null;
   /** 외곽선·태그 색으로 칠하기 */
   profiles: boolean;
   colorByTag: boolean;
@@ -1013,6 +1019,12 @@ export class SkpViewerApp implements PanelHost {
     }
     // 스타일의 외곽선·태그 색(장면을 올리면 겉모습이 풀린다)
     this.applyStyleLooks(d.style, true);
+    // 해 조명·그림자(파일의 그림자 보이기·해로 음영)와 안개(스타일)
+    this.activeShadow = d.shadow;
+    this.shadowsOn = d.shadow?.display === true;
+    this.fogStyle = d.style;
+    this.fogOn = d.style?.fog === true;
+    this.applyLighting();
     // 잘린 면 채우기: 모형 스타일의 단면 채우기(장면 스타일이 바꿀 수 있다)
     this.sectionFill = sectionFillOf(d.style, d.info.major);
     const sec = initialSection(d.scene.meta);
@@ -1597,6 +1609,16 @@ export class SkpViewerApp implements PanelHost {
     }
     if (plan.renderMode) this.setRenderMode(plan.renderMode);
     if (plan.style) this.applyStyleLooks(plan.style, false);
+    // 장면이 기억하는 그림자 설정(날짜·시각·켜짐)과 장면 스타일의 안개
+    if (page.shadow) {
+      this.activeShadow = { ...(d.shadow ?? {}), ...page.shadow };
+      if (typeof page.shadow.display === 'boolean') this.shadowsOn = page.shadow.display;
+    }
+    if (typeof plan.style?.fog === 'boolean') {
+      this.fogStyle = plan.style;
+      this.fogOn = plan.style.fog;
+    }
+    if (page.shadow || typeof plan.style?.fog === 'boolean') this.applyLighting();
     // 장면 스타일의 배경 색
     const bg = styleBackground(plan.style);
     // 하늘·지면은 장면 스타일이 켜고 끔을 알 때만(모르면 그대로)
@@ -1935,6 +1957,40 @@ export class SkpViewerApp implements PanelHost {
     // X-ray·와이어프레임은 형상이 글을 가리지 않는다
     this.labels?.resetOcclusion();
     this.refreshToolbar();
+  }
+
+  // ───────────────────────── 해 조명·그림자·안개 ─────────────────────────
+
+  /** 지금 그림자 설정(모형, 장면이 기억하면 그 장면의 것) */
+  private activeShadow: SkpShadowMeta | null = null;
+  /** 그림자를 그리는지(처음엔 파일의 그림자 보이기) */
+  private shadowsOn = false;
+  /** 안개를 그리는지(처음엔 스타일의 안개)와 안개 거리·색을 읽을 스타일 */
+  private fogOn = false;
+  private fogStyle: SkpStyleMeta | null = null;
+
+  setShadows(on: boolean): void {
+    this.shadowsOn = on;
+    this.applyLighting();
+    this.refreshToolbar();
+  }
+
+  setFogOn(on: boolean): void {
+    this.fogOn = on;
+    this.applyLighting();
+  }
+
+  /**
+   * 코어 조명·안개를 지금 상태로: 그림자를 켰거나 파일이 해로 음영을 칠하면 그 날짜·시각·위치의 해(설정이 없으면 SketchUp 기본 11월 8일 13:30 볼더),
+   * 아니면 예전 고정 조명. 안개는 장면 범위로 정한 기본 거리(스타일 거리가 있으면 그것)
+   */
+  private applyLighting(): void {
+    const v = this.viewer;
+    const d = this.doc;
+    if (!v) return;
+    const s = this.activeShadow;
+    v.setLighting(d && (this.shadowsOn || usesSun(s)) ? lightingForShadow(shadowOrDefault(s), this.shadowsOn) : null);
+    v.setFog(d && this.fogOn ? fogFor(this.fogStyle, d.scene.bounds) : null);
   }
 
   /** 외곽선(스타일 "윤곽선" — 코어 화면 공간 외곽선) */
@@ -2285,6 +2341,8 @@ export class SkpViewerApp implements PanelHost {
       ...narrowItems,
       { label: '외곽선(윤곽 굵게)', checked: this.profilesOn, toggle: true, sep: true, run: () => this.setProfiles(!this.profilesOn) },
       { label: '태그 색으로 칠하기', checked: this.colorByTag, toggle: true, run: () => this.setColorByTag(!this.colorByTag) },
+      { label: '그림자(파일의 날짜·시각·위치)', checked: this.shadowsOn, toggle: true, sep: true, run: () => this.setShadows(!this.shadowsOn) },
+      { label: '안개', checked: this.fogOn, toggle: true, run: () => this.setFogOn(!this.fogOn) },
       ...(phone ? [{ label: '그림 저장…', icon: 'image', sep: true, run: () => this.savePng() }] : []),
     ]);
   }
@@ -2731,6 +2789,13 @@ export class SkpViewerApp implements PanelHost {
       background: this.backdrop ? cssHex(this.backdrop) : null,
       sectionFill: this.sectionFill,
       sky: !!this.viewer?.background,
+      shadows: this.shadowsOn,
+      fog: this.fogOn,
+      lit: !!this.viewer?.lighting,
+      sun: (() => {
+        const sun = sunForShadow(shadowOrDefault(this.activeShadow));
+        return sun ? { elevation: sun.elevation, azimuth: sun.azimuth } : null;
+      })(),
       profiles: this.profilesOn,
       colorByTag: this.colorByTag,
     };

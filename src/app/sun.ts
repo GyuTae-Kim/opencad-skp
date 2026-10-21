@@ -7,7 +7,8 @@
  * - 모형 방향: 북쪽은 그림자 설정의 north(모형 축에서의 북쪽, (0, 1, 0) = 북쪽 각 0), 동쪽은 북쪽을 Z축 둘레로 시계 방향 90°.
  * - 밝음·어둠(0~100, 기본 80·45)은 코어 해 세기·주변광으로 0~1. 해가 지평선 아래면 해 빛을 끄고(주변광만) 그림자도 그리지 않는다.
  */
-import type { SkpShadowMeta } from '../meta';
+import type { Box3, FogOptions } from 'opencad-viewer3d';
+import type { SkpShadowMeta, SkpStyleMeta } from '../meta';
 
 export type V3 = [number, number, number];
 
@@ -121,4 +122,31 @@ export function lightingForShadow(s: SkpShadowMeta | null | undefined, shadows: 
 /** 파일이 해 조명을 쓰는지(그림자 보이기 또는 해로 음영) */
 export function usesSun(s: SkpShadowMeta | null | undefined): boolean {
   return !!s && isNum(s.time) && (s.display === true || s.useSun === true);
+}
+
+/** SketchUp 새 모형의 그림자 시각(11월 8일 13:30, 그곳 시각) — 올해 */
+export function defaultShadowTime(year = new Date().getUTCFullYear()): number {
+  return Date.UTC(year, 10, 8, 13, 30) / 1000;
+}
+
+/** 그림자 설정이 없거나 시각이 없으면 SketchUp 기본(11월 8일 13:30, 위치는 sunForShadow의 볼더) */
+export function shadowOrDefault(s: SkpShadowMeta | null | undefined): SkpShadowMeta {
+  return s && isNum(s.time) ? s : { ...(s ?? {}), time: defaultShadowTime() };
+}
+
+/**
+ * 스타일 안개 → 코어 안개(setFog). 거리는 스타일 값(시작 ≥ 0, 끝 > 시작)이 있으면 그것, 아니면(−1 = SketchUp 기본) 장면 범위 대각선 D로
+ * 시작 0.25·D, 끝 2·D. 색은 배경 색 쓰기를 끄고 안개 색이 있을 때만(아니면 코어가 바탕색)
+ */
+export function fogFor(style: Pick<SkpStyleMeta, 'fogStart' | 'fogEnd' | 'fogColor' | 'fogUseBackground'> | null | undefined, bounds: Box3 | null | undefined): FogOptions {
+  const b = bounds;
+  const diag = b ? Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) : 0;
+  const D = diag > 0 && Number.isFinite(diag) ? diag : 1000;
+  const s0 = style?.fogStart;
+  const s1 = style?.fogEnd;
+  const own = isNum(s0) && isNum(s1) && s0 >= 0 && s1 > s0;
+  const out: FogOptions = own ? { start: s0, end: s1 } : { start: 0.25 * D, end: 2 * D };
+  const c = style?.fogColor;
+  if (style?.fogUseBackground === false && c) out.color = [c[0], c[1], c[2], 1];
+  return out;
 }

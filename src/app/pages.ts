@@ -13,7 +13,7 @@
  */
 import type { Box3, RenderMode } from 'opencad-viewer3d';
 import { DEFAULT_FOV, basisFromAngles, cameraBasis, cameraEye, dirToAngles, lerpCamera, type CameraState, type Projection } from 'opencad-viewer3d/camera';
-import type { Rgb, SkpCameraMeta, SkpFaceStyle, SkpPageMeta, SkpSectionPlaneMeta, SkpStyleMeta, Vec3 } from '../meta';
+import type { Rgb, SkpCameraMeta, SkpFaceStyle, SkpPageMeta, SkpSectionPlaneMeta, SkpShadowMeta, SkpStyleMeta, Vec3 } from '../meta';
 
 /** SketchUp 기본 틀의 세로 시야각(도) — 원근 카메라에 시야각이 없을 때 */
 export const SKP_DEFAULT_FOV_DEG = 35;
@@ -403,7 +403,22 @@ export function readPage(v: unknown, index: number): SkpPageMeta {
   if (delay !== undefined) page.delay = delay;
   if (typeof o.thumbnail === 'string' && o.thumbnail) page.thumbnail = o.thumbnail;
   if (o.includeInAnimation === false) page.includeInAnimation = false;
+  const shadow = readShadow(o.shadow);
+  if (shadow) page.shadow = shadow;
   return page;
+}
+
+/** 그림자 설정(모르는 꼴이어도 안전하게 — 수·참거짓·북쪽 벡터만 남긴다). 객체가 아니면 null */
+export function readShadow(v: unknown): SkpShadowMeta | null {
+  const o = obj(v);
+  if (!o) return null;
+  const out: SkpShadowMeta = {};
+  for (const k of ['time', 'latitude', 'longitude', 'tz', 'light', 'dark'] as const) if (isNum(o[k])) out[k] = o[k] as number;
+  for (const k of ['city', 'country'] as const) if (typeof o[k] === 'string') out[k] = o[k] as string;
+  for (const k of ['display', 'onFaces', 'onGround', 'useSun'] as const) if (typeof o[k] === 'boolean') out[k] = o[k] as boolean;
+  const n = vec3(o.north);
+  if (n) out.north = n;
+  return out;
 }
 
 /** meta.pages → 장면 목록. 차례는 파일 그대로 지킨다(activePage·장면 단면 차례가 이 차례를 가리킨다) */

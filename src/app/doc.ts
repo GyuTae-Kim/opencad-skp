@@ -24,7 +24,7 @@ import { nodeEntity, type EntityInput } from './entity';
 import { definitionNodes } from './search';
 import { edgeGeometry, faceBox, faceGeometry, faceOfTriangle, readFaceIndex, segmentsBox, triangleCount, type FaceIndex, type PartBox } from './faces';
 import type { MeasureToolResult } from './measure';
-import { readActivePage, readPages, readSectionPlane } from './pages';
+import { readActivePage, readPages, readSectionPlane, readShadow } from './pages';
 import { formatAngle, formatArea, formatLength, mmPerSceneUnit, readUnits, type UnitsDisplay } from './units';
 import { fmtCount } from './format';
 import type { ParseResult } from './protocol';
@@ -755,7 +755,7 @@ export function readMetaExtras(scene: Scene3d): Pick<
     modelAttrs: num(m.modelAttrs),
     treeInfo: infoOk ? info : null,
     location: readLocation(m.location),
-    shadow: m.shadow && typeof m.shadow === 'object' ? (m.shadow as SkpShadowMeta) : null,
+    shadow: readShadow(m.shadow),
     axes: readAxes(m.axes),
     page: null,
     showTexts: style?.texts !== false,

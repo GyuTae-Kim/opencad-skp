@@ -45,6 +45,7 @@ import { entityInfo } from './entity';
 import { mmPerSceneUnit, unitsLabel } from './units';
 import { NODE_HIDDEN, NODE_MORE, childrenOf, hiddenByNodes, isSplit, nodeDefinition, nodeName, nodePath, nodeTag, treeDefinitionCounts, type PickMode, type TreeView } from './tree';
 import { normalizeQuery, parentPath, searchOutline, searchTree } from './search';
+import { sunForShadow } from './sun';
 
 /** 패널이 부르는 앱 기능 */
 export interface PanelHost {
@@ -805,13 +806,23 @@ export class Panel {
       if (t) place.push(row('그림자 날짜·시각', t));
     }
     if (sh && (sh.light !== undefined || sh.dark !== undefined)) place.push(row('밝음·어둠', `${sh.light ?? '?'} · ${sh.dark ?? '?'}`));
-    if (sh?.display !== undefined) place.push(row('그림자 보이기', sh.display ? '켬(이 뷰어는 아직 그림자를 그리지 않음)' : '끔'));
+    if (sh?.display !== undefined) place.push(row('그림자 보이기', sh.display ? '켬' : '끔'));
+    const sun = sunForShadow(sh);
+    if (sun) place.push(row('해 고도·방위', `${fmtNum(sun.elevation, 1)}° · ${fmtNum(sun.azimuth, 1)}°`));
     if (d.axes) {
       const u2 = unitLabel(s.units);
       place.push(row('그리기 축 원점', `${fmtPt(d.axes.origin, 1)}${u2 ? ` ${u2}` : ''}`));
       place.push(row('빨강·초록·파랑 축', [d.axes.x, d.axes.y, d.axes.z].map((a) => fmtPt(a, 3)).join(' · ')));
     }
-    if (place.length) this.body.append(section('위치·그림자', ...place, d.axes ? h('p', { class: 'hint' }, '줄자·각도기의 축 고정과 기본 평면은 옮긴 그리기 축을 따릅니다.') : null));
+    if (place.length)
+      this.body.append(
+        section(
+          '위치·그림자',
+          ...place,
+          sun ? h('p', { class: 'hint' }, '보기 설정의 "그림자"로 이 날짜·시각·위치의 해 그림자를 켜고 끕니다.') : null,
+          d.axes ? h('p', { class: 'hint' }, '줄자·각도기의 축 고정과 기본 평면은 옮긴 그리기 축을 따릅니다.') : null,
+        ),
+      );
     const scenes = d.images?.scenes ?? [];
     if (d.pages.length) {
       // 장면(페이지): 누르면 그 장면의 카메라·숨긴 태그·숨긴 개체·단면·스타일을 적용한다
