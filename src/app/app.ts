@@ -20,10 +20,10 @@ import {
   type SectionAxis,
   type ViewName,
 } from 'opencad-viewer3d';
-import { lerpCamera, type CameraState } from 'opencad-viewer3d/camera';
+import { lerpCamera, type CameraState, type ViewFrame } from 'opencad-viewer3d/camera';
 import { dragStartPx } from 'opencad-viewer3d/pointer';
 import { ParseClient } from './client';
-import { AnnotationLabels } from './annotations';
+import { AnnotationLabels, occludedBy } from './annotations';
 import { HISTORY_LIMIT, HISTORY_SETTLE_MS, ViewHistory } from './history';
 import { beginOpen, showAnalyticsSettings, trackExport, type OpenAttempt } from './analytics';
 import { MeasureTool, type MeasureMode, type MeasureToolResult } from './measure';
@@ -156,6 +156,8 @@ export interface AppSnapshot {
   hiddenTags: string[];
   hiddenNodes: number;
   labels: number;
+  /** 형상에 가려 숨긴 라벨 수(카메라가 멈춘 뒤 판정) */
+  labelsOccluded: number;
   /** 측정 도구(줄자·각도기, 꺼져 있으면 null) */
   measureMode: MeasureMode | null;
   /** 고른 것의 종류(outline·node·material·item·face·edge, 없으면 null) */
@@ -976,6 +978,8 @@ export class SkpViewerApp implements PanelHost {
       this.overlay = new Overlay(this.els.viewHost);
       this.overlay.attach(v);
       this.labels = new AnnotationLabels(this.overlay);
+      // 형상 뒤의 글·치수는 숨긴다(카메라가 멈추면 라벨 기준점에서 코어 고르기로 판정)
+      this.labels.setOcclusion((p, x, y, f) => this.labelOccluded(p, x, y, f));
       this.measureTool = new MeasureTool(v, this.overlay, {
         getScene: () => this.doc?.scene ?? null,
         getUnits: () => this.doc?.units ?? DEFAULT_UNITS,
@@ -1649,7 +1653,29 @@ export class SkpViewerApp implements PanelHost {
   setRenderMode(m: RenderMode): void {
     this.renderMode = m;
     this.viewer?.setRenderMode(m);
+    // X-ray·와이어프레임은 형상이 글을 가리지 않는다
+    this.labels?.resetOcclusion();
     this.refreshToolbar();
+  }
+
+  /**
+   * 라벨 가림: 음영 방식에서 라벨 기준점의 화면 자리에서 고른 형상(불투명 면, 또는 면에 붙은 모서리 — 코어는 선을 면보다 앞세운다)이
+   * 기준점보다 앞에 있으면 가렸다. 단면에 잘린 쪽·숨긴 항목은 코어가 고르지 않는다. 반투명 면(유리)과 주석 선(치수선·지시선)은 가리지 않는다
+   */
+  private labelOccluded(p: readonly number[], x: number, y: number, f: ViewFrame): boolean {
+    const v = this.viewer;
+    const d = this.doc;
+    if (!v || !d || (this.renderMode !== 'shaded' && this.renderMode !== 'shadedEdges')) return false;
+    const hit = v.pick(x, y);
+    if (!hit || hit.section || hit.kind === 'point') return false;
+    if (hit.kind === 'mesh') {
+      const k = d.meshIndex.get(hit.id);
+      const mesh = k === undefined ? undefined : d.scene.meshes[k];
+      if (!mesh || mesh.color[3] < 0.999) return false;
+    } else if (d.annotationKind.has(hit.id) || d.extras?.soft.has(hit.id)) return false;
+    const b = d.scene.bounds;
+    const diag = b ? Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) : 0;
+    return occludedBy(f, p, hit.point, diag * 0.002);
   }
 
   // 격자·뷰 큐브·좌표축 상태는 뷰어가 들고 있다(뷰어를 만들기 전에는 뷰어 기본값 켜짐)
@@ -2338,6 +2364,7 @@ export class SkpViewerApp implements PanelHost {
       hiddenTags: d ? d.tags.filter((t) => tagHidden(d, t.name)).map((t) => t.name) : [],
       hiddenNodes: d?.hiddenNodes.size ?? 0,
       labels: this.labels?.size ?? 0,
+      labelsOccluded: this.labels?.occludedCount ?? 0,
       measureMode: this.measureTool?.mode ?? null,
       selectionKind: d?.selection?.kind ?? null,
       fileBackground: this.fileBg,

@@ -13,7 +13,9 @@
  * - 겹침: 우선순위(화면 고정 글 → 치수 → 문자, 같은 종류는 파일 차례)대로 놓으며, 앞서 놓인 라벨과 상자가 겹치는 라벨은
  *   숨기거나('hide', 기본) 흐리게('fade' — 흐린 라벨은 자리를 차지하지 않는다) 한다. 상자 크기는 글자 수로 어림한다(DOM을 재지 않는다).
  * - 많을 때: 한 번에 그리는 라벨은 LABEL_LIMIT(400)개까지, DOM 요소는 모아 두고 다시 쓴다(바뀐 속성만 쓴다).
- * - 가림(형상 뒤 글 숨기기)은 이번 범위 밖이다 — 코어에 깊이 읽기·광선 고르기 예산이 필요하다(PRISME는 멈춘 뒤 CPU 광선으로 판정).
+ * - 가림(형상 뒤 글 숨기기): 카메라가 OCCLUSION_SETTLE_MS 멈추면 라벨 기준점(지시선 글은 붙는 점, 치수·지시선 없는 글은 글 자리)의
+ *   화면 자리에서 부른 쪽의 가림 판정(코어 고르기 — 단면에 잘린 쪽·숨긴 항목은 고르지 않는다)으로 형상에 가린 라벨을 숨긴다.
+ *   움직이는 동안은 앞의 판정을 쓰고(PRISME처럼 멈춘 뒤 CPU 광선), 화면 고정 글은 가리지 않는다. 한 번에 OCCLUSION_LIMIT개까지 판정한다.
  * 규칙은 PRISME 서비스 SKP 뷰어(skp_viewer_annotations.js)에서 옮겼다.
  */
 import { projectToScreen, worldPerPixel, type ViewFrame } from 'opencad-viewer3d/camera';
@@ -43,6 +45,39 @@ export const EDGE_MARGIN_PX = 2;
 export const LIGHT_INK = 0.6;
 /** 라벨 글 길이 상한 */
 export const MAX_TEXT_CHARS = 2000;
+/** 카메라가 이만큼 멈춘 뒤 가림을 판정한다(ms) */
+export const OCCLUSION_SETTLE_MS = 160;
+/** 한 번에 가림을 판정할 라벨 수(화면 안 후보 차례대로) */
+export const OCCLUSION_LIMIT = 2000;
+
+/**
+ * 가림 판정: 라벨 기준점 p(세계)와 그 화면 자리(x, y) → 형상에 가렸으면 true. 부른 쪽이 코어 고르기로 판정한다
+ * (ViewFrame은 깊이 비교용 — occludedBy 참고)
+ */
+export type OcclusionTest = (p: Vec3, x: number, y: number, f: ViewFrame) => boolean;
+
+/** 시선 방향 깊이(눈 앞이 +) */
+export function viewDepthOf(f: Pick<ViewFrame, 'eye' | 'basis'>, p: readonly number[]): number {
+  const b = f.basis.back;
+  return -((p[0]! - f.eye[0]) * b[0] + (p[1]! - f.eye[1]) * b[1] + (p[2]! - f.eye[2]) * b[2]);
+}
+
+/**
+ * 고른 점 hit(세계)이 라벨 기준점 p보다 시선 방향으로 tol보다 앞에 있으면 가렸다. tol은 기준점 깊이의 0.5 %와 abs 중 큰 것 —
+ * 면 위에 붙은 지시선 점은 그 면을 고르므로(같은 깊이) 가리지 않는다
+ */
+export function occludedBy(f: Pick<ViewFrame, 'eye' | 'basis'>, p: readonly number[], hit: readonly number[], abs = 0): boolean {
+  const dp = viewDepthOf(f, p);
+  const dh = viewDepthOf(f, hit);
+  const tol = Math.max(abs, Math.abs(dp) * 0.005);
+  return dh < dp - tol;
+}
+
+/** 카메라·크기가 같은지 가리는 열쇠 */
+export function frameKey(f: Pick<ViewFrame, 'eye' | 'basis' | 'width' | 'height' | 'projection' | 'pixelPerDepth' | 'pixelConst'>): string {
+  const r = (v: number): string => (Number.isFinite(v) ? v.toPrecision(7) : 'x');
+  return [f.width, f.height, f.projection, ...f.eye.map(r), ...f.basis.back.map(r), ...f.basis.up.map(r), r(f.pixelPerDepth), r(f.pixelConst)].join(',');
+}
 /** 라벨 상자 안쪽 여백(px, 어림 크기에 더한다 — CSS padding 1px 2px와 맞춘다) */
 const PAD_X = 4;
 const PAD_Y = 2;
@@ -527,6 +562,12 @@ export class AnnotationLabels {
   private states: ElState[] = [];
   private last: Placement[] = [];
   private disposed = false;
+  /** 가림 판정(없으면 가리지 않는다)·형상에 가린 라벨(items 차례)·판정한 카메라 열쇠·기다리는 판정 */
+  private occlusion: OcclusionTest | null = null;
+  private occluded = new Set<number>();
+  private occKey = '';
+  private lastKey = '';
+  private occTimer: ReturnType<typeof setTimeout> | 0 = 0;
   /** 덧그림 층이 부르는 그리기 함수 */
   readonly painter = (f: ViewFrame): void => this.paint(f);
 
@@ -543,14 +584,14 @@ export class AnnotationLabels {
   setData(texts: readonly unknown[] | null | undefined, dims: readonly unknown[] | null | undefined, sceneUnits: string | undefined, units: UnitsDisplay = DEFAULT_UNITS): void {
     this.items = [...prepareTexts(texts), ...prepareDimensions(dims, units, mmPerSceneUnit(sceneUnits))];
     this.cand = null;
-    this.host.invalidate();
+    this.resetOcclusion();
   }
 
-  /** 보기 상태(주지 않은 칸은 앞의 값) */
+  /** 보기 상태(주지 않은 칸은 앞의 값). 보이는 형상(태그·노드·단면)이 바뀌므로 가림도 다시 판정한다 */
   setFilter(f: Partial<AnnotationFilter>): void {
     this.filter = { ...this.filter, ...f };
     this.cand = null;
-    this.host.invalidate();
+    this.resetOcclusion();
   }
 
   setOptions(o: LayoutOptions): void {
@@ -568,11 +609,72 @@ export class AnnotationLabels {
     return this.last;
   }
 
+  /** 가림 판정을 둔다(null이면 끈다). 숨긴 태그·노드·단면이 바뀌면 setFilter가 다시 판정하게 한다 */
+  setOcclusion(test: OcclusionTest | null): void {
+    this.occlusion = test;
+    this.resetOcclusion();
+  }
+
+  /** 다음 그림에서 가림을 다시 판정한다(보이는 형상이 바뀌었을 때) */
+  resetOcclusion(): void {
+    this.occluded.clear();
+    this.occKey = '';
+    if (this.occTimer) clearTimeout(this.occTimer);
+    this.occTimer = 0;
+    this.host.invalidate();
+  }
+
+  /** 형상에 가려 숨긴 라벨 수(마지막 판정) */
+  get occludedCount(): number {
+    return this.occluded.size;
+  }
+
+  /** 카메라가 멈췄으면 그 프레임으로 가림을 판정해 두고 다시 그린다 */
+  private scheduleOcclusion(f: ViewFrame, key: string): void {
+    if (this.occTimer) clearTimeout(this.occTimer);
+    this.occTimer = setTimeout(() => {
+      this.occTimer = 0;
+      if (this.disposed || !this.occlusion || this.lastKey !== key) return;
+      this.occluded = this.computeOcclusion(f);
+      this.occKey = key;
+      this.host.invalidate();
+    }, OCCLUSION_SETTLE_MS);
+  }
+
+  /** 후보 라벨의 기준점마다 가림 판정(화면 안·눈 앞만, OCCLUSION_LIMIT개까지) */
+  private computeOcclusion(f: ViewFrame): Set<number> {
+    const out = new Set<number>();
+    const test = this.occlusion;
+    if (!test || !this.cand) return out;
+    let n = 0;
+    for (const i of this.cand) {
+      const it = this.items[i];
+      const p = it ? (it.anchor ?? it.at) : null;
+      if (!it || !p || it.kind === 'screen') continue;
+      const s = projectToScreen(f, p);
+      if (!s || !Number.isFinite(s[0]) || !Number.isFinite(s[1]) || s[0] < 0 || s[1] < 0 || s[0] > f.width || s[1] > f.height) continue;
+      if (++n > OCCLUSION_LIMIT) break;
+      try {
+        if (test(p, s[0], s[1], f)) out.add(i);
+      } catch {
+        /* 판정을 못 하면 보인다 */
+      }
+    }
+    return out;
+  }
+
   /** 지금 프레임으로 그린다(덧그림 층이 부른다) */
   paint(f: ViewFrame): void {
     if (this.disposed) return;
     if (!this.cand) this.cand = annotationCandidates(this.items, this.filter);
-    const list = this.cand.length ? layoutAnnotations(this.items, this.cand, f, this.options) : [];
+    let cand = this.cand;
+    if (this.occlusion && cand.length) {
+      const key = frameKey(f);
+      this.lastKey = key;
+      if (key !== this.occKey) this.scheduleOcclusion(f, key);
+      if (this.occluded.size) cand = cand.filter((i) => !this.occluded.has(i));
+    }
+    const list = cand.length ? layoutAnnotations(this.items, cand, f, this.options) : [];
     this.last = list;
     list.forEach((p, k) => this.write(k, p, this.items[p.item]!));
     for (let k = list.length; k < this.pool.length; k++) {
@@ -630,6 +732,8 @@ export class AnnotationLabels {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    if (this.occTimer) clearTimeout(this.occTimer);
+    this.occTimer = 0;
     this.host.set(ANNOTATIONS_KEY, null);
     this.el.remove();
     this.pool = [];
