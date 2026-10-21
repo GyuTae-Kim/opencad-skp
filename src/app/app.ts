@@ -87,6 +87,8 @@ import { deviceHints, textureLimitsFor, type TextureLimits } from './texlimits';
 import { THEME_CHOICES, applyThemeChoice, readStoredTheme, resolveTheme, storeTheme, systemPrefersDark, themeChoiceOf, type ThemeChoice, type ThemeName } from './theme';
 import { childrenOf, isAncestor, isSplit, nodeBox, nodePath, type PickMode } from './tree';
 import { cameraForBox, keepViewOnHeightChange } from './view';
+import { cssHex, loadFileBackground, safeStorage, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
+import type { Rgb } from '../meta';
 
 export const APP_TITLE = 'OpenCAD SketchUp 뷰어';
 const TOOLS_URL = 'https://gyutae-kim.github.io/opencad';
@@ -158,6 +160,9 @@ export interface AppSnapshot {
   measureMode: MeasureMode | null;
   /** 고른 것의 종류(outline·node·material·item·face·edge, 없으면 null) */
   selectionKind: Selection['kind'] | null;
+  /** 파일·장면 스타일 배경 색 쓰기(사용자 설정)와 지금 3D 배경(파일 색이면 #rrggbb, 앱 테마면 null) */
+  fileBackground: boolean;
+  background: string | null;
 }
 
 interface Els {
@@ -169,6 +174,7 @@ interface Els {
   projBtns: Map<Projection, HTMLButtonElement>;
   modeBtns: Map<RenderMode, HTMLButtonElement>;
   gridBtn: HTMLButtonElement;
+  bgBtn: HTMLButtonElement;
   cubeBtn: HTMLButtonElement;
   axesBtn: HTMLButtonElement;
   measureBtn: HTMLButtonElement;
@@ -248,6 +254,9 @@ export class SkpViewerApp implements PanelHost {
   private userMoved = false;
   /** 구간을 숨겨 둔 항목 id(다음에 바뀌면 풀려고)와 지금 숨긴 구간(항목 차례 → 구간) */
   private rangedIds = new Set<string>();
+  /** 파일·장면 스타일 배경 쓰기(사용자 설정)와 지금 스타일의 배경 색 */
+  private fileBg = loadFileBackground(safeStorage());
+  private styleBg: Rgb | null = null;
   private hiddenRanges = new Map<number, IndexRange[]>();
   /** 나눠 올리기가 끝나면 부를 것(새 문서로 바뀌면 바로 부른다) */
   private uploadDone: (() => void) | null = null;
@@ -349,6 +358,7 @@ export class SkpViewerApp implements PanelHost {
     ]);
     const modeBtns = new Map<RenderMode, HTMLButtonElement>(RENDER_MODES.map(([m, label, ico]) => [m, tbtn(label, ico, `그리기: ${label}`, () => this.setRenderMode(m))]));
     const gridBtn = tbtn('격자', 'grid', '바닥 격자 (F7)', () => this.toggleGrid());
+    const bgBtn = tbtn('배경', 'backdrop', '파일 스타일의 배경 색으로 보기(끄면 앱 테마 배경)', () => this.setFileBackground(!this.fileBg));
     const cubeBtn = tbtn('뷰 큐브', 'cube', '뷰 큐브 보이기', () => this.toggleCube());
     const axesBtn = tbtn('좌표축', 'axes', '좌표축 보이기', () => this.toggleAxes());
     const measureBtn = tbtn('줄자', 'tape', '줄자 (T): 두 점 거리 — 끝점·중간점·모서리·면에 붙고, 축 방향이면 축에 고정 · Esc 지우기', () => this.toggleMeasure());
@@ -388,7 +398,7 @@ export class SkpViewerApp implements PanelHost {
       sep(),
       h('div', { class: 'tgroup seg wide-only', role: 'group', 'aria-label': '그리기 방식' }, ...modeBtns.values()),
       sep(),
-      h('div', { class: 'tgroup compact wide-only' }, gridBtn, cubeBtn, axesBtn),
+      h('div', { class: 'tgroup compact wide-only' }, gridBtn, cubeBtn, axesBtn, bgBtn),
       sep(),
       h('div', { class: 'tgroup' }, measureBtn, protractorBtn, pngBtn),
       sep(),
@@ -474,6 +484,7 @@ export class SkpViewerApp implements PanelHost {
       projBtns,
       modeBtns,
       gridBtn,
+      bgBtn,
       cubeBtn,
       axesBtn,
       measureBtn,
@@ -917,6 +928,9 @@ export class SkpViewerApp implements PanelHost {
       this.userMoved = true;
     }
     d.page = openingPage(d.scene.meta);
+    // 배경: 모형 스타일의 배경 색(장면을 고르면 그 장면 스타일의 색으로 바뀐다)
+    this.styleBg = styleBackground(d.style);
+    this.applyTheme();
     this.labels?.setData(d.texts, d.dimensions, d.scene.units, d.units);
     this.refreshAnnotations();
     if (old && old !== d) revokeImages(old);
@@ -943,7 +957,7 @@ export class SkpViewerApp implements PanelHost {
     if (this.viewer) return this.viewer;
     try {
       const v = new Viewer3d(this.els.viewHost, {
-        theme: this.theme,
+        theme: viewerTheme(this.theme, this.backdrop),
         projection: this.projection,
         renderMode: this.renderMode,
         viewCubeSize: this.viewCubeSize(),
@@ -1368,6 +1382,12 @@ export class SkpViewerApp implements PanelHost {
       if (st.sectionPlanes !== undefined) d.showSectionPlanes = st.sectionPlanes;
     }
     if (plan.renderMode) this.setRenderMode(plan.renderMode);
+    // 장면 스타일의 배경 색
+    const bg = styleBackground(plan.style);
+    if (bg) {
+      this.styleBg = bg;
+      this.applyTheme();
+    }
     d.page = index;
     for (const t of d.tags) v.setGroupVisible(t.name, !tagHidden(d, t.name));
     this.refreshItemVisibility();
@@ -1889,6 +1909,7 @@ export class SkpViewerApp implements PanelHost {
       { label: '격자', checked: this.gridOn, toggle: true, sep: true, run: () => this.toggleGrid() },
       { label: '뷰 큐브', checked: this.cubeOn, toggle: true, run: () => this.toggleCube() },
       { label: '좌표축', checked: this.axesOn, toggle: true, run: () => this.toggleAxes() },
+      { label: '파일 배경 색', checked: this.fileBg, toggle: true, run: () => this.setFileBackground(!this.fileBg) },
       { label: 'PNG 저장', icon: 'image', sep: true, run: () => void this.savePng() },
     ]);
   }
@@ -2086,10 +2107,23 @@ export class SkpViewerApp implements PanelHost {
     this.setThemeChoice(this.theme === 'dark' ? 'light' : 'dark');
   }
 
+  /** 3D 보기에 쓰는 파일 배경(설정이 꺼졌거나 스타일에 없으면 null) */
+  private get backdrop(): Rgb | null {
+    return this.fileBg && this.doc ? this.styleBg : null;
+  }
+
+  /** 파일·장면 스타일의 배경 색으로 볼지(기억한다) */
+  setFileBackground(on: boolean): void {
+    this.fileBg = on;
+    storeFileBackground(safeStorage(), on);
+    this.applyTheme();
+    this.refreshToolbar();
+  }
+
   private applyTheme(): void {
     document.documentElement.dataset.theme = this.theme;
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', this.theme === 'dark' ? '#1b2027' : '#f4f5f7');
-    this.viewer?.setTheme(this.theme);
+    this.viewer?.setTheme(viewerTheme(this.theme, this.backdrop));
     if (this.els) {
       const choice = themeChoiceOf(this.themeStored);
       const label = THEME_CHOICES.find((c) => c.choice === choice)!.label;
@@ -2162,6 +2196,7 @@ export class SkpViewerApp implements PanelHost {
     for (const [p, b] of e.projBtns) press(b, this.projection === p);
     for (const [m, b] of e.modeBtns) press(b, this.renderMode === m);
     press(e.gridBtn, this.gridOn);
+    press(e.bgBtn, this.fileBg);
     press(e.cubeBtn, this.cubeOn);
     press(e.axesBtn, this.axesOn);
     press(e.measureBtn, this.measureTool?.mode === 'tape');
@@ -2305,6 +2340,8 @@ export class SkpViewerApp implements PanelHost {
       labels: this.labels?.size ?? 0,
       measureMode: this.measureTool?.mode ?? null,
       selectionKind: d?.selection?.kind ?? null,
+      fileBackground: this.fileBg,
+      background: this.backdrop ? cssHex(this.backdrop) : null,
     };
   }
 

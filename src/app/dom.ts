@@ -67,6 +67,7 @@ const ICONS: Record<string, string> = {
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.3"/>',
   drop: '<path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 17v2.5h16V17"/>',
   external: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
+  backdrop: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 13.5h17" stroke-opacity=".55"/><path d="M3.5 13.5 9 9l3.5 2.5L16 8l4.5 4" stroke-opacity=".8"/>',
   face: '<path d="M4 8.5 12 4l8 4.5v7L12 20l-8-4.5v-7Z" stroke-opacity=".45"/><path d="M4 8.5 12 13l8-4.5L12 4 4 8.5Z" fill="currentColor" fill-opacity=".45"/>',
   logo: '<path d="M12 2.8 20.5 7.6v8.8L12 21.2l-8.5-4.8V7.6L12 2.8Z" fill="currentColor" fill-opacity=".18"/><path d="M12 12 20.5 7.6M12 12v9.2M12 12 3.5 7.6"/>',
 };
