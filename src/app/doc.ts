@@ -9,6 +9,7 @@ import type { SkpImages } from '../images';
 import type {
   SkpAnnotationItems,
   SkpAnnotationMarks,
+  SkpEdgeColorMode,
   SkpAttrDictsMeta,
   SkpAxesMeta,
   SkpLocationMeta,
@@ -243,6 +244,8 @@ export interface SkpDoc {
   annotationRuns: Map<string, AnnotationRuns>;
   /** 치수·지시선 선분 묶음 id → 화면 크기로 그릴 끝 표시·연장선 넘침(meta.annotationMarks, 꼴이 맞는 칸만) */
   annotationMarks: Record<string, SkpAnnotationMarks>;
+  /** 모형 모서리 묶음이 정점 색으로 띤 모서리 색 방식(meta.edgeColoring — 재질별·축별, 없으면 null) */
+  edgeColoring: SkpEdgeColorMode | null;
   attributes: SkpAttrDictsMeta[];
   modelAttrs: number | null;
   treeInfo: SkpTreeInfo | null;
@@ -779,6 +782,7 @@ export function readMetaExtras(scene: Scene3d): Pick<
   | 'annotationKind'
   | 'annotationRuns'
   | 'annotationMarks'
+  | 'edgeColoring'
   | 'attributes'
   | 'modelAttrs'
   | 'treeInfo'
@@ -833,6 +837,7 @@ export function readMetaExtras(scene: Scene3d): Pick<
     annotationKind,
     annotationRuns,
     annotationMarks,
+    edgeColoring: m.edgeColoring === 'material' || m.edgeColoring === 'axis' ? m.edgeColoring : null,
     attributes: objects<SkpAttrDictsMeta>(m.attributes),
     modelAttrs: num(m.modelAttrs),
     treeInfo: infoOk ? info : null,

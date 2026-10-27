@@ -51,6 +51,7 @@ import type {
   SkpAnnotationMarks,
   SkpAttrDictsMeta,
   SkpDimensionMeta,
+  SkpEdgeColorMode,
   SkpFontMeta,
   SkpSectionPlaneMeta,
   SkpTextMeta,
@@ -67,6 +68,14 @@ import { solidInfo } from './solid';
 
 export const DEFAULT_FACE_COLOR: Rgba = [0.82, 0.82, 0.8, 1];
 export const EDGE_COLOR: Rgba = [0.12, 0.12, 0.12, 1];
+/** 모서리 색 "축별"의 빨강 X·초록 Y·파랑 Z(앱 측정 도구의 축 색과 같은 값) */
+export const AXIS_EDGE_COLORS: readonly Rgba[] = [
+  [212 / 255, 32 / 255, 32 / 255, 1],
+  [26 / 255, 158 / 255, 51 / 255, 1],
+  [32 / 255, 80 / 255, 220 / 255, 1],
+];
+/** 축별: 모서리와 축 사잇각의 사인² 한도(사인 1e-4 — 약 0.006°) 안이면 그 축과 나란하다 */
+export const AXIS_PARALLEL_SIN2 = 1e-8;
 /** 부드러운·매끈한 모서리 색(extras) — 보통 모서리보다 옅게 */
 export const SOFT_EDGE_COLOR: Rgba = [0.52, 0.52, 0.52, 1];
 /** 숨긴 모서리 색(extras, 점선으로 그린다) */
@@ -284,6 +293,8 @@ interface LineBatch {
   cls: LineCls;
   /** 선분마다 정의 안 곡선 차례(-1 = 곡선 아님). 곡선 모서리가 없으면 없다 */
   curve?: Int32Array;
+  /** 선분마다 모서리 재질 번호(NaN = 없음) — 모서리 색 "재질별"일 때 보통 모서리만 */
+  mat?: Float64Array;
 }
 
 interface Prepared {
@@ -456,6 +467,7 @@ function prepare(
   smooth: boolean,
   onFaces?: (n: number) => void,
   tex?: PrepTex | null,
+  edgeMats = false,
 ): Prepared {
   const layerKey = (l: number | undefined): number => (l === undefined || l === defaultLayer ? -1 : l);
   const groups = new Map<string, FaceGroup>();
@@ -624,6 +636,8 @@ function prepare(
   interface LineGroup {
     pos: F64;
     curve: I32 | null;
+    /** 모서리 재질 번호(모서리 색 "재질별"일 때 보통 모서리만) */
+    mat: F64 | null;
   }
   const lineGroups = new Map<number, LineGroup>();
   const softGroups = new Map<number, LineGroup>();
@@ -642,7 +656,8 @@ function prepare(
     } else map = lineGroups;
     const layer = layerKey(opt(E.layer[ei]!));
     let g = map.get(layer);
-    if (!g) map.set(layer, (g = { pos: new F64(), curve: null }));
+    if (!g) map.set(layer, (g = { pos: new F64(), curve: null, mat: edgeMats && map === lineGroups ? new F64() : null }));
+    g.mat?.push(E.material[ei]!);
     const k = E.curve[ei]! >= 0 ? E.curve[ei]! : -1;
     if (k >= 0 && !g.curve) {
       // 앞서 든 곡선 아닌 선분은 -1
@@ -669,6 +684,7 @@ function prepare(
   const batchOf = (layer: number, g: LineGroup, cls: LineCls): LineBatch => {
     const l: LineBatch = { layer, pos: g.pos.done(), cls };
     if (g.curve) l.curve = g.curve.done();
+    if (g.mat) l.mat = g.mat.done();
     return l;
   };
   const lines: LineBatch[] = [];
@@ -906,6 +922,13 @@ export interface BuildOptions {
   defaultBackColor?: Rgba;
   /** 모서리 색(기본 EDGE_COLOR) — 모형 스타일의 모서리 색(ForegroundColor, SketchUp 스타일 "모서리 색: 모두 같게")을 넘긴다 */
   edgeColor?: Rgba;
+  /**
+   * 모서리 색 방식(SketchUp 스타일 "모서리 색: 재질별·축별"). 주면 보통 모서리 묶음(skp-edges-*·skp-reveal-edges-*)에 선분마다 정점 색(colors)을 단다:
+   * 재질별은 모서리 재질 → 감싼 인스턴스 재질 → edgeColor, 축별은 axes(없으면 세계 축)와 나란하면 AXIS_EDGE_COLORS, 아니면 edgeColor. 없으면 예전과 같다
+   */
+  edgeColoring?: SkpEdgeColorMode;
+  /** 축별 모서리 색의 축(모형 그리기 축 X·Y·Z 방향, 없으면 세계 축) */
+  axes?: readonly (readonly number[])[];
   /** 큰 좌표 기준(장면 단위). 기본은 LARGE_COORD_INCH × scale(= 100 m). Infinity면 origin을 쓰지 않는다 */
   originThreshold?: number;
   /** 무늬를 입힐 재질(model.dat 재질 번호 → 무늬 id·한 장 크기). 없으면 무늬 좌표를 만들지 않는다 */
@@ -945,6 +968,8 @@ export interface SceneParts {
   faceRuns: Uint32Array[];
   /** 모서리 묶음마다(lines 차례) 선분의 놓인 곡선 번호(-1 = 곡선 아님, 같은 수 = 같은 곡선의 한 배치). 곡선이 없는 묶음은 null, 곡선이 하나도 없으면 없다 */
   segmentCurves?: (Int32Array | null)[];
+  /** 보통 모서리 묶음에 정점 색으로 칠한 모서리 색 방식(edgeColoring을 주었고 칠한 모서리가 있을 때만) */
+  edgeColoring?: SkpEdgeColorMode;
   /** 주석(모형에 주석이 있을 때만): meta.texts·dimensions·sectionPlanes·annotationItems 꼴 */
   texts?: SkpTextMeta[];
   dimensions?: SkpDimensionMeta[];
@@ -997,6 +1022,14 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   const defaultColor = opts.defaultFaceColor ?? DEFAULT_FACE_COLOR;
   const defaultBack = opts.defaultBackColor ?? null;
   const edgeColor = opts.edgeColor ?? EDGE_COLOR;
+  const edgeColoring = opts.edgeColoring === 'material' || opts.edgeColoring === 'axis' ? opts.edgeColoring : null;
+  /** 축별: 축 방향(단위 벡터, 쓸 수 없으면 세계 축) */
+  const axisDirs = [0, 1, 2].map((k) => {
+    const v = opts.axes?.[k];
+    const l = v ? Math.hypot(v[0]!, v[1]!, v[2]!) : 0;
+    return v && l > 0 && Number.isFinite(l) ? [v[0]! / l, v[1]! / l, v[2]! / l] : [k === 0 ? 1 : 0, k === 1 ? 1 : 0, k === 2 ? 1 : 0];
+  });
+  let edgeColored = false;
 
   // ── 진행: 삼각화한 면 수(정의마다 한 번)와 펼친 배치 수의 반반 ──
   const totalFaces = Math.max(1, model.counts.faces);
@@ -1041,7 +1074,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   const cache = new Map<SkpEntities, Prepared>();
   const prep = (e: SkpEntities): Prepared => {
     let p = cache.get(e);
-    if (!p) cache.set(e, (p = prepare(e, model.defaultLayer, counter, extras, smooth, onFaces, prepTex)));
+    if (!p) cache.set(e, (p = prepare(e, model.defaultLayer, counter, extras, smooth, onFaces, prepTex, edgeColoring === 'material')));
     return p;
   };
 
@@ -1273,6 +1306,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     origin?: [number, number, number] | null;
     /** 선분마다 놓인 곡선 번호(-1 = 곡선 아님) — 곡선 선분이 처음 들어올 때 만든다 */
     curves: I32 | null;
+    /** 모서리 색 방식(재질별·축별)으로 칠하는 보통 모서리 묶음이면 정점 색(선분마다 rgba 둘) */
+    colors?: F32;
   }
   const originLimit = opts.originThreshold ?? LARGE_COORD_INCH * Math.abs(scale);
   const cellSize = originLimit * 10;
@@ -1506,7 +1541,10 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   const lineBucket = (slot: number, cls: LineCls, layer: number, far: ReturnType<typeof farCell>): LineBucket => {
     const key = (cls === 0 ? `${slot}|${layer}` : `${slot}|${cls === 1 ? 's' : 'x'}|${layer}`) + (far ? far.key : '');
     let lb = lineBuckets.get(key);
-    if (!lb) lineBuckets.set(key, (lb = { serial: serials++, slot, cls, layer, pos: new F32(), origin: far ? far.origin : null, curves: null }));
+    if (!lb) {
+      lineBuckets.set(key, (lb = { serial: serials++, slot, cls, layer, pos: new F32(), origin: far ? far.origin : null, curves: null }));
+      if (edgeColoring && cls === 0) lb.colors = new F32();
+    }
     return lb;
   };
   /** 묶음의 무늬 좌표를 3값으로 넓힌다(원근 무늬가 처음 들어올 때, q = 1을 끼운다) */
@@ -1660,10 +1698,56 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   let curveSerial = 0;
   const curveBase = new Map<SkpEntities, number>();
   const curvePlacement = new Map<SkpEntities, number>();
-  const appendLines = (lb: LineBucket, l: LineBatch, m: Float64Array, node: number, ents: SkpEntities, placement: number): void => {
+  /** 모서리 재질 색(재질별 — 재질 정보가 없으면 모서리 색) */
+  const edgeMatColor = (id: number): Rgba => {
+    const name = model.materials.get(id);
+    const info = name !== undefined ? materials.get(name) : undefined;
+    return info ? info.color : edgeColor;
+  };
+  /** 축별: 세계 방향이 축과 나란하면 그 축 색, 아니면 모서리 색 */
+  const axisColorOf = (dx: number, dy: number, dz: number): Rgba => {
+    const l2 = dx * dx + dy * dy + dz * dz;
+    if (!(l2 > 0)) return edgeColor;
+    for (let k = 0; k < 3; k++) {
+      const u = axisDirs[k]!;
+      const d = dx * u[0]! + dy * u[1]! + dz * u[2]!;
+      if (d * d >= l2 * (1 - AXIS_PARALLEL_SIN2)) return AXIS_EDGE_COLORS[k]!;
+    }
+    return edgeColor;
+  };
+  /** 모서리 색 방식(재질별·축별)이면 이 배치의 선분마다 두 정점 색(불투명)을 쌓는다. 축별 방향은 정의 로컬 선분에 배치 행렬을 곱해 f64로 잰다 */
+  const paintEdges = (C: F32, l: LineBatch, m: Float64Array, inhMat: number | undefined): void => {
+    const ns = l.pos.length / 6;
+    C.reserve(ns * 8);
+    const a = C.a;
+    let o = C.n;
+    const P = l.pos;
+    for (let i = 0; i < ns; i++) {
+      let c: Rgba;
+      if (edgeColoring === 'material') {
+        const own = l.mat ? l.mat[i]! : NaN;
+        const id = Number.isNaN(own) ? inhMat : own;
+        c = id === undefined ? edgeColor : edgeMatColor(id);
+      } else {
+        const k = i * 6;
+        const lx = P[k + 3]! - P[k]!, ly = P[k + 4]! - P[k + 1]!, lz = P[k + 5]! - P[k + 2]!;
+        c = axisColorOf(m[0]! * lx + m[4]! * ly + m[8]! * lz, m[1]! * lx + m[5]! * ly + m[9]! * lz, m[2]! * lx + m[6]! * ly + m[10]! * lz);
+      }
+      for (let v = 0; v < 2; v++) {
+        a[o++] = c[0];
+        a[o++] = c[1];
+        a[o++] = c[2];
+        a[o++] = 1;
+      }
+    }
+    C.n = o;
+    edgeColored = true;
+  };
+  const appendLines = (lb: LineBucket, l: LineBatch, m: Float64Array, node: number, ents: SkpEntities, placement: number, inhMat?: number): void => {
     const seg0 = lb.pos.n / 6;
     addRun(lb.serial, seg0, node);
     put(lb.pos, l.pos, m, lb.cls === 0, lb.origin);
+    if (lb.colors) paintEdges(lb.colors, l, m, inhMat);
     const ns = l.pos.length / 6;
     if (!l.curve && !lb.curves) return;
     if (!lb.curves) {
@@ -2060,8 +2144,11 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       const far = farCell(l.pos, m);
       const key = `${node}|${layer}${far ? far.key : ''}`;
       let lb = revealLines.get(key);
-      if (!lb) revealLines.set(key, (lb = { serial: -1, slot: REVEAL_SLOT, cls: 2, layer, pos: new F32(), origin: far ? far.origin : null, curves: null, node }));
-      appendLines(lb, l, m, REVEAL_NODE, ents, placement);
+      if (!lb) {
+        revealLines.set(key, (lb = { serial: -1, slot: REVEAL_SLOT, cls: 2, layer, pos: new F32(), origin: far ? far.origin : null, curves: null, node }));
+        if (edgeColoring) lb.colors = new F32();
+      }
+      appendLines(lb, l, m, REVEAL_NODE, ents, placement, inhMat);
     }
     if (depth >= MAX_DEPTH) return;
     stack.add(ents);
@@ -2171,7 +2258,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
         bbEdgeCount.set(layerName(layer), (bbEdgeCount.get(layerName(layer)) ?? 0) + ns);
         continue;
       }
-      appendLines(lineBucket(slot, 0, layer, farCell(l.pos, m)), l, m, node, ents, placements);
+      appendLines(lineBucket(slot, 0, layer, farCell(l.pos, m)), l, m, node, ents, placements, inhMat);
     }
     // 부드러운·숨긴 모서리(숨긴 인스턴스 안의 부드러운 모서리는 그리지 않는다. 카메라를 보는 배치는 돌릴 수 없어 뺀다)
     for (const l of p.extraLines) {
@@ -2486,6 +2573,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     segments += n;
     const id = `skp-edges-${lines.length}`;
     const edgeSet: LineSet3d = { id, name: `모서리 · ${tag}`, positions, color: edgeColor, group: tag };
+    if (lb.colors) edgeSet.colors = lb.colors.done();
     if (dashedTags.has(tag)) edgeSet.dashed = true;
     lines.push(withOrigin(edgeSet));
     tagStat(tag).edges += n;
@@ -2497,6 +2585,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     const tag = layerName(lb.layer);
     const id = `skp-reveal-edges-${lines.length}`;
     const l: LineSet3d = { id, name: `장면에서 보이는 숨긴 개체 모서리 · ${tag}`, positions: lb.pos.done(), color: edgeColor, group: tag };
+    if (lb.colors) l.colors = lb.colors.done();
     if (dashedTags.has(tag)) l.dashed = true;
     if (lb.origin) l.origin = lb.origin;
     lines.push(l);
@@ -2675,6 +2764,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     faceRuns,
   };
   if (segmentCurves.some((c) => c)) parts.segmentCurves = segmentCurves;
+  if (edgeColoring && edgeColored) parts.edgeColoring = edgeColoring;
   if (annSeen) {
     parts.texts = texts;
     parts.dimensions = dims;

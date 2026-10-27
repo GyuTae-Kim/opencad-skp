@@ -42,6 +42,9 @@ export interface SkpCameraMeta {
 /** 면 스타일 */
 export type SkpFaceStyle = 'wireframe' | 'hiddenLine' | 'shaded' | 'textured' | 'monochrome';
 
+/** 모서리 색 방식(SketchUp 스타일 "모서리 색"): 재질별 · 축별. 모두 같게는 값이 없다(edgeColor 한 색) */
+export type SkpEdgeColorMode = 'material' | 'axis';
+
 /** 스타일(렌더링 설정 + style.xml을 합친 값). 모르는 값은 빠진다 */
 export interface SkpStyleMeta {
   name?: string;
@@ -61,6 +64,11 @@ export interface SkpStyleMeta {
   front?: Rgb;
   back?: Rgb;
   edgeColor?: Rgb;
+  /**
+   * 모서리 색 방식(EdgeColorMode — 레코드 7348·style.xml 1002): 'material' 재질별(모서리 재질, 없으면 감싼 인스턴스 재질, 그것도 없으면 edgeColor),
+   * 'axis' 축별(그리기 축과 나란한 모서리는 축 색, 나머지는 edgeColor). 모두 같게(1)·모름이면 없다
+   */
+  edgeColorMode?: SkpEdgeColorMode;
   hiddenGeometry?: boolean;
   hiddenObjects?: boolean;
   axes?: boolean;
@@ -306,6 +314,11 @@ export interface SkpMetaExtras {
   faceRuns?: Uint32Array[];
   /** 모서리 묶음마다(scene.lines 차례) 선분의 놓인 곡선 번호(-1 = 곡선 아님, 같은 수 = 같은 곡선의 한 배치). 곡선이 없는 묶음·주석은 null */
   segmentCurves?: (Int32Array | null)[];
+  /**
+   * 모형 모서리 묶음(skp-edges-*·skp-reveal-edges-*)이 정점 색(LineSet3d.colors)으로 띤 모서리 색 방식(SketchUp "모서리 색: 재질별·축별").
+   * 모형 스타일이 그 방식이거나(아니면) 스타일을 쓰는 장면이 그 방식일 때만. 화면은 지금 스타일이 모두 같게면 묶음 색(color) 한 색으로 덮는다
+   */
+  edgeColoring?: SkpEdgeColorMode;
   /** 위치(정보 탭)·그림자 설정·그리기 축 */
   location?: SkpLocationMeta;
   shadow?: SkpShadowMeta;

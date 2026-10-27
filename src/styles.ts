@@ -92,6 +92,10 @@ const KEYS = {
   DrawBackEdges: ['bool', 0x7356, 1015],
   BackgroundColor: ['color', 0x7357, 4000],
   ForegroundColor: ['color', 0x7358, 1014],
+  // 모서리 색 방식(0 재질별 · 1 모두 같게 · 2 축별 — 공개 Ruby·C API의 EdgeColorMode 값). 꼬리표는 SketchUp에 딸린 파일에서 맞췄다:
+  // 사람 컴포넌트 표본 둘만 레코드 7348 = 0이고 그 작업 사본 스타일의 1002도 0, 나머지 1,200여 파일은 둘 다 1.
+  // 딸린 스타일 가운데 설명이 "colored by material"인 것만 1002 = 0이다(docs/formats/skp.md "모서리 색 방식")
+  EdgeColorMode: ['int', 0x7348, 1002],
   FaceFrontColor: ['color', 0x735c, 2002],
   FaceBackColor: ['color', 0x735d, 2003],
   SkyColor: ['color', 0x7365, 4001],
@@ -176,6 +180,10 @@ export function resolveStyle(raw: SkpRenderingRaw | undefined, items: Map<number
   set('front', rgb('FaceFrontColor'));
   set('back', rgb('FaceBackColor'));
   set('edgeColor', rgb('ForegroundColor'));
+  // 모서리 색 방식: 모두 같게(거의 모든 파일 — edgeColor 그대로)는 넣지 않고 재질별·축별만
+  const ecm = get('EdgeColorMode');
+  if (ecm === 0) out.edgeColorMode = 'material';
+  else if (ecm === 2) out.edgeColorMode = 'axis';
   set('hiddenGeometry', bool('DrawHiddenGeometry'));
   set('hiddenObjects', bool('DrawHiddenObjects'));
   set('axes', bool('DisplaySketchAxes'));

@@ -117,7 +117,7 @@ import { cssHex, isLightBackground, loadFileBackground, safeStorage, skyBackgrou
 import type { BackgroundOptions, Rgba } from 'opencad-viewer3d';
 import { DEFAULT_EDGE_COLOR, LineContrast, edgeLooks, lineColorOverrides } from './linecontrast';
 import { openShortcutsDialog } from './shortcuts';
-import type { Rgb, SkpShadowMeta, SkpStyleMeta } from '../meta';
+import type { Rgb, SkpEdgeColorMode, SkpShadowMeta, SkpStyleMeta } from '../meta';
 import { fogFor, lightingForShadow, shadowOrDefault, sunForShadow, usesSun } from './sun';
 import { WalkStick } from './joystick';
 import { Vcb, vcbStartKey } from './vcb';
@@ -358,6 +358,8 @@ export class SkpViewerApp implements PanelHost {
   private styleSky: BackgroundOptions | null = null;
   /** 지금 스타일의 모서리 색(모형 스타일, 장면을 고르면 그 장면 스타일 — 모형 모서리 묶음에 건다) */
   private styleEdge: Rgb | null = null;
+  /** 지금 스타일의 모서리 색 방식(재질별·축별, 모두 같게면 null) — 모서리 묶음의 정점 색(doc.edgeColoring)을 보일지 정한다 */
+  private styleEdgeMode: SkpEdgeColorMode | null = null;
   /** 배경에 묻히는 선 색 바꾸기(와이어프레임·숨은 선·X-ray, linecontrast.ts) */
   private readonly lineContrast = new LineContrast();
   private hiddenRanges = new Map<number, IndexRange[]>();
@@ -1151,6 +1153,7 @@ export class SkpViewerApp implements PanelHost {
     this.styleBg = styleBackground(d.style);
     this.styleSky = skyBackground(d.style);
     this.styleEdge = d.style?.edgeColor ?? null;
+    this.styleEdgeMode = d.style?.edgeColorMode ?? null;
     this.applyTheme();
     this.labels?.setData(d.texts, d.dimensions, d.scene.units, d.units);
     this.marks?.setData(d.annotationMarks);
@@ -1746,8 +1749,14 @@ export class SkpViewerApp implements PanelHost {
     const skyKnown = plan.style && (plan.style.sky !== undefined || plan.style.ground !== undefined);
     // 장면 스타일의 모서리 색(SketchUp 스타일 "모서리 색: 모두 같게")
     const edge = plan.style?.edgeColor;
-    const edgeChanged = !!edge && (!this.styleEdge || edge.some((x, i) => x !== this.styleEdge![i]));
+    let edgeChanged = !!edge && (!this.styleEdge || edge.some((x, i) => x !== this.styleEdge![i]));
     if (edge) this.styleEdge = edge;
+    // 장면 스타일의 모서리 색 방식(스타일을 쓰는 장면만 — 재질별·축별이 아니면 모두 같게)
+    if (plan.style) {
+      const mode = plan.style.edgeColorMode ?? null;
+      if (mode !== this.styleEdgeMode) edgeChanged = true;
+      this.styleEdgeMode = mode;
+    }
     if (bg || skyKnown) {
       if (bg) this.styleBg = bg;
       if (skyKnown) this.styleSky = skyBackground(plan.style);
@@ -3007,6 +3016,7 @@ export class SkpViewerApp implements PanelHost {
           { mode: this.renderMode, theme: this.theme, backdrop: this.backdrop, sky: this.fileBg ? this.styleSky : null },
           (id) => d.annotationKind.get(id) === 'sectionPlanes',
           this.styleEdge,
+          !!d.edgeColoring && this.styleEdgeMode === d.edgeColoring,
         )
       : new Map();
     this.lineContrast.apply(v, want);
