@@ -1689,6 +1689,125 @@ button.scene-card.sel {
   }
 }
 
+/*
+ * 측정값 칸(VCB, vcb.ts): 넓은 화면은 3D 보기 오른쪽 아래(SketchUp 측정값 칸 자리),
+ * 측정 띠를 쓰는 화면은 띠 안 둘째 줄(.measure-bar.has-vcb는 줄을 바꾼다)
+ */
+.vcb {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 4px 10px;
+  background: color-mix(in srgb, var(--bg-elev) 94%, transparent);
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  font-size: 13px;
+}
+
+.vcb[hidden] {
+  display: none;
+}
+
+.vcb-label {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.vcb-input {
+  width: 9.5em;
+  height: 30px;
+  min-width: 0;
+  padding: 0 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  background: var(--bg-input);
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.vcb-input[aria-invalid] {
+  border-color: var(--danger);
+}
+
+.vcb-btn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  background: var(--bg-input);
+  color: inherit;
+  cursor: pointer;
+}
+
+.vcb-btn[hidden] {
+  display: none;
+}
+
+/* 알림(읽지 못한 길이 등): 칸 위에 말풍선 */
+.vcb-msg {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  max-width: min(280px, 80vw);
+  padding: 5px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--danger-bg);
+  color: var(--text);
+  font-size: 12.5px;
+  white-space: normal;
+}
+
+.vcb-msg[hidden] {
+  display: none;
+}
+
+.measure-bar.has-vcb {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.measure-bar .vcb {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  flex: 1 1 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.measure-bar .vcb-input {
+  flex: 1 1 auto;
+  width: auto;
+}
+
+@media (pointer: coarse) {
+  /* 휴대폰 자판이 화면을 확대하지 않게 16px, 누르기 쉬운 높이 */
+  .vcb-input {
+    height: 38px;
+    font-size: 16px;
+  }
+
+  .vcb-btn {
+    width: 38px;
+    height: 38px;
+  }
+}
+
 /* 카메라 띠(걷기·시야각·2점 투시): 넓은 화면에서도 보인다. 글은 위 한 줄, 시야각·단추는 아래 줄 */
 .cam-bar:not([hidden]) {
   display: flex;

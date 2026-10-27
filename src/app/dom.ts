@@ -52,6 +52,7 @@ const ICONS: Record<string, string> = {
   expand: '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>',
   sliders: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
+  enter: '<path d="M19 5.5V12a2.5 2.5 0 0 1-2.5 2.5H5.5"/><path d="m9.5 10.5-4 4 4 4"/>',
   chevron: '<path d="m6 9 6 6 6-6"/>',
   twisty: '<path d="m9 6 6 6-6 6"/>',
   section: '<path d="M12 3 20 7.5v9L12 21l-8-4.5v-9L12 3Z" stroke-opacity=".55"/><path d="M3 13.5 21 9" stroke-width="2.2"/><path d="m4 7.5 8 4.5 8-4.5" stroke-opacity=".55"/>',

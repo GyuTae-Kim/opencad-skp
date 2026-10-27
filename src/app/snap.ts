@@ -70,6 +70,9 @@ export interface SnapScene {
   lines: readonly LineSet3d[];
 }
 
+/** 측정값 칸으로 찍은 안내점에 붙는 추정 글(끝점처럼 붙는다 — SketchUp "안내점") */
+export const GUIDE_POINT_LABEL = '안내점';
+
 /** 면에 수직 추정 글(모서리에 수직은 SNAP_LABELS.perpendicular) */
 export const FACE_PERPENDICULAR_LABEL = '면에 수직';
 
@@ -319,6 +322,8 @@ export interface SnapInput {
   centers?: readonly V3[];
   /** 축 고정에 쓸 축(모형의 그리기 축, 없으면 세계 축) */
   axisDirs?: AxisDirs | null;
+  /** 측정값 칸으로 찍은 안내점(세계) — 끝점처럼 붙는다 */
+  guides?: readonly V3[];
 }
 
 interface Cand {
@@ -331,6 +336,8 @@ interface Cand {
   id: string;
   /** 코어가 이미 보이는 것으로 고른 점(가림 판정 생략) */
   trusted: boolean;
+  /** 종류 글 대신 쓸 글(안내점) */
+  label?: string;
 }
 
 /** 점 p에서 직선(a, b)에 내린 발과 그 매개변수(a = 0, b = 1). 선분 길이가 0이면 null */
@@ -402,6 +409,8 @@ export function chooseSnap(o: SnapInput): Snap {
     }
   // 앞서 지나간 곡선의 중심
   for (const c of o.centers ?? []) push({ kind: 'center', point: [c[0], c[1], c[2]], rank: 0, id: '', trusted: false });
+  // 측정값 칸으로 찍은 안내점(덧그림이라 형상에 가리지 않는다)
+  for (const g of o.guides ?? []) push({ kind: 'endpoint', point: [g[0], g[1], g[2]], rank: 0, id: '', trusted: true, label: GUIDE_POINT_LABEL });
   // 점 묶음(있으면 끝점처럼)
   if (pick && pick.kind === 'point') push({ kind: 'endpoint', point: [...pick.point], rank: 0, id: pick.id, trusted: true });
   // 그물 윤곽선(코어 윤곽선 고르기 — 카메라를 보는 그물의 모서리): 고른 점을 모서리 위로
@@ -416,7 +425,7 @@ export function chooseSnap(o: SnapInput): Snap {
   let snap: Snap | null = null;
   for (const c of cands) {
     if (!c.trusted && o.visible && !o.visible(c.point)) continue;
-    snap = { kind: c.kind, point: c.point, label: SNAP_LABELS[c.kind], id: c.id };
+    snap = { kind: c.kind, point: c.point, label: c.label ?? SNAP_LABELS[c.kind], id: c.id };
     if (c.edge) snap.edge = c.edge;
     if (c.other) snap.other = c.other;
     break;

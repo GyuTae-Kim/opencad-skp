@@ -8,8 +8,10 @@ import type { LineSet3d, Mesh3d, Scene3d } from 'opencad-viewer3d/types';
 import {
   AIM_HOLD_MS,
   AIM_OFFSET_PX,
+  MAX_GUIDE_POINTS,
   MeasureTool,
   aimPoint,
+  pointAlong,
   joinTip,
   measureHint,
   planeAngle,
@@ -120,6 +122,7 @@ interface Rig {
   canvas: HTMLCanvasElement;
   results: (MeasureToolResult | null)[];
   hints: (string | null)[];
+  lives: (number | null)[];
   setCamera(c: CameraState): void;
   ptr(type: string, x: number, y: number, o?: { id?: number; button?: number; buttons?: number; pointerType?: string; shift?: boolean }): void;
   click(x: number, y: number, o?: { pointerType?: string; id?: number; shift?: boolean }): void;
@@ -166,7 +169,8 @@ function rig(scene: Pick<Scene3d, 'meshes' | 'lines' | 'units'>, cam: CameraStat
   overlay.attach(viewer as unknown as Viewer3d);
   const results: (MeasureToolResult | null)[] = [];
   const hints: (string | null)[] = [];
-  const tool = new MeasureTool(viewer, overlay, { getScene: () => scene, getUnits: () => units, onResult: (r) => results.push(r), onHint: (h) => hints.push(h) });
+  const lives: (number | null)[] = [];
+  const tool = new MeasureTool(viewer, overlay, { getScene: () => scene, getUnits: () => units, onResult: (r) => results.push(r), onHint: (h) => hints.push(h), onLive: (l) => lives.push(l) });
   const ptr: Rig['ptr'] = (type, x, y, o = {}) => {
     const e = new MouseEvent(type, { clientX: x, clientY: y, button: o.button ?? 0, buttons: o.buttons ?? 0, shiftKey: !!o.shift, bubbles: true });
     Object.defineProperty(e, 'pointerId', { value: o.id ?? 1 });
@@ -179,6 +183,7 @@ function rig(scene: Pick<Scene3d, 'meshes' | 'lines' | 'units'>, cam: CameraStat
     canvas,
     results,
     hints,
+    lives,
     setCamera(c) {
       camera = c;
       for (const cb of camCbs) cb(c);
@@ -536,5 +541,73 @@ describe('측정 도구: 정밀 조준(터치 길게 누르기)', () => {
     r.overlay.paintNow();
     expect(r.tool.pointCount).toBe(0);
     expect(r.tip()).toBeNull();
+  });
+});
+
+describe('측정값 칸(VCB): 길이를 쳐서 안내점 찍기', () => {
+  it('시작점에서 방향 쪽으로 길이만큼 간 점(음수면 반대쪽, 방향이 없으면 null)', () => {
+    expect(pointAlong([1, 1, 0], [11, 1, 0], 4)).toEqual([5, 1, 0]);
+    expect(pointAlong([1, 1, 0], [1, 11, 0], -2)).toEqual([1, -1, 0]);
+    expect(pointAlong([1, 1, 0], [1, 1, 0], 4)).toBeNull();
+    expect(pointAlong([0, 0, 0], [1, 0, 0], Number.NaN)).toBeNull();
+  });
+
+  it('시작점을 찍고 커서를 잴 방향에 둔 채 길이를 넣으면 그 길이에 안내점, 결과는 시작점 → 안내점', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    expect(r.tool.applyLength(30)).toBe('start');
+    r.click(102, 103);
+    // 커서가 아직 시작점 위(방향 없음)
+    r.move(101, 101);
+    expect(r.tool.applyLength(30)).toBe('direction');
+    // 모서리 위 (60, 0) 쪽 — 진행 중 길이(측정값 칸)는 시작점 → 커서
+    r.move(160, 101);
+    expect(r.lives.at(-1)).toBeCloseTo(60, 6);
+    expect(r.tool.applyLength(0)).toBe('zero');
+    expect(r.tool.applyLength(30)).toBe('ok');
+    expect(r.tool.pointCount).toBe(0);
+    expect(r.results.at(-1)).toMatchObject({ kind: 'tape', a: [0, 0, 0], distance: 30 });
+    const b = (r.results.at(-1) as { b: number[] }).b;
+    expect(b[0]).toBeCloseTo(30, 9);
+    expect(b[1]).toBeCloseTo(0, 9);
+    expect(r.tool.guides).toHaveLength(1);
+    r.overlay.paintNow();
+    expect(r.qa('.measure-guide')).toHaveLength(1);
+    expect(r.q('.measure-label-length')?.textContent).toBe('30 mm');
+    // 결과가 있으면 측정값 칸은 그 거리
+    expect(r.lives.at(-1)).toBeCloseTo(30, 6);
+    // 안내점은 끝점처럼 붙는다(글 '안내점')
+    r.move(131, 102);
+    expect(r.tip()).toBe('안내점');
+  });
+
+  it('두 점을 다 잰 뒤(손가락 기기)는 그 결과의 방향으로, 음수면 반대쪽', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    r.click(102, 103, { pointerType: 'touch' });
+    r.click(198, 101, { pointerType: 'touch' });
+    expect(r.results.at(-1)).toMatchObject({ distance: 100 });
+    expect(r.tool.applyLength(-25)).toBe('ok');
+    const last = r.results.at(-1) as { a: number[]; b: number[]; distance: number };
+    expect(last.a).toEqual([0, 0, 0]);
+    expect(last.b[0]).toBeCloseTo(-25, 9);
+    expect(last.distance).toBeCloseTo(25, 9);
+    // 안내점은 새로 재도 남고, clearGuides·각도기에서는 넣지 않는다
+    r.click(102, 103, { pointerType: 'touch' });
+    expect(r.tool.guides).toHaveLength(1);
+    r.tool.clearGuides();
+    expect(r.tool.guides).toHaveLength(0);
+    r.tool.setMode('protractor');
+    expect(r.tool.applyLength(10)).toBe('mode');
+  });
+
+  it(`안내점은 ${MAX_GUIDE_POINTS}개까지(오래된 것부터 버린다)`, () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    r.click(102, 103);
+    r.click(198, 101);
+    for (let i = 1; i <= MAX_GUIDE_POINTS + 3; i++) expect(r.tool.applyLength(i)).toBe('ok');
+    expect(r.tool.guides).toHaveLength(MAX_GUIDE_POINTS);
+    expect(r.tool.guides[0]![0]).toBeCloseTo(4, 9);
   });
 });

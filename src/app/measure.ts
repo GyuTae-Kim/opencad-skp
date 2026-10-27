@@ -19,6 +19,9 @@
  * 각도기: 중심 → 기준 방향 → 잴 방향 → { kind: 'protractor', center, a, b, angle(도, 0~180), normal }.
  *   평면은 중심을 찍을 때 커서 밑 면, 없으면 카메라를 가장 정면으로 보는 축 평면. Shift를 누르고 있으면 그 평면을 고정한다.
  * 결과 선·점·라벨은 카메라가 움직여도 남고, 다음 측정을 시작하거나 clear·setMode를 하면 지운다.
+ * 측정값 칸(VCB, vcb.ts): 줄자에서 길이를 치면(applyLength) SketchUp 줄자처럼 시작점에서 그 길이만큼 간 자리에 안내점(✕)을 찍는다.
+ *   방향은 시작점을 찍은 뒤면 시작점 → 커서 추정(축 고정 포함), 두 점을 다 잰 뒤면 그 결과의 시작점 → 끝점(손가락 기기는 커서가 없어 이쪽).
+ *   결과는 시작점 → 안내점 줄자 결과로 바꾸고, 안내점은 모형에 넣지 않는 보기 전용 표시라 새 문서·clearGuides까지 남으며 끝점처럼 붙는다.
  * 그리기는 덧그림 층의 SVG 묶음(g.measure)과 DOM 라벨(div.measure-layer)로 하고, 숫자 글은 모형 단위(units.ts)로 쓴다.
  */
 import type { Viewer3d } from 'opencad-viewer3d';
@@ -86,7 +89,15 @@ export interface MeasureToolOptions {
   curveCenter?: (id: string, seg: number) => V3 | null;
   /** 모형의 그리기 축(옮겼으면 — 축 고정·각도기 기본 평면이 그 축을 따른다, 없으면 세계 축) */
   getAxes?: () => AxisDirs | null;
+  /** 측정값 칸 표시: 줄자 진행 중이면 시작점 → 커서 길이, 아니면 줄자 결과 거리(장면 단위), 없으면 null. 바뀔 때만 부른다 */
+  onLive?: (length: number | null) => void;
 }
+
+/** 측정값 칸으로 길이를 넣은 결과: ok, 줄자가 아님(mode), 시작점·결과가 없음(start), 방향을 모름(direction), 길이 0(zero) */
+export type LengthApply = 'ok' | 'mode' | 'start' | 'direction' | 'zero';
+
+/** 안내점을 기억하는 수(넘으면 오래된 것부터 버린다) */
+export const MAX_GUIDE_POINTS = 50;
 
 /** 기억해 두는 지나간 곡선 중심 수 */
 export const RECENT_CENTERS = 4;
@@ -134,6 +145,16 @@ export function snapRadius(pointerType: string): number {
 /** 정밀 조준 십자선 자리: 손가락 바로 위(보기 위 가장자리에서 멈춘다) */
 export function aimPoint(x: number, y: number): { x: number; y: number } {
   return { x, y: Math.max(0, y - AIM_OFFSET_PX) };
+}
+
+/**
+ * 시작점 a에서 toward 쪽으로 length만큼 간 점(length가 음수면 반대쪽). 방향 길이가 a 크기에 비해 0이면 null
+ */
+export function pointAlong(a: readonly number[], toward: readonly number[], length: number): V3 | null {
+  const d = sub(toward, a);
+  const l = Math.hypot(d[0], d[1], d[2]);
+  if (!(l > 1e-9 * Math.max(1, Math.hypot(a[0]!, a[1]!, a[2]!))) || !Number.isFinite(length)) return null;
+  return addScaled(a, d, length / l);
 }
 
 /** 줄자 결과(장면 단위) */
@@ -213,7 +234,7 @@ export function joinTip(label: string, value?: string | null): string {
 /** 상태 줄 안내. touch면 키 설명 대신 길게 누르기(정밀 조준)를 알린다 */
 export function measureHint(mode: MeasureMode | null, points: number, hasResult: boolean, touch = false): string | null {
   if (mode === 'tape') {
-    if (points === 1) return touch ? '줄자: 끝점을 누르세요' : '줄자: 끝점을 누르세요 · Esc 취소';
+    if (points === 1) return touch ? '줄자: 끝점을 누르세요' : '줄자: 끝점을 누르세요 · 길이를 치면 안내점 · Esc 취소';
     if (hasResult) return touch ? '줄자: 다시 누르면 새로 잽니다' : '줄자: 다시 누르면 새로 잽니다 · Esc 지우기';
     return touch ? '줄자: 잴 시작점을 누르세요 · 길게 누르면 정밀 조준' : '줄자: 잴 시작점을 누르세요';
   }
@@ -277,6 +298,10 @@ export class MeasureTool {
   private lastHint: string | null = null;
   /** 앞서 커서가 지나간 호·원의 중심(새것이 앞) */
   private centers: V3[] = [];
+  /** 측정값 칸으로 찍은 안내점(오래된 것이 앞) */
+  private guidePts: V3[] = [];
+  /** 마지막으로 알린 측정값 칸 길이(undefined = 아직 알리지 않음) */
+  private lastLive: number | null | undefined = undefined;
   private readonly g: SVGGElement;
   private readonly layer: HTMLDivElement;
   private readonly tip: HTMLDivElement;
@@ -345,6 +370,51 @@ export class MeasureTool {
     return this.resultValue;
   }
 
+  /** 측정값 칸으로 찍은 안내점 */
+  get guides(): readonly V3[] {
+    return this.guidePts;
+  }
+
+  /** 안내점 모두 지우기 */
+  clearGuides(): void {
+    if (!this.guidePts.length) return;
+    this.guidePts = [];
+    this.hoverDirty = true;
+    this.overlay.invalidate();
+  }
+
+  /**
+   * 측정값 칸에 친 길이(장면 단위, 음수면 반대쪽): 줄자 시작점에서 그 길이만큼 간 자리에 안내점을 찍고 결과를 시작점 → 안내점으로 바꾼다.
+   * 시작점을 찍은 뒤면 방향은 시작점 → 커서 추정 점, 두 점을 다 잰 뒤(커서 없는 손가락 기기)면 그 결과의 시작점 → 끝점이다
+   */
+  applyLength(length: number): LengthApply {
+    if (this.modeValue !== 'tape') return 'mode';
+    if (!(Math.abs(length) > 0) || !Number.isFinite(length)) return 'zero';
+    let a: V3;
+    let toward: V3 | null;
+    if (this.pts.length) {
+      a = this.pts[0]!;
+      const f = this.overlay.frame();
+      if (this.hoverDirty && f) {
+        this.hoverDirty = false;
+        this.updateHover(f);
+      }
+      toward = this.cursor && this.cursor.type !== 'touch' && !this.dragging ? (this.hover?.point ?? null) : null;
+    } else if (this.resultValue?.kind === 'tape') {
+      a = this.resultValue.a;
+      toward = this.resultValue.b;
+    } else return 'start';
+    const end = toward ? pointAlong(a, toward, length) : null;
+    if (!end) return 'direction';
+    this.pts = [];
+    this.guidePts = [...this.guidePts, end].slice(-MAX_GUIDE_POINTS);
+    this.setResult(tapeResult(a, end));
+    this.hoverDirty = true;
+    this.refreshHint();
+    this.overlay.invalidate();
+    return 'ok';
+  }
+
   /** 도구 켜기·바꾸기·끄기(null). 진행 중 점과 결과는 지운다 */
   setMode(mode: MeasureMode | null): void {
     if (this.disposed) return;
@@ -362,6 +432,7 @@ export class MeasureTool {
       this.layer.replaceChildren();
       this.g.remove();
       this.layer.remove();
+      this.notifyLive(null);
     }
     this.refreshHint();
   }
@@ -465,6 +536,7 @@ export class MeasureTool {
       curveCenter,
       centers: this.centers,
       axisDirs: this.opts.getAxes?.() ?? null,
+      guides: this.guidePts,
     });
   }
 
@@ -808,9 +880,33 @@ export class MeasureTool {
         }
       }
     }
+    for (const g of this.guidePts) this.guideMark(f, g);
     if (snap && snap.kind !== 'free') this.marker(f, snap);
     if (this.aimId !== null && this.cursor) this.reticle(this.cursor.x, this.cursor.y);
     this.tooltip(f, tip);
+    this.notifyLive(snap);
+  }
+
+  /** 측정값 칸 길이 알리기(줄자 진행 중이면 시작점 → 커서, 아니면 줄자 결과) */
+  private notifyLive(snap: Snap | null): void {
+    let live: number | null = null;
+    const a = this.pts[0];
+    if (this.modeValue === 'tape' && a && snap && this.cursor?.type !== 'touch') live = Math.hypot(...sub(snap.point, a));
+    else if (this.resultValue?.kind === 'tape') live = this.resultValue.distance;
+    if (live === this.lastLive) return;
+    this.lastLive = live;
+    this.opts.onLive?.(live);
+  }
+
+  /** 안내점 표식: 흰 테두리를 두른 작은 ×(SketchUp 안내점) */
+  private guideMark(f: ViewFrame, p: readonly number[]): void {
+    const s = screenPoint(f, p, 20);
+    if (!s) return;
+    const [x, y] = s;
+    const d = `M${x - 4},${y - 4}L${x + 4},${y + 4}M${x + 4},${y - 4}L${x - 4},${y + 4}`;
+    const g = svgEl('g', { class: 'measure-guide' });
+    g.append(svgEl('path', { d, stroke: '#ffffff', 'stroke-width': 3.5, 'stroke-linecap': 'round' }), svgEl('path', { d, stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linecap': 'round' }));
+    this.g.append(g);
   }
 
   /** 정밀 조준 십자선(가운데는 비워 추정 표식이 보이게, 흰 테두리로 어느 바탕에서도 보이게) */

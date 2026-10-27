@@ -31,6 +31,7 @@ export const SHORTCUTS: readonly ShortcutGroup[] = [
     items: [
       { keys: ['Ctrl+O', '⌘+O'], label: '파일 열기' },
       { keys: ['T'], label: '줄자 켜고 끄기' },
+      { keys: ['0~9', 'Enter'], label: '줄자 시작점을 찍은 뒤: 측정값 칸에 길이 넣기(그 길이에 안내점)' },
       { keys: ['Shift'], label: '각도기: 지금 평면에 고정' },
       { keys: ['Esc'], label: '여는 중이면 취소 → 측정 점 지우기 → 측정 끄기 → 고른 것 지우기' },
       { keys: ['?'], label: '이 안내 열기' },
