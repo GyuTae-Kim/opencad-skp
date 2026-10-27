@@ -428,6 +428,7 @@ function extrasMeta(
   if (parts.dimensions) out.dimensions = parts.dimensions;
   if (parts.sectionPlanes) out.sectionPlanes = parts.sectionPlanes;
   if (parts.annotationItems) out.annotationItems = parts.annotationItems;
+  if (parts.annotationRuns) out.annotationRuns = parts.annotationRuns;
   if (parts.attributes) out.attributes = parts.attributes;
   if (parts.modelAttrs !== undefined) out.modelAttrs = parts.modelAttrs;
   if (parts.treeInfo) out.treeInfo = parts.treeInfo;

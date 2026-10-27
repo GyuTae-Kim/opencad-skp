@@ -75,6 +75,7 @@ import {
   hiddenNodeRanges,
   isBigScene,
   itemVisible,
+  annotationHiddenRanges,
   nodeSelection,
   pickDeepest,
   releaseName,
@@ -1975,6 +1976,8 @@ export class SkpViewerApp implements PanelHost {
     }
     // 나누지 않은 깊은 노드 숨김: 항목마다 구간을 합쳐 한 번에 넘기고, 더는 숨길 것이 없는 항목은 푼다
     this.hiddenRanges = hiddenNodeRanges(d);
+    // 숨긴 그룹·컴포넌트 안의 주석 선(치수선·지시선·보조선·단면 기호) 구간 — 라벨과 같이 숨긴다
+    for (const [item, list] of annotationHiddenRanges(d)) this.hiddenRanges.set(item, list);
     // 장면이 다시 보이게 한 숨김 개체: 반투명 숨긴 형상은 숨긴다(보통 색 그림과 겹치지 않게)
     for (const [item, list] of revealGhostRanges(d)) {
       const cur = this.hiddenRanges.get(item);
