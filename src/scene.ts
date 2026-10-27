@@ -59,6 +59,7 @@ import type {
 import * as A from './scene-annotations';
 import { AttrPool, PAGE_USE_HIDDEN_OBJECTS } from './scene-meta';
 import { cornerNormals, faceUnitNormal } from './scene-smooth';
+import { F32, I32, U32 } from './grow';
 import { applyFaceUvq, faceUvq, planeAxes } from './projection';
 import { solidInfo } from './solid';
 
@@ -296,64 +297,6 @@ interface Prepared {
   closed: boolean;
   /** SketchUp 입체면 부피(로컬 인치³, solid.ts) */
   volume?: number;
-}
-
-class F32 {
-  a = new Float32Array(1024);
-  n = 0;
-  reserve(k: number): void {
-    if (this.n + k <= this.a.length) return;
-    let size = this.a.length * 2;
-    while (size < this.n + k) size *= 2;
-    const b = new Float32Array(size);
-    b.set(this.a.subarray(0, this.n));
-    this.a = b;
-  }
-  done(): Float32Array {
-    return this.a.slice(0, this.n);
-  }
-}
-
-class U32 {
-  a: Uint32Array;
-  n = 0;
-  constructor(size = 1024) {
-    this.a = new Uint32Array(size);
-  }
-  reserve(k: number): void {
-    if (this.n + k <= this.a.length) return;
-    let size = Math.max(1, this.a.length * 2);
-    while (size < this.n + k) size *= 2;
-    const b = new Uint32Array(size);
-    b.set(this.a.subarray(0, this.n));
-    this.a = b;
-  }
-  push(v: number): void {
-    this.reserve(1);
-    this.a[this.n++] = v;
-  }
-  done(): Uint32Array {
-    return this.a.slice(0, this.n);
-  }
-}
-
-class I32 {
-  a: Int32Array;
-  n = 0;
-  constructor(size = 1024) {
-    this.a = new Int32Array(size);
-  }
-  reserve(k: number): void {
-    if (this.n + k <= this.a.length) return;
-    let size = Math.max(1, this.a.length * 2);
-    while (size < this.n + k) size *= 2;
-    const b = new Int32Array(size);
-    b.set(this.a.subarray(0, this.n));
-    this.a = b;
-  }
-  done(): Int32Array {
-    return this.a.slice(0, this.n);
-  }
 }
 
 /** 면 하나를 삼각화해 (위치, 삼각형) 추가. 실패하면 false */
