@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Vcb, vcbStartKey } from '../../src/app/vcb';
-import { DEFAULT_UNITS, decimalKeypadFits, parseLength, type UnitsDisplay } from '../../src/app/units';
+import { DEFAULT_UNITS, decimalKeypadFits, parseLength, usesDecimalComma, type UnitsDisplay } from '../../src/app/units';
 
 const ARCH: UnitsDisplay = { ...DEFAULT_UNITS, lengthUnit: 'inch', lengthFormat: 'architectural', lengthPrecision: 3 };
 const CM: UnitsDisplay = { ...DEFAULT_UNITS, lengthUnit: 'cm' };
@@ -38,8 +38,27 @@ describe('측정값 칸 글 읽기(parseLength → mm)', () => {
     expect(parseLength('3/4', ARCH)).toBeCloseTo(19.05, 9);
   });
 
+  it('쉼표: 세 자리 묶음은 천 단위 구분, 그 밖은 소수 쉼표 — 소수 쉼표 언어는 늘 소수점', () => {
+    expect(parseLength('1,500')).toBe(1500);
+    expect(parseLength('1,500 mm')).toBe(1500);
+    expect(parseLength('12,345.5')).toBe(12345.5);
+    expect(parseLength('1,234,567')).toBe(1234567);
+    expect(parseLength('1,5')).toBe(1.5);
+    expect(parseLength('12,3456')).toBe(12.3456);
+    expect(parseLength('-1,500')).toBe(-1500);
+    expect(parseLength('1,500', DEFAULT_UNITS, true)).toBe(1.5);
+    expect(parseLength('1,5 m', DEFAULT_UNITS, true)).toBe(1500);
+    expect(usesDecimalComma('de')).toBe(true);
+    for (const l of ['ko', 'en', 'ja', 'zh-CN', '', null]) expect(usesDecimalComma(l), String(l)).toBe(false);
+  });
+
+  it('칸에 보이던 반올림 표시(~)는 건너뛴다', () => {
+    expect(parseLength('~ 2852 mm')).toBe(2852);
+    expect(parseLength('~1.5 m')).toBe(1500);
+  });
+
   it('못 읽는 글은 null', () => {
-    for (const t of ['', ' ', 'abc', '.', '1/0', '12 xyz', '--3', '1..2']) expect(parseLength(t), t).toBeNull();
+    for (const t of ['', ' ', 'abc', '.', '1/0', '12 xyz', '--3', '1..2', '1,500,5', '~']) expect(parseLength(t), t).toBeNull();
   });
 
   it('숫자 자판(소수점만)으로 충분한 단위인지', () => {
@@ -112,6 +131,35 @@ describe('측정값 칸(Vcb)', () => {
     expect(vcb.input.value).toBe('100 mm');
     expect(msg.hidden).toBe(true);
     expect(returnFocus).toHaveBeenCalledTimes(1);
+  });
+
+  it('보이던 지금 길이를 그대로 넣으면(칸만 누르고 Enter) 넣지 않고 알린다', () => {
+    const { vcb, onSubmit } = make();
+    vcb.setLive('~ 3728 mm');
+    vcb.input.dispatchEvent(new Event('focus'));
+    expect(vcb.editing).toBe(true);
+    vcb.submit();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(vcb.el.querySelector<HTMLElement>('.vcb-msg')!.textContent).toBe('길이를 치세요');
+  });
+
+  it('쉼표는 화면 언어를 따른다(한국어 1,500 = 천오백, 독일어 1,5 = 1.5)', () => {
+    const { vcb, onSubmit } = make();
+    const lang = document.documentElement.lang;
+    try {
+      document.documentElement.lang = 'ko';
+      vcb.begin('1');
+      vcb.input.value = '1,500';
+      vcb.submit();
+      expect(onSubmit).toHaveBeenLastCalledWith(1500);
+      document.documentElement.lang = 'de';
+      vcb.begin('1');
+      vcb.input.value = '1,500';
+      vcb.submit();
+      expect(onSubmit).toHaveBeenLastCalledWith(1.5);
+    } finally {
+      document.documentElement.lang = lang;
+    }
   });
 
   it('건축·분수 단위는 글 자판, 안내점이 있으면 지우기 단추', () => {

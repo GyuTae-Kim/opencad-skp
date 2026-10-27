@@ -5,12 +5,12 @@
  *   - 시작점을 찍고 커서를 잴 방향(끝점·모서리·축 고정)으로 둔 채 숫자를 치면 이 칸에 들어가고, Enter로 시작점에서 그 길이에 안내점을 찍는다.
  *   - 두 점을 다 잰 뒤 길이를 치면 그 결과의 방향으로 시작점에서 그 길이에 안내점을 찍는다(커서가 없는 손가락 기기는 이쪽 — 칸을 누르면 숫자 자판).
  *   안내점은 보기 전용 표시(모형에 넣지 않음)이고 끝점처럼 붙으므로, "이 벽 모서리에서 900 mm 떨어진 곳"에서 다시 잴 수 있다.
- * 글은 모형 단위로 읽는다(units.ts parseLength — 단위를 붙여도 된다). 십진·공학 단위는 숫자 자판(inputmode decimal),
+ * 글은 모형 단위로 읽는다(units.ts parseLength — 단위를 붙여도 되고, 쉼표는 화면 언어를 따른다). 십진·공학 단위는 숫자 자판(inputmode decimal),
  * 건축·분수 인치는 ' " / 가 필요해 글 자판을 띄운다. 휴대폰 자판이 화면을 확대하지 않게 손가락 기기의 글 크기는 16px(CSS).
  * 칸 안의 Esc는 입력만 그만두고(측정 점은 그대로), Enter·Esc 뒤에는 부른 쪽이 정한 곳으로 초점을 돌려준다.
  */
 import { h, icon } from './dom';
-import { DEFAULT_UNITS, decimalKeypadFits, parseLength, type UnitsDisplay } from './units';
+import { DEFAULT_UNITS, decimalKeypadFits, parseLength, usesDecimalComma, type UnitsDisplay } from './units';
 
 export interface VcbOptions {
   /** 친 길이(mm, 음수면 반대쪽) → 못 넣었으면 알릴 글, 넣었으면 null */
@@ -153,11 +153,13 @@ export class Vcb {
   /** 친 길이 넣기(Enter·넣기 단추) */
   submit(): void {
     const text = this.input.value.trim();
-    if (!text || (text === this.live && !this.editingValue)) {
+    // 보이던 지금 길이를 그대로 넣으면(칸만 누르고 Enter) 친 것이 없다
+    if (!text || text === this.live.trim()) {
       this.setMessage('길이를 치세요');
       return;
     }
-    const mm = parseLength(text, this.units);
+    // 쉼표는 화면 언어를 따른다(독일어는 소수 쉼표, 그 밖은 1,500 = 천오백)
+    const mm = parseLength(text, this.units, usesDecimalComma(document.documentElement.lang));
     if (mm === null) {
       this.setMessage('길이를 읽지 못했습니다');
       return;
