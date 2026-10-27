@@ -48,7 +48,7 @@ import {
   unwidenSceneCamera,
   type SceneFit,
 } from './pages';
-import { DEFAULT_UNITS, formatLength, mmPerSceneUnit } from './units';
+import { DEFAULT_UNITS, formatAngle, formatLength, mmPerSceneUnit } from './units';
 import { Overlay } from './overlay';
 import { cardName, cardRows, entityInfo } from './entity';
 import { h, icon } from './dom';
@@ -112,7 +112,7 @@ import { openShortcutsDialog } from './shortcuts';
 import type { Rgb, SkpEdgeColorMode, SkpShadowMeta, SkpStyleMeta } from '../meta';
 import { fogFor, lightingForShadow, shadowOrDefault, sunForShadow, usesSun } from './sun';
 import { WalkStick } from './joystick';
-import { Vcb, vcbStartKey } from './vcb';
+import { Vcb, vcbStartKey, type VcbKind } from './vcb';
 
 export const APP_TITLE = 'OpenCAD SketchUp 뷰어';
 const TOOLS_URL = 'https://gyutae-kim.github.io/opencad';
@@ -194,8 +194,10 @@ export interface AppSnapshot {
   measureMode: MeasureMode | null;
   /** 측정값 칸으로 찍은 안내점 수 */
   measureGuides: number;
-  /** 측정값 칸이 보이는지·지금 글·측정 띠 안에 있는지 */
-  vcb: { shown: boolean; value: string; inBand: boolean };
+  /** 측정값 칸으로 둔 안내선 수 */
+  measureGuideLines: number;
+  /** 측정값 칸이 보이는지·지금 글·측정 띠 안에 있는지·받는 값(길이·각도) */
+  vcb: { shown: boolean; value: string; inBand: boolean; kind: VcbKind };
   /** 고른 것의 종류(outline·node·material·item·face·edge, 없으면 null) */
   selectionKind: Selection['kind'] | null;
   /** 장면 재생 중인지 */
@@ -324,7 +326,7 @@ export class SkpViewerApp implements PanelHost {
   /** 측정 띠를 쓰는 화면(styles.css .measure-bar와 같은 조건): 측정값 칸을 띠 안 둘째 줄로 옮긴다 */
   private readonly bandQuery: MediaQueryList | null =
     typeof window.matchMedia === 'function' ? window.matchMedia(`(max-width: ${NARROW_WIDTH - 0.02}px), (pointer: coarse)`) : null;
-  /** 측정값 칸(VCB): 줄자 길이를 보이고 쳐서 넣는다 */
+  /** 측정값 칸(VCB): 줄자 길이·각도기 각도를 보이고 쳐서 넣는다 */
   private vcb!: Vcb;
   private projection: Projection = 'perspective';
   private renderMode: RenderMode = 'shadedEdges';
@@ -601,7 +603,7 @@ export class SkpViewerApp implements PanelHost {
     updLater.addEventListener('click', () => (updateBar.hidden = true));
     // 측정값 칸(VCB): 넓은 화면은 3D 보기 오른쪽 아래, 측정 띠를 쓰는 화면은 띠 안 둘째 줄(placeVcb)
     this.vcb = new Vcb({
-      onSubmit: (mm) => this.submitLength(mm),
+      onSubmit: (value, kind) => this.submitValue(value, kind),
       onClearGuides: () => {
         this.measureTool?.clearGuides();
         this.refreshStatus();
@@ -1222,10 +1224,11 @@ export class SkpViewerApp implements PanelHost {
           const a = this.doc?.axes;
           return a ? { x: a.x, y: a.y, z: a.z } : null;
         },
-        // 측정값 칸: 줄자 진행 중이면 시작점 → 커서 길이, 다 재면 그 거리(모형 단위 글)
-        onLive: (len) => {
+        // 측정값 칸: 줄자 진행 중이면 시작점 → 커서 길이, 다 재면 그 거리(모형 단위 글). 각도기는 커서 각도·결과 각도
+        onLive: (value, kind) => {
           const d = this.doc;
-          this.vcb.setLive(len === null || !d ? '' : formatLength(len * mmPerSceneUnit(d.scene.units), d.units));
+          this.vcb.setKind(kind);
+          this.vcb.setLive(value === null || !d ? '' : kind === 'angle' ? formatAngle(value, d.units) : formatLength(value * mmPerSceneUnit(d.scene.units), d.units));
         },
       });
       return true;
@@ -2858,8 +2861,9 @@ export class SkpViewerApp implements PanelHost {
     }
     const v = this.viewer;
     const tool = this.measureTool;
-    // 줄자 시작점을 찍은 뒤 숫자를 치면 측정값 칸으로(SketchUp처럼 — 그동안 1~7 보기 키는 칸이 받는다)
-    if (tool?.mode === 'tape' && tool.pointCount === 1 && !isEditableTarget(ev.target) && vcbStartKey(ev) && this.vcb.shown && !this.busy) {
+    // 줄자 시작점·각도기 기준 방향을 찍은 뒤 숫자를 치면 측정값 칸으로(SketchUp처럼 — 그동안 1~7 보기 키는 칸이 받는다)
+    const typing = (tool?.mode === 'tape' && tool.pointCount === 1) || (tool?.mode === 'protractor' && tool.pointCount === 2);
+    if (typing && !isEditableTarget(ev.target) && vcbStartKey(ev) && this.vcb.shown && !this.busy) {
       ev.preventDefault();
       ev.stopPropagation();
       this.vcb.begin(ev.key);
@@ -3172,8 +3176,8 @@ export class SkpViewerApp implements PanelHost {
   }
 
   /**
-   * 측정값 칸 자리·보이기: 줄자에서만. 넓은 화면은 3D 보기 오른쪽 아래에 늘(SketchUp 측정값 칸처럼 지금 길이를 보인다),
-   * 측정 띠를 쓰는 화면은 띠 안 둘째 줄에 줄자 결과·안내점이 있을 때만(커서가 없어 결과의 방향으로 넣는다 — 그 전에는 띠를 작게)
+   * 측정값 칸 자리·보이기: 줄자(길이)·각도기(각도)에서. 넓은 화면은 3D 보기 오른쪽 아래에 늘(SketchUp 측정값 칸처럼 지금 값을 보인다),
+   * 측정 띠를 쓰는 화면은 띠 안 둘째 줄에 그 도구의 결과·안내가 있을 때만(커서가 없어 결과의 방향으로 넣는다 — 그 전에는 띠를 작게)
    */
   private placeVcb(): void {
     const tool = this.measureTool;
@@ -3184,26 +3188,29 @@ export class SkpViewerApp implements PanelHost {
       if (band) host.insertBefore(this.vcb.el, this.els.measureLog);
       else host.insertBefore(this.vcb.el, this.els.measureBar.nextSibling);
     }
-    const tape = !!this.doc && tool?.mode === 'tape';
-    const show = tape && (!band || tool!.result?.kind === 'tape' || tool!.guides.length > 0);
+    const mode = this.doc ? (tool?.mode ?? null) : null;
+    if (mode) this.vcb.setKind(mode === 'protractor' ? 'angle' : 'length');
+    const guides = (tool?.guides.length ?? 0) + (tool?.guideLines.length ?? 0);
+    const show = !!mode && (!band || tool!.result?.kind === mode || guides > 0);
     this.vcb.show(show);
-    this.vcb.setGuides(tool?.guides.length ?? 0);
+    this.vcb.setGuides(tool?.guides.length ?? 0, tool?.guideLines.length ?? 0);
     this.els.measureBar.classList.toggle('has-vcb', band && show);
   }
 
-  /** 측정값 칸에 친 길이(mm) 넣기 → 못 넣었으면 알릴 글 */
-  private submitLength(mm: number): string | null {
+  /** 측정값 칸에 친 값(길이 mm · 각도 도) 넣기 → 못 넣었으면 알릴 글 */
+  private submitValue(value: number, kind: VcbKind): string | null {
     const d = this.doc;
     const tool = this.measureTool;
     if (!d || !tool) return null;
-    const r = tool.applyLength(mm / mmPerSceneUnit(d.scene.units));
+    const angle = kind === 'angle';
+    const r = angle ? tool.applyAngle(value) : tool.applyLength(value / mmPerSceneUnit(d.scene.units));
     if (r === 'ok') {
       this.refreshStatus();
       return null;
     }
-    if (r === 'zero') return '0이 아닌 길이를 치세요';
-    if (r === 'direction') return '커서를 잴 방향으로 옮긴 뒤 치세요';
-    if (r === 'start') return '먼저 시작점을 누르세요';
+    if (r === 'zero') return angle ? '0이 아닌 각도를 치세요' : '0이 아닌 길이를 치세요';
+    if (r === 'direction') return angle ? '커서를 돌릴 쪽으로 옮긴 뒤 치세요' : '커서를 잴 방향으로 옮긴 뒤 치세요';
+    if (r === 'start') return angle ? '먼저 중심점과 기준 방향을 누르세요' : '먼저 시작점을 누르세요';
     return null;
   }
 
@@ -3283,7 +3290,8 @@ export class SkpViewerApp implements PanelHost {
       labelsOccluded: this.labels?.occludedCount ?? 0,
       measureMode: this.measureTool?.mode ?? null,
       measureGuides: this.measureTool?.guides.length ?? 0,
-      vcb: { shown: this.vcb.shown, value: this.vcb.input.value, inBand: this.vcb.el.parentElement === this.els.measureBar },
+      measureGuideLines: this.measureTool?.guideLines.length ?? 0,
+      vcb: { shown: this.vcb.shown, value: this.vcb.input.value, inBand: this.vcb.el.parentElement === this.els.measureBar, kind: this.vcb.kind },
       selectionKind: d?.selection?.kind ?? null,
       slideshow: this.sliding,
       fileBackground: this.fileBg,

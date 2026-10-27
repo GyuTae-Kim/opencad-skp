@@ -10,6 +10,8 @@
  * - 교차점(SketchUp "교차점" 추정): 커서·둘레에서 고른 선분 두 개가 3D에서 만나는 곳(두 선분 모두 안쪽 — 끝에서 만나는 꺾인 곳·T자는 끝점이 맡는다).
  *   다른 그룹의 모서리끼리, 보조선과 모서리처럼 SketchUp이 나누지 않은 교차를 잡는다. 화면에서만 엇갈리는 선분(깊이가 다름)은 잡지 않는다.
  *   계산은 코어 0.9.0 순수 함수 segmentIntersection(허용치는 그 자리 반 화소의 세계 길이)을 쓴다.
+ * - 측정값 칸으로 둔 안내점은 끝점처럼, 안내선(끝이 없는 직선)은 모서리 위처럼 붙고 안내선이 모서리·다른 안내선과 만나는 곳은 교차점이다
+ *   (SketchUp 안내선 추정).
  * - 수직: 시작점(from)이 있을 때만 — 모서리 직선에 내린 발이 선분 안이면, 면은 커서 밑 면의 평면에 내린 발(벽과 벽 사이 거리).
  * - 시작점(from)이 있고 결과가 면 위·빈 곳이면, 커서가 시작점에서 축 방향(화면 각 6° 안)으로 가면 그 축 위로 고정한다
  *   (빨강 X · 초록 Y · 파랑 Z).
@@ -72,6 +74,15 @@ export interface SnapScene {
 
 /** 측정값 칸으로 찍은 안내점에 붙는 추정 글(끝점처럼 붙는다 — SketchUp "안내점") */
 export const GUIDE_POINT_LABEL = '안내점';
+
+/** 측정값 칸으로 둔 안내선에 붙는 추정 글(모서리 위처럼 붙는다 — SketchUp "안내선에") */
+export const GUIDE_LINE_LABEL = '안내선에';
+
+/** 안내선(끝이 없는 직선): 지나는 점과 단위 방향(세계) */
+export interface GuideLine {
+  point: V3;
+  dir: V3;
+}
 
 /** 면에 수직 추정 글(모서리에 수직은 SNAP_LABELS.perpendicular) */
 export const FACE_PERPENDICULAR_LABEL = '면에 수직';
@@ -324,6 +335,8 @@ export interface SnapInput {
   axisDirs?: AxisDirs | null;
   /** 측정값 칸으로 찍은 안내점(세계) — 끝점처럼 붙는다 */
   guides?: readonly V3[];
+  /** 측정값 칸으로 둔 안내선(세계) — 모서리 위처럼 붙고, 모서리·다른 안내선과 만나는 곳은 교차점 */
+  guideLines?: readonly GuideLine[];
 }
 
 interface Cand {
@@ -375,7 +388,7 @@ export function chooseSnap(o: SnapInput): Snap {
   const seen = new Set<string>();
   const scene = o.scene;
   /** 교차점을 볼 선분(그 자리 반 화소의 세계 길이 tol과 함께) */
-  const near: { seg: [V3, V3]; id: string; tol: number }[] = [];
+  const near: { seg: [V3, V3]; id: string; tol: number; guide?: boolean }[] = [];
   for (const p of [pick, ...(o.probes ?? [])]) {
     if (!p || p.kind !== 'line' || !scene) continue;
     const key = `${p.id}#${p.raw ?? p.index}`;
@@ -400,12 +413,24 @@ export function chooseSnap(o: SnapInput): Snap {
     push({ kind: 'onEdge', point: on, rank: 2, edge: seg, id: p.id, trusted: center });
     if (near.length < MAX_INTERSECTION_SEGMENTS) near.push({ seg, id: p.id, tol: 0.5 * worldPerPixel(f, Math.max(viewDepth(f, on), 0)) });
   }
-  // 두 선분이 3D에서 만나는 점(둘 다 안쪽)
+  // 측정값 칸으로 둔 안내선: 커서 광선에 가장 가까운 선 위 점(모서리 위처럼 — 덧그림이라 형상에 가리지 않는다).
+  // 끝이 없는 선이라 교차점 계산에는 그 점 둘레(추정 반경의 네 배) 선분으로 넣는다
+  for (const gl of o.guideLines ?? []) {
+    const q = closestOnLine(ray, gl.point, gl.dir);
+    if (!q) continue;
+    const wpp = worldPerPixel(f, Math.max(viewDepth(f, q), 0));
+    const half = wpp * R * 4;
+    if (!(half > 0)) continue;
+    const seg: [V3, V3] = [along(q, gl.dir, -half), along(q, gl.dir, half)];
+    push({ kind: 'onEdge', point: q, rank: 2, edge: seg, id: '', trusted: true, label: GUIDE_LINE_LABEL });
+    if (near.length < MAX_INTERSECTION_SEGMENTS) near.push({ seg, id: '', tol: 0.5 * wpp, guide: true });
+  }
+  // 두 선분이 3D에서 만나는 점(둘 다 안쪽). 안내선끼리 만나는 점은 덧그림이라 가림을 보지 않는다
   for (let i = 0; i < near.length; i++)
     for (let j = i + 1; j < near.length; j++) {
       const s = near[i]!, t = near[j]!;
       const x = segmentIntersection(s.seg[0], s.seg[1], t.seg[0], t.seg[1], Math.max(s.tol, t.tol));
-      if (x) push({ kind: 'intersection', point: x, rank: 1.25, edge: s.seg, other: t.seg, id: s.id, trusted: false });
+      if (x) push({ kind: 'intersection', point: x, rank: 1.25, edge: s.seg, other: t.seg, id: s.id || t.id, trusted: !!(s.guide && t.guide) });
     }
   // 앞서 지나간 곡선의 중심
   for (const c of o.centers ?? []) push({ kind: 'center', point: [c[0], c[1], c[2]], rank: 0, id: '', trusted: false });

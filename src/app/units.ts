@@ -291,6 +291,39 @@ export function parseLength(text: string, d: UnitsDisplay = DEFAULT_UNITS, decim
   return Number.isFinite(mm) && Math.abs(mm) < 1e15 ? sign * mm : null;
 }
 
+/**
+ * 측정값 칸(각도기)에 친 각도 글 → 도(못 읽으면 null). SketchUp 각도기처럼 도(34.1 · 34.1° · 34.1deg)나
+ * 경사(높이:밑변 — 1:6은 atan(1/6) ≈ 9.46°)로 친다. 앞의 −는 반대쪽으로 돌기, 앞의 ~(칸에 보이던 반올림 표시)는 건너뛴다.
+ * 쉼표는 parseLength와 같다: decimalComma면 소수점, 아니면 세 자리 묶음은 천 단위 구분, 그 밖의 쉼표는 점이 없을 때 소수점.
+ */
+export function parseAngle(text: string, decimalComma = false): number | null {
+  let s = String(text ?? '')
+    .trim()
+    .toLowerCase();
+  if (!s) return null;
+  let sign = 1;
+  if (/^[-+−]/.test(s)) {
+    if (s[0] !== '+') sign = -1;
+    s = s.slice(1).trim();
+  }
+  s = s.replace(/^~\s*/, '');
+  const num = (t: string): number | null => {
+    let v = t.trim();
+    if (!decimalComma && /^\d{1,3}(?:,\d{3})+$/.test(v)) v = v.replace(/,/g, '');
+    if (!v.includes('.')) v = v.replace(/,/g, '.');
+    return /^(?:\d+(?:\.\d*)?|\.\d+)$/.test(v) ? Number(v) : null;
+  };
+  let deg: number | null;
+  const slope = /^([^:]+):([^:]+)$/.exec(s);
+  if (slope) {
+    const rise = num(slope[1]!);
+    const run = num(slope[2]!);
+    if (rise === null || run === null || (rise === 0 && run === 0)) return null;
+    deg = (Math.atan2(rise, run) * 180) / Math.PI;
+  } else deg = num(s.replace(/\s*(?:°|º|deg|degrees?)$/, ''));
+  return deg !== null && Number.isFinite(deg) && Math.abs(deg) < 1e9 ? sign * deg : null;
+}
+
 /** 측정값 칸이 숫자 자판(소수점만)으로 충분한지: 십진 미터계·인치·피트 소수 꼴. 건축·분수는 ' " / 가 필요하다 */
 export function decimalKeypadFits(d: UnitsDisplay = DEFAULT_UNITS): boolean {
   return d.lengthFormat === 'decimal' || d.lengthFormat === 'engineering';
