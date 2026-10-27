@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { faceAt, facesFrom } from '../src/entities';
+import { F64, U32 } from '../src/grow';
 import { skpToScene } from '../src/index';
 import { parseMaterialXml } from '../src/materials';
 import { matrixFrom13, readModelDat } from '../src/model';
@@ -205,25 +206,26 @@ const oneFace = (loops: number[][], normal: [number, number, number]) => facesFr
 describe('면 삼각화', () => {
   it('구멍 있는 다각형', () => {
     const pts = new Float64Array([0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0, 3, 3, 0, 7, 3, 0, 7, 7, 0, 3, 7, 0]);
-    const pos: number[] = [];
-    const idx: number[] = [];
+    const pos = new F64();
+    const idx = new U32();
     expect(triangulateFace(pts, oneFace([[0, 1, 2, 3], [7, 6, 5, 4]], [0, 0, 1]), 0, pos, idx)).toBe(true);
-    expect(idx.length / 3).toBe(8);
-    expect(triArea(new Float32Array(pos), new Uint32Array(idx))).toBeCloseTo(84);
+    expect(idx.n / 3).toBe(8);
+    expect(triArea(new Float32Array(pos.done()), idx.done())).toBeCloseTo(84);
   });
 
   it('세로 면(법선 x)도 투영해 나눈다', () => {
     const pts = new Float64Array([5, 0, 0, 5, 2, 0, 5, 2, 3, 5, 0, 3]);
-    const pos: number[] = [];
-    const idx: number[] = [];
+    const pos = new F64();
+    const idx = new U32();
     expect(triangulateFace(pts, oneFace([[0, 1, 2, 3]], [1, 0, 0]), 0, pos, idx)).toBe(true);
-    expect(triArea(new Float32Array(pos), new Uint32Array(idx))).toBeCloseTo(6);
+    expect(triArea(new Float32Array(pos.done()), idx.done())).toBeCloseTo(6);
   });
 
   it('면적 0이면 false', () => {
-    const pos: number[] = [];
-    expect(triangulateFace(new Float64Array([0, 0, 0, 1, 0, 0, 2, 0, 0]), oneFace([[0, 1, 2]], [0, 0, 1]), 0, pos, [])).toBe(false);
-    expect(pos.length).toBe(0);
+    const pos = new F64();
+    const idx = new U32();
+    expect(triangulateFace(new Float64Array([0, 0, 0, 1, 0, 0, 2, 0, 0]), oneFace([[0, 1, 2]], [0, 0, 1]), 0, pos, idx)).toBe(false);
+    expect([pos.n, idx.n]).toEqual([0, 0]);
   });
 });
 
