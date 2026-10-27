@@ -9,7 +9,7 @@
  */
 
 import type { SkpAttr, SkpAttrDicts, SkpDimension, SkpEdge, SkpFace, SkpFont, SkpGuide, SkpInstance, SkpSectionPlane, SkpText } from './model';
-import { MfcError, type MfcStream } from './mfcstream';
+import { BAD_REF, MfcError, type MfcStream } from './mfcstream';
 
 /** 묶음 번호와 차례를 묶는 자리값(차례는 2^32 미만) */
 const SHIFT = 4294967296;
@@ -192,6 +192,11 @@ export class MfcState {
   local(packed: unknown, what: string): number {
     if (typeof packed !== 'number' || cidOf(packed) !== this.top.cid) throw new MfcError('corrupt', `${what}가 다른 요소 묶음에 속합니다`, this.s.pos);
     return indexOf(packed);
+  }
+
+  /** local과 같되 너그럽게 읽다 버린 참조(BAD_REF)는 -1 */
+  localOrNone(packed: unknown, what: string): number {
+    return packed === BAD_REF ? -1 : this.local(packed, what);
   }
 
   /** 형 있는 값(속성·설정) */

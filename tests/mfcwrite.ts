@@ -296,6 +296,8 @@ export interface MfcEdgeSpec {
   curve?: number;
   pid?: number;
   attrs?: MfcDicts;
+  /** 끝 정점 참조를 첫 모서리 칸으로 깨뜨려 쓴다(칸 번호 바이트가 바뀐 파일 흉내 — 시험용, 첫 모서리가 아닐 때) */
+  brokenRef?: boolean;
 }
 
 export interface MfcLoopSpec {
@@ -945,7 +947,8 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
         pre(ed.attrs, ed.pid);
         drawing(ed.material, ed, ed.layer);
         vertexRef(ed.a);
-        vertexRef(ed.b);
+        if (ed.brokenRef && slots.edges[0] !== undefined) w.ref(slots.edges[0]);
+        else vertexRef(ed.b);
         curveRef(ed.curve);
       });
     };

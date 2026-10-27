@@ -655,11 +655,12 @@ class Decoder {
     s.values[slot] = packed;
     const pre = st.preamble();
     const d = st.drawing();
-    const a = st.local(s.readObject(C.VERTEX), '모서리 정점');
-    const b = st.local(s.readObject(C.VERTEX), '모서리 정점');
-    const curve = s.readObject(C.CURVE);
-    e.a = a;
-    e.b = b;
+    // 정점 참조 하나가 깨진 모서리는 버리고(a·b = -1 — 그 모서리를 쓰는 면도 건너뜀) 이어 읽는다
+    const a = st.localOrNone(s.readObject(C.VERTEX, true), '모서리 정점');
+    const b = st.localOrNone(s.readObject(C.VERTEX, true), '모서리 정점');
+    const curve = s.readObject(C.CURVE, true);
+    e.a = a < 0 || b < 0 ? -1 : a;
+    e.b = a < 0 || b < 0 ? -1 : b;
     e.flags = (d.flags[0] ? FLAG_HIDDEN : 0) | (d.flags[3] ? FLAG_SOFT : 0) | (d.flags[4] ? FLAG_SMOOTH : 0);
     if (d.layer >= 0) e.layer = d.layer;
     if (d.material >= 0) e.material = d.material;
@@ -695,7 +696,8 @@ class Decoder {
     const s = this.s;
     const st = this.st;
     st.preamble();
-    const edge = st.local(s.readObject(C.EDGE), '고리 모서리');
+    // 모서리 참조가 깨지면 -1(면을 만들 때 그 면을 건너뛴다)
+    const edge = st.localOrNone(s.readObject(C.EDGE, true), '고리 모서리');
     const rev = s.u8();
     const owner = s.readObject(C.LOOP);
     const loop = this.loop;
@@ -1224,6 +1226,13 @@ export function readMfcModel(bytes: Uint8Array, header: SkpHeader, onProgress?: 
       if (e instanceof MfcError && e.kind === 'truncated') dec.damaged = true;
       dec.st.note(`형상 뒤의 장면·스타일을 읽지 못했습니다(형상은 다 읽었습니다): ${why(e)}`);
     }
+  if (s.badRefs) {
+    // 칸 번호가 깨진 참조(바이트 하나가 바뀐 파일 등): 그 모서리·면만 빼고 끝까지 읽었다
+    dec.damaged = true;
+    dec.st.note(
+      `깨진 참조 ${s.badRefs.toLocaleString('en-US')}개를 건너뛰었습니다(첫 자리 ${s.firstBadRef.toLocaleString('en-US')}바이트) — 그 모서리와 그 모서리를 쓰는 면은 그리지 않습니다`,
+    );
+  }
   const { model, materials } = assemble(dec, head);
   return { model, materials, styles: dec.view.styles, images: dec.st.images };
 }

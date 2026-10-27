@@ -294,6 +294,7 @@
   "깨진 장면 {0} 목록의 뒷부분을 건너뛰었습니다": "Broken Scene {0} Skipped later part of list",
   "깨진 장면을 건너뛰었습니다": "Broken scene skipped",
   "깨진 재질 항목을 건너뛰었습니다": "Broken material item skipped",
+  "깨진 참조 {0}개를 건너뛰었습니다(첫 자리 {1}바이트) — 그 모서리와 그 모서리를 쓰는 면은 그리지 않습니다": "Skipped {0} broken references (first at byte {1}) — those edges and the faces that use them are not drawn",
   "깨진 카메라를 건너뛰었습니다": "Broken camera skipped",
   "깨진 컴포넌트 정의를 건너뛰었습니다": "Broken component definition skipped",
   "깨진 태그 항목을 건너뛰었습니다": "Broken tag entry skipped",
