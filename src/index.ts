@@ -70,6 +70,11 @@ export interface SkpOptions {
   maxTextures?: number;
   /** 무늬 좌표를 다는 정점 수 한도(기본 scene.ts MAX_UV_VERTICES) */
   maxUvVertices?: number;
+  /**
+   * 미리 푼 꾸러미 항목(이름 → 풀린 바이트, 지금은 'model.dat'만 본다). 워커가 브라우저 내장 풀기로 먼저 푼 것을 넘기면
+   * 해석기가 다시 풀지 않는다(길이가 목록의 원래 크기와 같을 때만 — 다르면 예전처럼 직접 푼다). 2021+ 파일만
+   */
+  inflated?: ReadonlyMap<string, Uint8Array>;
 }
 
 /** 무늬를 입힐 재질 수 기본 한도 */
@@ -265,7 +270,7 @@ function readZipPackage(
   meta: Record<string, unknown>,
   warnings: string[],
   progress: (f: number, stage: string) => void,
-  opts: Pick<SkpOptions, 'textures' | 'maxTextures'> = {},
+  opts: Pick<SkpOptions, 'textures' | 'maxTextures' | 'inflated'> = {},
 ): Package | Scene3d {
   let model: SkpModel;
   const materials = new Map<string, SkpMaterialInfo>();
@@ -337,8 +342,9 @@ function readZipPackage(
         warnings.push('model.dat가 잘렸거나 압축이 깨져 앞부분만 읽었습니다 — 일부 형상이 빠졌을 수 있습니다');
       }
     } else {
+      const pre = opts.inflated?.get('model.dat');
       try {
-        dat = readZipItem(bytes, modelItem, unpacking);
+        dat = pre && pre.length === modelItem.size ? pre : readZipItem(bytes, modelItem, unpacking);
       } catch (e) {
         // 압축이 중간에 깨졌으면 앞부분이라도
         const part = readZipItemPartial(bytes, modelItem);

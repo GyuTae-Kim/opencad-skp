@@ -1,0 +1,76 @@
+/**
+ * 워커의 내장 풀기(DecompressionStream 'deflate-raw')로 model.dat를 미리 푸는 길(src/worker/unzip.ts)과
+ * 해석기의 inflated 선택: 미리 푼 바이트를 쓰든 직접 풀든 장면이 같아야 한다.
+ */
+import { describe, expect, it } from 'vitest';
+import { deflateRawSync } from 'node:zlib';
+import { inflateNative, preinflateSkp } from '../src/worker/unzip';
+import { readSkpHeader, skpToScene } from '../src/index';
+import { findSkpZipItems, readZipItem } from '../src/zip';
+import { edge, entities, face, modelDat, skpFile, vertex } from './build';
+import { mfcFile, squareEntities } from './mfcwrite';
+
+/** 정점·모서리·면 n×n 격자(model.dat가 몇백 KB가 되게) */
+function gridModel(n: number): Uint8Array {
+  const vertices: Uint8Array[] = [];
+  const edges: Uint8Array[] = [];
+  const faces: Uint8Array[] = [];
+  const id = (i: number, j: number): number => 1 + i * (n + 1) + j;
+  for (let i = 0; i <= n; i++) for (let j = 0; j <= n; j++) vertices.push(vertex(id(i, j), i * 10, j * 10, 0));
+  let e = 100000;
+  let f = 500000;
+  for (let i = 0; i < n; i++)
+    for (let j = 0; j < n; j++) {
+      const a = id(i, j);
+      const b = id(i + 1, j);
+      const c = id(i + 1, j + 1);
+      const d = id(i, j + 1);
+      const ids = [e++, e++, e++, e++];
+      edges.push(edge(ids[0]!, a, b), edge(ids[1]!, b, c), edge(ids[2]!, c, d), edge(ids[3]!, d, a));
+      faces.push(face(f++, [0, 0, 1, 0], [ids.map((x) => [x, false] as [number, boolean])]));
+    }
+  return skpFile(modelDat({ root: entities(undefined, { vertices, edges, faces }) }));
+}
+
+const modelItem = (bytes: Uint8Array) => findSkpZipItems(bytes, readSkpHeader(bytes)!.bodyOffset).items!.find((d) => d.name === 'model.dat')!;
+
+describe('내장 풀기로 model.dat 미리 풀기', () => {
+  it('inflateNative: 원래 크기와 정확히 같을 때만 돌려준다', async () => {
+    const raw = new Uint8Array(200_000).map((_, i) => (i * 31) & 0xff);
+    const packed = new Uint8Array(deflateRawSync(raw));
+    expect(await inflateNative(packed, raw.length)).toEqual(raw);
+    expect(await inflateNative(packed, raw.length - 1)).toBeNull();
+    expect(await inflateNative(packed, raw.length + 1)).toBeNull();
+    expect(await inflateNative(new Uint8Array([0xff, 0xff, 0xff]), 10)).toBeNull();
+    expect(await inflateNative(packed, 0)).toBeNull();
+  });
+
+  it('preinflateSkp: 큰 2021+ model.dat만, 직접 푼 것과 같은 바이트', async () => {
+    const bytes = gridModel(40);
+    const item = modelItem(bytes);
+    expect(item.method).toBe(8);
+    // 작은 파일은 기본 문턱(1 MB) 아래라 넘기지 않는다
+    expect(await preinflateSkp(bytes)).toBeUndefined();
+    const pre = await preinflateSkp(bytes, 1);
+    expect(pre?.get('model.dat')).toEqual(readZipItem(bytes, item));
+    // 2020 이하(MFC)·SketchUp 파일 아님·잘린 꾸러미는 넘기지 않는다
+    expect(await preinflateSkp(mfcFile({ schemas: 'v17', root: squareEntities() }), 1)).toBeUndefined();
+    expect(await preinflateSkp(new Uint8Array([1, 2, 3]), 1)).toBeUndefined();
+    expect(await preinflateSkp(bytes.subarray(0, bytes.length - 200), 1)).toBeUndefined();
+  });
+
+  it('skpToScene: 미리 푼 model.dat를 쓰든 직접 풀든 같은 장면, 길이가 다르면 직접 푼다', async () => {
+    const bytes = gridModel(20);
+    const pre = (await preinflateSkp(bytes, 1))!;
+    const a = skpToScene(bytes, { outline: true });
+    const b = skpToScene(bytes, { outline: true, inflated: pre });
+    expect(b.meshes.map((m) => [...m.positions].length)).toEqual(a.meshes.map((m) => [...m.positions].length));
+    expect(b.meta?.faces).toBe(400);
+    expect(b.meta?.faces).toBe(a.meta?.faces);
+    expect(b.lines.map((l) => l.positions.length)).toEqual(a.lines.map((l) => l.positions.length));
+    // 길이가 맞지 않는 바이트(잘못 넘김)는 쓰지 않는다
+    const wrong = skpToScene(bytes, { inflated: new Map([['model.dat', new Uint8Array(10)]]) });
+    expect(wrong.meta?.faces).toBe(400);
+    expect(wrong.warnings ?? []).toEqual(a.warnings ?? []);
+  });
+});
