@@ -183,8 +183,11 @@ describe('probe: 앱 워커와 같은 해석 길', () => {
     for (const s of Object.values(m.stages)) {
       expect(s!.peakHeapMB).toBeGreaterThan(0);
       expect(s!.peakRssMB).toBeGreaterThan(0);
+      // 같은 때의 heap + external 합은 그때 heap보다 작을 수 없다
+      expect(s!.peakHeapExternalMB).toBeGreaterThanOrEqual(s!.peakHeapMB);
     }
     expect(m.peakHeapMB).toBeGreaterThanOrEqual(m.stages.scene!.peakHeapMB);
+    expect(m.peakHeapExternalMB).toBeGreaterThanOrEqual(m.stages.scene!.peakHeapExternalMB);
     expect(m.sceneBuffersMB['mesh.positions']).toBeGreaterThanOrEqual(0);
     expect(m.modelDatMB).toBeDefined();
   });

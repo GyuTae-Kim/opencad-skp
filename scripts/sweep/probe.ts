@@ -37,6 +37,8 @@ export interface StageMemory {
   peakHeapMB: number;
   peakExternalMB: number;
   peakRssMB: number;
+  /** 진행 알림마다 잰 heap + external 합의 최대(같은 때 함께 살아 있던 JS 메모리 — rss는 기계의 메모리 압박에 따라 흔들린다) */
+  peakHeapExternalMB: number;
   /** 단계가 끝날 때 gc 뒤 크기(그때 살아 있는 것) */
   endHeapMB: number;
   endExternalMB: number;
@@ -61,6 +63,8 @@ export interface ProbeMemory {
   peakHeapMB: number;
   peakExternalMB: number;
   peakRssMB: number;
+  /** 단계 heap + external 합 최대 가운데 가장 큰 것 */
+  peakHeapExternalMB: number;
   /** model.dat 풀린 크기(2021+ 꾸러미에서 찾았을 때) */
   modelDatMB?: number;
   /** 장면 결과의 형식 배열 바이트(종류별, MB) — 화면으로 넘기는 크기 */
@@ -129,6 +133,7 @@ interface Acc {
   peakHeap: number;
   peakExt: number;
   peakRss: number;
+  peakSum: number;
   endHeap: number;
   endExt: number;
   endRss: number;
@@ -147,7 +152,7 @@ class Meter {
   private get(s: ProbeStage): Acc {
     let a = this.acc.get(s);
     if (!a) {
-      a = { ms: 0, peakHeap: 0, peakExt: 0, peakRss: 0, endHeap: 0, endExt: 0, endRss: 0 };
+      a = { ms: 0, peakHeap: 0, peakExt: 0, peakRss: 0, peakSum: 0, endHeap: 0, endExt: 0, endRss: 0 };
       this.acc.set(s, a);
     }
     return a;
@@ -172,6 +177,7 @@ class Meter {
     if (m.heapUsed > a.peakHeap) a.peakHeap = m.heapUsed;
     if (m.external > a.peakExt) a.peakExt = m.external;
     if (m.rss > a.peakRss) a.peakRss = m.rss;
+    if (m.heapUsed + m.external > a.peakSum) a.peakSum = m.heapUsed + m.external;
   }
 
   close(): void {
@@ -339,6 +345,7 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
     let peakHeap = 0;
     let peakExt = 0;
     let peakRss = 0;
+    let peakSum = 0;
     for (const s of PROBE_STAGES) {
       const a = meter.acc.get(s);
       if (!a) continue;
@@ -347,6 +354,7 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
         peakHeapMB: MB(a.peakHeap),
         peakExternalMB: MB(a.peakExt),
         peakRssMB: MB(a.peakRss),
+        peakHeapExternalMB: MB(a.peakSum),
         endHeapMB: MB(a.endHeap),
         endExternalMB: MB(a.endExt),
         endRssMB: MB(a.endRss),
@@ -354,6 +362,7 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
       peakHeap = Math.max(peakHeap, a.peakHeap);
       peakExt = Math.max(peakExt, a.peakExt);
       peakRss = Math.max(peakRss, a.peakRss);
+      peakSum = Math.max(peakSum, a.peakSum);
     }
     const sceneBuffersMB: Record<string, number> = {};
     for (const [k, v] of Object.entries(buffers).sort((a, b) => b[1] - a[1])) sceneBuffersMB[k] = MB(v);
@@ -370,6 +379,7 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
       peakHeapMB: MB(peakHeap),
       peakExternalMB: MB(peakExt),
       peakRssMB: MB(peakRss),
+      peakHeapExternalMB: MB(peakSum),
       sceneBuffersMB,
       sceneBackingMB: MB(backingBytes),
       sceneHoldsFile: backing.has(bytes.buffer),
