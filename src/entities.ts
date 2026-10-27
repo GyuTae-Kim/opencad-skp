@@ -58,9 +58,61 @@ export interface SkpFaces {
   pid: Float64Array;
   /** 면 차례 → 속성 사전(있는 면만) */
   attrs?: Map<number, SkpAttrDicts>;
-  /** 면 차례 → 앞·뒷면 무늬 투영(그쪽 재질이 무늬 재질이고 저장된 투영이 있을 때만) */
-  frontMap?: Map<number, SkpTextureMap>;
-  backMap?: Map<number, SkpTextureMap>;
+  /** 앞·뒷면 무늬 투영(그쪽 재질이 무늬 재질이고 저장된 투영이 있는 면만 — 그런 면이 없으면 없다). 꺼낼 때는 textureMapAt */
+  frontMaps?: SkpTextureMaps;
+  backMaps?: SkpTextureMaps;
+}
+
+/**
+ * 면 무늬 투영 표(한쪽): 면 k의 투영은 at[k]번째(-1 = 없음). 투영마다 MAP_STRIDE칸 —
+ * 종류, 방향이 있는지(1·0), 행렬 9칸(열 우선), 방향 3칸. 투영을 객체로 두면 큰 무늬 모형에서 heap을 수백 MB 잡았다
+ */
+export interface SkpTextureMaps {
+  at: Int32Array;
+  data: Float64Array;
+}
+
+export const MAP_STRIDE = 14;
+
+/** 면 k의 무늬 투영(없으면 undefined). 행렬은 표를 보는 배열(복사하지 않는다) */
+export function textureMapAt(t: SkpTextureMaps | undefined, k: number): SkpTextureMap | undefined {
+  const i = t ? t.at[k]! : -1;
+  if (!(i >= 0)) return undefined;
+  const d = t!.data;
+  const o = i * MAP_STRIDE;
+  const m: SkpTextureMap = { kind: d[o]!, matrix: d.subarray(o + 2, o + 11) };
+  if (d[o + 1]) m.dir = [d[o + 11]!, d[o + 12]!, d[o + 13]!];
+  return m;
+}
+
+/** 무늬 투영 표 쌓기(첫 투영이 나올 때 만든다 — 그 앞 면은 -1) */
+class MapTableBuilder {
+  private readonly at: I32;
+  private readonly data = new F64(MAP_STRIDE * 4);
+  private count = 0;
+  constructor(faces: number) {
+    this.at = new I32(Math.max(16, faces));
+    this.at.a.fill(-1, 0, faces);
+    this.at.n = faces;
+  }
+  add(m: Readonly<SkpTextureMap> | undefined): void {
+    if (!m) {
+      this.at.push(-1);
+      return;
+    }
+    this.at.push(this.count++);
+    const d = this.data;
+    d.reserve(MAP_STRIDE);
+    const o = d.n;
+    d.a[o] = m.kind;
+    d.a[o + 1] = m.dir ? 1 : 0;
+    for (let i = 0; i < 9; i++) d.a[o + 2 + i] = m.matrix[i]!;
+    for (let i = 0; i < 3; i++) d.a[o + 11 + i] = m.dir ? m.dir[i]! : NaN;
+    d.n = o + MAP_STRIDE;
+  }
+  done(): SkpTextureMaps {
+    return { at: this.at.done(), data: this.data.done() };
+  }
 }
 
 /** NaN(없음)이면 undefined */
@@ -127,8 +179,8 @@ export class FaceTableBuilder {
   private readonly layer = new F64(16);
   private readonly pid = new F64(16);
   private attrs?: Map<number, SkpAttrDicts>;
-  private frontMap?: Map<number, SkpTextureMap>;
-  private backMap?: Map<number, SkpTextureMap>;
+  private frontMaps?: MapTableBuilder;
+  private backMaps?: MapTableBuilder;
 
   constructor() {
     this.loopStart.push(0);
@@ -167,8 +219,10 @@ export class FaceTableBuilder {
     this.layer.push(num(f.layer));
     this.pid.push(num(f.pid));
     if (f.attrs) (this.attrs ??= new Map()).set(k, f.attrs);
-    if (f.frontMap) (this.frontMap ??= new Map()).set(k, f.frontMap);
-    if (f.backMap) (this.backMap ??= new Map()).set(k, f.backMap);
+    if (f.frontMap) this.frontMaps ??= new MapTableBuilder(k);
+    this.frontMaps?.add(f.frontMap);
+    if (f.backMap) this.backMaps ??= new MapTableBuilder(k);
+    this.backMaps?.add(f.backMap);
     return k;
   }
 
@@ -188,8 +242,8 @@ export class FaceTableBuilder {
       pid: this.pid.done(),
     };
     if (this.attrs) out.attrs = this.attrs;
-    if (this.frontMap) out.frontMap = this.frontMap;
-    if (this.backMap) out.backMap = this.backMap;
+    if (this.frontMaps) out.frontMaps = this.frontMaps.done();
+    if (this.backMaps) out.backMaps = this.backMaps.done();
     return out;
   }
 }
@@ -251,9 +305,9 @@ export function faceAt(t: SkpFaces, k: number): SkpFace {
   if (known && loopEdges.length) f.loopEdges = loopEdges;
   const attrs = t.attrs?.get(k);
   if (attrs) f.attrs = attrs;
-  const fm = t.frontMap?.get(k);
+  const fm = textureMapAt(t.frontMaps, k);
   if (fm) f.frontMap = fm;
-  const bm = t.backMap?.get(k);
+  const bm = textureMapAt(t.backMaps, k);
   if (bm) f.backMap = bm;
   return f;
 }

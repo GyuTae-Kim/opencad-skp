@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   EDGE_UNKNOWN,
+  MAP_STRIDE,
   edgeAt,
   edgeList,
   edgesFrom,
@@ -13,6 +14,7 @@ import {
   faceList,
   facesFrom,
   loopEdgesKnown,
+  textureMapAt,
 } from '../src/entities';
 import type { SkpEdge, SkpFace } from '../src/model';
 import { readModelDat } from '../src/model';
@@ -74,12 +76,18 @@ describe('면·모서리 표', () => {
     expect(faceList(facesFrom([])).length).toBe(0);
   });
 
-  it('무늬 투영: 투영이 있는 면만', () => {
+  it('무늬 투영 표: 투영이 있는 면만, 방향이 있는 것과 없는 것', () => {
     const m1 = { kind: 1, matrix: Float64Array.from([1, 0, 0, 0, 1, 0, 0.5, 0.25, 1]) };
-    const t = facesFrom([square, { ...square, frontMap: m1 }]);
-    expect(t.frontMap?.get(1)).toBe(m1);
-    expect(faceAt(t, 1).frontMap).toBe(m1);
-    expect(facesFrom([square]).frontMap).toBeUndefined();
+    const m2 = { kind: 2, matrix: Float64Array.from([2, 0, 0, 0, 2, 0, 0, 0, 1]), dir: [0, 0, 1] as [number, number, number] };
+    const t = facesFrom([square, { ...square, frontMap: m1 }, { ...square, frontMap: m2, backMap: m1 }]);
+    expect(Array.from(t.frontMaps!.at)).toEqual([-1, 0, 1]);
+    expect(t.frontMaps!.data.length).toBe(2 * MAP_STRIDE);
+    expect(Array.from(t.backMaps!.at)).toEqual([-1, -1, 0]);
+    expect(textureMapAt(t.frontMaps, 0)).toBeUndefined();
+    expect(textureMapAt(t.frontMaps, 1)).toEqual(m1);
+    expect(textureMapAt(t.frontMaps, 2)).toEqual(m2);
+    expect(faceAt(t, 2).backMap).toEqual(m1);
+    expect(facesFrom([square]).frontMaps).toBeUndefined();
   });
 
   it('2021+ 해석기는 면·모서리를 표로 읽는다(고리는 모서리 쓰임 차례, 뒤집힘이면 끝 정점부터)', () => {

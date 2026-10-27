@@ -59,7 +59,7 @@ import type {
 import * as A from './scene-annotations';
 import { AttrPool, PAGE_USE_HIDDEN_OBJECTS } from './scene-meta';
 import { cornerNormals, faceUnitNormal } from './scene-smooth';
-import { opt, type SkpFaces } from './entities';
+import { opt, textureMapAt, type SkpFaces } from './entities';
 import { F32, I32, U32 } from './grow';
 import { applyFaceUvq, faceUvq, planeAxes } from './projection';
 import { solidInfo } from './solid';
@@ -512,13 +512,13 @@ function prepare(
     const nv = (g.pos.length - before) / 3;
     if (g.uv) {
       const t = tex!.tile(mat)!;
-      const r = faceUvq(normal, F.frontMap?.get(fi), t.w, t.h);
+      const r = faceUvq(normal, textureMapAt(F.frontMaps, fi), t.w, t.h);
       if (r.singular) tex!.singular++;
       if (applyFaceUvq(r.m, g.pos, v0, nv, g.uv).flat) tex!.flat++;
     }
     if (g.buv) {
       const t = tex!.tile(back)!;
-      const r = faceUvq(normal, F.backMap?.get(fi), t.w, t.h);
+      const r = faceUvq(normal, textureMapAt(F.backMaps, fi), t.w, t.h);
       if (r.singular) tex!.singular++;
       if (applyFaceUvq(r.m, g.pos, v0, nv, g.buv).flat) tex!.flat++;
     }

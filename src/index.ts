@@ -36,8 +36,10 @@ export {
   faceList,
   facesFrom,
   loopEdgesKnown,
+  textureMapAt,
   type SkpEdges,
   type SkpFaces,
+  type SkpTextureMaps,
 } from './entities';
 export { readSkpImages, type SkpImage, type SkpImages, type SkpImageOptions } from './images';
 export { parseMaterialXml, type SkpMaterialInfo, type SkpMaterialTexture } from './materials';
