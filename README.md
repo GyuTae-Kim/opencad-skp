@@ -272,6 +272,7 @@ const scene = skpToScene(bytes, { textures: images.materials }); // Viewer3d.set
 | `src/materials.ts`, `src/scene.ts`, `src/solid.ts` | 재질(색·무늬)과 `Scene3d` 만들기(면은 earcut 삼각화, 무늬 좌표, 태그·재질 통계, outline), 닫힌 입체·부피 가리기 |
 | `src/projection.ts`, `src/colorize.ts` | 면 무늬 투영(평면 틀·행렬·원근 q), 색 바꾼 무늬의 화소 색 바꾸기 |
 | `tests/` | 해석기 시험(`tests/build.ts`는 시험용 바이트 만들기, `tests/mfcwrite.ts`는 2020 이하 꼴 바이트 만들기), `tests/app/`은 앱 순수 로직 시험 |
+| `scripts/sweep/` | 로컬 표본 폴더의 실제 파일을 한꺼번에 해석하고 두 결과를 견주는 개발 도구(아래 "실제 파일 훑기") |
 | `docs/formats/skp.md` | 형식 조사 기록 |
 
 ## 개발
@@ -293,6 +294,24 @@ npm run preview
 측정 도구의 누르기 문턱은 코어의 `dragStartPx`(마우스·펜 4, 터치 10화소)를, 추정의 가운데·둘레 고르기는 코어 마우스 허용 거리(6화소)를 그대로 씁니다(터치 추정 반경 22화소가 코어 터치 허용 거리 14화소를 덮습니다).
 의존을 올릴 때는 `npm install "opencad-viewer3d@github:GyuTae-Kim/opencad-viewer3d#<태그>"`로 받아야 잠금 파일의 커밋이 바뀝니다.
 
+### 실제 파일 훑기
+
+해석기를 고치기 전과 뒤에 가진 SketchUp 파일을 모두 열어 보고 결과를 견주는 도구입니다(`scripts/sweep/`). 표본은 저장소에 없으므로 각자 로컬 폴더를 줍니다.
+
+```bash
+npm run sweep -- --dirs "$HOME/Documents:$HOME/Downloads" --out .runtime/sweep/before   # 폴더는 쌍점으로 구분(OPENCAD_SWEEP_DIRS도 됨)
+npm run sweep -- --dirs "$HOME/Documents:$HOME/Downloads" --out .runtime/sweep/after
+npm run sweep:compare -- .runtime/sweep/before .runtime/sweep/after --fail-on-change
+npm run sweep -- --dirs "$HOME/Downloads" --min-mb 25 --mem --jobs 1 --out .runtime/sweep/mem   # 큰 모형의 단계별 메모리
+```
+
+- 폴더 아래를 모두 훑어 `.skp`를 고르고(`node_modules`, `.git`, `.claude` 폴더는 건너뜀) 내용이 같은 파일은 sha256으로 한 번만 엽니다. 해석은 앱 워커와 같은 차례로 합니다. 큰 2021 이후 파일은 `model.dat`를 내장 풀기로 먼저 풀고, 그림을 꺼낸 뒤 같은 선택으로 `skpToScene`을 부릅니다.
+- 해석은 Node 자식 프로세스 여러 개(`--jobs`, 기본은 CPU 절반이고 많아야 4)가 나눠 합니다. 파일 하나가 `--timeout`(기본 300초)을 넘거나 프로세스가 죽으면 그 파일을 예외로 적고 이어 갑니다.
+- 결과 폴더에는 파일마다 한 줄씩 적은 `records.jsonl`(열쇠는 내용 해시)과 요약 `summary.json`을 씁니다. 요약에는 판마다 정상, 경고, 빈 장면, 읽지 않는 판, SketchUp 파일 아님, 예외로 나눈 개수와 경고 종류별 파일 수, 면과 정의와 인스턴스 합, 해석 시간 백분위, 큰 파일의 시간과 메모리가 들어갑니다. 파일 경로는 `records.jsonl`에만 있으니 결과는 `.runtime/`(git이 무시함)에 두고 저장소에 넣지 않습니다.
+- `sweep:compare`는 같은 해시끼리 견주어 분류가 바뀐 파일, 지표나 경고가 바뀐 파일(`--top` 개수만큼), 새 예외를 찍습니다. `--fail-on-change`를 주면 바뀐 것이 있을 때 1로 끝납니다.
+- `--mem`은 파일마다 새 프로세스를 띄워 단계(풀기, 그림 꺼내기, 해석, 장면 만들기)마다 가장 컸던 heap, external, rss와 그 파일을 여는 동안의 최대 rss를 잽니다. 단계마다 gc를 부르므로 이때 잰 시간은 다른 결과와 견주지 않습니다.
+- 폴더를 주지 않으면 쓰는 법만 찍고 끝나므로 CI에서는 돌지 않습니다.
+
 ## 배포
 
 `main`에 올리면 GitHub Actions(`.github/workflows/deploy.yml`)가 타입 확인·시험·빌드를 거쳐 `dist/`를 `gh-pages` 가지에 올립니다(GitHub Pages).
@@ -312,6 +331,7 @@ npm run preview
 - 보여 주기: 땅 위 그림자(지면에 드리우기)·반투명 그물 그림자, 2020 이하 파일의 안개(렌더링 덩어리 자리를 모름)·그림자 켜기 깃발(CShadowInfo의 깃발 자리를 모름 — 그림자를 켠 옛 판 표본이 없음),
   한 칸에서 서로 겹친 닫힌 입체가 다섯 이상 겹겹이 쌓인 곳의 단면 채우기(넘친 것은 첫 묶음에서 홀짝), 카메라를 보는 컴포넌트의 부드러운·숨긴 모서리
 - 실제 표본(2024 판, 새 기능)으로 확인
+- 큰 모형의 메모리: 165 MB 파일(면 64만 개, 모서리 106만 개)을 열면 해석 프로세스가 2.3~2.6 GB까지 씁니다. 모형 요소가 heap을 1 GB 가까이 차지하고, 장면을 다 만들 때까지 미리 푼 `model.dat`(323 MB)와 장면 배열을 키우던 버퍼가 함께 남습니다(Node에서 `npm run sweep -- --mem`으로 잰 값)
 
 ## 내력
 
