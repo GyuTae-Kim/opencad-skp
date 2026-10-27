@@ -964,5 +964,12 @@
   "화면으로 넘기는 중": "Zum Bildschirm wischen",
   "확인": "Bestätigen",
   "활성": "Aktiv",
-  "휴대폰: 한 손가락 돌리기 · 두 손가락 옮기기·확대": "Mobiltelefon: Drehen mit einem Finger · Bewegen mit zwei Fingern · Zoomen"
+  "휴대폰: 한 손가락 돌리기 · 두 손가락 옮기기·확대": "Mobiltelefon: Drehen mit einem Finger · Bewegen mit zwei Fingern · Zoomen",
+  "언어 선택": "Sprache wählen",
+  "https://gyutae-kim.github.io/opencad-skp/og-opencad.jpg": "https://gyutae-kim.github.io/assets/i18n/de/og/opencad.jpg",
+  "시스템 설정 따르기(지금 어두움)": "Systemeinstellung (aktuell dunkel)",
+  "앱 설정 · 테마: 시스템 설정 따르기(지금 어두움) — 눌러서 바꾸기": "App-Einstellungen · Design: Systemeinstellung (aktuell dunkel) — Zum Ändern klicken",
+  "시스템 설정 따르기(지금 밝음)": "Systemeinstellung (aktuell hell)",
+  "앱 설정 · 테마: 시스템 설정 따르기(지금 밝음) — 눌러서 바꾸기": "App-Einstellungen · Design: Systemeinstellung (aktuell hell) — Zum Ändern klicken",
+  "OpenCAD SketchUp 뷰어 처음 화면": "Startseite des OpenCAD SketchUp-Viewers"
 }
