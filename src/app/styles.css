@@ -2503,7 +2503,8 @@ html:lang(zh-CN) { --font: -apple-system, "PingFang SC", "Microsoft YaHei", sans
 }
 
 /*
- * 3D 보기 캔버스의 키보드 초점 테두리는 코어 0.9.0이 그린다(:focus-visible일 때만 캔버스 안쪽 2화소, 누를 때는 없음).
+ * 3D 보기 캔버스의 키보드 초점 테두리는 코어가 그린다(0.9.0: :focus-visible일 때만 캔버스 안쪽 2화소, 0.9.1: 키보드 초점 뒤 누르면 감춤 —
+ * 감추는 규칙의 구체성이 (0,3,1)이라 위의 전역 :focus-visible보다 먼저다).
  * 앱은 색만 다른 초점 테두리와 같은 강조색으로 맞춘다(--v3d-focus — 두 테마 바탕과 대비 5:1쯤)
  */
 .view-host {
