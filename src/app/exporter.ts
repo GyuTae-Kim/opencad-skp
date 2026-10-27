@@ -130,9 +130,13 @@ function drawLabels(g: CanvasRenderingContext2D, ops: readonly LabelOp[], scale:
   }
 }
 
-/** SVG 덧그림(줄자·각도기 선·점)을 currentColor를 풀어 그림으로 */
-async function drawOverlaySvg(g: CanvasRenderingContext2D, svg: SVGSVGElement, w: number, h: number, scale: number): Promise<void> {
+/**
+ * SVG 덧그림(줄자·각도기 선·점, 치수 끝 표시)을 currentColor를 풀어 그림으로. only를 주면 그 고르개에 맞는 맨 위 묶음만
+ * (글·치수 넣기를 끈 그림에도 치수선의 끝 표시는 넣는다 — 치수선은 3D 그림에 있으므로)
+ */
+async function drawOverlaySvg(g: CanvasRenderingContext2D, svg: SVGSVGElement, w: number, h: number, scale: number, only?: string): Promise<void> {
   if (!svg.childElementCount) return;
+  if (only && !svg.querySelector(`:scope > ${only}`)) return;
   const clone = svg.cloneNode(true) as SVGSVGElement;
   const src = [svg, ...svg.querySelectorAll('*')];
   const dst = [clone, ...clone.querySelectorAll('*')];
@@ -143,6 +147,7 @@ async function drawOverlaySvg(g: CanvasRenderingContext2D, svg: SVGSVGElement, w
     for (const a of ['stroke', 'fill']) if (d.getAttribute(a) === 'currentColor') d.setAttribute(a, color);
     if (getComputedStyle(el).display === 'none') d.setAttribute('display', 'none');
   });
+  if (only) for (const c of [...clone.children]) if (!c.matches(only)) c.remove();
   clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
   clone.setAttribute('width', String(w));
   clone.setAttribute('height', String(h));
@@ -203,6 +208,12 @@ export async function renderExport(ctx: ExportContext, o: ExportOptions): Promis
     }
     if (ctx.labels) drawLabels(g, labelOps(ctx.labels.placements, ctx.labels.itemList), scale);
     if (ctx.overlay) drawMeasureBoxes(g, ctx.overlay.labels, canvas.getBoundingClientRect(), scale);
+  } else if (ctx.overlay) {
+    try {
+      await drawOverlaySvg(c.getContext('2d')!, ctx.overlay.svg, cssW, cssH, scale, '.anno-marks');
+    } catch {
+      /* SVG를 그림으로 못 바꾸는 브라우저 */
+    }
   }
   return await new Promise<Blob>((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('그림을 만들지 못했습니다'))), 'image/png'));
 }

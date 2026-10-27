@@ -201,6 +201,18 @@ export interface SkpDimensionMeta {
   node: number;
 }
 
+/** 주석 선분 묶음 하나의 화면 크기 표시(meta.annotationMarks 한 칸). 표시 n개 */
+export interface SkpAnnotationMarks {
+  /** 표시마다 9개(세계): 끝점 xyz, 바깥 방향 xyz(단위 — 화살이 가리키는 쪽, 넘침은 이쪽으로 긋는다), 치수 평면에서 선에 수직 xyz(단위) */
+  geom: Float64Array;
+  /** 표시마다 꼴: 1 빗금 · 2 점 · 3 닫힌 화살 · 4 열린 화살 · 5 연장선 넘침 */
+  kind: Uint8Array;
+  /** 표시마다 그 표시가 붙은 선(치수선·지시선·반지름)의 세계 길이 — 화면에서 짧은 선은 표시를 줄인다 */
+  span: Float64Array;
+  /** 표시마다 놓인 나무 노드(-1 = 모형에 바로) — 숨긴 그룹·컴포넌트 안 표시는 숨긴다 */
+  node: Int32Array;
+}
+
 /** 단면 평면(배치마다 하나). plane = [a, b, c, d]: a·x+b·y+c·z+d ≥ 0 쪽이 남는다(세계) */
 export interface SkpSectionPlaneMeta {
   name: string;
@@ -282,6 +294,11 @@ export interface SkpMetaExtras {
    * 나무(outline)가 있고 그룹·컴포넌트 안에 주석이 있을 때만. 화면은 숨긴 노드의 구간을 숨긴다(문자·치수 라벨과 같게)
    */
   annotationRuns?: Record<string, { start: Uint32Array; node: Int32Array }>;
+  /**
+   * 치수·지시선 선분 묶음(annotationItems의 id)마다 화면 크기로 그릴 끝 표시(화살·빗금·점)와 연장선 넘침. 선분 묶음에는 선만 있고,
+   * 화면은 이 표시를 그 묶음이 보일 때(같은 태그·숨김·노드·단면) 덧그림 층에 같은 화소 크기로 그린다(확대·축소해도 크기가 그대로)
+   */
+  annotationMarks?: Record<string, SkpAnnotationMarks>;
   /**
    * 그물마다(scene.meshes 차례) 면 경계: 면 k의 삼각형은 [runs[k], runs[k + 1])(마지막 면은 그물 끝까지).
    * 해석기가 면마다 삼각형을 이어 붙이므로 고른 삼각형(Pick3d.raw)이 든 SketchUp 면 하나를 구간으로 찾는다

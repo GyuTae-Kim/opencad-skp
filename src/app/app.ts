@@ -75,6 +75,7 @@ import {
   hiddenNodeRanges,
   isBigScene,
   itemVisible,
+  nodeHiddenByUser,
   annotationHiddenRanges,
   nodeSelection,
   pickDeepest,
@@ -100,7 +101,8 @@ import {
   type Selection,
   type SkpDoc,
 } from './doc';
-import { MAX_FILE_BYTES, SKP_ACCEPT, baseName, fmtCount, formatBytes, formatMs } from './format';
+import { MAX_FILE_BYTES, SKP_ACCEPT, baseName, fmtCount, formatBytes, formatMs, rgbCss } from './format';
+import { AnnotationMarks } from './dimmarks';
 import { VIEW_KEY_OF, VIEW_MENU, isEditableTarget, isViewKey, keyAction } from './keys';
 import type { LaunchRequest } from './launch';
 import { PANEL_WIDTH_DEFAULT, SHEET_DEFAULT, clampPanelWidth, clampSheetFraction, readLayout, storeLayout, type StoredLayout } from './layout';
@@ -112,7 +114,7 @@ import { THEME_CHOICES, applyThemeChoice, readStoredTheme, resolveTheme, storeTh
 import { childrenOf, isAncestor, isSplit, nodeBox, nodePath, normalizeRanges, type PickMode } from './tree';
 import { cameraForBox, keepViewOnHeightChange } from './view';
 import { cssHex, isLightBackground, loadFileBackground, safeStorage, skyBackground, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
-import type { BackgroundOptions } from 'opencad-viewer3d';
+import type { BackgroundOptions, Rgba } from 'opencad-viewer3d';
 import { DEFAULT_EDGE_COLOR, LineContrast, edgeLooks, lineColorOverrides } from './linecontrast';
 import { openShortcutsDialog } from './shortcuts';
 import type { Rgb, SkpShadowMeta, SkpStyleMeta } from '../meta';
@@ -372,6 +374,10 @@ export class SkpViewerApp implements PanelHost {
   private overlay: Overlay | null = null;
   /** 문자·치수 라벨 */
   private labels: AnnotationLabels | null = null;
+  /** 치수·지시선 끝 표시(화면 크기, dimmarks.ts) */
+  private marks: AnnotationMarks | null = null;
+  /** 선 색 대비로 바꾼 주석·모서리 선 색(id → 색) — 끝 표시도 같은 색 */
+  private lineColorWant: ReadonlyMap<string, Rgba> = new Map();
   /** 줄자·각도기(코어 두 점 측정 대신) */
   private measureTool: MeasureTool | null = null;
   /** 측정 도구 안내 글(상태 막대·패널 아래 띠) */
@@ -1147,6 +1153,7 @@ export class SkpViewerApp implements PanelHost {
     this.styleEdge = d.style?.edgeColor ?? null;
     this.applyTheme();
     this.labels?.setData(d.texts, d.dimensions, d.scene.units, d.units);
+    this.marks?.setData(d.annotationMarks);
     this.refreshAnnotations();
     if (old && old !== d) revokeImages(old);
     this.panel.show(d);
@@ -1193,6 +1200,8 @@ export class SkpViewerApp implements PanelHost {
       this.labels = new AnnotationLabels(this.overlay);
       // 형상 뒤의 글·치수는 숨긴다(카메라가 멈추면 라벨 기준점에서 코어 고르기로 판정)
       this.labels.setOcclusion((p, x, y, f) => this.labelOccluded(p, x, y, f));
+      this.marks = new AnnotationMarks(this.overlay);
+      this.marks.setOcclusion((p, x, y, f) => this.labelOccluded(p, x, y, f));
       this.measureTool = new MeasureTool(v, this.overlay, {
         getScene: () => this.doc?.scene ?? null,
         getUnits: () => this.doc?.units ?? DEFAULT_UNITS,
@@ -2039,6 +2048,7 @@ export class SkpViewerApp implements PanelHost {
     }
     this.rangedIds = next;
     if (d.selection?.kind === 'node') this.applySelection(d.selection, false);
+    this.refreshMarks();
   }
 
   /** 문자·치수 라벨을 보이기 상태(태그·숨긴 노드·켜고 끄기)에 맞춰 다시 그린다 */
@@ -2063,6 +2073,38 @@ export class SkpViewerApp implements PanelHost {
       showHidden: d.showHidden,
       section: sec ? { normal: sec.normal, offset: sec.offset } : null,
       sections,
+    });
+    this.refreshMarks();
+  }
+
+  /**
+   * 치수·지시선 끝 표시(화면 크기)를 그 선분 묶음과 같이 보이게: 묶음이 보일 때(태그·주석 켜고 끄기·숨김·숨긴 그룹 — 코어에 건 것과 같은 판정),
+   * 표시가 놓인 노드가 숨지 않았을 때, 그 묶음을 자르는 단면의 남는 쪽. 색은 묶음이 지금 띠는 색(선 색 대비로 바꾼 색)
+   */
+  private refreshMarks(): void {
+    const m = this.marks;
+    const d = this.doc;
+    const v = this.viewer;
+    if (!m) return;
+    if (!d || !v || !Object.keys(d.annotationMarks).length) {
+      m.setVisibility(null);
+      return;
+    }
+    const lineOf = (id: string): (typeof d.scene.lines)[number] | undefined => {
+      const li = d.lineIndex.get(id);
+      return li === undefined ? undefined : d.scene.lines[li];
+    };
+    const want = this.lineColorWant;
+    m.setVisibility({
+      lineVisible: (id) => {
+        const li = d.lineIndex.get(id);
+        const l = li === undefined ? undefined : d.scene.lines[li];
+        return !!l && itemVisible(d, d.scene.meshes.length + li!) && !(l.group && tagHidden(d, l.group));
+      },
+      nodeHidden: (n) => nodeHiddenByUser(d, n),
+      color: (id) => rgbCss(want.get(id) ?? lineOf(id)?.color ?? DEFAULT_EDGE_COLOR),
+      faint: (id) => !!lineOf(id)?.dashed,
+      sections: v.sections.map((s) => ({ normal: s.normal, offset: s.offset, items: s.items ?? null })),
     });
   }
 
@@ -2968,6 +3010,8 @@ export class SkpViewerApp implements PanelHost {
         )
       : new Map();
     this.lineContrast.apply(v, want);
+    this.lineColorWant = want;
+    this.refreshMarks();
     this.applyEdgeLooks();
   }
 

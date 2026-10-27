@@ -48,6 +48,7 @@ import type { SkpMaterialInfo } from './materials';
 import type {
   Rgb,
   SkpAnnotationItems,
+  SkpAnnotationMarks,
   SkpAttrDictsMeta,
   SkpDimensionMeta,
   SkpFontMeta,
@@ -951,6 +952,8 @@ export interface SceneParts {
   annotationItems?: SkpAnnotationItems;
   /** 주석 선분 묶음마다 나무 노드 구간(meta.annotationRuns 꼴 — 나무가 있고 그룹·컴포넌트 안 주석이 있을 때만) */
   annotationRuns?: Record<string, { start: Uint32Array; node: Int32Array }>;
+  /** 주석 선분 묶음마다 화면 크기로 그릴 끝 표시·연장선 넘침(meta.annotationMarks) */
+  annotationMarks?: Record<string, SkpAnnotationMarks>;
   /** sectionPlanes 차례마다 단면 영구 번호(장면의 활성 단면 잇기용) */
   sectionPids?: (number | undefined)[];
   /** 나무 노드·정의의 더 많은 정보(tree가 있을 때) */
@@ -1747,7 +1750,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     first: Vec3;
     /** 주석이 놓인 나무 노드(-1 = 모형에 바로, 나무가 없으면 -1) */
     node: number;
-    draw: (out: number[], mark: (length: number) => number, clip: (p: Vec3, d: Vec3) => [Vec3, Vec3]) => void;
+    /** 선분을 out에, 화면 크기로 그릴 끝 표시·연장선 넘침을 marks에(치수·지시선) */
+    draw: (out: number[], clip: (p: Vec3, d: Vec3) => [Vec3, Vec3], marks: A.MarkSink) => void;
   }
   const defaults = model.annotationDefaults ?? {};
   const texts: SkpTextMeta[] = [];
@@ -1832,10 +1836,10 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
           node,
           color: lineColor(color, ANNOTATION_COLOR),
           first: a,
-          draw: (out, mark) => {
+          draw: (out, _clip, marks) => {
             A.seg(out, b, a);
             const d = A.unit(A.sub(a, b));
-            if (d) A.endMark(out, a, d, A.perpendicular(d), arrow, mark(A.len(A.sub(a, b))));
+            if (d) A.pushEndMark(marks, a, d, A.perpendicular(d), arrow, A.len(A.sub(a, b)));
           },
         });
     }
@@ -1866,7 +1870,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
         if (dir) dm.direction = dir;
         const perp: Vec3 = !dir ? [0, 0, 1] : off ? A.perpendicular(dir, A.unit(off)) : nrm ? (A.unit(A.cross(nrm, dir)) ?? A.perpendicular(dir)) : A.perpendicular(dir);
         first = lay.a;
-        draw = (out, mark) => A.linearSegments(out, lay, perp, arrow, mark(A.len(A.sub(lay.b, lay.a))));
+        draw = (out, _clip, marks) => A.linearLines(out, lay, perp, arrow, marks);
         extendAnn(S);
         extendAnn(E);
         extendAnn(lay.a);
@@ -1884,15 +1888,15 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
         if (dir) dm.direction = dir;
         const perp: Vec3 = !dir ? [0, 0, 1] : nrm ? (A.unit(A.cross(nrm, dir)) ?? A.perpendicular(dir)) : A.perpendicular(dir);
         first = ap;
-        draw = (out, mark) => {
+        draw = (out, _clip, marks) => {
           if (!dir) return;
           // 반지름: 중심 → 호 위 점, 지름: 맞은편 점 → 호 위 점. 글이 호 밖이면 글 자리까지 잇는다
           const op = diameter ? A.sub(A.mulS(c, 2), ap) : c;
           A.seg(out, op, ap);
           if (A.len(A.sub(at, c)) > r * (1 + 1e-9) && A.dot(A.sub(at, c), dir) > 0) A.seg(out, ap, at);
-          const size = mark(diameter ? 2 * r : r);
-          A.endMark(out, ap, dir, perp, arrow, size);
-          if (diameter) A.endMark(out, op, A.mulS(dir, -1), perp, arrow, size);
+          const span = diameter ? 2 * r : r;
+          A.pushEndMark(marks, ap, dir, perp, arrow, span);
+          if (diameter) A.pushEndMark(marks, op, A.mulS(dir, -1), perp, arrow, span);
         };
         extendAnn(c);
         extendAnn(ap);
@@ -1945,7 +1949,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
         node,
         color: GUIDE_COLOR,
         first: P,
-        draw: (out, _mark, clip) => {
+        draw: (out, clip) => {
           const [a, b] = clip(P, dir);
           A.seg(out, a, b);
         },
@@ -2506,18 +2510,15 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   const points: PointSet3d[] = [];
   const annItems: SkpAnnotationItems = { dimensions: [], leaders: [], guides: [], sectionPlanes: [] };
   let annotationRuns: Record<string, { start: Uint32Array; node: Int32Array }> | undefined;
+  let annotationMarks: Record<string, SkpAnnotationMarks> | undefined;
   if (recs.length || guidePoints.length) {
-    // 크기 기준: 장면 범위(형상이 없으면 주석 범위)의 대각선
+    // 끝없는 보조선을 자를 범위: 장면 범위(형상이 없으면 주석 범위)
     const useScene = min[0] <= max[0];
     const bmin = useScene ? min : annMin;
     const bmax = useScene ? max : annMax;
     const hasBox = bmin[0]! <= bmax[0]!;
     const diag = hasBox ? A.len(A.sub(bmax, bmin)) : 0;
     const unitLen = diag > 0 ? diag : 50 * Math.abs(scale) || 1;
-    const mark = (length: number): number => {
-      const cap = unitLen * 0.012;
-      return length > 0 ? Math.min(length * 0.15, cap) : cap;
-    };
     const pad = unitLen * 0.1;
     const cmin: Vec3 | null = hasBox ? [bmin[0]! - pad, bmin[1]! - pad, bmin[2]! - pad] : null;
     const cmax: Vec3 | null = hasBox ? [bmax[0]! + pad, bmax[1]! + pad, bmax[2]! + pad] : null;
@@ -2553,13 +2554,21 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       /** 나무 노드 구간: 선분 차례 runStart[k]부터 노드 runNode[k](다음 구간 전까지) */
       runStart: number[];
       runNode: number[];
+      /** 화면 크기 표시(끝 표시·연장선 넘침): 표시마다 자리·방향·수직 9개, 꼴, 선 길이, 노드 */
+      markGeom: number[];
+      markKind: number[];
+      markSpan: number[];
+      markNode: number[];
     }
     const sinks = new Map<string, Sink>();
     let annSegs = 0;
     const tmp: number[] = [];
+    const tmpMarks: number[] = [];
+    const markSink: A.MarkSink = (p, dir, perp, kind, span) => tmpMarks.push(p[0], p[1], p[2], dir[0], dir[1], dir[2], perp[0], perp[1], perp[2], kind, span);
     for (const r of recs) {
       tmp.length = 0;
-      r.draw(tmp, mark, clip);
+      tmpMarks.length = 0;
+      r.draw(tmp, clip, markSink);
       const ns = tmp.length / 6;
       if (!ns || !tmp.every(Number.isFinite)) continue;
       if (annSegs + ns > MAX_ANNOTATION_SEGMENTS) {
@@ -2570,12 +2579,23 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       const far = farWorld(r.first);
       const key = `${r.kind}|${r.tag}|${r.hidden ? 1 : 0}|${r.color.join(',')}${far ? far.key : ''}`;
       let sk = sinks.get(key);
-      if (!sk) sinks.set(key, (sk = { kind: r.kind, tag: r.tag, hidden: r.hidden, color: r.color, pos: [], origin: far ? far.origin : null, runStart: [], runNode: [] }));
+      if (!sk)
+        sinks.set(
+          key,
+          (sk = { kind: r.kind, tag: r.tag, hidden: r.hidden, color: r.color, pos: [], origin: far ? far.origin : null, runStart: [], runNode: [], markGeom: [], markKind: [], markSpan: [], markNode: [] }),
+        );
       if (sk.runNode[sk.runNode.length - 1] !== r.node) {
         sk.runStart.push(sk.pos.length / 6);
         sk.runNode.push(r.node);
       }
       for (const v of tmp) sk.pos.push(v);
+      if (tmpMarks.every(Number.isFinite))
+        for (let k = 0; k + 11 <= tmpMarks.length; k += 11) {
+          for (let j = 0; j < 9; j++) sk.markGeom.push(tmpMarks[k + j]!);
+          sk.markKind.push(tmpMarks[k + 9]!);
+          sk.markSpan.push(tmpMarks[k + 10]!);
+          sk.markNode.push(r.node);
+        }
     }
     const annRuns: Record<string, { start: Uint32Array; node: Int32Array }> = {};
     let annNodes = false;
@@ -2588,6 +2608,16 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       lines.push(l);
       annItems[sk.kind].push(id);
       if (sk.hidden) hiddenIds.push(id);
+      // 화면 크기 표시(끝 표시·연장선 넘침): 이 선분 묶음과 같이 보이고 숨는다
+      if (sk.markKind.length) {
+        annotationMarks ??= {};
+        annotationMarks[id] = {
+          geom: Float64Array.from(sk.markGeom),
+          kind: Uint8Array.from(sk.markKind),
+          span: Float64Array.from(sk.markSpan),
+          node: Int32Array.from(sk.markNode),
+        };
+      }
       // 나무가 있으면 선분 구간마다 놓인 노드(화면이 그룹·컴포넌트를 숨기면 그 안 주석 선도 숨긴다)
       if (T) {
         annRuns[id] = { start: Uint32Array.from(sk.runStart), node: Int32Array.from(sk.runNode) };
@@ -2652,6 +2682,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     parts.sectionPids = sectionPids;
     parts.annotationItems = annItems;
     if (annotationRuns) parts.annotationRuns = annotationRuns;
+    if (annotationMarks) parts.annotationMarks = annotationMarks;
   }
   // 속성 사전: 모형 속성(0x0209 모형 속성 + 뿌리 묶음 머리 사전)을 먼저, 나무 노드·정의는 아래에서
   const pool = new AttrPool(scale);
