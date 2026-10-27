@@ -1,6 +1,6 @@
 /**
  * model.dat(SketchUp 2021+) 꼬리표 표. 16진 이름 = 꼬리표 값.
- * 뜻은 공개 표본 바이트로 추론한 것과 2026-10 PRISME 엔진(SketchUp C API를 비교 기준으로 맞춘 해석기)의 형식 지식을 옮긴 것이다(docs/formats/skp.md).
+ * 뜻은 공개 표본 바이트로 추론한 것과 2026-10 비공개 참조 해석기(SketchUp C API를 비교 기준으로 맞춘 해석기)의 형식 지식을 옮긴 것이다(docs/formats/skp.md).
  */
 export const TAG = {
   ROOT: 0x01f4,
@@ -22,14 +22,14 @@ export const TAG = {
   AXES_SECTION: 0x01fc,
   SHADOW_SECTION: 0x0204,
 
-  // ── 그리기 축(01fc → 4650, 장면 714f → 4650): 원점, x·y·z 축(f64×3씩, 엔진 records AXES_*) ──
+  // ── 그리기 축(01fc → 4650, 장면 714f → 4650): 원점, x·y·z 축(f64×3씩, 이름은 참조 해석기 기록과 같다) ──
   AXES: 0x4650,
   AXES_ORIGIN: 0x4651,
   AXES_X: 0x4652,
   AXES_Y: 0x4653,
   AXES_Z: 0x4654,
 
-  // ── 그림자·위치(0204 → 6590, 장면 714e → 6590, 엔진 records SHADOW_INFO_*) ──
+  // ── 그림자·위치(0204 → 6590, 장면 714e → 6590, 이름은 참조 해석기 기록과 같다) ──
   SHADOW_INFO: 0x6590,
   /** u32 ShadowTime_time_t: 지역 시각을 UTC 초처럼 적은 것 */
   SHADOW_TIME: 0x6591,

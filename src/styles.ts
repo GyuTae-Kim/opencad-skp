@@ -1,7 +1,7 @@
 /**
  * 스타일: 꾸러미의 styles/<이름>/style.xml과 model.dat 렌더링 설정(0x733c)을 합쳐 화면용 스타일(SkpStyleMeta)로 푼다.
  * 값 정하기 차례: 렌더링 레코드 → (없거나 "unset"이면) style.xml 항목 → 비움.
- * 꼬리표·항목 번호와 값 읽기 규칙은 2026-10 PRISME 엔진(SketchUp C API를 비교 기준으로 맞춘 해석기)의 형식 지식을 옮긴 것이다(docs/formats/skp.md).
+ * 꼬리표·항목 번호와 값 읽기 규칙은 2026-10 비공개 참조 해석기(SketchUp C API를 비교 기준으로 맞춘 해석기)의 형식 지식을 옮긴 것이다(docs/formats/skp.md).
  */
 import type { Rgb, SkpFaceStyle, SkpStyleMeta } from './meta';
 import type { SkpRenderingRaw } from './model';

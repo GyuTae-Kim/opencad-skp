@@ -3,7 +3,7 @@
  *
  * 좌표는 장면 좌표(세계, Scene3d.units 단위, 그물 origin을 더한 값)다. 색은 0~1 RGB(A).
  * "노드"는 meta.tree의 노드 차례(모형 바로 아래 요소는 -1)다.
- * 이 꼴의 형식 지식(꼬리표·뜻)은 PRISME 엔진(prisme-engine io/skp/native)의 SketchUp 2021+ 해석기와 문서에서 옮겼다.
+ * 이 꼴의 형식 지식(꼬리표·뜻)은 비공개 참조 해석기(SketchUp C API를 비교 기준으로 맞춘 해석기)의 SketchUp 2021+ 해석 코드와 문서에서 옮겼다.
  */
 
 export type Vec3 = [number, number, number];
@@ -88,7 +88,7 @@ export interface SkpStyleMeta {
 }
 
 /**
- * 위치·그림자 설정(Model Info > 위치, 그림자 창 — 엔진 SkpShadowInfo). time은 그곳 시각을 UTC 초처럼 적은 것(시간대 tz를 빼면 실제 UTC).
+ * 위치·그림자 설정(Model Info > 위치, 그림자 창 — 참조 해석기와 같은 칸). time은 그곳 시각을 UTC 초처럼 적은 것(시간대 tz를 빼면 실제 UTC).
  * north는 모형 축에서 북쪽 방향((0, 1, 0) = 북쪽 각 0). 읽지 못한 칸은 빠진다(2020 이하는 켜고 끄기 깃발이 없다)
  */
 export interface SkpShadowMeta {

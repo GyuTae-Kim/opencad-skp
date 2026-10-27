@@ -1,7 +1,7 @@
 /**
  * SketchUp 2020 이하 본문(MFC CArchive 객체 직렬화) 바이트 커서.
  * 형식 지식은 MFC 직렬화 규칙(Microsoft "TN002: Persistent Object Data Format", CArchive 설명)과,
- * 사용자가 허락한 2026-10 PRISME 엔진(SketchUp C API를 비교 기준으로 맞춘 해석기)의 legacy 해석기에서 옮긴 것이다(docs/formats/skp.md).
+ * 사용자가 허락한 2026-10 비공개 참조 해석기(SketchUp C API를 비교 기준으로 맞춘 해석기)의 legacy 부분에서 옮긴 것이다(docs/formats/skp.md).
  *
  * 객체 꼬리표(u16):
  *   0x0000 없음(null) · 0xFFFF 새 클래스(u16 스키마, u16 이름 길이, ASCII 이름) 뒤에 그 객체 ·

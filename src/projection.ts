@@ -1,5 +1,5 @@
 /**
- * SketchUp 면 무늬 투영(PRISME 엔진 projection.py·vff/entities.py의 기록을 옮김 — SketchUp 2026 C API로 실제 모형에서 잰 규칙).
+ * SketchUp 면 무늬 투영(비공개 참조 해석기의 무늬 투영 기록을 옮김 — SketchUp 2026 C API로 실제 모형에서 잰 규칙).
  *
  * 면 평면 틀: x = (Z × n) 정규화, n의 x·y가 모두 1e-3보다 작으면(거의 수평인 면) (Y × n). y = n × x. 원점은 정의(컴포넌트) 원점.
  * 기본 투영(저장된 투영이 없는 면, 물려받은 재질로 칠하는 면): u = p·x / 무늬 가로, v = p·y / 무늬 세로(p는 정의 좌표, 인치).

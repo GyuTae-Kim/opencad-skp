@@ -1,5 +1,5 @@
 /**
- * SketchUp(.skp) 해석기. 형식 지식은 공개 표본 바이트로 추론한 것에 PRISME 엔진(SketchUp C API를 비교 기준으로 맞춘 해석기)의
+ * SketchUp(.skp) 해석기. 형식 지식은 공개 표본 바이트로 추론한 것에 비공개 참조 해석기(SketchUp C API를 비교 기준으로 맞춘 해석기)의
  * 형식 지식을 옮겨 더했다(docs/formats/skp.md).
  *
  * 지원: SketchUp 2021~2026(머리 뒤 "VFF" 블록 + ZIP 꾸러미, 안의 model.dat가 TLV)과
@@ -349,7 +349,7 @@ function readZipPackage(
     for (const item of dir) {
       const st = /^styles\/(.+)\/style\.xml$/.exec(item.name);
       if (st) {
-        // 한 파일 16 MiB까지(엔진과 같은 한도 — 스타일 글은 보통 수십 KB)
+        // 한 파일 16 MiB까지(참조 해석기와 같은 한도 — 스타일 글은 보통 수십 KB)
         if (item.size > MAX_STYLE_XML_BYTES) {
           warnings.push(`스타일 파일이 너무 커서 건너뛰었습니다: ${item.name}`);
           continue;

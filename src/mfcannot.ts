@@ -1,7 +1,7 @@
 /**
  * SketchUp 2020 이하(MFC)의 주석 기록: 문자(CText), 선형·반지름 치수(CDimensionLinear·CDimensionRadial),
  * 보조선·보조점(CConstructionLine·CConstructionPoint), 단면 평면(CSectionPlane). 좌표는 든 요소 묶음의 로컬 인치다.
- * 형식 지식은 2026-10 PRISME 엔진(SketchUp C API를 비교 기준으로 맞춘 해석기)의 legacy 해석기에서 옮긴 것이다(docs/formats/skp.md).
+ * 형식 지식은 2026-10 비공개 참조 해석기(SketchUp C API를 비교 기준으로 맞춘 해석기)의 legacy 부분에서 옮긴 것이다(docs/formats/skp.md).
  *
  * 붙는 점(치수 끝·문자 점): 8바이트, 점, 붙은 객체, 10바이트. 모서리에 붙은 점은 x에 모서리 매개변수(0~1)를 적고,
  * 정점에 붙은 점은 그 정점이다. 그 밖의 대상에 붙은 점은 저장된 점을 쓴다.

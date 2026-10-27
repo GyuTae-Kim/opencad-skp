@@ -1,8 +1,8 @@
 /**
  * SketchUp 2020 이하(머리 뒤 MFC CArchive 객체 직렬화) → 중간 모형(SkpModel, 2021+ 해석기와 같은 꼴).
  * SketchUp 6(CSketchUpModel 스키마 18)·7·8·2013~2020(21~29)을 읽고, SketchUp 3~5는 분명한 까닭과 함께 거절한다(MfcRefused).
- * 형식 지식은 MFC 직렬화 규칙(Microsoft TN002)과, 사용자가 허락한 2026-10 PRISME 엔진(SketchUp C API를 비교 기준으로 맞춘 해석기)의
- * legacy 해석기·문서에서 옮긴 것이다(docs/formats/skp.md). 코드는 opencad-skp 꼴로 새로 썼다.
+ * 형식 지식은 MFC 직렬화 규칙(Microsoft TN002)과, 사용자가 허락한 2026-10 비공개 참조 해석기(SketchUp C API를 비교 기준으로 맞춘 해석기)의
+ * legacy 부분과 문서에서 옮긴 것이다(docs/formats/skp.md). 코드는 opencad-skp 꼴로 새로 썼다.
  *
  * 차례(클래스마다 스키마는 파일의 CVersionMap이 알린다):
  *   CString "SketchUp Model", CString "{판}", 16바이트 GUID, CString 경로, u32 시각
@@ -135,7 +135,7 @@ interface DibRef {
 
 const isDib = (v: unknown): v is DibRef => !!v && typeof v === 'object' && 'kind' in v && 'start' in v;
 
-/** 그림 길(엔진 image_name: 경로의 마지막 이름) */
+/** 그림 길(참조 해석기와 같게 경로의 마지막 이름) */
 const baseName = (path: string): string => path.replace(/\\/g, '/').split('/').pop() ?? '';
 
 /** 속성 사전에 넣기(__proto__ 같은 이름도 제 칸으로) */
@@ -775,7 +775,7 @@ class Decoder {
     if (pre.pid !== undefined) f.pid = pre.pid;
     if (pre.attrs) f.attrs = pre.attrs;
     // 무늬 위치(CFaceTextureCoords): 그쪽 재질이 무늬 재질이고 깃발 비트 0(위치 정함)이 있을 때만(2021+ 읽기와 같게 —
-    // 무늬를 지운 재질의 면에도 남아 있다). 쪽마다 f64 12개 중 앞 9개가 2021+와 같은 열 우선 3×3 행렬이다(엔진 legacy 해석기)
+    // 무늬를 지운 재질의 면에도 남아 있다). 쪽마다 f64 12개 중 앞 9개가 2021+와 같은 열 우선 3×3 행렬이다(참조 해석기와 같다)
     const t = pre.texture;
     if (t) {
       const map = (v: readonly number[], flags: number, mat: number | undefined): SkpTextureMap | undefined => {
@@ -811,7 +811,7 @@ function behavior(block: Uint8Array, shift: number, noMask = false): SkpBehavior
 // ── 맞추기(모형 전체를 읽은 뒤) ───────────────────────────────────────
 
 /**
- * 곡선 모서리 잇기(엔진 _chain_edges): 열린 곡선은 자유 끝에서(호는 시작각 점에 가까운 끝), 닫힌 호는 시작각 정점에서
+ * 곡선 모서리 잇기(참조 해석기와 같은 차례): 열린 곡선은 자유 끝에서(호는 시작각 점에 가까운 끝), 닫힌 호는 시작각 정점에서
  * 법선 둘레 반시계 방향으로. 한 정점에 모서리가 셋 이상 모이거나 다 잇지 못하면 읽은 차례 그대로.
  */
 export function chainCurveEdges(members: number[], edges: SkpEdge[], pos: ArrayLike<number>, curve: CurveRaw): number[] {

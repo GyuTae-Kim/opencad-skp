@@ -1,6 +1,6 @@
 /**
  * SketchUp 2020 이하(MFC) 해석의 공용 상태와 모든 클래스가 쓰는 앞머리 읽기.
- * 형식 지식은 2026-10 PRISME 엔진(SketchUp C API를 비교 기준으로 맞춘 해석기)의 legacy 해석기에서 옮긴 것이다(docs/formats/skp.md).
+ * 형식 지식은 2026-10 비공개 참조 해석기(SketchUp C API를 비교 기준으로 맞춘 해석기)의 legacy 부분에서 옮긴 것이다(docs/formats/skp.md).
  *
  *   CEntity 앞머리: CAttributeContainer 포인터, (CEntity 스키마 5 이상 = SketchUp 2017+) 영구 번호 = 바이트 가면 u8 + 가면이 고른 바이트(리틀 엔디언)
  *   CDrawingElement: CMaterial 포인터, 깃발 6바이트(0 숨김, 3 soft, 4 smooth, 5 잠김), CLayer 포인터

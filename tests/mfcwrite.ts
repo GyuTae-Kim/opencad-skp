@@ -1,6 +1,6 @@
 /**
  * 시험용 SketchUp 2020 이하(MFC CArchive 객체 직렬화) 바이트 쓰기 도구.
- * 형식 기록(docs/formats/skp.md "SketchUp 7~2020: MFC CArchive" — PRISME 엔진에서 옮긴 형식 지식)의 구조를 손으로 옮겼다.
+ * 형식 기록(docs/formats/skp.md "SketchUp 7~2020: MFC CArchive" — 비공개 참조 해석기에서 옮긴 형식 지식)의 구조를 손으로 옮겼다.
  * 실제 SketchUp 파일은 저장소에 넣지 않는다. 해석기가 읽는 범위까지만 흉내 내고, SketchUp에서 다시 열리는 것은 확인하지 않았다.
  *
  * 객체는 MFC처럼 처음 나올 때 새 객체로(클래스도 처음이면 새 클래스 꼬리표와 함께) 쓰고, 다시 나오면 칸 번호 참조로 쓴다.
@@ -12,7 +12,7 @@ import { concat, utf16String } from './build';
 
 export type Vec3 = [number, number, number];
 
-/** 판별 클래스 스키마(엔진 표준 파일의 CVersionMap에서 해석기가 쓰는 것만) */
+/** 판별 클래스 스키마(참조 해석기 표준 파일의 CVersionMap에서 해석기가 쓰는 것만) */
 const BASE = {
   CArcCurve: 3,
   CAttributeContainer: 0,
