@@ -2370,10 +2370,12 @@ html:lang(zh-CN) { --font: -apple-system, "PingFang SC", "Microsoft YaHei", sans
   }
 }
 
-/* 3D 보기 캔버스: 코어가 캔버스에 outline:none을 직접 둔다 — 키보드로 왔을 때만 안쪽 테두리로 초점을 보인다 */
-.view-host canvas:focus-visible {
-  outline: 2px solid var(--accent) !important;
-  outline-offset: -2px;
+/*
+ * 3D 보기 캔버스의 키보드 초점 테두리는 코어 0.9.0이 그린다(:focus-visible일 때만 캔버스 안쪽 2화소, 누를 때는 없음).
+ * 앱은 색만 다른 초점 테두리와 같은 강조색으로 맞춘다(--v3d-focus — 두 테마 바탕과 대비 5:1쯤)
+ */
+.view-host {
+  --v3d-focus: var(--accent);
 }
 
 /* 키보드 바로 가기 안내(? 키·앱 설정 메뉴) */
