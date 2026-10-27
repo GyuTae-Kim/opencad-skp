@@ -60,6 +60,10 @@ jobs:
             done
           done
           node_modules/.bin/opencad-site performance-summary .runtime/performance >> "$GITHUB_STEP_SUMMARY"
+      - name: Check mobile performance budget
+        if: ${{ !cancelled() && hashFiles('.runtime/performance/comparison.json') != '' }}
+        shell: bash
+        run: node_modules/.bin/opencad-site check-performance-budget .runtime/performance tools/performance-budget.json | tee -a "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         if: always()

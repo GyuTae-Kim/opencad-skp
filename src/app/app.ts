@@ -9,18 +9,10 @@
  * - 패널 가장자리를 끌어 폭(좁은 화면은 시트 높이)을 바꾼다. 좁은 화면에서 시트를 열고 닫아도 확대해 둔 보기는 지킨다.
  * - 자동 확인용으로 window.opencadApp에 상태를 둔다.
  */
-import {
-  VIEW_LABELS,
-  Viewer3d,
-  type Pick3d,
-  type IndexRange,
-  type PickEvent,
-  type Projection,
-  type RenderMode,
-  type SectionAxis,
-  type ViewName,
-} from 'opencad-viewer3d';
-import { lerpCamera, type CameraState, type ViewFrame } from 'opencad-viewer3d/camera';
+// 코어 입구(Viewer3d — 그리기·고르기)는 문서를 열 때 나눠 받는다(core.ts). 여기서는 타입과 작은 모듈만 가져온다
+import type { Pick3d, IndexRange, PickEvent, Projection, RenderMode, SectionAxis, ViewName, Viewer3d } from 'opencad-viewer3d';
+import { VIEW_LABELS, lerpCamera, type CameraState, type ViewFrame } from 'opencad-viewer3d/camera';
+import { loadViewerCore } from './core';
 import { dragStartPx } from 'opencad-viewer3d/pointer';
 import { ParseClient } from './client';
 import { AnnotationLabels, occludedBy } from './annotations';
@@ -56,7 +48,7 @@ import {
   unwidenSceneCamera,
   type SceneFit,
 } from './pages';
-import { DEFAULT_UNITS, formatLength, mmPerSceneUnit } from './units';
+import { DEFAULT_UNITS, formatAngle, formatLength, mmPerSceneUnit } from './units';
 import { Overlay } from './overlay';
 import { cardName, cardRows, entityInfo } from './entity';
 import { h, icon } from './dom';
@@ -120,7 +112,7 @@ import { openShortcutsDialog } from './shortcuts';
 import type { Rgb, SkpEdgeColorMode, SkpShadowMeta, SkpStyleMeta } from '../meta';
 import { fogFor, lightingForShadow, shadowOrDefault, sunForShadow, usesSun } from './sun';
 import { WalkStick } from './joystick';
-import { Vcb, vcbStartKey } from './vcb';
+import { Vcb, vcbStartKey, type VcbKind } from './vcb';
 
 export const APP_TITLE = 'OpenCAD SketchUp 뷰어';
 const TOOLS_URL = 'https://gyutae-kim.github.io/opencad';
@@ -202,8 +194,10 @@ export interface AppSnapshot {
   measureMode: MeasureMode | null;
   /** 측정값 칸으로 찍은 안내점 수 */
   measureGuides: number;
-  /** 측정값 칸이 보이는지·지금 글·측정 띠 안에 있는지 */
-  vcb: { shown: boolean; value: string; inBand: boolean };
+  /** 측정값 칸으로 둔 안내선 수 */
+  measureGuideLines: number;
+  /** 측정값 칸이 보이는지·지금 글·측정 띠 안에 있는지·받는 값(길이·각도) */
+  vcb: { shown: boolean; value: string; inBand: boolean; kind: VcbKind };
   /** 고른 것의 종류(outline·node·material·item·face·edge, 없으면 null) */
   selectionKind: Selection['kind'] | null;
   /** 장면 재생 중인지 */
@@ -332,7 +326,7 @@ export class SkpViewerApp implements PanelHost {
   /** 측정 띠를 쓰는 화면(styles.css .measure-bar와 같은 조건): 측정값 칸을 띠 안 둘째 줄로 옮긴다 */
   private readonly bandQuery: MediaQueryList | null =
     typeof window.matchMedia === 'function' ? window.matchMedia(`(max-width: ${NARROW_WIDTH - 0.02}px), (pointer: coarse)`) : null;
-  /** 측정값 칸(VCB): 줄자 길이를 보이고 쳐서 넣는다 */
+  /** 측정값 칸(VCB): 줄자 길이·각도기 각도를 보이고 쳐서 넣는다 */
   private vcb!: Vcb;
   private projection: Projection = 'perspective';
   private renderMode: RenderMode = 'shadedEdges';
@@ -609,7 +603,7 @@ export class SkpViewerApp implements PanelHost {
     updLater.addEventListener('click', () => (updateBar.hidden = true));
     // 측정값 칸(VCB): 넓은 화면은 3D 보기 오른쪽 아래, 측정 띠를 쓰는 화면은 띠 안 둘째 줄(placeVcb)
     this.vcb = new Vcb({
-      onSubmit: (mm) => this.submitLength(mm),
+      onSubmit: (value, kind) => this.submitValue(value, kind),
       onClearGuides: () => {
         this.measureTool?.clearGuides();
         this.refreshStatus();
@@ -1004,6 +998,8 @@ export class SkpViewerApp implements PanelHost {
     // 앞 파일을 아직 해석 중이면 멈추고(동기 해석이라 기다리면 늦어진다) 새 파일을 읽는다
     if (this.parsingSeq) this.client.cancel();
     this.parsingSeq = seq;
+    // 3D 뷰어 코어를 워커 해석과 함께 받기 시작한다(첫 문서만 — 실패는 아래 ensureViewer가 알린다)
+    if (!this.viewer) void loadViewerCore().catch(() => undefined);
     try {
       const res = await this.client.open(
         name,
@@ -1034,6 +1030,8 @@ export class SkpViewerApp implements PanelHost {
       this.setBusy(name, isBigScene(res) ? 0 : 0.99, '화면에 올리는 중');
       await new Promise<void>((r) => requestAnimationFrame(() => setTimeout(r, 0)));
       if (seq !== this.openSeq) return false;
+      // 코어를 아직 못 받았으면 기다린다(받지 못하면 '3D 보기를 열 수 없습니다' 알림, 열려 있던 문서는 그대로)
+      if (!(await this.ensureViewer()) || seq !== this.openSeq) return false;
       const doc = createDoc(name, size, res, { makeUrl: (b, mime) => URL.createObjectURL(new Blob([b as BlobPart], { type: mime })) });
       const uploaded = this.setDoc(doc, (done, total) => {
         if (seq === this.openSeq) this.setBusy(name, total ? done / total : 1, `화면에 올리는 중 · 묶음 ${fmtCount(done)}/${fmtCount(total)}`);
@@ -1059,7 +1057,8 @@ export class SkpViewerApp implements PanelHost {
    * 코어의 나눠 올리기(프레임마다 8 ms)로 올리고 progress(올린 묶음, 전체)를 알린다. 올리기가 끝나면 풀리는 약속을 돌려준다
    */
   private setDoc(d: SkpDoc, progress?: (done: number, total: number) => void): Promise<void> {
-    const v = this.ensureViewer();
+    // 뷰어는 openBuffer가 먼저 만든다(ensureViewer — 코어를 나눠 받는다)
+    const v = this.viewer;
     if (!v) {
       revokeImages(d);
       return Promise.resolve();
@@ -1178,9 +1177,13 @@ export class SkpViewerApp implements PanelHost {
     }
   }
 
-  private ensureViewer(): Viewer3d | null {
-    if (this.viewer) return this.viewer;
+  /** 뷰어를 한 번 만든다(코어 입구를 처음에 받는다). 받지 못했거나 WebGL2를 쓸 수 없으면 알리고 false */
+  private async ensureViewer(): Promise<boolean> {
+    if (this.viewer) return true;
     try {
+      const { Viewer3d } = await loadViewerCore();
+      // 기다리는 사이 다른 열기가 먼저 만들었으면 그것을 쓴다
+      if (this.viewer) return true;
       const v = new Viewer3d(this.els.viewHost, {
         theme: viewerTheme(this.theme, this.backdrop),
         projection: this.projection,
@@ -1221,16 +1224,17 @@ export class SkpViewerApp implements PanelHost {
           const a = this.doc?.axes;
           return a ? { x: a.x, y: a.y, z: a.z } : null;
         },
-        // 측정값 칸: 줄자 진행 중이면 시작점 → 커서 길이, 다 재면 그 거리(모형 단위 글)
-        onLive: (len) => {
+        // 측정값 칸: 줄자 진행 중이면 시작점 → 커서 길이, 다 재면 그 거리(모형 단위 글). 각도기는 커서 각도·결과 각도
+        onLive: (value, kind) => {
           const d = this.doc;
-          this.vcb.setLive(len === null || !d ? '' : formatLength(len * mmPerSceneUnit(d.scene.units), d.units));
+          this.vcb.setKind(kind);
+          this.vcb.setLive(value === null || !d ? '' : kind === 'angle' ? formatAngle(value, d.units) : formatLength(value * mmPerSceneUnit(d.scene.units), d.units));
         },
       });
-      return v;
+      return true;
     } catch (e) {
       this.showNotice('error', '3D 보기를 열 수 없습니다', errorText(e));
-      return null;
+      return false;
     }
   }
 
@@ -2857,8 +2861,9 @@ export class SkpViewerApp implements PanelHost {
     }
     const v = this.viewer;
     const tool = this.measureTool;
-    // 줄자 시작점을 찍은 뒤 숫자를 치면 측정값 칸으로(SketchUp처럼 — 그동안 1~7 보기 키는 칸이 받는다)
-    if (tool?.mode === 'tape' && tool.pointCount === 1 && !isEditableTarget(ev.target) && vcbStartKey(ev) && this.vcb.shown && !this.busy) {
+    // 줄자 시작점·각도기 기준 방향을 찍은 뒤 숫자를 치면 측정값 칸으로(SketchUp처럼 — 그동안 1~7 보기 키는 칸이 받는다)
+    const typing = (tool?.mode === 'tape' && tool.pointCount === 1) || (tool?.mode === 'protractor' && tool.pointCount === 2);
+    if (typing && !isEditableTarget(ev.target) && vcbStartKey(ev) && this.vcb.shown && !this.busy) {
       ev.preventDefault();
       ev.stopPropagation();
       this.vcb.begin(ev.key);
@@ -3171,8 +3176,8 @@ export class SkpViewerApp implements PanelHost {
   }
 
   /**
-   * 측정값 칸 자리·보이기: 줄자에서만. 넓은 화면은 3D 보기 오른쪽 아래에 늘(SketchUp 측정값 칸처럼 지금 길이를 보인다),
-   * 측정 띠를 쓰는 화면은 띠 안 둘째 줄에 줄자 결과·안내점이 있을 때만(커서가 없어 결과의 방향으로 넣는다 — 그 전에는 띠를 작게)
+   * 측정값 칸 자리·보이기: 줄자(길이)·각도기(각도)에서. 넓은 화면은 3D 보기 오른쪽 아래에 늘(SketchUp 측정값 칸처럼 지금 값을 보인다),
+   * 측정 띠를 쓰는 화면은 띠 안 둘째 줄에 그 도구의 결과·안내가 있을 때만(커서가 없어 결과의 방향으로 넣는다 — 그 전에는 띠를 작게)
    */
   private placeVcb(): void {
     const tool = this.measureTool;
@@ -3183,26 +3188,29 @@ export class SkpViewerApp implements PanelHost {
       if (band) host.insertBefore(this.vcb.el, this.els.measureLog);
       else host.insertBefore(this.vcb.el, this.els.measureBar.nextSibling);
     }
-    const tape = !!this.doc && tool?.mode === 'tape';
-    const show = tape && (!band || tool!.result?.kind === 'tape' || tool!.guides.length > 0);
+    const mode = this.doc ? (tool?.mode ?? null) : null;
+    if (mode) this.vcb.setKind(mode === 'protractor' ? 'angle' : 'length');
+    const guides = (tool?.guides.length ?? 0) + (tool?.guideLines.length ?? 0);
+    const show = !!mode && (!band || tool!.result?.kind === mode || guides > 0);
     this.vcb.show(show);
-    this.vcb.setGuides(tool?.guides.length ?? 0);
+    this.vcb.setGuides(tool?.guides.length ?? 0, tool?.guideLines.length ?? 0);
     this.els.measureBar.classList.toggle('has-vcb', band && show);
   }
 
-  /** 측정값 칸에 친 길이(mm) 넣기 → 못 넣었으면 알릴 글 */
-  private submitLength(mm: number): string | null {
+  /** 측정값 칸에 친 값(길이 mm · 각도 도) 넣기 → 못 넣었으면 알릴 글 */
+  private submitValue(value: number, kind: VcbKind): string | null {
     const d = this.doc;
     const tool = this.measureTool;
     if (!d || !tool) return null;
-    const r = tool.applyLength(mm / mmPerSceneUnit(d.scene.units));
+    const angle = kind === 'angle';
+    const r = angle ? tool.applyAngle(value) : tool.applyLength(value / mmPerSceneUnit(d.scene.units));
     if (r === 'ok') {
       this.refreshStatus();
       return null;
     }
-    if (r === 'zero') return '0이 아닌 길이를 치세요';
-    if (r === 'direction') return '커서를 잴 방향으로 옮긴 뒤 치세요';
-    if (r === 'start') return '먼저 시작점을 누르세요';
+    if (r === 'zero') return angle ? '0이 아닌 각도를 치세요' : '0이 아닌 길이를 치세요';
+    if (r === 'direction') return angle ? '커서를 돌릴 쪽으로 옮긴 뒤 치세요' : '커서를 잴 방향으로 옮긴 뒤 치세요';
+    if (r === 'start') return angle ? '먼저 중심점과 기준 방향을 누르세요' : '먼저 시작점을 누르세요';
     return null;
   }
 
@@ -3282,7 +3290,8 @@ export class SkpViewerApp implements PanelHost {
       labelsOccluded: this.labels?.occludedCount ?? 0,
       measureMode: this.measureTool?.mode ?? null,
       measureGuides: this.measureTool?.guides.length ?? 0,
-      vcb: { shown: this.vcb.shown, value: this.vcb.input.value, inBand: this.vcb.el.parentElement === this.els.measureBar },
+      measureGuideLines: this.measureTool?.guideLines.length ?? 0,
+      vcb: { shown: this.vcb.shown, value: this.vcb.input.value, inBand: this.vcb.el.parentElement === this.els.measureBar, kind: this.vcb.kind },
       selectionKind: d?.selection?.kind ?? null,
       slideshow: this.sliding,
       fileBackground: this.fileBg,

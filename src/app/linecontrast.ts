@@ -9,7 +9,9 @@
  * 모형 모서리 묶음의 바탕 색은 지금 스타일의 모서리 색이다(해석기가 모형 스타일 색으로 적고, 장면 스타일이 다른 색이면 여기서 바꾼다).
  * 뒤 모서리 점선·외곽선(실루엣)·카메라를 보는 컴포넌트 윤곽선 색은 edgeLooks로 구해 코어 0.8.0 setRenderOptions에 넘긴다.
  */
-import { DARK_THEME, LIGHT_THEME, type BackgroundOptions, type RenderMode, type Rgba } from 'opencad-viewer3d';
+import type { BackgroundOptions, RenderMode, Rgba } from 'opencad-viewer3d';
+// 테마 색은 작은 모듈에서(다른 코어 모듈을 끌어오지 않는다 — 코어 입구는 문서를 열 때 나눠 받는다, core.ts)
+import { DARK_THEME, LIGHT_THEME } from 'opencad-viewer3d/theme';
 import type { Rgb } from '../meta';
 import { isLightBackground, luminance } from './backdrop';
 

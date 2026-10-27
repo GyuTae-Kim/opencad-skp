@@ -10,6 +10,7 @@ import { h, icon } from './dom';
 import type { MeasureToolResult } from './measure';
 import {
   KIND_LABEL,
+  MAX_SECTION_PLANES,
   boundsSize,
   componentImage,
   definitionCounts,
@@ -963,8 +964,8 @@ export class Panel {
   }
 }
 
-/** 한 번에 쓰는 파일 단면 수(코어 MAX_SECTION_PLANES) */
-const MAX_FILE_SECTIONS = 6;
+/** 한 번에 쓰는 파일 단면 수(코어 MAX_SECTION_PLANES — doc.ts의 같은 값) */
+const MAX_FILE_SECTIONS = MAX_SECTION_PLANES;
 
 function indent(depth: number): number {
   return 4 + (depth - 1) * 14;

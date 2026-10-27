@@ -21,7 +21,10 @@
  * 결과 선·점·라벨은 카메라가 움직여도 남고, 다음 측정을 시작하거나 clear·setMode를 하면 지운다.
  * 측정값 칸(VCB, vcb.ts): 줄자에서 길이를 치면(applyLength) SketchUp 줄자처럼 시작점에서 그 길이만큼 간 자리에 안내점(✕)을 찍는다.
  *   방향은 시작점을 찍은 뒤면 시작점 → 커서 추정(축 고정 포함), 두 점을 다 잰 뒤면 그 결과의 시작점 → 끝점(손가락 기기는 커서가 없어 이쪽).
- *   결과는 시작점 → 안내점 줄자 결과로 바꾸고, 안내점은 모형에 넣지 않는 보기 전용 표시라 새 문서·clearGuides까지 남으며 끝점처럼 붙는다.
+ *   시작점이 모서리 위(끝점·중간점이 아닌 곳 — 추정 '모서리에'·'안내선에')면 SketchUp 줄자처럼 안내점 대신 그 모서리와 나란한 안내선을
+ *   커서(결과) 쪽으로 친 거리만큼 띄워 둔다(거리는 모서리에 수직으로 잰다). 결과는 시작점 → 안내점(안내선에 내린 발) 줄자 결과로 바꾼다.
+ *   각도기에서 각도를 치면(applyAngle — 도, 경사 1:6) 중심을 지나 기준 방향에서 그 각도만큼 커서(잰 방향) 쪽으로 돈 안내선을 둔다(음수는 반대쪽).
+ *   안내점·안내선은 모형에 넣지 않는 보기 전용 표시라 새 문서·clearGuides까지 남으며, 안내점은 끝점처럼, 안내선은 모서리 위처럼 붙는다.
  * 그리기는 덧그림 층의 SVG 묶음(g.measure)과 DOM 라벨(div.measure-layer)로 하고, 숫자 글은 모형 단위(units.ts)로 쓴다.
  */
 import type { Viewer3d } from 'opencad-viewer3d';
@@ -41,13 +44,17 @@ import {
   TOUCH_SNAP_RADIUS_PX,
   axisOf,
   chooseSnap,
+  closestOnLine,
   probeOffsets,
   rayPlane,
   type Axis,
   type AxisDirs,
+  type GuideLine,
   type Ray,
   type Snap,
 } from './snap';
+
+export type { GuideLine } from './snap';
 
 export type MeasureMode = 'tape' | 'protractor';
 
@@ -89,15 +96,27 @@ export interface MeasureToolOptions {
   curveCenter?: (id: string, seg: number) => V3 | null;
   /** 모형의 그리기 축(옮겼으면 — 축 고정·각도기 기본 평면이 그 축을 따른다, 없으면 세계 축) */
   getAxes?: () => AxisDirs | null;
-  /** 측정값 칸 표시: 줄자 진행 중이면 시작점 → 커서 길이, 아니면 줄자 결과 거리(장면 단위), 없으면 null. 바뀔 때만 부른다 */
-  onLive?: (length: number | null) => void;
+  /**
+   * 측정값 칸 표시: 줄자는 진행 중이면 시작점 → 커서 길이, 아니면 줄자 결과 거리(장면 단위). 각도기는 기준 방향을 찍은 뒤 커서 각도,
+   * 아니면 각도기 결과 각도(도). 없으면 null. 값이나 종류가 바뀔 때만 부른다
+   */
+  onLive?: (value: number | null, kind: LiveKind) => void;
 }
+
+/** 측정값 칸 값의 종류(줄자 길이 · 각도기 각도) */
+export type LiveKind = 'length' | 'angle';
 
 /** 측정값 칸으로 길이를 넣은 결과: ok, 줄자가 아님(mode), 시작점·결과가 없음(start), 방향을 모름(direction), 길이 0(zero) */
 export type LengthApply = 'ok' | 'mode' | 'start' | 'direction' | 'zero';
 
+/** 측정값 칸으로 각도를 넣은 결과: ok, 각도기가 아님(mode), 중심·기준 방향·결과가 없음(start), 돌릴 쪽을 모름(direction), 0°(zero) */
+export type AngleApply = LengthApply;
+
 /** 안내점을 기억하는 수(넘으면 오래된 것부터 버린다) */
 export const MAX_GUIDE_POINTS = 50;
+
+/** 안내선을 기억하는 수(넘으면 오래된 것부터 버린다) */
+export const MAX_GUIDE_LINES = 50;
 
 /** 기억해 두는 지나간 곡선 중심 수 */
 export const RECENT_CENTERS = 4;
@@ -155,6 +174,91 @@ export function pointAlong(a: readonly number[], toward: readonly number[], leng
   const l = Math.hypot(d[0], d[1], d[2]);
   if (!(l > 1e-9 * Math.max(1, Math.hypot(a[0]!, a[1]!, a[2]!))) || !Number.isFinite(length)) return null;
   return addScaled(a, d, length / l);
+}
+
+/**
+ * 모서리와 나란한 안내선 자리(SketchUp 줄자를 모서리 위에서 시작): 시작점 a에서 모서리 방향에 수직인 toward 쪽으로 length만큼 간 점
+ * (length가 음수면 반대쪽). toward가 모서리 직선 위(수직 성분이 a 크기에 비해 0)이거나 모서리 길이가 0이면 null
+ */
+export function parallelOffset(a: readonly number[], edge: readonly [readonly number[], readonly number[]], toward: readonly number[], length: number): V3 | null {
+  const u = unit(sub(edge[1], edge[0]));
+  if (!dot(u, u) || !Number.isFinite(length)) return null;
+  const d = sub(toward, a);
+  const w = addScaled(d, u, -dot(d, u));
+  const l = Math.hypot(w[0], w[1], w[2]);
+  if (!(l > 1e-9 * Math.max(1, Math.hypot(a[0]!, a[1]!, a[2]!)))) return null;
+  return addScaled(a, w, length / l);
+}
+
+/**
+ * 각도기 안내선 방향(단위): 중심 c에서 본 기준 방향(base)을 평면(법선 n) 안에서 deg도 돌린 방향.
+ * 도는 쪽은 toward(커서·잰 방향 점)가 있는 쪽이고 deg가 음수면 반대쪽이다. toward가 없거나 기준 직선 위면 법선 n 둘레 시계 반대쪽.
+ * 기준 방향이 평면에 비쳐 길이가 0이면 null
+ */
+export function angledGuideDir(c: readonly number[], base: readonly number[], toward: readonly number[] | null, n: readonly number[], deg: number): V3 | null {
+  const nn = unit(n);
+  const b = sub(base, c);
+  const u = unit(addScaled(b, nn, -dot(b, nn)));
+  if (!dot(u, u) || !dot(nn, nn) || !Number.isFinite(deg)) return null;
+  const v = cross(nn, u);
+  let side = 1;
+  if (toward) {
+    const t = sub(toward, c);
+    const s = dot(t, v);
+    if (Math.abs(s) > 1e-9 * Math.max(1e-300, Math.hypot(t[0], t[1], t[2]))) side = Math.sign(s);
+  }
+  const r = (deg * Math.PI) / 180;
+  return unit(addScaled(addScaled([0, 0, 0], u, Math.cos(r)), v, side * Math.sin(r)));
+}
+
+/**
+ * 안내선(끝이 없는 직선)을 그릴 화면 선분: 화면 가운데 시선에 가장 가까운 선 위 점에서 양쪽으로 멀리 뻗고, 원근이면 눈 앞에서 자른 뒤
+ * 보기 사각형(margin 화소 밖까지)으로 자른다. 시선과 거의 나란해 점으로 보이거나 화면에 들지 않으면 null
+ */
+export function guideLineScreen(f: ViewFrame, line: GuideLine, margin = 4): [number, number, number, number] | null {
+  const u = unit(line.dir);
+  if (!dot(u, u)) return null;
+  const fwd = forwardOf(f);
+  const sin = Math.hypot(...cross(u, fwd));
+  if (!(sin > 1e-6)) return null;
+  const c = closestOnLine({ origin: f.eye, dir: fwd }, line.point, u) ?? [line.point[0], line.point[1], line.point[2]];
+  const toEye = Math.hypot(...sub(c, f.eye));
+  let seg: [number, number, number, number] | null;
+  if (f.projection === 'perspective') {
+    // 아주 멀리(눈까지 거리의 만 배) 뻗으면 그 끝은 소실점에 거의 닿는다. 눈 뒤로 넘어간 쪽은 눈 앞 가까운 곳에서 자른다
+    const half = Math.max(toEye, 1e-9) * 1e4;
+    seg = screenSegment(f, addScaled(c, u, -half), addScaled(c, u, half), Math.max(1e-6, toEye * 1e-3));
+  } else {
+    const half = ((f.width + f.height) * f.pixelConst) / sin;
+    seg = screenSegment(f, addScaled(c, u, -half), addScaled(c, u, half));
+  }
+  return seg ? clipToRect(seg, -margin, -margin, f.width + margin, f.height + margin) : null;
+}
+
+/** 선 색(CSS rgb 글)과 반대 밝기의 테두리 색: 밝은 선이면 검정, 어둡거나 모르면 흰색 */
+export function haloFor(color: string): string {
+  const m = /rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/.exec(color);
+  if (!m) return '#ffffff';
+  return 0.299 * Number(m[1]) + 0.587 * Number(m[2]) + 0.114 * Number(m[3]) > 140 ? '#000000' : '#ffffff';
+}
+
+/** 화면 선분을 사각형으로 자른다(Liang–Barsky). 사각형에 들지 않으면 null */
+export function clipToRect(s: readonly [number, number, number, number], x0: number, y0: number, x1: number, y1: number): [number, number, number, number] | null {
+  const [ax, ay, bx, by] = s;
+  if (![ax, ay, bx, by].every(Number.isFinite)) return null;
+  const dx = bx - ax, dy = by - ay;
+  let t0 = 0, t1 = 1;
+  for (const [p, q] of [[-dx, ax - x0], [dx, x1 - ax], [-dy, ay - y0], [dy, y1 - ay]] as const) {
+    if (p === 0) {
+      if (q < 0) return null;
+      continue;
+    }
+    const t = q / p;
+    if (p < 0) t0 = Math.max(t0, t);
+    else t1 = Math.min(t1, t);
+    if (t0 > t1) return null;
+  }
+  return [ax + dx * t0, ay + dy * t0, ax + dx * t1, ay + dy * t1];
 }
 
 /** 줄자 결과(장면 단위) */
@@ -231,16 +335,22 @@ export function joinTip(label: string, value?: string | null): string {
   return [label, value].filter((s) => !!s).join(' · ');
 }
 
-/** 상태 줄 안내. touch면 키 설명 대신 길게 누르기(정밀 조준)를 알린다 */
-export function measureHint(mode: MeasureMode | null, points: number, hasResult: boolean, touch = false): string | null {
+/**
+ * 상태 줄 안내. touch면 키 설명 대신 길게 누르기(정밀 조준)를 알린다.
+ * edgeStart: 줄자 시작점이 모서리 위(끝점·중간점이 아닌 곳)라 길이를 치면 안내점 대신 나란한 안내선을 둔다
+ */
+export function measureHint(mode: MeasureMode | null, points: number, hasResult: boolean, touch = false, edgeStart = false): string | null {
   if (mode === 'tape') {
-    if (points === 1) return touch ? '줄자: 끝점을 누르세요' : '줄자: 끝점을 누르세요 · 길이를 치면 안내점 · Esc 취소';
+    if (points === 1) {
+      if (touch) return '줄자: 끝점을 누르세요';
+      return edgeStart ? '줄자: 끝점을 누르세요 · 길이를 치면 모서리와 나란한 안내선 · Esc 취소' : '줄자: 끝점을 누르세요 · 길이를 치면 안내점 · Esc 취소';
+    }
     if (hasResult) return touch ? '줄자: 다시 누르면 새로 잽니다' : '줄자: 다시 누르면 새로 잽니다 · Esc 지우기';
     return touch ? '줄자: 잴 시작점을 누르세요 · 길게 누르면 정밀 조준' : '줄자: 잴 시작점을 누르세요';
   }
   if (mode === 'protractor') {
     if (points === 1) return touch ? '각도기: 기준 방향의 점을 누르세요' : '각도기: 기준 방향의 점을 누르세요 · Esc 취소';
-    if (points === 2) return touch ? '각도기: 잴 방향의 점을 누르세요' : '각도기: 잴 방향의 점을 누르세요 · Esc 취소';
+    if (points === 2) return touch ? '각도기: 잴 방향의 점을 누르세요' : '각도기: 잴 방향의 점을 누르세요 · 각도를 치면 안내선 · Esc 취소';
     if (hasResult) return touch ? '각도기: 다시 누르면 새로 잽니다' : '각도기: 다시 누르면 새로 잽니다 · Esc 지우기';
     return touch ? '각도기: 중심점을 누르세요 · 길게 누르면 정밀 조준' : '각도기: 중심점을 누르세요 · Shift를 누르고 있으면 평면 고정';
   }
@@ -300,8 +410,15 @@ export class MeasureTool {
   private centers: V3[] = [];
   /** 측정값 칸으로 찍은 안내점(오래된 것이 앞) */
   private guidePts: V3[] = [];
-  /** 마지막으로 알린 측정값 칸 길이(undefined = 아직 알리지 않음) */
+  /** 측정값 칸으로 둔 안내선(오래된 것이 앞) */
+  private guideLns: GuideLine[] = [];
+  /** 줄자 시작점이 모서리 위(끝점·중간점이 아닌 곳)면 그 모서리(나란한 안내선 방향) */
+  private startEdge: [V3, V3] | null = null;
+  /** 지금 줄자 결과가 모서리 위에서 시작했으면 그 모서리(다 잰 뒤 친 길이도 나란한 안내선으로) */
+  private resultEdge: [V3, V3] | null = null;
+  /** 마지막으로 알린 측정값 칸 값과 종류(undefined = 아직 알리지 않음) */
   private lastLive: number | null | undefined = undefined;
+  private lastLiveKind: LiveKind | null = null;
   private readonly g: SVGGElement;
   private readonly layer: HTMLDivElement;
   private readonly tip: HTMLDivElement;
@@ -375,40 +492,95 @@ export class MeasureTool {
     return this.guidePts;
   }
 
-  /** 안내점 모두 지우기 */
+  /** 측정값 칸으로 둔 안내선 */
+  get guideLines(): readonly GuideLine[] {
+    return this.guideLns;
+  }
+
+  /** 줄자 시작점이 모서리 위라 친 길이가 나란한 안내선이 되는지 */
+  get edgeStart(): boolean {
+    return this.modeValue === 'tape' && (this.pts.length ? !!this.startEdge : !!this.resultEdge);
+  }
+
+  /** 안내점·안내선 모두 지우기 */
   clearGuides(): void {
-    if (!this.guidePts.length) return;
+    if (!this.guidePts.length && !this.guideLns.length) return;
     this.guidePts = [];
+    this.guideLns = [];
     this.hoverDirty = true;
     this.overlay.invalidate();
   }
 
+  /** 진행 중 측정의 커서 추정(그리기를 기다리지 않고 지금 커서 자리에서). 손가락·끌기 중이면 null */
+  private cursorSnap(): Snap | null {
+    const f = this.overlay.frame();
+    if (this.hoverDirty && f) {
+      this.hoverDirty = false;
+      this.updateHover(f);
+    }
+    return this.cursor && this.cursor.type !== 'touch' && !this.dragging ? this.hover : null;
+  }
+
   /**
    * 측정값 칸에 친 길이(장면 단위, 음수면 반대쪽): 줄자 시작점에서 그 길이만큼 간 자리에 안내점을 찍고 결과를 시작점 → 안내점으로 바꾼다.
-   * 시작점을 찍은 뒤면 방향은 시작점 → 커서 추정 점, 두 점을 다 잰 뒤(커서 없는 손가락 기기)면 그 결과의 시작점 → 끝점이다
+   * 시작점을 찍은 뒤면 방향은 시작점 → 커서 추정 점, 두 점을 다 잰 뒤(커서 없는 손가락 기기)면 그 결과의 시작점 → 끝점이다.
+   * 시작점이 모서리 위(끝점·중간점이 아닌 곳)면 안내점 대신 그 모서리와 나란한 안내선을 그 방향 쪽으로 모서리에 수직인 거리만큼 띄워 둔다
    */
   applyLength(length: number): LengthApply {
     if (this.modeValue !== 'tape') return 'mode';
     if (!(Math.abs(length) > 0) || !Number.isFinite(length)) return 'zero';
     let a: V3;
     let toward: V3 | null;
+    let edge: [V3, V3] | null;
     if (this.pts.length) {
       a = this.pts[0]!;
-      const f = this.overlay.frame();
-      if (this.hoverDirty && f) {
-        this.hoverDirty = false;
-        this.updateHover(f);
-      }
-      toward = this.cursor && this.cursor.type !== 'touch' && !this.dragging ? (this.hover?.point ?? null) : null;
+      toward = this.cursorSnap()?.point ?? null;
+      edge = this.startEdge;
     } else if (this.resultValue?.kind === 'tape') {
       a = this.resultValue.a;
       toward = this.resultValue.b;
+      edge = this.resultEdge;
     } else return 'start';
-    const end = toward ? pointAlong(a, toward, length) : null;
+    const end = !toward ? null : edge ? parallelOffset(a, edge, toward, length) : pointAlong(a, toward, length);
     if (!end) return 'direction';
     this.pts = [];
-    this.guidePts = [...this.guidePts, end].slice(-MAX_GUIDE_POINTS);
-    this.setResult(tapeResult(a, end));
+    this.startEdge = null;
+    if (edge) this.guideLns = [...this.guideLns, { point: end, dir: unit(sub(edge[1], edge[0])) }].slice(-MAX_GUIDE_LINES);
+    else this.guidePts = [...this.guidePts, end].slice(-MAX_GUIDE_POINTS);
+    this.setResult(tapeResult(a, end), edge);
+    this.hoverDirty = true;
+    this.refreshHint();
+    this.overlay.invalidate();
+    return 'ok';
+  }
+
+  /**
+   * 측정값 칸에 친 각도(도, 음수면 반대쪽): 각도기 중심을 지나 기준 방향에서 그 각도만큼 돈 안내선을 두고(SketchUp 각도기 안내선),
+   * 결과를 기준 방향 → 안내선 각도기 결과로 바꾼다. 도는 쪽은 기준 방향을 찍은 뒤면 커서 쪽, 다 잰 뒤(손가락 기기)면 그 결과의 잰 방향 쪽이다
+   */
+  applyAngle(deg: number): AngleApply {
+    if (this.modeValue !== 'protractor') return 'mode';
+    if (!Number.isFinite(deg) || !(Math.abs(deg) > 1e-9)) return 'zero';
+    let c: V3;
+    let base: V3;
+    let n: V3;
+    let toward: V3 | null;
+    if (this.pts.length === 2 && this.normal) {
+      [c, base] = this.pts as [V3, V3];
+      n = this.normal;
+      toward = this.cursorSnap() ? this.hoverPoint : null;
+      if (!toward) return 'direction';
+    } else if (!this.pts.length && this.resultValue?.kind === 'protractor') {
+      ({ center: c, a: base, b: toward, normal: n } = this.resultValue);
+    } else return 'start';
+    const dir = angledGuideDir(c, base, toward, n, deg);
+    if (!dir) return 'direction';
+    const end = addScaled(c, dir, Math.hypot(...sub(base, c)));
+    this.pts = [];
+    this.normal = null;
+    const at: V3 = [c[0], c[1], c[2]];
+    this.guideLns = [...this.guideLns, { point: at, dir }].slice(-MAX_GUIDE_LINES);
+    this.setResult(protractorResult(c, base, end, n));
     this.hoverDirty = true;
     this.refreshHint();
     this.overlay.invalidate();
@@ -440,6 +612,7 @@ export class MeasureTool {
   /** 진행 중 점과 결과 지우기(도구는 켜 둔다) */
   clear(): void {
     this.pts = [];
+    this.startEdge = null;
     this.normal = null;
     this.centers = [];
     this.dropResult();
@@ -459,6 +632,7 @@ export class MeasureTool {
       if (e.type === 'keyup' || e.ctrlKey || e.metaKey || e.altKey) return false;
       if (this.pts.length) {
         this.pts = [];
+        this.startEdge = null;
         this.normal = null;
         this.hoverDirty = true;
       } else if (this.resultValue) {
@@ -537,6 +711,7 @@ export class MeasureTool {
       centers: this.centers,
       axisDirs: this.opts.getAxes?.() ?? null,
       guides: this.guidePts,
+      guideLines: this.guideLns,
     });
   }
 
@@ -727,11 +902,15 @@ export class MeasureTool {
       if (!this.pts.length) {
         this.dropResult();
         this.pts = [snap.point];
+        // 모서리 위(끝점·중간점이 아닌 곳, 안내선 위 포함)에서 시작하면 친 길이는 그 모서리와 나란한 안내선이 된다(SketchUp 줄자)
+        this.startEdge = snap.kind === 'onEdge' && snap.edge ? snap.edge : null;
       } else {
         const a = this.pts[0]!;
         if (samePoint(a, snap.point)) return;
+        const edge = this.startEdge;
         this.pts = [];
-        this.setResult(tapeResult(a, snap.point));
+        this.startEdge = null;
+        this.setResult(tapeResult(a, snap.point), edge);
       }
     } else if (this.modeValue === 'protractor') {
       if (!this.pts.length) {
@@ -768,19 +947,23 @@ export class MeasureTool {
     this.overlay.invalidate();
   }
 
-  private setResult(r: MeasureToolResult): void {
+  /** 결과 두기. edge: 줄자 결과가 모서리 위에서 시작했으면 그 모서리(다 잰 뒤 친 길이도 나란한 안내선으로) */
+  private setResult(r: MeasureToolResult, edge: [V3, V3] | null = null): void {
     this.resultValue = r;
+    this.resultEdge = r.kind === 'tape' ? edge : null;
     this.opts.onResult(r);
   }
 
   private dropResult(): void {
     if (!this.resultValue) return;
     this.resultValue = null;
+    this.resultEdge = null;
     this.opts.onResult(null);
   }
 
   private reset(): void {
     this.pts = [];
+    this.startEdge = null;
     this.normal = null;
     this.centers = [];
     this.planeLock = null;
@@ -797,7 +980,7 @@ export class MeasureTool {
   }
 
   private refreshHint(): void {
-    const h = measureHint(this.modeValue, this.pts.length, !!this.resultValue, this.opts.touch?.() ?? false);
+    const h = measureHint(this.modeValue, this.pts.length, !!this.resultValue, this.opts.touch?.() ?? false, this.edgeStart);
     if (h === this.lastHint) return;
     this.lastHint = h;
     this.opts.onHint?.(h);
@@ -842,6 +1025,11 @@ export class MeasureTool {
     const len = (d: number): string => formatLength(d * k, units);
     const ang = (deg: number): string => formatAngle(deg, units);
 
+    // 안내선은 맨 아래(결과 선·표식이 그 위에 보이게). 테두리는 선 색(글자 색)과 반대 밝기 — 어두운 테마의 흰 점선이 흰 테두리에 묻히지 않게
+    if (this.guideLns.length) {
+      const halo = haloFor(typeof getComputedStyle === 'function' ? getComputedStyle(this.g).color : '');
+      for (const gl of this.guideLns) this.guideLineMark(f, gl, halo);
+    }
     const r = this.resultValue;
     if (r?.kind === 'tape') this.drawTape(f, r, len(r.distance));
     else if (r?.kind === 'protractor') this.drawAngle(f, r.center, r.a, r.b, r.normal, ang(r.angle), true);
@@ -887,15 +1075,40 @@ export class MeasureTool {
     this.notifyLive(snap);
   }
 
-  /** 측정값 칸 길이 알리기(줄자 진행 중이면 시작점 → 커서, 아니면 줄자 결과) */
+  /**
+   * 측정값 칸 값 알리기: 줄자는 진행 중이면 시작점 → 커서 길이, 아니면 줄자 결과 거리.
+   * 각도기는 기준 방향을 찍은 뒤면 기준 방향 → 커서 각도, 아니면 각도기 결과 각도
+   */
   private notifyLive(snap: Snap | null): void {
     let live: number | null = null;
-    const a = this.pts[0];
-    if (this.modeValue === 'tape' && a && snap && this.cursor?.type !== 'touch') live = Math.hypot(...sub(snap.point, a));
-    else if (this.resultValue?.kind === 'tape') live = this.resultValue.distance;
-    if (live === this.lastLive) return;
+    const kind: LiveKind = this.modeValue === 'protractor' ? 'angle' : 'length';
+    const cursor = !!snap && this.cursor?.type !== 'touch';
+    if (this.modeValue === 'tape') {
+      const a = this.pts[0];
+      if (a && cursor) live = Math.hypot(...sub(snap!.point, a));
+      else if (this.resultValue?.kind === 'tape') live = this.resultValue.distance;
+    } else if (this.modeValue === 'protractor') {
+      const [c, base] = this.pts;
+      if (c && base && this.normal && cursor && this.hoverPoint) live = planeAngle(sub(base, c), sub(this.hoverPoint, c), this.normal);
+      else if (this.resultValue?.kind === 'protractor') live = this.resultValue.angle;
+    }
+    if (live === this.lastLive && kind === this.lastLiveKind) return;
     this.lastLive = live;
-    this.opts.onLive?.(live);
+    this.lastLiveKind = kind;
+    this.opts.onLive?.(live, kind);
+  }
+
+  /** 안내선 표식: 화면 끝까지 뻗은 점선(흰 테두리 — SketchUp 안내선) */
+  private guideLineMark(f: ViewFrame, gl: GuideLine, halo: string): void {
+    const s = guideLineScreen(f, gl);
+    if (!s) return;
+    const at = { x1: s[0].toFixed(1), y1: s[1].toFixed(1), x2: s[2].toFixed(1), y2: s[3].toFixed(1) };
+    const g = svgEl('g', { class: 'measure-guide-line' });
+    g.append(
+      svgEl('line', { ...at, stroke: halo, 'stroke-width': 3, 'stroke-opacity': 0.55 }),
+      svgEl('line', { ...at, stroke: 'currentColor', 'stroke-width': 1.25, 'stroke-dasharray': '8 5' }),
+    );
+    this.g.append(g);
   }
 
   /** 안내점 표식: 흰 테두리를 두른 작은 ×(SketchUp 안내점) */

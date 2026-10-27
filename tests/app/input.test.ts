@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { VIEW_KEYS } from 'opencad-viewer3d';
-import { VIEW_KEY_OF, VIEW_MENU, isEditableTarget, isViewKey, keyAction } from '../../src/app/keys';
+import { VIEW_KEYS as APP_VIEW_KEYS, VIEW_KEY_OF, VIEW_MENU, isEditableTarget, isViewKey, keyAction } from '../../src/app/keys';
 import { parseLaunch } from '../../src/app/launch';
 import { THEME_KEY, readStoredTheme, resolveTheme, storeTheme } from '../../src/app/theme';
 
@@ -63,7 +63,8 @@ describe('키 → 할 일', () => {
     expect(isEditableTarget(null)).toBe(false);
   });
 
-  it('표준 뷰 메뉴의 키 안내는 뷰어의 VIEW_KEYS에서', () => {
+  it('표준 뷰 메뉴의 키 안내는 뷰어의 VIEW_KEYS에서(첫 화면용 앱 표가 코어 표와 같다)', () => {
+    expect(APP_VIEW_KEYS).toEqual(VIEW_KEYS);
     expect(VIEW_MENU.length).toBe(10);
     for (const [k, v] of Object.entries(VIEW_KEYS)) expect(VIEW_KEY_OF[v]).toBe(k);
     expect(VIEW_KEY_OF.top).toBe('5');

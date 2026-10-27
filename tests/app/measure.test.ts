@@ -8,10 +8,17 @@ import type { LineSet3d, Mesh3d, Scene3d } from 'opencad-viewer3d/types';
 import {
   AIM_HOLD_MS,
   AIM_OFFSET_PX,
+  MAX_GUIDE_LINES,
   MAX_GUIDE_POINTS,
   MeasureTool,
   aimPoint,
+  angledGuideDir,
+  clipToRect,
+  guideLineScreen,
+  haloFor,
+  parallelOffset,
   pointAlong,
+  type LiveKind,
   joinTip,
   measureHint,
   planeAngle,
@@ -123,6 +130,7 @@ interface Rig {
   results: (MeasureToolResult | null)[];
   hints: (string | null)[];
   lives: (number | null)[];
+  liveKinds: LiveKind[];
   setCamera(c: CameraState): void;
   ptr(type: string, x: number, y: number, o?: { id?: number; button?: number; buttons?: number; pointerType?: string; shift?: boolean }): void;
   click(x: number, y: number, o?: { pointerType?: string; id?: number; shift?: boolean }): void;
@@ -170,7 +178,17 @@ function rig(scene: Pick<Scene3d, 'meshes' | 'lines' | 'units'>, cam: CameraStat
   const results: (MeasureToolResult | null)[] = [];
   const hints: (string | null)[] = [];
   const lives: (number | null)[] = [];
-  const tool = new MeasureTool(viewer, overlay, { getScene: () => scene, getUnits: () => units, onResult: (r) => results.push(r), onHint: (h) => hints.push(h), onLive: (l) => lives.push(l) });
+  const liveKinds: LiveKind[] = [];
+  const tool = new MeasureTool(viewer, overlay, {
+    getScene: () => scene,
+    getUnits: () => units,
+    onResult: (r) => results.push(r),
+    onHint: (h) => hints.push(h),
+    onLive: (l, k) => {
+      lives.push(l);
+      liveKinds.push(k);
+    },
+  });
   const ptr: Rig['ptr'] = (type, x, y, o = {}) => {
     const e = new MouseEvent(type, { clientX: x, clientY: y, button: o.button ?? 0, buttons: o.buttons ?? 0, shiftKey: !!o.shift, bubbles: true });
     Object.defineProperty(e, 'pointerId', { value: o.id ?? 1 });
@@ -184,6 +202,7 @@ function rig(scene: Pick<Scene3d, 'meshes' | 'lines' | 'units'>, cam: CameraStat
     results,
     hints,
     lives,
+    liveKinds,
     setCamera(c) {
       camera = c;
       for (const cb of camCbs) cb(c);
@@ -609,5 +628,184 @@ describe('측정값 칸(VCB): 길이를 쳐서 안내점 찍기', () => {
     for (let i = 1; i <= MAX_GUIDE_POINTS + 3; i++) expect(r.tool.applyLength(i)).toBe('ok');
     expect(r.tool.guides).toHaveLength(MAX_GUIDE_POINTS);
     expect(r.tool.guides[0]![0]).toBeCloseTo(4, 9);
+  });
+});
+
+describe('측정값 칸: 안내선(모서리와 나란히 · 각도기 각도)', () => {
+  it('나란한 안내선 자리: 모서리에 수직인 커서 쪽으로 친 거리(음수면 반대쪽), 커서가 모서리 직선 위면 null', () => {
+    const edge: [number[], number[]] = [[0, 0, 0], [10, 0, 0]];
+    expect(parallelOffset([2, 0, 0], edge, [7, 4, 0], 3)).toEqual([2, 3, 0]);
+    expect(parallelOffset([2, 0, 0], edge, [7, 4, 0], -3)).toEqual([2, -3, 0]);
+    // 3D: 수직 성분만 본다(모서리 방향 성분은 버린다)
+    const p = parallelOffset([2, 0, 0], edge, [9, 3, 4], 10)!;
+    expect(p[0]).toBeCloseTo(2, 12);
+    expect(p[1]).toBeCloseTo(6, 12);
+    expect(p[2]).toBeCloseTo(8, 12);
+    expect(parallelOffset([2, 0, 0], edge, [8, 0, 0], 3)).toBeNull();
+    expect(parallelOffset([2, 0, 0], [[1, 1, 1], [1, 1, 1]], [2, 5, 0], 3)).toBeNull();
+  });
+
+  it('각도기 안내선 방향: 기준 방향을 평면 안에서 커서 쪽으로 돌리고, 음수는 반대쪽, 커서가 없으면 법선 둘레 시계 반대', () => {
+    const near = (a: number[] | null, b: number[]): void => {
+      expect(a).not.toBeNull();
+      for (let i = 0; i < 3; i++) expect(a![i]).toBeCloseTo(b[i]!, 12);
+    };
+    const n = [0, 0, 1];
+    near(angledGuideDir([0, 0, 0], [10, 0, 0], [0, 5, 0], n, 90), [0, 1, 0]);
+    near(angledGuideDir([0, 0, 0], [10, 0, 0], [0, -5, 0], n, 90), [0, -1, 0]);
+    near(angledGuideDir([0, 0, 0], [10, 0, 0], [0, 5, 0], n, -90), [0, -1, 0]);
+    near(angledGuideDir([0, 0, 0], [10, 0, 0], null, n, 30), [Math.cos(Math.PI / 6), 0.5, 0]);
+    // 기준 방향이 평면 밖으로 기울어 있어도 평면에 비친 방향에서 돈다
+    near(angledGuideDir([1, 1, 0], [11, 1, 7], [1, 9, 3], n, 45), [Math.SQRT1_2, Math.SQRT1_2, 0]);
+    expect(angledGuideDir([0, 0, 0], [0, 0, 5], [0, 5, 0], n, 30)).toBeNull();
+  });
+
+  it('화면 선분 자르기와 안내선 화면 선분(평행 투영은 화면 끝까지, 시선과 나란하면 그리지 않는다)', () => {
+    expect(clipToRect([-10, 50, 210, 50], 0, 0, 200, 200)).toEqual([0, 50, 200, 50]);
+    clipToRect([50, -10, 50, 300], 0, 0, 200, 200)!.forEach((v, i) => expect(v).toBeCloseTo([50, 0, 50, 200][i]!, 9));
+    expect(clipToRect([-10, -10, -5, 300], 0, 0, 200, 200)).toBeNull();
+    // 안내선 테두리: 밝은 선(어두운 테마 글자 색)은 검정, 어두운 선·모르는 색은 흰색
+    expect(haloFor('rgb(232, 235, 240)')).toBe('#000000');
+    expect(haloFor('rgb(29, 37, 48)')).toBe('#ffffff');
+    expect(haloFor('')).toBe('#ffffff');
+    const f = frameFor(TOP, W, W);
+    const s = guideLineScreen(f, { point: [30, 25, 0], dir: [1, 0, 0] }, 4)!;
+    expect(Math.min(s[0], s[2])).toBeCloseTo(-4, 6);
+    expect(Math.max(s[0], s[2])).toBeCloseTo(W + 4, 6);
+    expect(s[1]).toBeCloseTo(75, 6);
+    expect(s[3]).toBeCloseTo(75, 6);
+    expect(guideLineScreen(f, { point: [0, 0, 0], dir: [0, 0, 1] })).toBeNull();
+    expect(guideLineScreen(f, { point: [0, 500, 0], dir: [1, 0, 0] })).toBeNull();
+    // 원근: 눈 뒤로 넘어가는 선도 눈 앞쪽만 보기 안에서 그린다
+    const cam: CameraState = { target: [0, 0, 0], distance: 300, yaw: 0, pitch: 0.4, projection: 'perspective', fovY: FOV };
+    const fp = frameFor(cam, W, W);
+    for (const dir of [[1, 0, 0], [0, 1, 0], [0.6, 0.8, 0]] as [number, number, number][]) {
+      const q = guideLineScreen(fp, { point: [0, 0, 0], dir }, 4);
+      expect(q, String(dir)).not.toBeNull();
+      for (const v of q!) expect(v).toBeGreaterThanOrEqual(-4 - 1e-6);
+      for (const v of q!) expect(v).toBeLessThanOrEqual(W + 4 + 1e-6);
+    }
+  });
+
+  // 원점에서 +X로 100 모서리와 X = −60의 세로 모서리(−80 ~ 80)
+  const TWO = (): Pick<Scene3d, 'meshes' | 'lines' | 'units'> => ({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 100, 0, 0], [-60, -80, 0, -60, 80, 0]])] });
+
+  it('줄자를 모서리 위(끝점·중간점이 아닌 곳)에서 시작해 길이를 치면 안내점 대신 그 모서리와 나란한 안내선', () => {
+    const r = rig(TWO());
+    r.tool.setMode('tape');
+    r.click(130, 101);
+    expect(r.tool.edgeStart).toBe(true);
+    expect(r.hints.at(-1)).toContain('모서리와 나란한 안내선');
+    // 커서를 위(+Y)로: 축 고정(녹색), 진행 중 길이는 그대로 시작점 → 커서
+    r.move(130, 60);
+    expect(r.liveKinds.at(-1)).toBe('length');
+    expect(r.tool.applyLength(30)).toBe('ok');
+    expect(r.tool.guides).toHaveLength(0);
+    expect(r.tool.guideLines).toHaveLength(1);
+    const gl = r.tool.guideLines[0]!;
+    expect(gl.dir).toEqual([1, 0, 0]);
+    expect(gl.point[1]).toBeCloseTo(30, 6);
+    const res = r.results.at(-1) as { a: number[]; b: number[]; distance: number };
+    expect(res.distance).toBeCloseTo(30, 6);
+    expect(res.b[0]).toBeCloseTo(res.a[0]!, 6);
+    r.overlay.paintNow();
+    const line = r.q('.measure-guide-line line:last-child')!;
+    expect(Number(line.getAttribute('y1'))).toBeCloseTo(70, 1);
+    expect(Number(line.getAttribute('y2'))).toBeCloseTo(70, 1);
+    expect(Math.abs(Number(line.getAttribute('x2')) - Number(line.getAttribute('x1')))).toBeGreaterThan(W);
+    // 안내선은 모서리 위처럼 붙고, 다른 모서리와 만나는 곳은 교차점
+    r.move(170, 71);
+    expect(r.tip()).toBe('안내선에');
+    r.move(41, 71);
+    expect(r.tip()).toBe('교차점');
+    // 안내선 위에서 시작해도 나란한 안내선
+    r.click(170, 71);
+    expect(r.tool.edgeStart).toBe(true);
+    r.move(170, 40);
+    expect(r.tool.applyLength(20)).toBe('ok');
+    expect(r.tool.guideLines).toHaveLength(2);
+    expect(r.tool.guideLines[1]!.point[1]).toBeCloseTo(50, 6);
+    // 끝점에서 시작하면 전처럼 안내점
+    r.click(102, 101);
+    expect(r.tool.edgeStart).toBe(false);
+    r.move(102, 20);
+    expect(r.tool.applyLength(10)).toBe('ok');
+    expect(r.tool.guides).toHaveLength(1);
+    expect(r.tool.guideLines).toHaveLength(2);
+    r.tool.clearGuides();
+    expect(r.tool.guides).toHaveLength(0);
+    expect(r.tool.guideLines).toHaveLength(0);
+  });
+
+  it('손가락 기기: 모서리 위에서 시작한 결과 뒤에 친 길이는 결과 쪽으로 나란한 안내선(음수면 반대쪽)', () => {
+    const r = rig(TWO());
+    r.tool.setMode('tape');
+    r.click(125, 101, { pointerType: 'touch' });
+    r.click(40, 60, { pointerType: 'touch' });
+    expect(r.results.at(-1)?.kind).toBe('tape');
+    expect(r.tool.edgeStart).toBe(true);
+    expect(r.tool.applyLength(-10)).toBe('ok');
+    const gl = r.tool.guideLines.at(-1)!;
+    expect(gl.dir).toEqual([1, 0, 0]);
+    expect(gl.point[1]).toBeCloseTo(-10, 6);
+  });
+
+  it('각도기: 기준 방향 뒤 각도를 치면 중심을 지나 커서 쪽으로 돈 안내선(음수는 반대쪽), 결과 뒤에는 결과 쪽으로', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('protractor');
+    expect(r.tool.applyAngle(30)).toBe('start');
+    r.click(101, 101);
+    expect(r.tool.applyAngle(30)).toBe('start');
+    r.click(197, 102);
+    expect(r.hints.at(-1)).toContain('각도를 치면 안내선');
+    r.move(101, 52);
+    // 측정값 칸은 지금 각도
+    expect(r.liveKinds.at(-1)).toBe('angle');
+    expect(r.lives.at(-1)).toBeCloseTo(90, 6);
+    expect(r.tool.applyAngle(0)).toBe('zero');
+    expect(r.tool.applyAngle(30)).toBe('ok');
+    expect(r.tool.pointCount).toBe(0);
+    let gl = r.tool.guideLines.at(-1)!;
+    expect(gl.point).toEqual([0, 0, 0]);
+    expect(gl.dir[0]).toBeCloseTo(Math.cos(Math.PI / 6), 9);
+    expect(gl.dir[1]).toBeCloseTo(0.5, 9);
+    const res = r.results.at(-1);
+    expect(res?.kind).toBe('protractor');
+    if (res?.kind !== 'protractor') return;
+    expect(res.angle).toBeCloseTo(30, 9);
+    r.overlay.paintNow();
+    expect(r.lives.at(-1)).toBeCloseTo(30, 6);
+    expect(r.qa('.measure-guide-line')).toHaveLength(1);
+    expect(r.q('.measure-label-angle')?.textContent).toBe('30.0°');
+    // 다 잰 뒤(손가락 기기)는 결과의 잰 방향 쪽으로
+    expect(r.tool.applyAngle(45)).toBe('ok');
+    gl = r.tool.guideLines.at(-1)!;
+    expect(gl.dir[0]).toBeCloseTo(Math.SQRT1_2, 9);
+    expect(gl.dir[1]).toBeCloseTo(Math.SQRT1_2, 9);
+    // 음수는 반대쪽
+    r.click(101, 101);
+    r.click(197, 102);
+    r.move(101, 52);
+    expect(r.tool.applyAngle(-30)).toBe('ok');
+    gl = r.tool.guideLines.at(-1)!;
+    expect(gl.dir[1]).toBeCloseTo(-0.5, 9);
+    expect(r.tool.guideLines).toHaveLength(3);
+    // 커서가 없으면(손가락) 돌릴 쪽을 모른다
+    r.click(101, 101, { pointerType: 'touch' });
+    r.click(197, 102, { pointerType: 'touch' });
+    expect(r.tool.applyAngle(30)).toBe('direction');
+    r.tool.setMode('tape');
+    expect(r.tool.applyAngle(30)).toBe('mode');
+  });
+
+  it(`안내선은 ${MAX_GUIDE_LINES}개까지(오래된 것부터 버린다)`, () => {
+    const r = rig(EDGES());
+    r.tool.setMode('protractor');
+    r.click(101, 101);
+    r.click(197, 102);
+    r.move(101, 52);
+    expect(r.tool.applyAngle(1)).toBe('ok');
+    for (let i = 2; i <= MAX_GUIDE_LINES + 3; i++) expect(r.tool.applyAngle(i)).toBe('ok');
+    expect(r.tool.guideLines).toHaveLength(MAX_GUIDE_LINES);
   });
 });
