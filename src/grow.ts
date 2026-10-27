@@ -1,5 +1,5 @@
 /**
- * 길이를 모르고 쌓는 형식 배열(장면 배열 — scene.ts). 두 배씩 키우며 쌓고, 끝에 꼭 맞는 길이로 낸다.
+ * 길이를 모르고 쌓는 형식 배열(장면 배열 — scene.ts, 면·모서리 표 — entities.ts). 두 배씩 키우며 쌓고, 끝에 꼭 맞는 길이로 낸다.
  *
  * 큰 모형에서 이 배열들이 장면 배열 크기의 몇 배를 잡았다: 키울 때마다 새로 잡고 복사한 옛 버퍼는 GC를 기다리며 쌓이고,
  * 끝에 slice로 한 벌 더 복사한 뒤에도 쌓던 큰 버퍼를 함수가 끝날 때까지 붙들었다(165 MB 모형: 장면 배열 200 MB에 external +560 MB).
@@ -8,7 +8,7 @@
  * 큰 버퍼를 붙들지 않는다. 어느 길이든 내는 값은 같다.
  */
 
-type Typed = Float32Array | Uint32Array | Int32Array;
+type Typed = Float64Array | Float32Array | Uint32Array | Int32Array | Uint8Array;
 
 interface TypedCtor<T extends Typed> {
   new (length: number): T;
@@ -68,6 +68,12 @@ class Grow<T extends Typed> {
   }
 }
 
+export class F64 extends Grow<Float64Array> {
+  constructor(size = 1024) {
+    super(Float64Array, size);
+  }
+}
+
 export class F32 extends Grow<Float32Array> {
   constructor(size = 1024) {
     super(Float32Array, size);
@@ -83,5 +89,11 @@ export class U32 extends Grow<Uint32Array> {
 export class I32 extends Grow<Int32Array> {
   constructor(size = 1024) {
     super(Int32Array, size);
+  }
+}
+
+export class U8 extends Grow<Uint8Array> {
+  constructor(size = 1024) {
+    super(Uint8Array, size);
   }
 }

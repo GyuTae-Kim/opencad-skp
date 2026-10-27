@@ -3,6 +3,7 @@ import type { SkpMaterialInfo } from '../src/materials';
 import { FLAG_HIDDEN, type SkpDefinition, type SkpEdge, type SkpEntities, type SkpFace, type SkpInstance, type SkpModel } from '../src/model';
 import { BoxSet, MAX_CAP_SPLITS, buildSceneParts } from '../src/scene';
 import { solidInfo } from '../src/solid';
+import { edgeList, edgesFrom, facesFrom } from '../src/entities';
 
 const at = (x: number, y = 0, z = 0, s = 1): Float64Array => Float64Array.from([s, 0, 0, 0, 0, s, 0, 0, 0, 0, s, 0, x, y, z, 1]);
 
@@ -36,7 +37,7 @@ function shell(points: number[], loops: number[][], o: { withLoopEdges?: boolean
     if (o.material !== undefined) f.front = o.material;
     return f;
   });
-  return { points: Float64Array.from(points), faces, edges, instances: [] };
+  return { points: Float64Array.from(points), faces: facesFrom(faces), edges: edgesFrom(edges), instances: [] };
 }
 
 /** 한 변 s인 정육면체(면 여섯, 바깥 방향으로 감음) */
@@ -81,7 +82,7 @@ describe('닫힌 입체·부피(solidInfo)', () => {
 
   it('떠 있는 모서리·안쪽 인스턴스가 있으면 입체가 아니다(채우기는 된다)', () => {
     const e = cube(1);
-    e.edges.push({ a: 0, b: 6, flags: 0 });
+    e.edges = edgesFrom([...edgeList(e.edges), { a: 0, b: 6, flags: 0 }]);
     expect(solidInfo(e)).toEqual({ closed: true });
     const g = cube(1);
     g.instances.push({ definition: 9, matrix: at(0), flags: 0 });
@@ -101,7 +102,7 @@ describe('단면 채우기 묶음과 노드 부피(buildSceneParts)', () => {
       layers: new Map([[1, 'Layer0']]),
       defaultLayer: 1,
       definitions: defs,
-      root: { points: new Float64Array(), faces: [], edges: [], instances: [inst(1, at(0)), inst(1, at(5, 0, 0, 2)), inst(2, at(0, 5)), inst(1, at(0, 9), { material: 5 })] },
+      root: { points: new Float64Array(), faces: facesFrom([]), edges: edgesFrom([]), instances: [inst(1, at(0)), inst(1, at(5, 0, 0, 2)), inst(2, at(0, 5)), inst(1, at(0, 9), { material: 5 })] },
       counts: { vertices: 0, edges: 0, faces: 0, instances: 4 },
       warnings: [],
     };
@@ -143,7 +144,7 @@ describe('단면 채우기 묶음과 노드 부피(buildSceneParts)', () => {
       layers: new Map([[1, 'Layer0']]),
       defaultLayer: 1,
       definitions: new Map<number, SkpDefinition>([[1, { id: 1, name: 'Box', entities: cube(1) }]]),
-      root: { points: new Float64Array(), faces: [], edges: [], instances: places.map(([x, y, z, k]) => ({ definition: 1, matrix: at(x, y, z, k), flags: 0, kind: 'group' as const })) },
+      root: { points: new Float64Array(), faces: facesFrom([]), edges: edgesFrom([]), instances: places.map(([x, y, z, k]) => ({ definition: 1, matrix: at(x, y, z, k), flags: 0, kind: 'group' as const })) },
       counts: { vertices: 0, edges: 0, faces: 0, instances: places.length },
       warnings: [],
     };

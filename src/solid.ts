@@ -8,6 +8,7 @@
  * 부피는 발산 정리로 V = |Σ면 (Σ고리 Σ p_k × p_{k+1}) · q_f| / 6(q_f는 그 면 위 한 점, 좌표는 첫 정점 기준으로 빼서 큰 좌표에서도 정밀하게).
  * 방향이 맞을 때만 뜻이 있다.
  */
+import { loopEdgesKnown } from './entities';
 import { FLAG_HIDDEN, type SkpEntities } from './model';
 
 export interface SolidInfo {
@@ -25,13 +26,15 @@ export interface SolidInfo {
 
 const NOT_CLOSED: SolidInfo = { closed: false };
 
-/** 요소 묶음 → 닫힘·부피. 고리의 모서리 번호(loopEdges)가 없으면 정점 쌍으로 모서리를 가린다 */
+/** 요소 묶음 → 닫힘·부피. 고리의 모서리 번호를 모르면 정점 쌍으로 모서리를 가린다 */
 export function solidInfo(ents: SkpEntities): SolidInfo {
   const faces = ents.faces;
   if (faces.length < 4) return NOT_CLOSED;
   const p = ents.points;
   const nPts = p.length / 3;
   const edges = ents.edges;
+  const EA = edges.a;
+  const EB = edges.b;
   // 모서리마다 쓰임 수와 방향 합(+1 = a → b, −1 = b → a)
   const useCount = new Uint8Array(edges.length);
   const dirSum = new Int8Array(edges.length);
@@ -41,10 +44,9 @@ export function solidInfo(ents: SkpEntities): SolidInfo {
   const use = (a: number, b: number, ei: number | undefined): boolean => {
     if (a === b || !(a >= 0 && a < nPts && b >= 0 && b < nPts)) return false;
     if (ei !== undefined) {
-      const e = edges[ei];
-      if (!e) return false;
-      const fwd = e.a === a && e.b === b;
-      if (!fwd && !(e.a === b && e.b === a)) return false;
+      if (!(ei >= 0 && ei < edges.length)) return false;
+      const fwd = EA[ei] === a && EB[ei] === b;
+      if (!fwd && !(EA[ei] === b && EB[ei] === a)) return false;
       if (useCount[ei]! >= 2) return false;
       useCount[ei]!++;
       dirSum[ei]! += fwd ? 1 : -1;
@@ -59,14 +61,18 @@ export function solidInfo(ents: SkpEntities): SolidInfo {
     r.d += a < b ? 1 : -1;
     return true;
   };
-  for (const f of faces) {
-    if (f.flags & FLAG_HIDDEN) hidden = true;
-    const le = f.loopEdges && f.loopEdges.length === f.loops.length ? f.loopEdges : null;
-    for (let li = 0; li < f.loops.length; li++) {
-      const loop = f.loops[li]!;
-      const via = le && le[li]!.length === loop.length ? le[li]! : null;
-      if (loop.length < 3) return NOT_CLOSED;
-      for (let k = 0; k < loop.length; k++) if (!use(loop[k]!, loop[(k + 1) % loop.length]!, via ? via[k] : undefined)) return NOT_CLOSED;
+  const LS = faces.loopStart;
+  const CS = faces.cornerStart;
+  const VX = faces.vertex;
+  const ED = faces.edge;
+  for (let f = 0; f < faces.length; f++) {
+    if (faces.flags[f]! & FLAG_HIDDEN) hidden = true;
+    for (let li = LS[f]!; li < LS[f + 1]!; li++) {
+      const s = CS[li]!;
+      const n = CS[li + 1]! - s;
+      const known = loopEdgesKnown(faces, li);
+      if (n < 3) return NOT_CLOSED;
+      for (let k = 0; k < n; k++) if (!use(VX[s + k]!, VX[s + ((k + 1) % n)]!, known ? ED![s + k]! : undefined)) return NOT_CLOSED;
     }
   }
   // 쓰인 모서리는 모두 쓰임이 둘이어야 한다
@@ -77,8 +83,9 @@ export function solidInfo(ents: SkpEntities): SolidInfo {
     const n = useCount[i]!;
     if (n === 0) {
       // 고리의 모서리 번호가 없는 면이 쓴 모서리는 정점 쌍으로 센다
-      const e = edges[i]!;
-      if (!pairMap?.has(e.a < e.b ? e.a * nPts + e.b : e.b * nPts + e.a)) stray = true;
+      const a = EA[i]!;
+      const b = EB[i]!;
+      if (!pairMap?.has(a < b ? a * nPts + b : b * nPts + a)) stray = true;
       continue;
     }
     if (n !== 2) return NOT_CLOSED;
@@ -95,14 +102,16 @@ export function solidInfo(ents: SkpEntities): SolidInfo {
   const oy = p[1]!;
   const oz = p[2]!;
   let v = 0;
-  for (const f of faces) {
+  for (let f = 0; f < faces.length; f++) {
     let ax = 0;
     let ay = 0;
     let az = 0;
-    for (const loop of f.loops) {
-      for (let k = 0; k < loop.length; k++) {
-        const i = 3 * loop[k]!;
-        const j = 3 * loop[(k + 1) % loop.length]!;
+    for (let li = LS[f]!; li < LS[f + 1]!; li++) {
+      const s = CS[li]!;
+      const len = CS[li + 1]! - s;
+      for (let k = 0; k < len; k++) {
+        const i = 3 * VX[s + k]!;
+        const j = 3 * VX[s + ((k + 1) % len)]!;
         const px = p[i]! - ox;
         const py = p[i + 1]! - oy;
         const pz = p[i + 2]! - oz;
@@ -114,7 +123,7 @@ export function solidInfo(ents: SkpEntities): SolidInfo {
         az += px * qy - py * qx;
       }
     }
-    const q = 3 * f.loops[0]![0]!;
+    const q = 3 * VX[CS[LS[f]!]!]!;
     v += ax * (p[q]! - ox) + ay * (p[q + 1]! - oy) + az * (p[q + 2]! - oz);
   }
   const volume = Math.abs(v) / 6;

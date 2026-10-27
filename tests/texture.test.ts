@@ -13,6 +13,7 @@ import { averageRgb, colorizeRgba, rgbToHls } from '../src/colorize';
 import { dropTexture, needsDecode, prepareSceneTextures, usesAlpha } from '../src/worker/textures';
 import { textureLimitsFor } from '../src/app/texlimits';
 import { IDENTITY13, edge, entities, face, instance, materialXml, modelDat, pngRgb, skpFile, type TextureMapOpts, vertex } from './build';
+import { faceAt } from '../src/entities';
 
 const TILE_A = { w: 10, h: 20 };
 const TILE_B = 5;
@@ -247,14 +248,14 @@ describe('면 무늬 투영 읽기(model.dat)', () => {
       root: entities(undefined, { components: [instance(900, 50, IDENTITY13)] }),
       definitions: [{ name: '판', entities: squareDef(50, { material: 1, back: 3, frontMap: MAP, backMap: MAP }) }],
     });
-    const f = readModelDat(model, undefined, { textured: ['무늬A'] }).definitions.get(50)!.entities.faces[0]!;
+    const f = faceAt(readModelDat(model, undefined, { textured: ['무늬A'] }).definitions.get(50)!.entities.faces, 0);
     expect(f.frontMap!.kind).toBe(3);
     expect([...f.frontMap!.matrix]).toEqual(MAP.matrix);
     expect(f.frontMap!.dir).toEqual([0, -1, 0]);
     // 뒤 재질(색)은 무늬 재질이 아니라 읽지 않는다
     expect(f.backMap).toBeUndefined();
     // textured를 주지 않으면 읽지 않는다(예전과 같은 모형)
-    expect(readModelDat(model).definitions.get(50)!.entities.faces[0]!.frontMap).toBeUndefined();
+    expect(faceAt(readModelDat(model).definitions.get(50)!.entities.faces, 0).frontMap).toBeUndefined();
   });
 });
 

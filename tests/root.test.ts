@@ -3,6 +3,7 @@ import { readModelDat } from '../src/model';
 import { parseStyleXml, resolveStyle } from '../src/styles';
 import { TlvReader } from '../src/tlv';
 import { IDENTITY13, edge, entities, face, f64, i32, instance, modelDat, packedIds, rendering, rgba, styleXml, tlv, u8, uintLE, val, vertex, type CamOpts } from './build';
+import { edgeAt } from '../src/entities';
 
 /** 삼각형 하나(모형 요소) — 뿌리 절 시험에서 형상이 그대로 읽히는지 보려고 */
 const tri = (): Uint8Array =>
@@ -463,7 +464,7 @@ describe('번호 읽기(TLV)', () => {
       edges: [tlv(0x0bb8, tlv(0x07d0, tlv(0x05dc, tlv(0x05de, uintLE(4))), tlv(0x07d2, new Uint8Array([2, 0, 0, 0, 0, 0, 0, 0x80]))), tlv(0x0bb9, uintLE(1)), tlv(0x0bba, uintLE(2)))],
     });
     const m = readModelDat(modelDat({ root }));
-    expect(m.root.edges[0]!.layer).toBeUndefined();
+    expect(edgeAt(m.root.edges, 0).layer).toBeUndefined();
   });
 });
 

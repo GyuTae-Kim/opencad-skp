@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readModelDat } from '../src/model';
 import { IDENTITY13, attrList, edge, entities, face, f64, instance, modelDat, tlv, u8, uintLE, utf8, val, vertex, type AttrDictsSpec } from './build';
+import { edgeAt, faceAt } from '../src/entities';
 
 /** F:attributes의 definition_dict(엔진 표준 파일 값, C API 기대값과 같음) */
 const ALL_TYPES: AttrDictsSpec = [
@@ -92,9 +93,9 @@ describe('속성 사전(05dd → 36b1)', () => {
     );
     expect(m.root.attrs).toEqual({ GeoReference: { UsesGeoReferencing: false } });
     expect(m.root.instances[0]!.attrs).toEqual({ SU_InstanceSet: { Owner: '' }, dynamic_attributes: { _lenx: 12.5, name: '가구' } });
-    expect(m.root.faces[0]!.attrs).toEqual({ face_dict: { index: 3, side: 'front' } });
-    expect(m.root.edges[0]!.attrs).toEqual({ edge_dict: { k: true } });
-    expect(m.root.edges[1]!.attrs).toBeUndefined();
+    expect(faceAt(m.root.faces, 0).attrs).toEqual({ face_dict: { index: 3, side: 'front' } });
+    expect(edgeAt(m.root.edges, 0).attrs).toEqual({ edge_dict: { k: true } });
+    expect(edgeAt(m.root.edges, 1).attrs).toBeUndefined();
     expect(m.definitions.get(50)!.entities.attrs).toBeUndefined();
   });
 
@@ -104,9 +105,9 @@ describe('속성 사전(05dd → 36b1)', () => {
       ['d', [['again', val.str('뒤')]]],
     ];
     const m = readModelDat(modelDat({ root: tri({ faceAttrs: dicts }) }));
-    expect(m.root.faces[0]!.attrs).toEqual({ d: { again: '뒤' } });
+    expect(faceAt(m.root.faces, 0).attrs).toEqual({ d: { again: '뒤' } });
     const single = readModelDat(modelDat({ root: tri({ faceAttrs: [dicts[0]!] }) }));
-    expect(single.root.faces[0]!.attrs).toEqual({ d: { ok: 1 } });
+    expect(faceAt(single.root.faces, 0).attrs).toEqual({ d: { ok: 1 } });
     expect(single.warnings.some((w) => w.includes('알 수 없는 속성 값 꼴(0x38b9)'))).toBe(true);
     expect(single.warnings.some((w) => w.includes('0x38a7'))).toBe(true);
   });
@@ -128,7 +129,7 @@ describe('속성 사전(05dd → 36b1)', () => {
       edges: [edge(4, 1, 2), edge(5, 2, 3), edge(6, 3, 1)],
       faces: [f],
     });
-    expect(readModelDat(modelDat({ root })).root.faces[0]!.attrs).toEqual({ x: { k: 6 } });
+    expect(faceAt(readModelDat(modelDat({ root })).root.faces, 0).attrs).toEqual({ x: { k: 6 } });
   });
 
   it('깨진 속성 사전은 앞부분만 쓰고, 면은 그대로 읽는다', () => {

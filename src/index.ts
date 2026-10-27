@@ -26,6 +26,19 @@ import { findSkpZipItems, readZipItem, readZipItemPartial } from './zip';
 
 export { readSkpHeader, type SkpHeader } from './header';
 export { readModelDat, type SkpModel } from './model';
+export {
+  EDGE_UNKNOWN,
+  edgeAt,
+  edgeList,
+  edgesFrom,
+  faceAt,
+  faceCorners,
+  faceList,
+  facesFrom,
+  loopEdgesKnown,
+  type SkpEdges,
+  type SkpFaces,
+} from './entities';
 export { readSkpImages, type SkpImage, type SkpImages, type SkpImageOptions } from './images';
 export { parseMaterialXml, type SkpMaterialInfo, type SkpMaterialTexture } from './materials';
 export { colorizeRgba, rgbToHls, hlsToRgb, type ColorizeSpec } from './colorize';

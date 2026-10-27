@@ -7,6 +7,7 @@ import type { SkpModel } from '../src/model';
 import { styleFor } from '../src/scene-meta';
 import { pngRgb } from './build';
 import { ID13, MFC_SCHEMAS, mfcFile, move13, mv, squareEntities, type MfcEntitiesSpec, type MfcSpec } from './mfcwrite';
+import { edgeAt, edgeList, faceAt } from '../src/entities';
 
 const read = (spec: MfcSpec): ReturnType<typeof readMfcModel> => {
   const bytes = mfcFile(spec);
@@ -173,7 +174,7 @@ describe('판 거르기', () => {
     });
     expect(m.warnings).toEqual([]);
     expect(m.counts).toEqual({ vertices: 8, edges: 8, faces: 1, instances: 0 });
-    const f = m.root.faces[0]!;
+    const f = faceAt(m.root.faces, 0);
     // 바깥 고리를 앞으로, 뒤집힌 모서리 사용은 끝 정점에서 시작
     expect(f.loops).toEqual([
       [0, 1, 2, 3],
@@ -185,7 +186,7 @@ describe('판 거르기', () => {
     ]);
     expect(f.normal).toEqual([0, 0, 1]);
     expect([f.front, f.back, f.flags]).toEqual([0, 1, 1]);
-    expect(m.root.edges.map((e) => e.flags)).toEqual([0, 0, 0, 1, 8, 16, 24, 0]);
+    expect(edgeList(m.root.edges).map((e) => e.flags)).toEqual([0, 0, 0, 1, 8, 16, 24, 0]);
     expect([...m.root.points.subarray(12, 15)]).toEqual([4, 4, 0]);
     expect([...m.materials.values()]).toEqual(['앞', '뒤']);
     expect(m.tags!.map((t) => t.name)).toEqual(['Layer0']);
@@ -197,8 +198,8 @@ describe('판 거르기', () => {
       schemas: v,
       root: squareEntities({ edges: [{ a: 0, b: 1, pid: 300 }, { a: 1, b: 2 }, { a: 2, b: 3 }, { a: 3, b: 0 }] }),
     });
-    expect(model(spec('v17')).root.edges[0]!.pid).toBe(300);
-    expect(model(spec('v15')).root.edges[0]!.pid).toBeUndefined();
+    expect(edgeAt(model(spec('v17')).root.edges, 0).pid).toBe(300);
+    expect(edgeAt(model(spec('v15')).root.edges, 0).pid).toBeUndefined();
   });
 });
 
@@ -245,7 +246,7 @@ describe('재질·태그·폴더', () => {
     const rgb = (i: number) => r.materials.get(m.tags![i]!.colorMaterial!)!.color.slice(0, 3).map((x) => Math.round(x * 255));
     expect(rgb(0)).toEqual([64, 64, 64]);
     expect(rgb(1)).toEqual([10, 20, 30]);
-    expect(m.root.edges.map((e) => e.layer)).toEqual([1, 0, 2, undefined]);
+    expect(edgeList(m.root.edges).map((e) => e.layer)).toEqual([1, 0, 2, undefined]);
     expect(m.activeLayer).toBe(2);
   });
 
@@ -323,7 +324,7 @@ describe('정의·인스턴스·곡선', () => {
     expect(defs[0]!.description).toBe('나무 의자');
     expect(defs[0]!.behavior).toEqual({ alwaysFaceCamera: true, cutsOpening: true, shadowsFaceSun: false, snapTo: 'horizontal', noScaleMask: 5 });
     expect(defs[2]!.behavior).toBeUndefined();
-    expect(defs[0]!.entities.edges[0]!.layer).toBe(1);
+    expect(edgeAt(defs[0]!.entities.edges, 0).layer).toBe(1);
     expect(m.tags!.length).toBe(2);
     expect(m.counts.instances).toBe(4);
   });
@@ -363,7 +364,7 @@ describe('정의·인스턴스·곡선', () => {
     expect(circle!.radius).toBe(2);
     // 시작각 60° = 원 위 1번 점 → 1-2, 2-3, …, 0-1 차례(정점 번호는 모서리에서 처음 나온 차례라 각도로 견준다)
     const k = (v: number): number => (Math.round((Math.atan2(m.root.points[3 * v + 1]!, m.root.points[3 * v]!) * 3) / Math.PI) + 6) % 6;
-    const order = circle!.edges.map((e) => [k(m.root.edges[e]!.a), k(m.root.edges[e]!.b)].sort((x, y) => x - y));
+    const order = circle!.edges.map((e) => [k(edgeAt(m.root.edges, e).a), k(edgeAt(m.root.edges, e).b)].sort((x, y) => x - y));
     expect(order).toEqual([
       [1, 2],
       [2, 3],
@@ -373,7 +374,7 @@ describe('정의·인스턴스·곡선', () => {
       [0, 1],
     ]);
     expect(poly!.kind).toBe('polygon');
-    expect(m.root.edges[6]!.curve).toBe(1);
+    expect(edgeAt(m.root.edges, 6).curve).toBe(1);
   });
 
   it('곡선 잇기: 열린 곡선은 자유 끝에서, 갈라지면 읽은 차례', () => {
@@ -513,7 +514,7 @@ describe('장면·스타일·설정', () => {
     expect(b!.flags).toBe((0x5f & ~0x10) | 0x180);
     expect(b!.camera).toMatchObject({ perspective: false, height: 30 });
     expect([b!.transition, b!.delay, b!.includeInAnimation]).toEqual([3, 0, false]);
-    expect(b!.hiddenIds.sort()).toEqual([42, m.definitions.get(0)!.entities.faces[0]!.pid].sort());
+    expect(b!.hiddenIds.sort()).toEqual([42, faceAt(m.definitions.get(0)!.entities.faces, 0).pid].sort());
     expect(b!.sectionIds).toEqual([51]);
     expect(m.activePage).toBe(1);
     expect(m.animation).toEqual({ showTransition: true, transitionTime: 1.5, sceneDelay: 2, loop: true });
@@ -649,8 +650,8 @@ describe('장면·스타일·설정', () => {
     expect(Object.prototype.hasOwnProperty.call(all, '__proto__')).toBe(true);
     expect(m.tags![0]!.attrs).toEqual({ 태그: { 수: -5 } });
     expect(m.definitions.get(0)!.entities.attrs).toEqual({ 정의: { 수: -5 } });
-    expect(m.root.edges[0]!.attrs).toEqual({ 모서리: { 수: -5 } });
-    expect(m.root.faces[0]!.attrs).toEqual({ 면: { 수: -5 } });
+    expect(edgeAt(m.root.edges, 0).attrs).toEqual({ 모서리: { 수: -5 } });
+    expect(faceAt(m.root.faces, 0).attrs).toEqual({ 면: { 수: -5 } });
     expect(m.root.instances[0]!.attrs).toEqual({ 인스턴스: { 수: -5 } });
   });
 
@@ -660,8 +661,8 @@ describe('장면·스타일·설정', () => {
       materials: [{ name: '유리', color: [0, 0, 255], transparency: 0.5, useAlpha: true }],
       root: squareEntities({ faces: [{ ...squareEntities().faces![0]!, front: 0 }] }),
     });
-    expect(model(spec('v7')).root.faces[0]!.back).toBe(0);
-    expect(model(spec('v8')).root.faces[0]!.back).toBeUndefined();
+    expect(faceAt(model(spec('v7')).root.faces, 0).back).toBe(0);
+    expect(faceAt(model(spec('v8')).root.faces, 0).back).toBeUndefined();
   });
 });
 
@@ -691,7 +692,7 @@ describe('깨진 파일·모르는 기록', () => {
     expect(s.warnings!.some((w) => w.includes('형상을 읽다 멈췄습니다') && w.includes('잘렸습니다'))).toBe(true);
     // 읽다 끊긴 모서리는 빼고, 다 읽은 것은 그린다
     const m = readMfcModel(bytes.subarray(0, cut), readSkpHeader(bytes)!).model;
-    expect(m.root.edges.every((e) => e.a >= 0 && e.b >= 0)).toBe(true);
+    expect(edgeList(m.root.edges).every((e) => e.a >= 0 && e.b >= 0)).toBe(true);
   });
 
   it('형상 뒤(장면·스타일)에서 잘리면 형상은 그대로 두고 경고', () => {
@@ -906,7 +907,7 @@ describe('무늬(2020 이하: CTexture·CFaceTextureCoords)', () => {
   });
 
   it('면 무늬 위치: 그쪽 재질이 무늬 재질이고 깃발 비트 0이 있을 때만 앞 9개를 열 우선 행렬로', () => {
-    const face = (f: Parameters<typeof spec>[0]) => model(spec(f)).root.faces[0]!;
+    const face = (f: Parameters<typeof spec>[0]) => faceAt(model(spec(f)).root.faces, 0);
     const fm = face({ front: 1, back: 0, textureCoords: { front: moved, back: moved, frontFlags: 1, backFlags: 1 } });
     expect(fm.frontMap).toEqual({ kind: 0, matrix: Float64Array.from(moved.slice(0, 9)) });
     // 뒤 재질(벽돌)은 무늬가 없다 — 남아 있는 위치를 읽지 않는다

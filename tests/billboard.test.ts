@@ -2,19 +2,20 @@ import { describe, expect, it } from 'vitest';
 import type { SkpMaterialInfo } from '../src/materials';
 import type { SkpDefinition, SkpEdge, SkpEntities, SkpFace, SkpInstance, SkpModel } from '../src/model';
 import { buildSceneParts } from '../src/scene';
+import { edgesFrom, facesFrom } from '../src/entities';
 
 /** XZ 평면(y = 0)에 선 2×3 판 하나(앞 = −Y)와 모서리 넷 — 2D 사람처럼 */
 function cutout(): SkpEntities {
   const face: SkpFace = { loops: [[0, 1, 2, 3]], normal: [0, -1, 0], flags: 0, loopEdges: [[0, 1, 2, 3]] };
   const edges: SkpEdge[] = [0, 1, 2, 3].map((i) => ({ a: i, b: (i + 1) % 4, flags: 0 }));
-  return { points: Float64Array.from([0, 0, 0, 2, 0, 0, 2, 0, 3, 0, 0, 3]), faces: [face], edges, instances: [] };
+  return { points: Float64Array.from([0, 0, 0, 2, 0, 0, 2, 0, 3, 0, 0, 3]), faces: facesFrom([face]), edges: edgesFrom(edges), instances: [] };
 }
 
 /** 바닥 정사각형 하나(보통 형상) */
 function floor(): SkpEntities {
   const face: SkpFace = { loops: [[0, 1, 2, 3]], normal: [0, 0, 1], flags: 0 };
   const edges: SkpEdge[] = [0, 1, 2, 3].map((i) => ({ a: i, b: (i + 1) % 4, flags: 0 }));
-  return { points: Float64Array.from([0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0]), faces: [face], edges, instances: [] };
+  return { points: Float64Array.from([0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0]), faces: facesFrom([face]), edges: edgesFrom(edges), instances: [] };
 }
 
 /** z축 둘레 deg도 돌리고 (x, y, z)에 놓기(열 우선) */
@@ -37,7 +38,7 @@ function model(): SkpModel {
     layers: new Map([[1, 'Layer0']]),
     defaultLayer: 1,
     definitions: defs,
-    root: { points: new Float64Array(), faces: [], edges: [], instances: [g(1, placeAt(0, 0, 0)), g(1, placeAt(10, 0, 0, 90)), g(2, placeAt(0, 20, 0)), g(3, placeAt(30, 0, 0), { kind: 'group' })] },
+    root: { points: new Float64Array(), faces: facesFrom([]), edges: edgesFrom([]), instances: [g(1, placeAt(0, 0, 0)), g(1, placeAt(10, 0, 0, 90)), g(2, placeAt(0, 20, 0)), g(3, placeAt(30, 0, 0), { kind: 'group' })] },
     counts: { vertices: 0, edges: 0, faces: 0, instances: 4 },
     warnings: [],
   };
@@ -90,7 +91,7 @@ describe('"항상 카메라 보기" 컴포넌트(코어 billboard)', () => {
     const pts = Float64Array.from([0, 0, 0, 2, 0, 0, 2, 0, 3, 0, 0, 3, 3, 0, 0, 5, 0, 0, 5, 0, 3, 3, 0, 3, 0, 0, 4, 5, 0, 4]);
     const quad = (o: number, layer: number): SkpFace => ({ loops: [[o, o + 1, o + 2, o + 3]], normal: [0, -1, 0], flags: 0, layer });
     const ring = (o: number, layer: number): SkpEdge[] => [0, 1, 2, 3].map((i) => ({ a: o + i, b: o + ((i + 1) % 4), flags: 0, layer }));
-    const ents: SkpEntities = { points: pts, faces: [quad(0, 1), quad(4, 2)], edges: [...ring(0, 1), ...ring(4, 2), { a: 8, b: 9, flags: 0, layer: 3 }], instances: [] };
+    const ents: SkpEntities = { points: pts, faces: facesFrom([quad(0, 1), quad(4, 2)]), edges: edgesFrom([...ring(0, 1), ...ring(4, 2), { a: 8, b: 9, flags: 0, layer: 3 }]), instances: [] };
     const m: SkpModel = {
       materials: new Map(),
       layers: new Map([
@@ -100,7 +101,7 @@ describe('"항상 카메라 보기" 컴포넌트(코어 billboard)', () => {
       ]),
       defaultLayer: 1,
       definitions: new Map([[1, { id: 1, name: 'Sign', entities: ents, behavior: { alwaysFaceCamera: true, cutsOpening: false, shadowsFaceSun: true } }]]),
-      root: { points: new Float64Array(), faces: [], edges: [], instances: [{ definition: 1, matrix: placeAt(0, 0, 0), flags: 0, kind: 'component' }] },
+      root: { points: new Float64Array(), faces: facesFrom([]), edges: edgesFrom([]), instances: [{ definition: 1, matrix: placeAt(0, 0, 0), flags: 0, kind: 'component' }] },
       counts: { vertices: 0, edges: 0, faces: 0, instances: 1 },
       warnings: [],
     };
