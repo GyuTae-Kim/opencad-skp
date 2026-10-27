@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { parseLaunch } from '../../src/app/launch';
-import { canUseServiceWorker, consumeLaunchFiles, registerServiceWorker, type SwRegistration, type SwWorker } from '../../src/app/pwa';
+import { canUseServiceWorker, consumeLaunchFiles, registerServiceWorker, type SwRegistration, type SwWorker } from 'opencad-site-kit/pwa/client';
 import { RecentStore, SHARED_MAX_AGE_MS, nameOfRecentId, staleSharedKeys, type RecentBackend, type RecentEntry } from '../../src/app/recent';
 import { fillTemplate, listFiles, serviceWorkerValues } from 'opencad-site-kit/pwa/sw-plugin';
 import { offline, precache } from '../../tools/site.mjs';
@@ -68,12 +68,12 @@ describe('서비스 워커 등록·새 판 알림', () => {
     expect(canUseServiceWorker({ protocol: 'https:', hostname: 'a.b' }, {})).toBe(false);
     let consumer: ((p: { files?: { getFile(): Promise<File> }[] }) => void) | null = null;
     const opened: string[] = [];
-    expect(consumeLaunchFiles((f) => opened.push(f.name), { launchQueue: { setConsumer: (fn) => (consumer = fn) } })).toBe(true);
+    expect(consumeLaunchFiles((files) => opened.push(files[0]!.name), undefined, { launchQueue: { setConsumer: (fn) => (consumer = fn) } })).toBe(true);
     consumer!({ files: [{ getFile: async () => new File([new Uint8Array(2)], '집.skp') }] });
     consumer!({});
     await new Promise((r) => setTimeout(r, 0));
     expect(opened).toEqual(['집.skp']);
-    expect(consumeLaunchFiles(() => {}, {})).toBe(false);
+    expect(consumeLaunchFiles(() => {}, undefined, {})).toBe(false);
   });
 });
 
