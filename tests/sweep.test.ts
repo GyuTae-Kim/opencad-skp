@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { classify, compareRuns, editionOf, exceptionCode, formatCompare, parseArgs, percentiles, summarize, warningCode } from '../scripts/sweep/lib.mjs';
-import { headerInfo, probeSkp } from '../scripts/sweep/probe';
+import { headerInfo, probeSkp, sceneDigest } from '../scripts/sweep/probe';
 import { skpToScene } from '../src/index';
 import { edge, entities, face, modelDat, skpFile, vertex } from './build';
 import { mfcFile, squareEntities } from './mfcwrite';
@@ -128,6 +128,14 @@ describe('훑기 순수 함수', () => {
     expect(c.newExceptions).toEqual([{ sha256: 'd', edition: '2026', code: 'RangeError: x' }]);
     expect(formatCompare(c)).toContain('분류가 바뀐 파일 2개');
   });
+
+  it('compareRuns: 장면 출력 해시는 두 결과에 다 있을 때만 견준다', () => {
+    const before = [rec({ sha256: 'a' }), { ...rec({ sha256: 'b' }), digest: '0123' }, { ...rec({ sha256: 'c' }), digest: '4567' }];
+    const after = [{ ...rec({ sha256: 'a' }), digest: 'aaaa' }, { ...rec({ sha256: 'b' }), digest: '0123' }, { ...rec({ sha256: 'c' }), digest: '89ab' }];
+    const c = compareRuns(before, after);
+    expect(c.metricChanged).toBe(1);
+    expect(c.metricChanges[0]).toMatchObject({ sha256: 'c', changes: { digest: ['4567', '89ab'] } });
+  });
 });
 
 describe('probe: 앱 워커와 같은 해석 길', () => {
@@ -158,6 +166,12 @@ describe('probe: 앱 워커와 같은 해석 길', () => {
     expect(small.inflated).toBe(false);
     expect(small.ms.inflate).toBeUndefined();
     expect(small.metrics).toEqual(r.metrics);
+    // 장면 출력 해시: 미리 풀든 직접 풀든 같고, 장면 이름(파일 이름)에 따라 바뀌지 않는다
+    expect(r.digest).toMatch(/^[0-9a-f]{16}$/);
+    expect(small.digest).toBe(r.digest);
+    expect(sceneDigest(direct)).toBe(r.digest);
+    expect(sceneDigest(skpToScene(bytes, { name: '다른 이름', outline: true, extras: true, smooth: true }))).toBe(sceneDigest(direct));
+    expect(sceneDigest(skpToScene(bytes))).not.toBe(sceneDigest(direct));
   });
 
   it('2020 이하·SketchUp 아님·옛 판', async () => {

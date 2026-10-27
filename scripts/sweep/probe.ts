@@ -12,6 +12,7 @@
  * ArrayBuffer가 섞일 수 있어, 해석을 마친 뒤에는 잠깐 쉬었다가 다시 gc()해 워커가 화면으로 넘기기 직전에 붙든 크기(retained)를 따로 잰다.
  * 이 파일은 scripts/sweep/sweep.mjs가 Vite로 묶어 Node 자식 프로세스에서 부른다. 파일 경로는 받지 않는다.
  */
+import { createHash } from 'node:crypto';
 import { readSkpHeader, readSkpImages, skpToScene, type SkpImages } from '../../src/index';
 import { NATIVE_INFLATE_MIN_BYTES, preinflateSkp } from '../../src/worker/unzip';
 import { findSkpZipItems } from '../../src/zip';
@@ -111,6 +112,11 @@ export interface ProbeResult {
   warnings: string[];
   /** meta.damaged·limited·unsupported */
   flags: string[];
+  /**
+   * 장면 출력 전체(그물·선분·점의 배열 바이트와 칸, 무늬, 범위, 경고, meta)의 sha256 앞 16자 — 해석기를 고친 뒤 출력이
+   * 한 바이트라도 바뀌었는지(지표는 개수만 본다). 장면 이름(파일 이름)은 넣지 않는다
+   */
+  digest: string;
   /** 장면 결과 형식 배열 합(MB) */
   sceneMB: number;
   /** 해석 직후(gc 없이) heap 증가와 프로세스 rss — 대강의 값. 정확한 값은 mem */
@@ -222,6 +228,55 @@ export function sceneBuffers(scene: ReturnType<typeof skpToScene>): { byKey: Rec
   return { byKey: out, backing };
 }
 
+/**
+ * 장면 출력의 sha256(앞 16자): 형식 배열은 꼴·길이와 바이트 그대로, 객체는 열쇠를 정렬해(undefined 칸은 없는 것과 같게),
+ * 수는 글로(-0과 NaN도 가른다). 장면 이름은 빼고 단위·그물·선분·점·무늬·범위·경고·meta를 넣는다
+ */
+export function sceneDigest(scene: ReturnType<typeof skpToScene>): string {
+  const h = createHash('sha256');
+  const walk = (v: unknown): void => {
+    if (ArrayBuffer.isView(v)) {
+      h.update(`<${v.constructor.name}:${v.byteLength}>`);
+      h.update(new Uint8Array(v.buffer, v.byteOffset, v.byteLength));
+      return;
+    }
+    if (typeof v === 'number') {
+      h.update(Object.is(v, -0) ? '-0,' : `${v},`);
+      return;
+    }
+    if (v === null || typeof v !== 'object') {
+      h.update(`${typeof v}:${JSON.stringify(v) ?? ''},`);
+      return;
+    }
+    if (v instanceof Map) {
+      h.update('Map{');
+      for (const [k, x] of v) {
+        walk(k);
+        walk(x);
+      }
+      h.update('}');
+      return;
+    }
+    if (Array.isArray(v)) {
+      h.update(`[${v.length}:`);
+      for (const x of v) walk(x);
+      h.update(']');
+      return;
+    }
+    h.update('{');
+    const o = v as Record<string, unknown>;
+    for (const k of Object.keys(o).sort()) {
+      if (o[k] === undefined) continue;
+      h.update(`${JSON.stringify(k)}:`);
+      walk(o[k]);
+    }
+    h.update('}');
+  };
+  const { name: _name, ...rest } = scene;
+  walk(rest);
+  return h.digest('hex').slice(0, 16);
+}
+
 /** SKP 바이트 하나를 워커와 같은 길로 해석해 지표·시간(·메모리)을 낸다. 예외는 부르는 쪽이 잡는다 */
 export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Promise<ProbeResult> {
   const mem = !!opts.mem;
@@ -326,6 +381,7 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
     metrics,
     warnings: scene.warnings ?? [],
     flags: (['damaged', 'limited', 'unsupported'] as const).filter((k) => m[k]),
+    digest: sceneDigest(scene),
     sceneMB: MB(sceneBytes),
     heapMB: MB(after.heapUsed - heap0),
     rssMB: MB(after.rss),

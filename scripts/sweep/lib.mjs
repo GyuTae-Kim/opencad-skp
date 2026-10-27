@@ -410,6 +410,8 @@ export function compareRuns(before, after, opts = {}) {
     const changes = metricDiff(x.metrics, y.metrics);
     const w = warningDiff(x.warnings, y.warnings);
     if (w) changes.warnings = w;
+    // 장면 출력 해시는 두 결과에 다 있을 때만 본다(해시가 없던 옛 결과와도 견줄 수 있게)
+    if (x.digest && y.digest && x.digest !== y.digest) changes.digest = [x.digest, y.digest];
     const fx = JSON.stringify([...(x.flags ?? [])].sort());
     const fy = JSON.stringify([...(y.flags ?? [])].sort());
     if (fx !== fy) changes.flags = [x.flags ?? [], y.flags ?? []];
