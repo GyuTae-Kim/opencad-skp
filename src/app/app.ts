@@ -46,7 +46,7 @@ import {
   SHADED_MODES,
   restoreSceneCamera,
   sectionFillOf,
-  eyeHeightFor,
+  walkOptionsFor,
   isTwoPoint,
   twoPointCamera,
   freshDocCamera,
@@ -113,7 +113,7 @@ import { childrenOf, isAncestor, isSplit, nodeBox, nodePath, normalizeRanges, ty
 import { cameraForBox, keepViewOnHeightChange } from './view';
 import { cssHex, isLightBackground, loadFileBackground, safeStorage, skyBackground, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
 import type { BackgroundOptions } from 'opencad-viewer3d';
-import { LineContrast, lineColorOverrides } from './linecontrast';
+import { DEFAULT_EDGE_COLOR, LineContrast, edgeLooks, lineColorOverrides } from './linecontrast';
 import { openShortcutsDialog } from './shortcuts';
 import type { Rgb, SkpShadowMeta, SkpStyleMeta } from '../meta';
 import { fogFor, lightingForShadow, shadowOrDefault, sunForShadow, usesSun } from './sun';
@@ -284,6 +284,8 @@ interface Els {
   fovValue: HTMLElement;
   walkBtn: HTMLButtonElement;
   twoPointBtn: HTMLButtonElement;
+  gravityBtn: HTMLButtonElement;
+  collideBtn: HTMLButtonElement;
 }
 
 interface MenuItem {
@@ -562,6 +564,11 @@ export class SkpViewerApp implements PanelHost {
     walkBtn.addEventListener('click', () => this.setWalk(!this.walking));
     const twoPointBtn = h('button', { class: 'mb-btn', type: 'button', title: '2점 투시: 세로선을 곧게(수평으로 보고 렌즈를 위아래로 옮김)', 'aria-pressed': 'false' }, '2점 투시');
     twoPointBtn.addEventListener('click', () => this.setTwoPoint(!this.twoPointOn));
+    // 걷는 동안만: 바닥 따라가기(중력)·벽 앞 멈춤(부딪힘) — SketchUp 걷기처럼 처음엔 둘 다 켬
+    const gravityBtn = h('button', { class: 'mb-btn', type: 'button', title: '중력: 바닥·계단을 따라 걷기(끄면 Q/E로 위아래)', 'aria-pressed': 'true', hidden: true }, '중력');
+    gravityBtn.addEventListener('click', () => this.setWalkGravity(!this.walkGravity));
+    const collideBtn = h('button', { class: 'mb-btn', type: 'button', title: '부딪힘: 벽·면을 지나가지 않기', 'aria-pressed': 'true', hidden: true }, '부딪힘');
+    collideBtn.addEventListener('click', () => this.setWalkCollide(!this.walkCollide));
     const camClose = h('button', { class: 'mb-btn icon', type: 'button', title: '카메라 띠 닫기(걷기 끝내기)', 'aria-label': '카메라 띠 닫기', html: icon('close', 16) });
     camClose.addEventListener('click', () => this.closeCamBar());
     const camBar = h(
@@ -569,7 +576,7 @@ export class SkpViewerApp implements PanelHost {
       { class: 'measure-bar cam-bar', role: 'group', 'aria-label': '카메라', hidden: true },
       camText,
       h('label', { class: 'fov' }, h('span', { class: 'fov-label' }, '시야각'), fovRange, fovValue),
-      h('div', { class: 'mb-acts' }, walkBtn, twoPointBtn, camClose),
+      h('div', { class: 'mb-acts' }, walkBtn, gravityBtn, collideBtn, twoPointBtn, camClose),
     );
     this.stick = new WalkStick((i) => this.viewer?.setWalkInput(i));
     // 새 판 알림(서비스 워커가 새 판을 받아 기다릴 때)
@@ -674,6 +681,8 @@ export class SkpViewerApp implements PanelHost {
       fovValue,
       walkBtn,
       twoPointBtn,
+      gravityBtn,
+      collideBtn,
     };
 
     this.bindWindow();
@@ -2077,12 +2086,28 @@ export class SkpViewerApp implements PanelHost {
 
   /** 걷는 중(코어 setNavigation('walk'))·2점 투시 켜짐·조이스틱 */
   private walking = false;
+  /** 걷기 중력(바닥 따라가기)·부딪힘(벽 앞 멈춤) — 코어 0.8.0, SketchUp 걷기처럼 처음엔 켬(이 창에서만 기억) */
+  private walkGravity = true;
+  private walkCollide = true;
+
+  setWalkGravity(on: boolean): void {
+    this.walkGravity = on;
+    if (this.walking) this.viewer?.setNavigation('walk', { gravity: on });
+    this.refreshCamBar();
+  }
+
+  setWalkCollide(on: boolean): void {
+    this.walkCollide = on;
+    if (this.walking) this.viewer?.setNavigation('walk', { collide: on });
+    this.refreshCamBar();
+  }
   private twoPointOn = false;
   private stick!: WalkStick;
 
   /**
    * 걷기(SketchUp 걷기·둘러보기·카메라 위치 정하기): 끌기 = 제자리에서 둘러보기, 휠·W/S·↑/↓ = 앞뒤, A/D = 옆, ←/→ = 돌기, Q/E·PageUp/PageDown = 위아래,
-   * 두 번 누르기 = 그 자리에 눈높이(5′6″)로 서기. 원근으로 바꾸고 측정·2점 투시·장면 재생은 끈다. 휴대폰은 조이스틱으로 걷는다
+   * 두 번 누르기 = 그 자리에 눈높이(5′6″)로 서기. 원근으로 바꾸고 측정·2점 투시·장면 재생은 끈다. 휴대폰은 조이스틱으로 걷는다.
+   * 코어 0.8.0 중력(바닥·계단 따라가기 — 그동안 위아래 키는 듣지 않는다)·부딪힘(벽 앞 멈춤)은 카메라 띠에서 켜고 끈다(처음엔 켬)
    */
   setWalk(on: boolean): void {
     const v = this.viewer;
@@ -2094,8 +2119,7 @@ export class SkpViewerApp implements PanelHost {
       this.unwidenScene();
       if (this.twoPointOn) this.setTwoPoint(false);
       if (this.projection !== 'perspective') this.setProjection('perspective');
-      const eye = eyeHeightFor(d.scene.units);
-      v.setNavigation('walk', eye !== undefined ? { eyeHeight: eye, tapToStand: true } : { tapToStand: true });
+      v.setNavigation('walk', walkOptionsFor(d.scene.units, this.walkGravity, this.walkCollide));
       this.els.camBar.hidden = false;
     } else v.setNavigation('orbit');
     this.walking = on;
@@ -2173,6 +2197,14 @@ export class SkpViewerApp implements PanelHost {
     e.walkBtn.setAttribute('aria-pressed', this.walking ? 'true' : 'false');
     e.twoPointBtn.classList.toggle('on', this.twoPointOn);
     e.twoPointBtn.setAttribute('aria-pressed', this.twoPointOn ? 'true' : 'false');
+    for (const [b, on] of [
+      [e.gravityBtn, this.walkGravity],
+      [e.collideBtn, this.walkCollide],
+    ] as const) {
+      b.hidden = !this.walking;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
     e.camText.replaceChildren(
       h('b', { class: 'mb-value' }, this.walking ? '걷기' : '카메라'),
       h(
@@ -2181,7 +2213,9 @@ export class SkpViewerApp implements PanelHost {
         this.walking
           ? touch
             ? '한 손가락 끌기: 둘러보기 · 조이스틱: 걷기 · 두 손가락: 벌려 앞으로·끌어 옆/위아래 · 두 번 누르기: 그 자리에 서기'
-            : '끌기: 둘러보기 · W/S·↑/↓: 앞뒤 · A/D: 옆 · ←/→: 돌기 · Q/E: 위아래 · Shift: 빠르게 · 두 번 누르기: 그 자리에 서기 · Esc: 끝내기'
+            : this.walkGravity
+              ? '끌기: 둘러보기 · W/S·↑/↓: 앞뒤 · A/D: 옆 · ←/→: 돌기 · Shift: 빠르게 · 두 번 누르기: 그 자리에 서기 · Esc: 끝내기(중력을 끄면 Q/E로 위아래)'
+              : '끌기: 둘러보기 · W/S·↑/↓: 앞뒤 · A/D: 옆 · ←/→: 돌기 · Q/E: 위아래 · Shift: 빠르게 · 두 번 누르기: 그 자리에 서기 · Esc: 끝내기'
           : persp
             ? '시야각을 바꾸거나 걷기·2점 투시를 켭니다'
             : '평행 투영에서는 시야각을 쓰지 않습니다',
@@ -2230,20 +2264,39 @@ export class SkpViewerApp implements PanelHost {
 
   setProfiles(on: boolean): void {
     this.profilesOn = on;
-    this.viewer?.setRenderOptions({ profiles: on ? { width: this.profileWidth } : null });
+    this.applyEdgeLooks();
     this.refreshToolbar();
   }
 
   /**
-   * 뒤 모서리(스타일 "뒤 모서리" — 코어 0.7.1 hiddenEdges): 면 뒤로 가려진 모서리를 흐린 점선으로. 코어는 숨은 선 방식에서만 그린다
-   * (SketchUp은 음영 방식에서도 그린다 — 남은 일)
+   * 뒤 모서리(스타일 "뒤 모서리" — 코어 hiddenEdges): 면 뒤로 가려진 모서리를 흐린 점선으로.
+   * 코어 0.8.0 shaded로 SketchUp처럼 음영 방식에서도 그리고, 점선 색은 지금 모형 모서리가 띠는 색이다
    */
   private backEdgesOn = false;
 
   setBackEdges(on: boolean): void {
     this.backEdgesOn = on;
-    this.viewer?.setRenderOptions({ hiddenEdges: on ? true : null });
+    this.applyEdgeLooks();
     this.refreshToolbar();
+  }
+
+  /**
+   * 코어 선 색 선택(0.8.0): 외곽선 굵기·색, 뒤 모서리 점선(음영 방식에서도)·색, 그물 윤곽선 색(카메라를 보는 컴포넌트 —
+   * 와이어프레임·X-ray에서 재질 색 대신 모형 모서리와 같은 색). 스타일 모서리 색·테마·그리기 방식·배경이 바뀌면 다시 넘긴다
+   */
+  private applyEdgeLooks(): void {
+    const v = this.viewer;
+    if (!v) return;
+    const looks = edgeLooks(
+      { mode: this.renderMode, theme: this.theme, backdrop: this.backdrop, sky: this.fileBg ? this.styleSky : null },
+      this.doc ? this.styleEdge : null,
+      DEFAULT_EDGE_COLOR,
+    );
+    v.setRenderOptions({
+      profiles: this.profilesOn ? { width: this.profileWidth, color: looks.profile } : null,
+      hiddenEdges: this.backEdgesOn ? { shaded: true, color: looks.edge } : null,
+      edgeColor: looks.edge,
+    });
   }
 
   /** 태그 색으로 칠하기(스타일 "태그 색으로" — 코어 setItemColor, 장면을 올리면 풀리므로 다시 건다) */
@@ -2876,6 +2929,7 @@ export class SkpViewerApp implements PanelHost {
         )
       : new Map();
     this.lineContrast.apply(v, want);
+    this.applyEdgeLooks();
   }
 
   // ───────────────────────── 화면 갱신 ─────────────────────────

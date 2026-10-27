@@ -42,7 +42,7 @@ export const SHORTCUTS: readonly ShortcutGroup[] = [
       { keys: ['W', 'S', '↑', '↓'], label: '앞 · 뒤로' },
       { keys: ['A', 'D'], label: '옆으로' },
       { keys: ['←', '→'], label: '돌기' },
-      { keys: ['Q', 'E'], label: '위 · 아래로' },
+      { keys: ['Q', 'E'], label: '위 · 아래로(중력을 끈 때)' },
       { keys: ['Shift'], label: '빠르게' },
       { keys: ['Esc'], label: '걷기 끝내기' },
     ],

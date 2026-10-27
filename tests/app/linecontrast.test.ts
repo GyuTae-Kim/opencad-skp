@@ -4,7 +4,9 @@ import {
   BACKGROUND_LINE_MODES,
   LineContrast,
   MIN_LINE_CONTRAST,
+  DEFAULT_EDGE_COLOR,
   billboardEdgeColor,
+  edgeLooks,
   isModelEdgeSet,
   THEME_LINE,
   contrastRatio,
@@ -244,5 +246,28 @@ describe('스타일 모서리 색(장면 스타일)', () => {
     expect(billboardEdgeColor(view('shadedEdges', 'light'), null, EDGE_COLOR)).toEqual(EDGE_COLOR);
     expect(billboardEdgeColor(view('xray', 'dark'), null, EDGE_COLOR)).toEqual(THEME_LINE.dark);
     expect(billboardEdgeColor(view('wireframe', 'light'), [0, 0, 0], EDGE_COLOR)).toEqual([0, 0, 0, 1]);
+  });
+});
+
+describe('코어 0.8.0 선 색 선택(edgeLooks)', () => {
+  it('화면 쪽 기본 모서리 색은 해석기의 EDGE_COLOR와 같다', () => {
+    expect(DEFAULT_EDGE_COLOR).toEqual(EDGE_COLOR);
+  });
+
+  it('그물 윤곽선·뒤 모서리 색 = 지금 방식에서 모형 모서리가 띠는 색, 외곽선 = 바탕과 읽히는 모서리 색', () => {
+    const grey: [number, number, number] = [0.36, 0.36, 0.36];
+    // 밝은 테마 음영: 스타일 색 그대로
+    expect(edgeLooks(view('shaded', 'light'), grey, EDGE_COLOR)).toEqual({ edge: [...grey, 1], profile: [...grey, 1] });
+    // 어두운 테마 음영: 모서리는 면 위라 그대로, 외곽선은 남색 바탕 앞이라 밝은 선
+    const darkShaded = edgeLooks(view('shaded', 'dark'), null, EDGE_COLOR);
+    expect(darkShaded.edge).toEqual(EDGE_COLOR);
+    expect(darkShaded.profile).toEqual(THEME_LINE.dark);
+    // 어두운 테마 와이어프레임·X-ray: 카메라를 보는 컴포넌트 윤곽선도 밝은 선(재질 색에 묻히지 않게)
+    for (const m of ['wireframe', 'xray', 'hiddenLine'] as const) {
+      const l = edgeLooks(view(m, 'dark'), [0, 0, 0], EDGE_COLOR);
+      expect(minContrast(l.edge, lineBackdrops(view(m, 'dark'))!)).toBeGreaterThanOrEqual(MIN_LINE_CONTRAST);
+    }
+    // 흰 배경 파일은 어두운 테마에서도 검은 외곽선(SketchUp처럼)
+    expect(edgeLooks(view('shaded', 'dark', [1, 1, 1]), [0, 0, 0], EDGE_COLOR).profile).toEqual([0, 0, 0, 1]);
   });
 });

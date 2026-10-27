@@ -7,11 +7,14 @@
  * 음영·음영+모서리·무늬 없음·단색 방식은 선이 면 색 위에 있어(단색 면은 두 테마에서 같은 밝은 회색) 파일 색 그대로 둔다.
  * 단면 평면 표시(주황)는 뜻이 있는 색이라 바꾸지 않고, 고른 것 강조 색은 코어가 따로 칠한다. 태그 색 칠하기는 면(그물)에만 건다.
  * 모형 모서리 묶음의 바탕 색은 지금 스타일의 모서리 색이다(해석기가 모형 스타일 색으로 적고, 장면 스타일이 다른 색이면 여기서 바꾼다).
- * 숨은 모서리 점선과 외곽선(실루엣)은 코어가 이미 테마 선 색으로 그려 배경 위에서 묻히지 않는다(테스트가 확인).
+ * 뒤 모서리 점선·외곽선(실루엣)·카메라를 보는 컴포넌트 윤곽선 색은 edgeLooks로 구해 코어 0.8.0 setRenderOptions에 넘긴다.
  */
 import { DARK_THEME, LIGHT_THEME, type BackgroundOptions, type RenderMode, type Rgba } from 'opencad-viewer3d';
 import type { Rgb } from '../meta';
 import { isLightBackground, luminance } from './backdrop';
+
+/** 스타일이 모서리 색을 모를 때 해석기가 쓰는 모서리 색(scene.ts EDGE_COLOR와 같은 값 — 시험이 맞춘다. 화면 묶음에 해석기를 넣지 않으려고 따로 둔다) */
+export const DEFAULT_EDGE_COLOR: Rgba = [0.12, 0.12, 0.12, 1];
 
 /** 선이 뒤 색과 이만큼은 달라야 읽힌다(WCAG 2.1 1.4.11 그래픽 대비) */
 export const MIN_LINE_CONTRAST = 3;
@@ -158,14 +161,31 @@ export function lineColorOverrides(
 }
 
 /**
- * "항상 카메라 보기" 컴포넌트(코어 billboard 그물)의 윤곽선(Mesh3d.edges)이 띨 색: SketchUp처럼 스타일 모서리 색(없으면 기본 모서리 색)이고,
- * 배경이 선 뒤인 방식에서는 모형 모서리와 같은 대비 규칙을 건다. 코어(0.7.1)는 와이어프레임·X-ray에서 그물 윤곽선을 재질 색으로,
- * 음영+모서리에서는 테마 모서리 색으로 그려 이 값을 아직 걸 수 없다 — 코어가 그물 윤곽선 색(항목별)을 받으면 그대로 넘긴다
+ * 지금 보기에서 모형 모서리가 띠는 색: SketchUp처럼 스타일 모서리 색(없으면 기본 모서리 색)이고, 배경이 선 뒤인 방식에서는
+ * 모형 모서리 묶음과 같은 대비 규칙을 건다. "항상 카메라 보기" 컴포넌트(코어 billboard 그물)의 윤곽선(Mesh3d.edges — 코어 0.8.0 edgeColor)과
+ * 뒤 모서리 점선 색도 이것이다(코어 0.7.1은 와이어프레임·X-ray에서 그물 윤곽선을 재질 색으로 그려 어두운 재질이면 어두운 테마에 묻혔다)
  */
 export function billboardEdgeColor(view: LineView, edgeColor: Rgb | null, fallback: Rgba): Rgba {
   const c: Rgba = edgeColor ? [edgeColor[0], edgeColor[1], edgeColor[2], 1] : fallback;
   const behind = lineBackdrops(view);
   return (behind && readableLineColor(c, behind, viewBase(view.theme, view.backdrop))) || c;
+}
+
+/** 코어 0.8.0 선 색 선택(setRenderOptions): 그물 윤곽선 색, 뒤 모서리 점선 색, 외곽선(실루엣) 색 */
+export interface EdgeLooks {
+  /** 그물 윤곽선(카메라를 보는 컴포넌트)·뒤 모서리 점선 — 지금 방식에서 모형 모서리가 띠는 색 */
+  edge: Rgba;
+  /** 외곽선: 모서리 색을 굵게(SketchUp 윤곽선) — 바탕(배경·하늘·지면)과 3:1이 안 되면 읽히는 선 색 */
+  profile: Rgba;
+}
+
+export function edgeLooks(view: LineView, edgeColor: Rgb | null, fallback: Rgba): EdgeLooks {
+  const edge = billboardEdgeColor(view, edgeColor, fallback);
+  const c: Rgba = edgeColor ? [edgeColor[0], edgeColor[1], edgeColor[2], 1] : fallback;
+  // 외곽선은 어느 방식에서든 모형 둘레(바탕 앞)에 그려진다 — 바탕 색들은 와이어프레임 때와 같다
+  const behind = lineBackdrops({ ...view, mode: 'wireframe' })!;
+  const profile = readableLineColor(c, behind, viewBase(view.theme, view.backdrop)) ?? c;
+  return { edge, profile };
 }
 
 /** 코어 쪽(setItemColor — null이면 되돌림) */
