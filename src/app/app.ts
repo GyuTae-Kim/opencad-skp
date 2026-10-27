@@ -114,6 +114,7 @@ import { cameraForBox, keepViewOnHeightChange } from './view';
 import { cssHex, isLightBackground, loadFileBackground, safeStorage, skyBackground, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
 import type { BackgroundOptions } from 'opencad-viewer3d';
 import { LineContrast, lineColorOverrides } from './linecontrast';
+import { openShortcutsDialog } from './shortcuts';
 import type { Rgb, SkpShadowMeta, SkpStyleMeta } from '../meta';
 import { fogFor, lightingForShadow, shadowOrDefault, sunForShadow, usesSun } from './sun';
 import { WalkStick } from './joystick';
@@ -2594,7 +2595,8 @@ export class SkpViewerApp implements PanelHost {
       { label: '걷기(1인칭)', icon: 'walk', checked: this.walking, toggle: true, sep: true, run: () => this.setWalk(!this.walking) },
       { label: '2점 투시', checked: this.twoPointOn, toggle: true, run: () => this.setTwoPoint(!this.twoPointOn) },
       { label: '시야각·카메라 띠…', icon: 'camera', run: () => this.openCamBar() },
-      ...(phone ? [{ label: '그림 저장…', icon: 'image', sep: true, run: () => this.savePng() }] : []),
+      ...(document.fullscreenEnabled ? [{ label: '전체 화면', icon: 'expand', checked: this.fullscreenOn, toggle: true, sep: true, run: () => this.toggleFullscreen() }] : []),
+      ...(phone ? [{ label: '그림 저장…', icon: 'image', sep: !document.fullscreenEnabled, run: () => this.savePng() }] : []),
     ]);
   }
 
@@ -2615,8 +2617,27 @@ export class SkpViewerApp implements PanelHost {
         icon: c.icon,
         checked: c.choice === cur,
         run: () => this.setThemeChoice(c.choice),
-      })), { label: '방문 통계 설정', icon: 'lock', run: showAnalyticsSettings }],
+      })), { label: '키보드 바로 가기', icon: 'keyboard', kbd: '?', sep: true, run: () => this.openShortcuts() }, { label: '방문 통계 설정', icon: 'lock', run: showAnalyticsSettings }],
     );
+  }
+
+  /** 키보드 바로 가기 안내(닫으면 연 곳에 초점) */
+  private shortcutsClose: (() => void) | null = null;
+
+  openShortcuts(): void {
+    if (this.shortcutsClose) return;
+    this.closeMenu();
+    this.shortcutsClose = openShortcutsDialog(document.body, () => (this.shortcutsClose = null));
+  }
+
+  /** 전체 화면(Fullscreen API — 앱 전체를, 지원하지 않는 브라우저는 메뉴에 없다) */
+  private get fullscreenOn(): boolean {
+    return !!document.fullscreenElement;
+  }
+
+  toggleFullscreen(): void {
+    if (document.fullscreenElement) void document.exitFullscreen?.().catch(() => {});
+    else void document.documentElement.requestFullscreen?.({ navigationUI: 'hide' }).catch(() => {});
   }
 
   private menuBtn: HTMLButtonElement | null = null;
@@ -2687,6 +2708,8 @@ export class SkpViewerApp implements PanelHost {
   // ───────────────────────── 키 ─────────────────────────
 
   private onKey(ev: KeyboardEvent): void {
+    // 바로 가기 안내(모달)가 열려 있으면 키는 그 상자 것(뒤 3D 보기로 보내지 않는다 — Esc는 상자가 닫는다)
+    if (this.shortcutsClose) return;
     if (this.sliding && !['Shift', 'Control', 'Alt', 'Meta'].includes(ev.key)) this.stopSlideshow();
     if (this.menu && ev.key === 'Escape') {
       ev.preventDefault();
@@ -2726,6 +2749,12 @@ export class SkpViewerApp implements PanelHost {
       inList: inList(ev.target),
     });
     if (!act) return;
+    if (act.kind === 'help') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.openShortcuts();
+      return;
+    }
     if (act.kind === 'open') {
       ev.preventDefault();
       ev.stopPropagation();
