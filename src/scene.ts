@@ -59,6 +59,8 @@ import type {
 import * as A from './scene-annotations';
 import { AttrPool, PAGE_USE_HIDDEN_OBJECTS } from './scene-meta';
 import { cornerNormals, faceUnitNormal } from './scene-smooth';
+import { opt, textureMapAt, type SkpFaces } from './entities';
+import { F32, F64, I32, U32 } from './grow';
 import { applyFaceUvq, faceUvq, planeAxes } from './projection';
 import { solidInfo } from './solid';
 
@@ -298,97 +300,47 @@ interface Prepared {
   volume?: number;
 }
 
-class F32 {
-  a = new Float32Array(1024);
-  n = 0;
-  reserve(k: number): void {
-    if (this.n + k <= this.a.length) return;
-    let size = this.a.length * 2;
-    while (size < this.n + k) size *= 2;
-    const b = new Float32Array(size);
-    b.set(this.a.subarray(0, this.n));
-    this.a = b;
-  }
-  done(): Float32Array {
-    return this.a.slice(0, this.n);
-  }
-}
-
-class U32 {
-  a: Uint32Array;
-  n = 0;
-  constructor(size = 1024) {
-    this.a = new Uint32Array(size);
-  }
-  reserve(k: number): void {
-    if (this.n + k <= this.a.length) return;
-    let size = Math.max(1, this.a.length * 2);
-    while (size < this.n + k) size *= 2;
-    const b = new Uint32Array(size);
-    b.set(this.a.subarray(0, this.n));
-    this.a = b;
-  }
-  push(v: number): void {
-    this.reserve(1);
-    this.a[this.n++] = v;
-  }
-  done(): Uint32Array {
-    return this.a.slice(0, this.n);
-  }
-}
-
-class I32 {
-  a: Int32Array;
-  n = 0;
-  constructor(size = 1024) {
-    this.a = new Int32Array(size);
-  }
-  reserve(k: number): void {
-    if (this.n + k <= this.a.length) return;
-    let size = Math.max(1, this.a.length * 2);
-    while (size < this.n + k) size *= 2;
-    const b = new Int32Array(size);
-    b.set(this.a.subarray(0, this.n));
-    this.a = b;
-  }
-  done(): Int32Array {
-    return this.a.slice(0, this.n);
-  }
-}
-
-/** 면 하나를 삼각화해 (위치, 삼각형) 추가. 실패하면 false */
-export function triangulateFace(
-  points: Float64Array,
-  loops: readonly (readonly number[])[],
-  normal: readonly [number, number, number],
-  pos: number[],
-  idx: number[],
-): boolean {
-  const ax = Math.abs(normal[0]);
-  const ay = Math.abs(normal[1]);
-  const az = Math.abs(normal[2]);
+/** 면 표의 면 k를 삼각화해 (위치, 삼각형)을 쌓기에 더한다. 실패하면 false(쌓기는 그대로) */
+export function triangulateFace(points: Float64Array, faces: SkpFaces, k: number, pos: F64, idx: U32): boolean {
+  const N = faces.normal;
+  const ax = Math.abs(N[3 * k]!);
+  const ay = Math.abs(N[3 * k + 1]!);
+  const az = Math.abs(N[3 * k + 2]!);
   // 버릴 축: 법선이 가장 큰 축
   const drop = az >= ax && az >= ay ? 2 : ax >= ay ? 0 : 1;
   const u = drop === 0 ? 1 : 0;
   const v = drop === 2 ? 1 : 2;
   const flat: number[] = [];
   const holes: number[] = [];
-  const base = pos.length / 3;
-  for (let li = 0; li < loops.length; li++) {
-    const loop = loops[li]!;
-    if (li > 0) holes.push(flat.length / 2);
-    for (const k of loop) {
-      const o = 3 * k;
+  const base = pos.n / 3;
+  const L0 = faces.loopStart[k]!;
+  const L1 = faces.loopStart[k + 1]!;
+  const C = faces.cornerStart;
+  const V = faces.vertex;
+  for (let li = L0; li < L1; li++) {
+    if (li > L0) holes.push(flat.length / 2);
+    pos.reserve(3 * (C[li + 1]! - C[li]!));
+    const P = pos.a;
+    let n = pos.n;
+    for (let c = C[li]!; c < C[li + 1]!; c++) {
+      const o = 3 * V[c]!;
       flat.push(points[o + u]!, points[o + v]!);
-      pos.push(points[o]!, points[o + 1]!, points[o + 2]!);
+      P[n++] = points[o]!;
+      P[n++] = points[o + 1]!;
+      P[n++] = points[o + 2]!;
     }
+    pos.n = n;
   }
   const tri = earcut(flat, holes.length ? holes : undefined, 2);
   if (tri.length === 0) {
-    pos.length = base * 3;
+    pos.n = base * 3;
     return false;
   }
-  for (const t of tri) idx.push(base + t);
+  idx.reserve(tri.length);
+  const I = idx.a;
+  let n = idx.n;
+  for (const t of tri) I[n++] = base + t;
+  idx.n = n;
   return true;
 }
 
@@ -396,28 +348,29 @@ interface FaceGroup {
   mat: MatKey;
   back: MatKey;
   layer: number;
-  pos: number[];
-  idx: number[];
+  /** 형식 배열 쌓기(큰 정의에서 JS 배열이 heap을 크게 잡지 않게 — 값은 내는 꼴 그대로: 위치·넓이 f64, 법선 f32) */
+  pos: F64;
+  idx: U32;
   faces: number;
-  /** 자기 무늬 재질의 무늬 좌표(정점마다 u, v, q) — 앞면·뒷면 */
-  uv: number[] | null;
-  buv: number[] | null;
+  /** 자기 무늬 재질의 무늬 좌표(정점마다 u, v, q — 원근인지 가리려고 f64) — 앞면·뒷면 */
+  uv: F64 | null;
+  buv: F64 | null;
   /** 기본 투영 평면 좌표(정점마다 x, y 인치) */
-  plane: number[] | null;
+  plane: F32 | null;
   /** 면마다 삼각형 수 */
-  ft: number[];
+  ft: U32;
   area: number;
-  fa: number[];
-  fn: number[];
-  nrm: number[] | null;
+  fa: F64;
+  fn: F32;
+  nrm: F32 | null;
   smoothed: boolean;
 }
 
-/** 면 고리 하나의 넓이(Newell 합을 단위 법선 n에 투영, 첫 정점 기준으로 빼서 큰 좌표에서도 정밀하게) */
-function loopArea(points: Float64Array, loop: readonly number[], n: ArrayLike<number>): number {
-  const len = loop.length;
+/** 면 고리 하나(꼭짓점 정점 번호 V[s, e))의 넓이(Newell 합을 단위 법선 n에 투영, 첫 정점 기준으로 빼서 큰 좌표에서도 정밀하게) */
+function loopArea(points: Float64Array, V: Int32Array, s: number, e: number, n: ArrayLike<number>): number {
+  const len = e - s;
   if (len < 3) return 0;
-  const o = 3 * loop[0]!;
+  const o = 3 * V[s]!;
   const ox = points[o]!;
   const oy = points[o + 1]!;
   const oz = points[o + 2]!;
@@ -425,8 +378,8 @@ function loopArea(points: Float64Array, loop: readonly number[], n: ArrayLike<nu
   let sy = 0;
   let sz = 0;
   for (let i = 1; i < len - 1; i++) {
-    const a = 3 * loop[i]!;
-    const b = 3 * loop[i + 1]!;
+    const a = 3 * V[s + i]!;
+    const b = 3 * V[s + i + 1]!;
     const ax = points[a]! - ox;
     const ay = points[a + 1]! - oy;
     const az = points[a + 2]! - oz;
@@ -441,8 +394,21 @@ function loopArea(points: Float64Array, loop: readonly number[], n: ArrayLike<nu
   return Math.abs(n[0] || n[1] || n[2] ? d : Math.hypot(sx, sy, sz)) / 2;
 }
 
+/** 면 하나의 무늬 좌표(u, v, q)를 쌓기에 더한다(applyFaceUvq를 면마다 다시 쓰는 작은 배열에 적고 옮긴다). 원근 없이 칠하면 true */
+const uvScratch: number[] = [];
+function applyUv(m: ArrayLike<number>, points: ArrayLike<number>, start: number, count: number, out: F64): boolean {
+  uvScratch.length = 0;
+  const flat = applyFaceUvq(m, points, start, count, uvScratch).flat;
+  out.reserve(uvScratch.length);
+  const A = out.a;
+  let n = out.n;
+  for (let i = 0; i < uvScratch.length; i++) A[n++] = uvScratch[i]!;
+  out.n = n;
+  return flat;
+}
+
 /** 원근 무늬 면이 없으면 (u, v, q) 무늬 좌표를 (u, v) 2값으로 줄인다 */
-function compactUv(src: number[]): { uv: Float32Array; stride: 2 | 3 } {
+function compactUv(src: Float64Array): { uv: Float32Array; stride: 2 | 3 } {
   let q = false;
   for (let i = 2; i < src.length && !q; i += 3) q = src[i] !== 1;
   if (q) return { uv: Float32Array.from(src), stride: 3 };
@@ -454,10 +420,10 @@ function compactUv(src: number[]): { uv: Float32Array; stride: 2 | 3 } {
   return { uv, stride: 2 };
 }
 
-/** idx[from…] 삼각형들의 감김이 법선 n 쪽에서 보아 시계 방향인지(넓이 벡터 합 · n < 0) */
-function windingAgainst(pos: readonly number[], idx: readonly number[], from: number, n: ArrayLike<number>): boolean {
+/** idx[from, to) 삼각형들의 감김이 법선 n 쪽에서 보아 시계 방향인지(넓이 벡터 합 · n < 0) */
+function windingAgainst(pos: ArrayLike<number>, idx: ArrayLike<number>, from: number, to: number, n: ArrayLike<number>): boolean {
   let s = 0;
-  for (let t = from; t + 2 < idx.length; t += 3) {
+  for (let t = from; t + 2 < to; t += 3) {
     const a = 3 * idx[t]!;
     const b = 3 * idx[t + 1]!;
     const c = 3 * idx[t + 2]!;
@@ -472,10 +438,12 @@ function windingAgainst(pos: readonly number[], idx: readonly number[], from: nu
   return s < 0;
 }
 
-/** 면 넓이(바깥 고리 − 구멍, 0 아래로는 내려가지 않는다) */
-export function faceArea(points: Float64Array, loops: readonly (readonly number[])[], n: ArrayLike<number>): number {
+/** 면 표의 면 k 넓이(바깥 고리 − 구멍, 0 아래로는 내려가지 않는다) */
+export function faceArea(points: Float64Array, faces: SkpFaces, k: number, n: ArrayLike<number>): number {
   let a = 0;
-  for (let li = 0; li < loops.length; li++) a += (li ? -1 : 1) * loopArea(points, loops[li]!, n);
+  const L0 = faces.loopStart[k]!;
+  const C = faces.cornerStart;
+  for (let li = L0; li < faces.loopStart[k + 1]!; li++) a += (li > L0 ? -1 : 1) * loopArea(points, faces.vertex, C[li]!, C[li + 1]!, n);
   return Math.max(0, a);
 }
 
@@ -493,16 +461,23 @@ function prepare(
   const hidden = new Map<string, FaceGroup>();
   const cn = smooth ? cornerNormals(ents) : null;
   const fu = new Float64Array(3);
+  const F = ents.faces;
+  /** 면 평면 법선(면마다 다시 채워 쓰는 자리 — 받는 함수는 붙들지 않는다) */
+  const normal: [number, number, number] = [0, 0, 0];
   let k = 0;
   let failedHere = 0;
-  for (let fi = 0; fi < ents.faces.length; fi++) {
-    const f = ents.faces[fi]!;
+  for (let fi = 0; fi < F.length; fi++) {
     if (onFaces && ++k % 2048 === 0) onFaces(2048);
-    const isHidden = (f.flags & FLAG_HIDDEN) !== 0;
+    const isHidden = (F.flags[fi]! & FLAG_HIDDEN) !== 0;
     if (isHidden && !extras) continue;
-    const mat: MatKey = f.front !== undefined ? f.front : -1;
-    const back: MatKey = f.back !== undefined ? f.back : -1;
-    const layer = layerKey(f.layer);
+    const fr = F.front[fi]!;
+    const bk = F.back[fi]!;
+    const mat: MatKey = fr === fr ? fr : -1;
+    const back: MatKey = bk === bk ? bk : -1;
+    const layer = layerKey(opt(F.layer[fi]!));
+    normal[0] = F.normal[3 * fi]!;
+    normal[1] = F.normal[3 * fi + 1]!;
+    normal[2] = F.normal[3 * fi + 2]!;
     const key = `${mat}|${back}|${layer}`;
     const map = isHidden ? hidden : groups;
     let g = map.get(key);
@@ -515,102 +490,130 @@ function prepare(
           mat,
           back,
           layer,
-          pos: [],
-          idx: [],
+          pos: new F64(),
+          idx: new U32(),
           faces: 0,
           area: 0,
-          fa: [],
-          fn: [],
-          nrm: smooth ? [] : null,
+          fa: new F64(64),
+          fn: new F32(192),
+          nrm: smooth ? new F32() : null,
           smoothed: false,
-          uv: own ? [] : null,
-          buv: ownBack ? [] : null,
-          plane: tex?.plane && (mat < 0 || back < 0) ? [] : null,
-          ft: [],
+          uv: own ? new F64() : null,
+          buv: ownBack ? new F64() : null,
+          plane: tex?.plane && (mat < 0 || back < 0) ? new F32() : null,
+          ft: new U32(64),
         }),
       );
     }
-    const before = g.pos.length;
-    const tri0 = g.idx.length;
-    if (!triangulateFace(ents.points, f.loops, f.normal, g.pos, g.idx)) {
+    const before = g.pos.n;
+    const tri0 = g.idx.n;
+    if (!triangulateFace(ents.points, F, fi, g.pos, g.idx)) {
       if (!isHidden) counter.failed++;
       failedHere++;
       continue;
     }
     g.faces++;
-    g.ft.push((g.idx.length - tri0) / 3);
-    faceUnitNormal(f.normal, fu, 0);
+    g.ft.push((g.idx.n - tri0) / 3);
+    faceUnitNormal(normal, fu, 0);
     // 삼각형 감김을 면 법선 쪽에서 반시계로(코어가 시계 방향으로 보이는 쪽을 뒷면으로 칠한다). earcut은 한 면의 삼각형을 같은 방향으로 내므로 합으로 본다
-    if (windingAgainst(g.pos, g.idx, tri0, fu)) for (let t = tri0; t < g.idx.length; t += 3) [g.idx[t + 1], g.idx[t + 2]] = [g.idx[t + 2]!, g.idx[t + 1]!];
-    const area = faceArea(ents.points, f.loops, fu);
+    const ix = g.idx.a;
+    if (windingAgainst(g.pos.a, ix, tri0, g.idx.n, fu))
+      for (let t = tri0; t < g.idx.n; t += 3) {
+        const x = ix[t + 1]!;
+        ix[t + 1] = ix[t + 2]!;
+        ix[t + 2] = x;
+      }
+    const area = faceArea(ents.points, F, fi, fu);
     g.area += area;
     g.fa.push(area);
-    g.fn.push(fu[0]!, fu[1]!, fu[2]!);
+    g.fn.reserve(3);
+    g.fn.a[g.fn.n] = fu[0]!;
+    g.fn.a[g.fn.n + 1] = fu[1]!;
+    g.fn.a[g.fn.n + 2] = fu[2]!;
+    g.fn.n += 3;
+    const corners = (g.pos.n - before) / 3;
     if (g.nrm) {
       // 꼭짓점 법선: 이어 칠하는 면이면 무리 평균, 아니면 면 법선
-      const corners = (g.pos.length - before) / 3;
+      const nr = g.nrm;
+      nr.reserve(3 * corners);
+      const A = nr.a;
+      let n = nr.n;
       const ci = cn ? cn.faceIndex[fi]! : -1;
       if (ci >= 0) {
         const s = 3 * cn!.start[ci]!;
-        for (let c = 0; c < 3 * corners; c++) g.nrm.push(cn!.normals[s + c]!);
+        const cnn = cn!.normals;
+        for (let c = 0; c < 3 * corners; c++) A[n++] = cnn[s + c]!;
         g.smoothed = true;
-      } else for (let c = 0; c < corners; c++) g.nrm.push(fu[0]!, fu[1]!, fu[2]!);
+      } else
+        for (let c = 0; c < corners; c++) {
+          A[n++] = fu[0]!;
+          A[n++] = fu[1]!;
+          A[n++] = fu[2]!;
+        }
+      nr.n = n;
     }
     // 무늬 좌표: 자기 무늬 재질이면 저장된 투영(없으면 기본), 물려받을 수 있으면 기본 투영 평면 좌표(인치)
     const v0 = before / 3;
-    const nv = (g.pos.length - before) / 3;
+    const nv = corners;
     if (g.uv) {
       const t = tex!.tile(mat)!;
-      const r = faceUvq(f.normal, f.frontMap, t.w, t.h);
+      const r = faceUvq(normal, textureMapAt(F.frontMaps, fi), t.w, t.h);
       if (r.singular) tex!.singular++;
-      if (applyFaceUvq(r.m, g.pos, v0, nv, g.uv).flat) tex!.flat++;
+      if (applyUv(r.m, g.pos.a, v0, nv, g.uv)) tex!.flat++;
     }
     if (g.buv) {
       const t = tex!.tile(back)!;
-      const r = faceUvq(f.normal, f.backMap, t.w, t.h);
+      const r = faceUvq(normal, textureMapAt(F.backMaps, fi), t.w, t.h);
       if (r.singular) tex!.singular++;
-      if (applyFaceUvq(r.m, g.pos, v0, nv, g.buv).flat) tex!.flat++;
+      if (applyUv(r.m, g.pos.a, v0, nv, g.buv)) tex!.flat++;
     }
     if (g.plane) {
-      const [x, y] = planeAxes(f.normal);
-      for (let i = before; i < g.pos.length; i += 3) {
-        const px = g.pos[i]!, py = g.pos[i + 1]!, pz = g.pos[i + 2]!;
-        g.plane.push(px * x[0] + py * x[1] + pz * x[2], px * y[0] + py * y[1] + pz * y[2]);
+      const [x, y] = planeAxes(normal);
+      const P = g.pos.a;
+      const pl = g.plane;
+      pl.reserve(2 * corners);
+      const A = pl.a;
+      let n = pl.n;
+      for (let i = before; i < g.pos.n; i += 3) {
+        const px = P[i]!, py = P[i + 1]!, pz = P[i + 2]!;
+        A[n++] = px * x[0] + py * x[1] + pz * x[2];
+        A[n++] = px * y[0] + py * y[1] + pz * y[2];
       }
+      pl.n = n;
     }
   }
   if (onFaces && k % 2048) onFaces(k % 2048);
   const toBatches = (m: Map<string, FaceGroup>): Batch[] => {
     const out: Batch[] = [];
     for (const g of m.values()) {
-      if (!g.idx.length) continue;
+      if (!g.idx.n) continue;
       const b: Batch = {
         mat: g.mat,
         back: g.back,
         layer: g.layer,
-        pos: Float64Array.from(g.pos),
-        idx: Uint32Array.from(g.idx),
+        pos: g.pos.done(),
+        idx: g.idx.done(),
         faces: g.faces,
         area: g.area,
-        fa: Float64Array.from(g.fa),
-        fn: Float32Array.from(g.fn),
-        ft: Uint32Array.from(g.ft),
+        fa: g.fa.done(),
+        fn: g.fn.done(),
+        ft: g.ft.done(),
       };
       if (g.nrm) {
-        b.nrm = Float32Array.from(g.nrm);
+        b.nrm = g.nrm.done();
         b.smoothed = g.smoothed;
       }
       if (g.uv) {
-        const c = compactUv(g.uv);
+        const c = compactUv(g.uv.done());
         b.uv = c.uv;
         b.uvStride = c.stride;
       }
       if (g.buv) {
-        const c = compactUv(g.buv);
+        const c = compactUv(g.buv.done());
         b.buv = c.uv;
         b.buvStride = c.stride;
       }
-      if (g.plane) b.plane = Float32Array.from(g.plane);
+      if (g.plane) b.plane = g.plane.done();
       out.push(b);
     }
     return out;
@@ -618,33 +621,53 @@ function prepare(
 
   // 모서리는 태그마다 모은다. 곡선(호·원·곡선) 모서리면 선분마다 정의 안 곡선 차례를 함께 적는다(화면이 고른 선분의 곡선 전체 길이를 잰다)
   interface LineGroup {
-    pos: number[];
-    curve: number[] | null;
+    pos: F64;
+    curve: I32 | null;
   }
   const lineGroups = new Map<number, LineGroup>();
   const softGroups = new Map<number, LineGroup>();
   const hiddenLines = new Map<number, LineGroup>();
   const p = ents.points;
-  for (const e of ents.edges) {
+  const E = ents.edges;
+  for (let ei = 0; ei < E.length; ei++) {
+    const flags = E.flags[ei]!;
     let map: Map<number, LineGroup>;
-    if (e.flags & FLAG_HIDDEN) {
+    if (flags & FLAG_HIDDEN) {
       if (!extras) continue;
       map = hiddenLines;
-    } else if (e.flags & FLAG_SOFT_SMOOTH) {
+    } else if (flags & FLAG_SOFT_SMOOTH) {
       if (!extras) continue;
       map = softGroups;
     } else map = lineGroups;
-    const layer = layerKey(e.layer);
+    const layer = layerKey(opt(E.layer[ei]!));
     let g = map.get(layer);
-    if (!g) map.set(layer, (g = { pos: [], curve: null }));
-    const k = e.curve !== undefined && e.curve >= 0 ? e.curve : -1;
-    if (k >= 0 && !g.curve) g.curve = new Array<number>(g.pos.length / 6).fill(-1);
+    if (!g) map.set(layer, (g = { pos: new F64(), curve: null }));
+    const k = E.curve[ei]! >= 0 ? E.curve[ei]! : -1;
+    if (k >= 0 && !g.curve) {
+      // 앞서 든 곡선 아닌 선분은 -1
+      const n = g.pos.n / 6;
+      g.curve = new I32(Math.max(64, 2 * n));
+      g.curve.a.fill(-1, 0, n);
+      g.curve.n = n;
+    }
     g.curve?.push(k);
-    g.pos.push(p[3 * e.a]!, p[3 * e.a + 1]!, p[3 * e.a + 2]!, p[3 * e.b]!, p[3 * e.b + 1]!, p[3 * e.b + 2]!);
+    const a = 3 * E.a[ei]!;
+    const b = 3 * E.b[ei]!;
+    const P = g.pos;
+    P.reserve(6);
+    const A = P.a;
+    const n = P.n;
+    A[n] = p[a]!;
+    A[n + 1] = p[a + 1]!;
+    A[n + 2] = p[a + 2]!;
+    A[n + 3] = p[b]!;
+    A[n + 4] = p[b + 1]!;
+    A[n + 5] = p[b + 2]!;
+    P.n = n + 6;
   }
   const batchOf = (layer: number, g: LineGroup, cls: LineCls): LineBatch => {
-    const l: LineBatch = { layer, pos: Float64Array.from(g.pos), cls };
-    if (g.curve) l.curve = Int32Array.from(g.curve);
+    const l: LineBatch = { layer, pos: g.pos.done(), cls };
+    if (g.curve) l.curve = g.curve.done();
     return l;
   };
   const lines: LineBatch[] = [];

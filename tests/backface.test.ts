@@ -3,6 +3,7 @@ import type { Mesh3d, Rgba } from 'opencad-viewer3d/types';
 import type { SkpMaterialInfo } from '../src/materials';
 import type { SkpDefinition, SkpEdge, SkpEntities, SkpFace, SkpInstance, SkpModel } from '../src/model';
 import { buildSceneParts } from '../src/scene';
+import { edgesFrom, facesFrom } from '../src/entities';
 
 /** 면 하나(고리 차례 그대로, 법선은 Newell)와 그 모서리 */
 function faceEnts(points: number[], loop: number[], o: Partial<SkpFace> = {}): SkpEntities {
@@ -15,7 +16,7 @@ function faceEnts(points: number[], loop: number[], o: Partial<SkpFace> = {}): S
   });
   const edges: SkpEdge[] = loop.map((v, k) => ({ a: v, b: loop[(k + 1) % loop.length]!, flags: 0 }));
   const face: SkpFace = { loops: [loop], normal: [n[0]!, n[1]!, n[2]!], flags: 0, ...o };
-  return { points: Float64Array.from(points), faces: [face], edges, instances: [] };
+  return { points: Float64Array.from(points), faces: facesFrom([face]), edges: edgesFrom(edges), instances: [] };
 }
 
 const SQ = [0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0];
@@ -32,7 +33,7 @@ function modelOf(defs: [number, SkpEntities][], insts: SkpInstance[], root: SkpE
     layers: new Map([[1, 'Layer0']]),
     defaultLayer: 1,
     definitions: new Map(defs.map(([id, e]): [number, SkpDefinition] => [id, { id, name: `D${id}`, entities: e }])),
-    root: root ?? { points: new Float64Array(), faces: [], edges: [], instances: insts },
+    root: root ?? { points: new Float64Array(), faces: facesFrom([]), edges: edgesFrom([]), instances: insts },
     counts: { vertices: 0, edges: 0, faces: 1, instances: insts.length },
     warnings: [],
   };

@@ -1,7 +1,7 @@
 /**
  * 훑기 도구가 파일 하나를 해석하는 길(probe). 앱 워커(src/worker/parse.worker.ts)와 같은 차례·같은 선택으로 부른다:
  * 큰 2021+ 파일은 model.dat를 내장 풀기(DecompressionStream)로 먼저 풀고(inflated) → 그림을 꺼내고(readSkpImages) →
- * 같은 선택으로 skpToScene. 무늬 그림 손질(createImageBitmap)과 화면으로 넘기기는 브라우저 일이라 하지 않는다.
+ * 같은 선택으로 skpToScene(해석기가 다 쓴 파일 버퍼를 떼어 놓는다 — releaseBytes, 넘긴 bytes는 길이 0이 된다). 무늬 그림 손질(createImageBitmap)과 화면으로 넘기기는 브라우저 일이라 하지 않는다.
  * 워커의 선택이 바뀌면 여기도 같이 바꾼다(tests/sweep.test.ts가 두 파일의 호출 글자를 견준다).
  *
  * 단계와 시간: inflate(워커의 내장 풀기) · images(그림 꺼내기 — 2020 이하는 여기서 모형을 다 읽는다) ·
@@ -12,6 +12,7 @@
  * ArrayBuffer가 섞일 수 있어, 해석을 마친 뒤에는 잠깐 쉬었다가 다시 gc()해 워커가 화면으로 넘기기 직전에 붙든 크기(retained)를 따로 잰다.
  * 이 파일은 scripts/sweep/sweep.mjs가 Vite로 묶어 Node 자식 프로세스에서 부른다. 파일 경로는 받지 않는다.
  */
+import { createHash } from 'node:crypto';
 import { readSkpHeader, readSkpImages, skpToScene, type SkpImages } from '../../src/index';
 import { NATIVE_INFLATE_MIN_BYTES, preinflateSkp } from '../../src/worker/unzip';
 import { findSkpZipItems } from '../../src/zip';
@@ -37,6 +38,8 @@ export interface StageMemory {
   peakHeapMB: number;
   peakExternalMB: number;
   peakRssMB: number;
+  /** 진행 알림마다 잰 heap + external 합의 최대(같은 때 함께 살아 있던 JS 메모리 — rss는 기계의 메모리 압박에 따라 흔들린다) */
+  peakHeapExternalMB: number;
   /** 단계가 끝날 때 gc 뒤 크기(그때 살아 있는 것) */
   endHeapMB: number;
   endExternalMB: number;
@@ -61,6 +64,8 @@ export interface ProbeMemory {
   peakHeapMB: number;
   peakExternalMB: number;
   peakRssMB: number;
+  /** 단계 heap + external 합 최대 가운데 가장 큰 것 */
+  peakHeapExternalMB: number;
   /** model.dat 풀린 크기(2021+ 꾸러미에서 찾았을 때) */
   modelDatMB?: number;
   /** 장면 결과의 형식 배열 바이트(종류별, MB) — 화면으로 넘기는 크기 */
@@ -107,6 +112,11 @@ export interface ProbeResult {
   warnings: string[];
   /** meta.damaged·limited·unsupported */
   flags: string[];
+  /**
+   * 장면 출력 전체(그물·선분·점의 배열 바이트와 칸, 무늬, 범위, 경고, meta)의 sha256 앞 16자 — 해석기를 고친 뒤 출력이
+   * 한 바이트라도 바뀌었는지(지표는 개수만 본다). 장면 이름(파일 이름)은 넣지 않는다
+   */
+  digest: string;
   /** 장면 결과 형식 배열 합(MB) */
   sceneMB: number;
   /** 해석 직후(gc 없이) heap 증가와 프로세스 rss — 대강의 값. 정확한 값은 mem */
@@ -129,6 +139,7 @@ interface Acc {
   peakHeap: number;
   peakExt: number;
   peakRss: number;
+  peakSum: number;
   endHeap: number;
   endExt: number;
   endRss: number;
@@ -147,7 +158,7 @@ class Meter {
   private get(s: ProbeStage): Acc {
     let a = this.acc.get(s);
     if (!a) {
-      a = { ms: 0, peakHeap: 0, peakExt: 0, peakRss: 0, endHeap: 0, endExt: 0, endRss: 0 };
+      a = { ms: 0, peakHeap: 0, peakExt: 0, peakRss: 0, peakSum: 0, endHeap: 0, endExt: 0, endRss: 0 };
       this.acc.set(s, a);
     }
     return a;
@@ -172,6 +183,7 @@ class Meter {
     if (m.heapUsed > a.peakHeap) a.peakHeap = m.heapUsed;
     if (m.external > a.peakExt) a.peakExt = m.external;
     if (m.rss > a.peakRss) a.peakRss = m.rss;
+    if (m.heapUsed + m.external > a.peakSum) a.peakSum = m.heapUsed + m.external;
   }
 
   close(): void {
@@ -216,6 +228,55 @@ export function sceneBuffers(scene: ReturnType<typeof skpToScene>): { byKey: Rec
   return { byKey: out, backing };
 }
 
+/**
+ * 장면 출력의 sha256(앞 16자): 형식 배열은 꼴·길이와 바이트 그대로, 객체는 열쇠를 정렬해(undefined 칸은 없는 것과 같게),
+ * 수는 글로(-0과 NaN도 가른다). 장면 이름은 빼고 단위·그물·선분·점·무늬·범위·경고·meta를 넣는다
+ */
+export function sceneDigest(scene: ReturnType<typeof skpToScene>): string {
+  const h = createHash('sha256');
+  const walk = (v: unknown): void => {
+    if (ArrayBuffer.isView(v)) {
+      h.update(`<${v.constructor.name}:${v.byteLength}>`);
+      h.update(new Uint8Array(v.buffer, v.byteOffset, v.byteLength));
+      return;
+    }
+    if (typeof v === 'number') {
+      h.update(Object.is(v, -0) ? '-0,' : `${v},`);
+      return;
+    }
+    if (v === null || typeof v !== 'object') {
+      h.update(`${typeof v}:${JSON.stringify(v) ?? ''},`);
+      return;
+    }
+    if (v instanceof Map) {
+      h.update('Map{');
+      for (const [k, x] of v) {
+        walk(k);
+        walk(x);
+      }
+      h.update('}');
+      return;
+    }
+    if (Array.isArray(v)) {
+      h.update(`[${v.length}:`);
+      for (const x of v) walk(x);
+      h.update(']');
+      return;
+    }
+    h.update('{');
+    const o = v as Record<string, unknown>;
+    for (const k of Object.keys(o).sort()) {
+      if (o[k] === undefined) continue;
+      h.update(`${JSON.stringify(k)}:`);
+      walk(o[k]);
+    }
+    h.update('}');
+  };
+  const { name: _name, ...rest } = scene;
+  walk(rest);
+  return h.digest('hex').slice(0, 16);
+}
+
 /** SKP 바이트 하나를 워커와 같은 길로 해석해 지표·시간(·메모리)을 낸다. 예외는 부르는 쪽이 잡는다 */
 export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Promise<ProbeResult> {
   const mem = !!opts.mem;
@@ -229,6 +290,16 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
   const h = readSkpHeader(bytes);
   const name = opts.name ?? 'model.skp';
   const zipPath = h?.container === 'zip';
+  // 워커처럼 해석기가 파일 버퍼를 떼어 놓으므로(releaseBytes) 파일 바이트로 알 것은 먼저 잰다
+  const header = headerInfo(bytes);
+  let zipDatBytes: number | undefined;
+  if (mem && h && zipPath)
+    try {
+      zipDatBytes = findSkpZipItems(bytes, h.bodyOffset).items?.find((d) => d.name === 'model.dat')?.size;
+    } catch {
+      /* 꾸러미가 깨졌으면 모른다 */
+    }
+  const fileBuffer = bytes.buffer;
   const t0 = performance.now();
 
   // 워커: 큰 2021+ 모형의 model.dat는 브라우저 내장 풀기로 먼저 푼다
@@ -244,8 +315,10 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
     }
   }
   const datBytes = inflated?.get('model.dat')?.length;
-  // 진단만 하려고 붙들면 그 버퍼가 끝까지 살아 메모리를 잘못 잰다 — 약한 참조로
+  // 진단만 하려고 붙들면 그 버퍼가 끝까지 살아 메모리를 잘못 잰다 — 약한 참조로. 약한 참조를 만든 작업(job)이 끝날 때까지는
+  // 대상이 살아 있으므로(WeakRef KeepDuringJob) 해석 전에 한 번 쉰다 — 쉬지 않으면 model.dat가 장면 단계 끝까지 남아 보인다
   const datBuffer = mem && inflated ? new WeakRef(inflated.get('model.dat')!.buffer) : undefined;
+  if (datBuffer) await new Promise((r) => setTimeout(r, 0));
 
   // 워커: 그림을 먼저 꺼낸다(2020 이하는 여기서 모형을 다 읽고 해석기가 이어 쓴다). 그림은 없어도 된다
   meter.enter('images');
@@ -260,7 +333,7 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
   const progress = (fraction: number): void => {
     meter.enter(fraction >= 0.65 ? 'scene' : zipPath && fraction < 0.4 ? 'unpack' : 'parse');
   };
-  const scene = skpToScene(bytes, { name, outline: true, extras: true, smooth: true, onProgress: progress, textures: images?.materials, inflated });
+  const scene = skpToScene(bytes, { name, outline: true, extras: true, smooth: true, onProgress: progress, textures: images?.materials, inflated, releaseBytes: true });
   inflated = undefined;
   meter.close();
   const total = performance.now() - t0;
@@ -312,12 +385,13 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
   const ms: ProbeResult['ms'] = { total: Math.round(total) };
   for (const [s, a] of meter.acc) ms[s] = Math.round(a.ms);
   const result: ProbeResult = {
-    header: headerInfo(bytes),
+    header,
     inflated: datBytes !== undefined,
     ms,
     metrics,
     warnings: scene.warnings ?? [],
     flags: (['damaged', 'limited', 'unsupported'] as const).filter((k) => m[k]),
+    digest: sceneDigest(scene),
     sceneMB: MB(sceneBytes),
     heapMB: MB(after.heapUsed - heap0),
     rssMB: MB(after.rss),
@@ -337,6 +411,7 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
     let peakHeap = 0;
     let peakExt = 0;
     let peakRss = 0;
+    let peakSum = 0;
     for (const s of PROBE_STAGES) {
       const a = meter.acc.get(s);
       if (!a) continue;
@@ -345,6 +420,7 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
         peakHeapMB: MB(a.peakHeap),
         peakExternalMB: MB(a.peakExt),
         peakRssMB: MB(a.peakRss),
+        peakHeapExternalMB: MB(a.peakSum),
         endHeapMB: MB(a.endHeap),
         endExternalMB: MB(a.endExt),
         endRssMB: MB(a.endRss),
@@ -352,6 +428,7 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
       peakHeap = Math.max(peakHeap, a.peakHeap);
       peakExt = Math.max(peakExt, a.peakExt);
       peakRss = Math.max(peakRss, a.peakRss);
+      peakSum = Math.max(peakSum, a.peakSum);
     }
     const sceneBuffersMB: Record<string, number> = {};
     for (const [k, v] of Object.entries(buffers).sort((a, b) => b[1] - a[1])) sceneBuffersMB[k] = MB(v);
@@ -368,23 +445,17 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
       peakHeapMB: MB(peakHeap),
       peakExternalMB: MB(peakExt),
       peakRssMB: MB(peakRss),
+      peakHeapExternalMB: MB(peakSum),
       sceneBuffersMB,
       sceneBackingMB: MB(backingBytes),
-      sceneHoldsFile: backing.has(bytes.buffer),
+      sceneHoldsFile: backing.has(fileBuffer),
       imagesMB: MB(imageBytes),
     };
     if (datBuffer) {
       const b = datBuffer.deref();
       result.mem.sceneHoldsModelDat = !!b && backing.has(b);
     }
-    let dat = datBytes;
-    if (dat === undefined && h && zipPath) {
-      try {
-        dat = findSkpZipItems(bytes, h.bodyOffset).items?.find((d) => d.name === 'model.dat')?.size;
-      } catch {
-        /* 꾸러미가 깨졌으면 모른다 */
-      }
-    }
+    const dat = datBytes ?? zipDatBytes;
     if (dat !== undefined) result.mem.modelDatMB = MB(dat);
   }
   return result;

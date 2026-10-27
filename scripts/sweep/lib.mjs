@@ -210,6 +210,7 @@ function fileBrief(r) {
     out.peakHeapMB = r.mem.peakHeapMB;
     out.peakExternalMB = r.mem.peakExternalMB;
     out.peakRssMB = r.mem.peakRssMB;
+    if (r.mem.peakHeapExternalMB !== undefined) out.peakHeapExternalMB = r.mem.peakHeapExternalMB;
     if (r.mem.maxRssMB !== undefined) out.maxRssMB = r.mem.maxRssMB;
   }
   return out;
@@ -233,7 +234,7 @@ export function summarize(records, info = {}) {
   const stageNames = ['inflate', 'images', 'unpack', 'parse', 'scene'];
   const times = { total: [] };
   for (const s of stageNames) times[s] = [];
-  const mem = { heapMB: [], rssMB: [], peakHeapMB: [], peakExternalMB: [], peakRssMB: [], maxRssMB: [] };
+  const mem = { heapMB: [], rssMB: [], peakHeapMB: [], peakExternalMB: [], peakHeapExternalMB: [], peakRssMB: [], maxRssMB: [] };
   let warningFiles = 0;
   let exceptionFiles = 0;
   let inflated = 0;
@@ -281,6 +282,7 @@ export function summarize(records, info = {}) {
     if (r.mem) {
       mem.peakHeapMB.push(r.mem.peakHeapMB);
       mem.peakExternalMB.push(r.mem.peakExternalMB);
+      if (r.mem.peakHeapExternalMB !== undefined) mem.peakHeapExternalMB.push(r.mem.peakHeapExternalMB);
       mem.peakRssMB.push(r.mem.peakRssMB);
       if (r.mem.maxRssMB !== undefined) mem.maxRssMB.push(r.mem.maxRssMB);
     }
@@ -343,7 +345,8 @@ export function formatSummary(s) {
   const t = s.timingMs?.total;
   if (t?.n) lines.push(`해석 시간(ms) p50 ${t.p50} · p90 ${t.p90} · p95 ${t.p95} · p99 ${t.p99} · 최대 ${t.max}`);
   for (const b of (s.largest ?? []).slice(0, 5)) {
-    const memText = b.peakRssMB !== undefined ? ` 최대 heap ${b.peakHeapMB} MB · 최대 rss ${b.maxRssMB ?? b.peakRssMB} MB` : b.heapMB !== undefined ? ` heap +${b.heapMB} MB · rss ${b.rssMB} MB` : '';
+    const both = b.peakHeapExternalMB !== undefined ? ` · 최대 heap+external ${b.peakHeapExternalMB} MB` : '';
+    const memText = b.peakRssMB !== undefined ? ` 최대 heap ${b.peakHeapMB} MB${both} · 최대 rss ${b.maxRssMB ?? b.peakRssMB} MB` : b.heapMB !== undefined ? ` heap +${b.heapMB} MB · rss ${b.rssMB} MB` : '';
     lines.push(`  큰 파일 ${b.sha256} ${b.sizeMB} MB ${b.edition} ${b.class} ${b.ms?.total ?? '-'} ms${memText}`);
   }
   return lines.join('\n');
@@ -407,6 +410,8 @@ export function compareRuns(before, after, opts = {}) {
     const changes = metricDiff(x.metrics, y.metrics);
     const w = warningDiff(x.warnings, y.warnings);
     if (w) changes.warnings = w;
+    // 장면 출력 해시는 두 결과에 다 있을 때만 본다(해시가 없던 옛 결과와도 견줄 수 있게)
+    if (x.digest && y.digest && x.digest !== y.digest) changes.digest = [x.digest, y.digest];
     const fx = JSON.stringify([...(x.flags ?? [])].sort());
     const fy = JSON.stringify([...(y.flags ?? [])].sort());
     if (fx !== fy) changes.flags = [x.flags ?? [], y.flags ?? []];

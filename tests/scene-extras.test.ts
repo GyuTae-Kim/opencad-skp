@@ -4,13 +4,14 @@ import type { SkpMaterialInfo } from '../src/materials';
 import type { SkpDefinition, SkpEdge, SkpEntities, SkpFace, SkpInstance, SkpModel } from '../src/model';
 import { DEFAULT_FACE_COLOR, buildSceneParts } from '../src/scene';
 import { xfNormal, xfPlane } from '../src/scene-annotations';
+import { edgesFrom, faceList, facesFrom } from '../src/entities';
 
 // ── 손으로 만드는 중간 모형 ──
 
 const at = (x: number, y = 0, z = 0, sx = 1, sy = 1, sz = 1): Float64Array => Float64Array.from([sx, 0, 0, 0, 0, sy, 0, 0, 0, 0, sz, 0, x, y, z, 1]);
 
 function ents(o: Partial<SkpEntities> = {}): SkpEntities {
-  return { points: new Float64Array(), faces: [], edges: [], instances: [], ...o };
+  return { points: new Float64Array(), faces: facesFrom([]), edges: edgesFrom([]), instances: [], ...o };
 }
 
 /** 한 변 s인 z=0 정사각형 면 하나와 모서리 넷 */
@@ -19,7 +20,7 @@ function square(s = 1, o: { material?: number; layer?: number; edgeLayer?: numbe
   if (o.material !== undefined) face.front = o.material;
   if (o.layer !== undefined) face.layer = o.layer;
   const edges: SkpEdge[] = [0, 1, 2, 3].map((i) => ({ a: i, b: (i + 1) % 4, flags: 0, ...(o.edgeLayer !== undefined ? { layer: o.edgeLayer } : {}) }));
-  return ents({ points: Float64Array.from([0, 0, 0, s, 0, 0, s, s, 0, 0, s, 0]), faces: [face], edges });
+  return ents({ points: Float64Array.from([0, 0, 0, s, 0, 0, s, s, 0, 0, s, 0]), faces: facesFrom([face]), edges: edgesFrom(edges) });
 }
 
 function model(root: SkpEntities, o: Partial<SkpModel> = {}): SkpModel {
@@ -322,7 +323,7 @@ describe('나무 정보·넓이', () => {
 
   it('구멍 난 면의 넓이는 바깥 − 구멍', () => {
     const pts = [0, 0, 0, 4, 0, 0, 4, 4, 0, 0, 4, 0, 1, 1, 0, 1, 2, 0, 2, 2, 0, 2, 1, 0];
-    const root = ents({ points: Float64Array.from(pts), faces: [{ loops: [[0, 1, 2, 3], [4, 5, 6, 7]], normal: [0, 0, 1], flags: 0 }] });
+    const root = ents({ points: Float64Array.from(pts), faces: facesFrom([{ loops: [[0, 1, 2, 3], [4, 5, 6, 7]], normal: [0, 0, 1], flags: 0 }]) });
     const p = buildSceneParts(model(root), NO_MATS, 2);
     expect(p.materials[0]!.area).toBeCloseTo(15 * 4, 9);
   });
@@ -351,7 +352,7 @@ describe('부드러운 음영(smooth)', () => {
       { loops: [[6, 7, 8]], normal: [0, 0, 1], flags: 0, front: 1, loopEdges: [[7, 8, 9]] },
     ];
     if (!withLoopEdges) for (const f of faces) delete f.loopEdges;
-    return ents({ points, faces, edges });
+    return ents({ points, faces: facesFrom(faces), edges: edgesFrom(edges) });
   }
   const normalAt = (m: Mesh3d, p: readonly number[]): number[][] => {
     const out: number[][] = [];
@@ -390,7 +391,7 @@ describe('부드러운 음영(smooth)', () => {
     const e = folded();
     e.points[3 * 4 + 0] = 1;
     e.points[3 * 5 + 0] = 1;
-    e.faces[1]!.normal = [-1, 0, 0];
+    e.faces.normal.set([-1, 0, 0], 3);
     const p = buildSceneParts(model(e, { materials: new Map([[1, '각진']]) }), NO_MATS, 1, { smooth: true });
     expect(p.meshes.every((x) => x.normals === undefined)).toBe(true);
   });
@@ -400,7 +401,7 @@ describe('부드러운 음영(smooth)', () => {
     root.points.set([0, 0, -3, 10, 0, -3, 10, 10, -3, 0, 10, -3]);
     root.instances = [inst(80, at(20, 0, 0, -1, 1, 1)), inst(80, at(40, 0, 0, 1, 1, 2))];
     const f = folded();
-    f.faces.pop();
+    f.faces = facesFrom(faceList(f.faces).slice(0, -1));
     const m = model(root, { definitions: new Map([def(80, '곡면', f)]) });
     const p = buildSceneParts(m, NO_MATS, 1, { smooth: true });
     expect(p.meshes).toHaveLength(1);

@@ -64,13 +64,45 @@ describe('내장 풀기로 model.dat 미리 풀기', () => {
     const pre = (await preinflateSkp(bytes, 1))!;
     const a = skpToScene(bytes, { outline: true });
     const b = skpToScene(bytes, { outline: true, inflated: pre });
+    // 해석기는 꺼내 쓴 항목을 Map에서 지운다(장면을 만드는 동안 풀린 바이트를 붙들지 않게)
+    expect(pre.has('model.dat')).toBe(false);
     expect(b.meshes.map((m) => [...m.positions].length)).toEqual(a.meshes.map((m) => [...m.positions].length));
     expect(b.meta?.faces).toBe(400);
     expect(b.meta?.faces).toBe(a.meta?.faces);
     expect(b.lines.map((l) => l.positions.length)).toEqual(a.lines.map((l) => l.positions.length));
     // 길이가 맞지 않는 바이트(잘못 넘김)는 쓰지 않는다
-    const wrong = skpToScene(bytes, { inflated: new Map([['model.dat', new Uint8Array(10)]]) });
+    const bad = new Map([['model.dat', new Uint8Array(10)]]);
+    const wrong = skpToScene(bytes, { inflated: bad });
+    expect(bad.size).toBe(0);
     expect(wrong.meta?.faces).toBe(400);
     expect(wrong.warnings ?? []).toEqual(a.warnings ?? []);
+  });
+
+  it('releaseBytes: 파일 바이트를 다 쓰면 버퍼를 떼어 놓고, 장면은 그대로', async () => {
+    const bytes = gridModel(20);
+    const keep = skpToScene(bytes, { outline: true });
+    const copy = bytes.slice();
+    const pre = (await preinflateSkp(copy, 1))!;
+    const freed = skpToScene(copy, { outline: true, inflated: pre, releaseBytes: true });
+    expect(copy.length).toBe(0);
+    expect(copy.buffer.byteLength).toBe(0);
+    expect(freed.meshes.map((m) => [...m.positions])).toEqual(keep.meshes.map((m) => [...m.positions]));
+    expect(freed.meta?.faces).toBe(400);
+    // 미리 풀지 않아도(해석기가 직접 푼 뒤), 2020 이하도
+    const direct = bytes.slice();
+    expect(skpToScene(direct, { releaseBytes: true }).meta?.faces).toBe(400);
+    expect(direct.length).toBe(0);
+    const mfc = mfcFile({ schemas: 'v17', root: squareEntities() });
+    const mfcKeep = skpToScene(mfc);
+    const mfcCopy = mfc.slice();
+    const mfcFreed = skpToScene(mfcCopy, { releaseBytes: true });
+    expect(mfcCopy.length).toBe(0);
+    expect(mfcFreed.meshes.map((m) => [...m.positions])).toEqual(mfcKeep.meshes.map((m) => [...m.positions]));
+    // 버퍼 일부만 보는 바이트는 떼어 놓지 않는다
+    const big = new Uint8Array(bytes.length + 8);
+    big.set(bytes, 8);
+    const part = big.subarray(8);
+    expect(skpToScene(part, { releaseBytes: true }).meta?.faces).toBe(400);
+    expect(part.length).toBe(bytes.length);
   });
 });

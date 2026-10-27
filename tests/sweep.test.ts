@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { classify, compareRuns, editionOf, exceptionCode, formatCompare, parseArgs, percentiles, summarize, warningCode } from '../scripts/sweep/lib.mjs';
-import { headerInfo, probeSkp } from '../scripts/sweep/probe';
+import { headerInfo, probeSkp, sceneDigest } from '../scripts/sweep/probe';
 import { skpToScene } from '../src/index';
 import { edge, entities, face, modelDat, skpFile, vertex } from './build';
 import { mfcFile, squareEntities } from './mfcwrite';
@@ -128,13 +128,21 @@ describe('훑기 순수 함수', () => {
     expect(c.newExceptions).toEqual([{ sha256: 'd', edition: '2026', code: 'RangeError: x' }]);
     expect(formatCompare(c)).toContain('분류가 바뀐 파일 2개');
   });
+
+  it('compareRuns: 장면 출력 해시는 두 결과에 다 있을 때만 견준다', () => {
+    const before = [rec({ sha256: 'a' }), { ...rec({ sha256: 'b' }), digest: '0123' }, { ...rec({ sha256: 'c' }), digest: '4567' }];
+    const after = [{ ...rec({ sha256: 'a' }), digest: 'aaaa' }, { ...rec({ sha256: 'b' }), digest: '0123' }, { ...rec({ sha256: 'c' }), digest: '89ab' }];
+    const c = compareRuns(before, after);
+    expect(c.metricChanged).toBe(1);
+    expect(c.metricChanges[0]).toMatchObject({ sha256: 'c', changes: { digest: ['4567', '89ab'] } });
+  });
 });
 
 describe('probe: 앱 워커와 같은 해석 길', () => {
   it('워커와 같은 skpToScene 선택·내장 풀기 조건을 쓴다', () => {
     const worker = readFileSync(join(root, 'src/worker/parse.worker.ts'), 'utf8');
     const probe = readFileSync(join(root, 'scripts/sweep/probe.ts'), 'utf8');
-    const call = 'skpToScene(bytes, { name, outline: true, extras: true, smooth: true, onProgress: progress, textures: images?.materials, inflated })';
+    const call = 'skpToScene(bytes, { name, outline: true, extras: true, smooth: true, onProgress: progress, textures: images?.materials, inflated, releaseBytes: true })';
     expect(worker).toContain(call);
     expect(probe).toContain(call);
     expect(worker).toContain('bytes.length >= NATIVE_INFLATE_MIN_BYTES');
@@ -145,7 +153,10 @@ describe('probe: 앱 워커와 같은 해석 길', () => {
   it('2021+ 꼴: 내장 풀기 길을 타도 직접 해석과 같은 지표', async () => {
     const bytes = gridSkp(20);
     const direct = skpToScene(bytes, { outline: true, extras: true, smooth: true });
-    const r = await probeSkp(bytes, { name: 'grid.skp', inflateMin: 1 });
+    // probe는 워커처럼 해석기가 파일 버퍼를 떼어 놓게 한다 — 사본을 넘긴다
+    const copy = bytes.slice();
+    const r = await probeSkp(copy, { name: 'grid.skp', inflateMin: 1 });
+    expect(copy.length).toBe(0);
     expect(r.inflated).toBe(true);
     expect(r.header).toMatchObject({ major: 26, container: 'zip' });
     expect(r.metrics.faces).toBe(400);
@@ -154,10 +165,16 @@ describe('probe: 앱 워커와 같은 해석 길', () => {
     expect(r.metrics.seg).toBe(direct.lines.reduce((s, l) => s + l.positions.length / 6, 0));
     expect(Object.keys(r.ms)).toEqual(expect.arrayContaining(['total', 'inflate', 'images', 'unpack', 'parse', 'scene']));
     // 기본 문턱(1 MB)보다 작으면 워커처럼 직접 푼다
-    const small = await probeSkp(bytes);
+    const small = await probeSkp(bytes.slice());
     expect(small.inflated).toBe(false);
     expect(small.ms.inflate).toBeUndefined();
     expect(small.metrics).toEqual(r.metrics);
+    // 장면 출력 해시: 미리 풀든 직접 풀든 같고, 장면 이름(파일 이름)에 따라 바뀌지 않는다
+    expect(r.digest).toMatch(/^[0-9a-f]{16}$/);
+    expect(small.digest).toBe(r.digest);
+    expect(sceneDigest(direct)).toBe(r.digest);
+    expect(sceneDigest(skpToScene(bytes, { name: '다른 이름', outline: true, extras: true, smooth: true }))).toBe(sceneDigest(direct));
+    expect(sceneDigest(skpToScene(bytes))).not.toBe(sceneDigest(direct));
   });
 
   it('2020 이하·SketchUp 아님·옛 판', async () => {
@@ -183,8 +200,11 @@ describe('probe: 앱 워커와 같은 해석 길', () => {
     for (const s of Object.values(m.stages)) {
       expect(s!.peakHeapMB).toBeGreaterThan(0);
       expect(s!.peakRssMB).toBeGreaterThan(0);
+      // 같은 때의 heap + external 합은 그때 heap보다 작을 수 없다
+      expect(s!.peakHeapExternalMB).toBeGreaterThanOrEqual(s!.peakHeapMB);
     }
     expect(m.peakHeapMB).toBeGreaterThanOrEqual(m.stages.scene!.peakHeapMB);
+    expect(m.peakHeapExternalMB).toBeGreaterThanOrEqual(m.stages.scene!.peakHeapExternalMB);
     expect(m.sceneBuffersMB['mesh.positions']).toBeGreaterThanOrEqual(0);
     expect(m.modelDatMB).toBeDefined();
   });

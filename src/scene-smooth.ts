@@ -7,6 +7,7 @@
  * 꼭짓점 = 면 고리 안의 정점 자리. 차례는 면마다 고리를 이어 붙인 차례(scene.ts triangulateFace가 위치를 쌓는 차례와 같다).
  * 큰 모형을 생각해 이어 칠하는 면만 꼭짓점 배열을 잡는다.
  */
+import { faceCorners, loopEdgesKnown } from './entities';
 import { FLAG_SMOOTH, type SkpEntities } from './model';
 
 export const SMOOTH_MIN_DOT = 0.02;
@@ -21,7 +22,7 @@ export interface CornerNormals {
 }
 
 /** 면 평면 법선(단위, 0이면 0) */
-export function faceUnitNormal(n: readonly number[], out: Float64Array, o: number): void {
+export function faceUnitNormal(n: ArrayLike<number>, out: Float64Array, o: number): void {
   const x = n[0] ?? 0;
   const y = n[1] ?? 0;
   const z = n[2] ?? 0;
@@ -38,9 +39,10 @@ export function cornerNormals(ents: SkpEntities): CornerNormals | null {
   const E = edges.length;
   const F = faces.length;
   if (!E || F < 2) return null;
+  const EF = edges.flags;
   let anySmooth = false;
   for (let e = 0; e < E; e++)
-    if (edges[e]!.flags & FLAG_SMOOTH) {
+    if (EF[e]! & FLAG_SMOOTH) {
       anySmooth = true;
       break;
     }
@@ -51,43 +53,52 @@ export function cornerNormals(ents: SkpEntities): CornerNormals | null {
   const f0 = new Int32Array(E);
   const f1 = new Int32Array(E);
   const use = (e: number, f: number): void => {
-    if (!(e >= 0 && e < E) || !(edges[e]!.flags & FLAG_SMOOTH)) return;
+    if (!(e >= 0 && e < E) || !(EF[e]! & FLAG_SMOOTH)) return;
     const c = uses[e]!;
     if (c === 0) f0[e] = f;
     else if (c === 1) f1[e] = f;
     if (c < 255) uses[e] = c + 1;
   };
-  // loopEdges가 없는 면은 정점 짝으로 매끈한 모서리를 찾는다(처음 필요할 때 만든다)
+  // 모서리 번호를 모르는 고리는 정점 짝으로 매끈한 모서리를 찾는다(처음 필요할 때 만든다)
   let pairs: Map<number, number> | null = null;
   const V = Math.max(1, Math.floor(ents.points.length / 3));
   const pairKey = (a: number, b: number): number => (a < b ? a * V + b : b * V + a);
+  const LS = faces.loopStart;
+  const CS = faces.cornerStart;
+  const VX = faces.vertex;
+  const ED = faces.edge;
   for (let f = 0; f < F; f++) {
-    const face = faces[f]!;
-    const le = face.loopEdges;
-    for (let li = 0; li < face.loops.length; li++) {
-      const loop = face.loops[li]!;
-      const el = le?.[li];
-      if (el && el.length === loop.length) {
-        for (let k = 0; k < el.length; k++) use(el[k]!, f);
+    for (let li = LS[f]!; li < LS[f + 1]!; li++) {
+      const s = CS[li]!;
+      const n = CS[li + 1]! - s;
+      if (loopEdgesKnown(faces, li)) {
+        for (let k = 0; k < n; k++) use(ED![s + k]!, f);
         continue;
       }
       if (!pairs) {
         pairs = new Map();
         for (let e = 0; e < E; e++) {
-          const ed = edges[e]!;
-          if (ed.flags & FLAG_SMOOTH && !pairs.has(pairKey(ed.a, ed.b))) pairs.set(pairKey(ed.a, ed.b), e);
+          const a = edges.a[e]!;
+          const b = edges.b[e]!;
+          if (EF[e]! & FLAG_SMOOTH && !pairs.has(pairKey(a, b))) pairs.set(pairKey(a, b), e);
         }
       }
-      const n = loop.length;
       for (let k = 0; k < n; k++) {
-        const e = pairs.get(pairKey(loop[k]!, loop[(k + 1) % n]!));
+        const e = pairs.get(pairKey(VX[s + k]!, VX[s + ((k + 1) % n)]!));
         if (e !== undefined) use(e, f);
       }
     }
   }
 
   const fn = new Float64Array(F * 3);
-  for (let f = 0; f < F; f++) faceUnitNormal(faces[f]!.normal, fn, 3 * f);
+  const N = faces.normal;
+  const nrm = [0, 0, 0];
+  for (let f = 0; f < F; f++) {
+    nrm[0] = N[3 * f]!;
+    nrm[1] = N[3 * f + 1]!;
+    nrm[2] = N[3 * f + 2]!;
+    faceUnitNormal(nrm, fn, 3 * f);
+  }
   const dotF = (a: number, b: number): number => fn[3 * a]! * fn[3 * b]! + fn[3 * a + 1]! * fn[3 * b + 1]! + fn[3 * a + 2]! * fn[3 * b + 2]!;
 
   // 이어 칠할 모서리의 두 면을 고른다
@@ -107,11 +118,11 @@ export function cornerNormals(ents: SkpEntities): CornerNormals | null {
       }
   }
   if (!joins.length) return null;
+  // 고른 면의 꼭짓점 수 = 면의 꼭짓점 구간 길이(고리를 이어 붙인 차례)
   const start = new Uint32Array(picked.length + 1);
   for (let i = 0; i < picked.length; i++) {
-    let c = 0;
-    for (const loop of faces[picked[i]!]!.loops) c += loop.length;
-    start[i + 1] = start[i]! + c;
+    const [s, e] = faceCorners(faces, picked[i]!);
+    start[i + 1] = start[i]! + (e - s);
   }
   const C = start[picked.length]!;
   const parent = new Int32Array(C);
@@ -125,17 +136,12 @@ export function cornerNormals(ents: SkpEntities): CornerNormals | null {
   };
   /** 고른 면 f(전체 차례)에서 정점 v의 첫 꼭짓점(고른 면 꼭짓점 차례), 없으면 -1 */
   const cornerOf = (f: number, v: number): number => {
-    let c = start[faceIndex[f]!]!;
-    for (const loop of faces[f]!.loops)
-      for (const k of loop) {
-        if (k === v) return c;
-        c++;
-      }
+    const [s, e] = faceCorners(faces, f);
+    for (let c = s; c < e; c++) if (VX[c] === v) return start[faceIndex[f]!]! + (c - s);
     return -1;
   };
   for (const e of joins) {
-    const ed = edges[e]!;
-    for (const v of [ed.a, ed.b]) {
+    for (const v of [edges.a[e]!, edges.b[e]!]) {
       const c0 = cornerOf(f0[e]!, v);
       const c1 = cornerOf(f1[e]!, v);
       if (c0 < 0 || c1 < 0) continue;

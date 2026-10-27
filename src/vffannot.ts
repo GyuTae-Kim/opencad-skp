@@ -5,7 +5,8 @@
  * 항목 하나를 읽는 함수는 깨진 곳에서 예외를 던질 수 있다 — 부르는 쪽(model.ts)이 항목 단위로 감싼다.
  */
 
-import type { SkpCurve, SkpDimension, SkpEdge, SkpFont, SkpGuide, SkpSectionPlane, SkpText, Vec3 } from './model';
+import type { SkpEdges } from './entities';
+import type { SkpCurve, SkpDimension, SkpFont, SkpGuide, SkpSectionPlane, SkpText, Vec3 } from './model';
 import type { TlvNode, TlvReader } from './tlv';
 import { add3, apply4, arrowName, cross3, leaderName, readBase, scale3, sub3, textAlignmentName, unit3, type Warn } from './vffcommon';
 import { TAG } from './vfftags';
@@ -341,30 +342,38 @@ function readCurveRaw(r: TlvReader, n: TlvNode, arcData: TlvNode | undefined): C
   return c;
 }
 
+/** 모서리 차례가 표 안인지(밖이면 객체 목록일 때처럼 그 곡선 읽기가 깨진다) */
+function edgeIn(edges: Pick<SkpEdges, 'length'>, e: number): number {
+  if (!(e >= 0 && e < edges.length)) throw new RangeError('모서리 번호가 표 밖입니다');
+  return e;
+}
+
 /**
  * 곡선을 이은 차례(엔진 _chain_edges): 첫 모서리에서 출발해 이어지는 모서리를 하나씩 따라간다.
  * 끝 모서리(같은 묶음의 다른 모서리)가 첫 모서리의 끝 정점만 공유하면 시작 정점 쪽으로 떠난다(닫힌 곡선을 바른 방향으로).
  * 첫 모서리가 곡선의 것이 아니면 오름차순 그대로, 닿지 못한 모서리는 오름차순으로 뒤에 붙인다.
  */
-export function chainEdges(members: number[], edges: SkpEdge[], first: number | undefined, last: number | undefined): number[] {
+export function chainEdges(members: number[], edges: Pick<SkpEdges, 'length' | 'a' | 'b'>, first: number | undefined, last: number | undefined): number[] {
   if (members.length <= 1) return members;
   if (first === undefined || !members.includes(first)) return members;
+  const A = edges.a;
+  const B = edges.b;
   const byVertex = new Map<number, number[]>();
   for (const e of members) {
-    const ed = edges[e]!;
-    (byVertex.get(ed.a) ?? byVertex.set(ed.a, []).get(ed.a)!).push(e);
-    (byVertex.get(ed.b) ?? byVertex.set(ed.b, []).get(ed.b)!).push(e);
+    edgeIn(edges, e);
+    (byVertex.get(A[e]!) ?? byVertex.set(A[e]!, []).get(A[e]!)!).push(e);
+    (byVertex.get(B[e]!) ?? byVertex.set(B[e]!, []).get(B[e]!)!).push(e);
   }
   const ordered = [first];
   const used = new Set([first]);
-  const f = edges[first]!;
-  let tip = f.b;
-  if (last !== undefined && last !== first && edges[last]) {
-    const l = edges[last]!;
-    const touches = (v: number): boolean => l.a === v || l.b === v;
-    if (touches(f.b) && !touches(f.a)) tip = f.a;
+  const fa = A[first]!;
+  const fb = B[first]!;
+  let tip = fb;
+  if (last !== undefined && last !== first && last >= 0 && last < edges.length) {
+    const touches = (v: number): boolean => A[last] === v || B[last] === v;
+    if (touches(fb) && !touches(fa)) tip = fa;
   }
-  if (!(byVertex.get(tip) ?? []).some((e) => !used.has(e))) tip = tip === f.b ? f.a : f.b;
+  if (!(byVertex.get(tip) ?? []).some((e) => !used.has(e))) tip = tip === fb ? fa : fb;
   const cursor = new Map<number, number>();
   while (ordered.length < members.length) {
     const cands = byVertex.get(tip) ?? [];
@@ -375,8 +384,7 @@ export function chainEdges(members: number[], edges: SkpEdge[], first: number | 
     const next = cands[pos]!;
     used.add(next);
     ordered.push(next);
-    const ed = edges[next]!;
-    tip = ed.a === tip ? ed.b : ed.a;
+    tip = A[next] === tip ? B[next]! : A[next]!;
   }
   if (ordered.length < members.length) for (const e of members) if (!used.has(e)) ordered.push(e);
   return ordered;
@@ -389,7 +397,7 @@ export function chainEdges(members: number[], edges: SkpEdge[], first: number | 
 export function readCurves(
   r: TlvReader,
   lists: TlvNode[],
-  edges: SkpEdge[],
+  edges: SkpEdges,
   edgeIndex: Map<number, number>,
   edgeCurve: Map<number, number>,
   warn: Warn,
@@ -439,13 +447,15 @@ export function readCurves(
     const firstEdge = raw.first !== undefined ? edgeIndex.get(raw.first) : undefined;
     const lastEdge = raw.last !== undefined ? edgeIndex.get(raw.last) : undefined;
     const list = chainEdges(members[i]!, edges, firstEdge, lastEdge);
-    for (const e of list) edges[e]!.curve = i;
+    for (const e of list) edges.curve[edgeIn(edges, e)] = i;
     let kind: SkpCurve['kind'] = 'curve';
     if (raw.polygon) kind = 'polygon';
     else if (raw.arc) {
-      const a = edges[list[0]!];
-      const z = edges[list[list.length - 1]!];
-      const closed = list.length >= 3 && !!a && !!z && (a.a === z.a || a.a === z.b || a.b === z.a || a.b === z.b);
+      const a = list[0]!;
+      const z = list[list.length - 1]!;
+      const A = edges.a;
+      const B = edges.b;
+      const closed = list.length >= 3 && (A[a] === A[z] || A[a] === B[z] || B[a] === A[z] || B[a] === B[z]);
       kind = closed ? 'circle' : 'arc';
     }
     const c: SkpCurve = { edges: list, kind };

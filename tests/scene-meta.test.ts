@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { SkpCamera, SkpEntities, SkpModel, SkpPage } from '../src/model';
 import { AttrPool, attrValueMeta, cameraMeta, pagesMeta, styleFor, unitsFor } from '../src/scene-meta';
+import { edgesFrom, facesFrom } from '../src/entities';
 
-const ents = (): SkpEntities => ({ points: new Float64Array(), faces: [], edges: [], instances: [] });
+const ents = (): SkpEntities => ({ points: new Float64Array(), faces: facesFrom([]), edges: edgesFrom([]), instances: [] });
 
 function model(o: Partial<SkpModel> = {}): SkpModel {
   return {

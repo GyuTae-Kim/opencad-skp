@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { edgeAt, edgeList, faceAt } from '../src/entities';
 import { readModelDat } from '../src/model';
 import { linearLayout } from '../src/vffannot';
 import { ifcGuid } from '../src/vffcommon';
@@ -69,9 +70,9 @@ describe('곡선·호(1396·1397)', () => {
     // 적은 차례 [3,4,5,0,1,2] → 첫 모서리(원래 0번 = 적은 차례 3)부터
     expect(cs[0]!.edges).toEqual([3, 4, 5, 0, 1, 2]);
     expect(cs[1]!.edges).toEqual(Array.from({ length: 24 }, (_, i) => 6 + i));
-    expect(m.root.edges.every((e) => e.curve !== undefined)).toBe(true);
-    expect(m.root.edges[0]!.curve).toBe(0);
-    expect(m.root.edges[6]!.curve).toBe(1);
+    expect(edgeList(m.root.edges).every((e) => e.curve !== undefined)).toBe(true);
+    expect(edgeAt(m.root.edges, 0).curve).toBe(0);
+    expect(edgeAt(m.root.edges, 6).curve).toBe(1);
     expect(m.warnings).toEqual([]);
   });
 
@@ -92,7 +93,7 @@ describe('곡선·호(1396·1397)', () => {
       ['polygon', [0, 1, 2, 3]],
       ['curve', [4]],
     ]);
-    expect(m.root.edges[5]!.curve).toBeUndefined();
+    expect(edgeAt(m.root.edges, 5).curve).toBeUndefined();
     expect(m.warnings.some((w) => w.includes('곡선을 찾지 못한 모서리'))).toBe(true);
   });
 });
@@ -377,12 +378,12 @@ describe('인스턴스·정의 칸', () => {
       ],
     });
     const m = readModelDat(modelDat({ root }));
-    expect(m.root.edges.map((e) => [e.pid, e.material ?? null, e.flags])).toEqual([
+    expect(edgeList(m.root.edges).map((e) => [e.pid, e.material ?? null, e.flags])).toEqual([
       [4, 13, 0x16],
       [5, null, 6],
       [6, null, 6],
     ]);
-    const f = m.root.faces[0]!;
+    const f = faceAt(m.root.faces, 0);
     expect(f.pid).toBe(7);
     expect(f.loops).toEqual([[0, 2, 1]]);
     expect(f.loopEdges).toEqual([[2, 1, 0]]);

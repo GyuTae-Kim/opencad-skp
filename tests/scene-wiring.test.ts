@@ -5,6 +5,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SkpMetaExtras } from '../src/meta';
 import type { SkpEntities, SkpModel } from '../src/model';
+import { edgesFrom, facesFrom } from '../src/entities';
 
 const hold = vi.hoisted(() => ({ model: null as unknown }));
 vi.mock('../src/model', async (importOriginal) => {
@@ -21,8 +22,8 @@ const at = (x: number, y = 0, z = 0): Float64Array => Float64Array.from([1, 0, 0
 function square(s: number): SkpEntities {
   return {
     points: Float64Array.from([0, 0, 0, s, 0, 0, s, s, 0, 0, s, 0]),
-    faces: [{ loops: [[0, 1, 2, 3]], normal: [0, 0, 1], flags: 0 }],
-    edges: [0, 1, 2, 3].map((i) => ({ a: i, b: (i + 1) % 4, flags: 0 })),
+    faces: facesFrom([{ loops: [[0, 1, 2, 3]], normal: [0, 0, 1], flags: 0 }]),
+    edges: edgesFrom([0, 1, 2, 3].map((i) => ({ a: i, b: (i + 1) % 4, flags: 0 }))),
     instances: [],
   };
 }

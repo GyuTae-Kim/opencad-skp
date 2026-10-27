@@ -16,6 +16,7 @@
  * 형상 뒤(장면·스타일)에서 멈추면 형상은 그대로 두고 경고한다.
  */
 
+import { edgesFrom, emptyEdges, emptyFaces, facesFrom } from './entities';
 import type { SkpHeader } from './header';
 import type { SkpMaterialInfo } from './materials';
 import {
@@ -1003,7 +1004,8 @@ function assemble(dec: Decoder, head: ReturnType<Decoder['readModelHead']>): { m
     counts.edges += c.edges.length;
     counts.faces += c.faces.length;
     counts.instances += c.instances.length;
-    const ents: SkpEntities = { points: Float64Array.from(c.pos), faces: c.faces, edges: c.edges, instances: c.instances };
+    // 면·모서리 표는 맨 끝에 만든다(장면 마무리가 숨긴 면·모서리에 임시 영구 번호를 붙인다 — finishPages)
+    const ents: SkpEntities = { points: Float64Array.from(c.pos), faces: emptyFaces(), edges: emptyEdges(), instances: c.instances };
     if (curves.length) ents.curves = curves;
     if (c.texts.length) ents.texts = c.texts;
     if (c.dimensions.length) ents.dimensions = c.dimensions;
@@ -1051,7 +1053,7 @@ function assemble(dec: Decoder, head: ReturnType<Decoder['readModelHead']>): { m
     layers.set(i, l.name);
   });
 
-  const root = built[0] ?? { points: new Float64Array(0), faces: [], edges: [], instances: [] };
+  const root = built[0] ?? { points: new Float64Array(0), faces: emptyFaces(), edges: emptyEdges(), instances: [] };
   const model: SkpModel = { materials: matNames, layers, defaultLayer: 0, definitions, root, counts, warnings: [], tags };
   if (dec.folders.length) model.tagFolders = dec.folders;
   const active = L(dec.activeLayer);
@@ -1096,6 +1098,15 @@ function assemble(dec: Decoder, head: ReturnType<Decoder['readModelHead']>): { m
     if (view.activePage !== undefined) model.activePage = view.activePage;
   }
   model.warnings = [...st.warn].map(([m, k]) => (k > 1 ? `${m} (${k}개)` : m));
+  // 읽는 동안 쓴 면·모서리 객체를 표로 옮기고 놓는다(큰 모형에서 객체가 heap을 크게 잡는다)
+  st.collections.forEach((c, i) => {
+    const ents = built[i];
+    if (!ents) return;
+    ents.faces = facesFrom(c.faces);
+    ents.edges = edgesFrom(c.edges);
+    c.faces = [];
+    c.edges = [];
+  });
   return { model, materials };
 }
 

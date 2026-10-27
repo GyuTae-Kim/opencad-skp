@@ -26,6 +26,21 @@ import { findSkpZipItems, readZipItem, readZipItemPartial } from './zip';
 
 export { readSkpHeader, type SkpHeader } from './header';
 export { readModelDat, type SkpModel } from './model';
+export {
+  EDGE_UNKNOWN,
+  edgeAt,
+  edgeList,
+  edgesFrom,
+  faceAt,
+  faceCorners,
+  faceList,
+  facesFrom,
+  loopEdgesKnown,
+  textureMapAt,
+  type SkpEdges,
+  type SkpFaces,
+  type SkpTextureMaps,
+} from './entities';
 export { readSkpImages, type SkpImage, type SkpImages, type SkpImageOptions } from './images';
 export { parseMaterialXml, type SkpMaterialInfo, type SkpMaterialTexture } from './materials';
 export { colorizeRgba, rgbToHls, hlsToRgb, type ColorizeSpec } from './colorize';
@@ -72,9 +87,32 @@ export interface SkpOptions {
   maxUvVertices?: number;
   /**
    * 미리 푼 꾸러미 항목(이름 → 풀린 바이트, 지금은 'model.dat'만 본다). 워커가 브라우저 내장 풀기로 먼저 푼 것을 넘기면
-   * 해석기가 다시 풀지 않는다(길이가 목록의 원래 크기와 같을 때만 — 다르면 예전처럼 직접 푼다). 2021+ 파일만
+   * 해석기가 다시 풀지 않는다(길이가 목록의 원래 크기와 같을 때만 — 다르면 예전처럼 직접 푼다). 2021+ 파일만.
+   * 해석기는 'model.dat' 항목을 꺼낸 뒤 이 Map에서 지운다: 모형 요소를 다 읽으면 풀린 바이트(큰 모형은 수백 MB)가
+   * 장면을 만드는 동안 남지 않게 한다(부르는 쪽도 그 바이트를 따로 붙들지 않아야 놓인다)
    */
-  inflated?: ReadonlyMap<string, Uint8Array>;
+  inflated?: Map<string, Uint8Array>;
+  /**
+   * 파일 바이트를 다 쓰면(2021+는 꾸러미의 재질·스타일을 읽고 model.dat를 꺼낸 뒤, 2020 이하는 모형을 읽은 뒤) 그 버퍼를 떼어 놓는다
+   * (ArrayBuffer.prototype.transfer(0) — 넘긴 bytes는 길이 0이 된다). 파일 바이트를 더 쓰지 않는 쪽(앱 워커)이 모형 요소를 읽고
+   * 장면을 만드는 동안 파일 크기만큼 덜 잡게 켠다. bytes가 버퍼 전체를 보지 않거나 떼어 놓을 수 없으면 그대로 둔다. 켜면 그 뒤에
+   * 같은 bytes로 readSkpImages를 부를 수 없다(그림은 먼저 꺼낸다). 기본 false
+   */
+  releaseBytes?: boolean;
+}
+
+type Transfer = (this: ArrayBuffer, newByteLength?: number) => ArrayBuffer;
+
+/** 파일 버퍼를 떼어 놓는다(releaseBytes). 버퍼 전체를 보는 바이트만, transfer가 없거나 떼어 놓을 수 없으면 그대로 */
+function releaseFile(bytes: Uint8Array): void {
+  const buf = bytes.buffer;
+  const transfer = (buf as unknown as { transfer?: Transfer }).transfer;
+  if (typeof transfer !== 'function' || !(buf instanceof ArrayBuffer) || bytes.byteOffset !== 0 || bytes.byteLength !== buf.byteLength) return;
+  try {
+    transfer.call(buf, 0);
+  } catch {
+    /* 떼어 놓을 수 없는 버퍼는 그대로 둔다 */
+  }
 }
 
 /** 무늬를 입힐 재질 수 기본 한도 */
@@ -129,6 +167,7 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
         res = readMfcModel(bytes, header, (f) => progress(0.05 + 0.59 * f, '모형 요소 읽는 중'));
         rememberMfcImages(bytes, res.images);
       }
+      if (opts.releaseBytes) releaseFile(bytes);
       read = { model: res.model, materials: res.materials, styles: res.styles, damaged: false, texImages: textureImages(res.materials, opts, warnings) };
     } catch (e) {
       if (e instanceof MfcRefused) {
@@ -270,7 +309,7 @@ function readZipPackage(
   meta: Record<string, unknown>,
   warnings: string[],
   progress: (f: number, stage: string) => void,
-  opts: Pick<SkpOptions, 'textures' | 'maxTextures' | 'inflated'> = {},
+  opts: Pick<SkpOptions, 'textures' | 'maxTextures' | 'inflated' | 'releaseBytes'> = {},
 ): Package | Scene3d {
   let model: SkpModel;
   const materials = new Map<string, SkpMaterialInfo>();
@@ -333,6 +372,9 @@ function readZipPackage(
     for (const [k, v] of textureImages(materials, opts, warnings, folders)) texImages.set(k, v);
     progress(0.2, 'model.dat 푸는 중');
     const unpacking = (f: number): void => progress(0.2 + 0.19 * f, 'model.dat 푸는 중');
+    // 미리 푼 바이트는 꺼내고 Map에서 지운다(쓰지 않는 길이여도) — 이 함수가 끝나면 장면을 만드는 동안 붙드는 곳이 없다
+    const pre = opts.inflated?.get('model.dat');
+    opts.inflated?.delete('model.dat');
     let dat: Uint8Array;
     if (found.salvaged || modelItem.truncated) {
       const part = readZipItemPartial(bytes, modelItem, unpacking);
@@ -342,7 +384,6 @@ function readZipPackage(
         warnings.push('model.dat가 잘렸거나 압축이 깨져 앞부분만 읽었습니다 — 일부 형상이 빠졌을 수 있습니다');
       }
     } else {
-      const pre = opts.inflated?.get('model.dat');
       try {
         dat = pre && pre.length === modelItem.size ? pre : readZipItem(bytes, modelItem, unpacking);
       } catch (e) {
@@ -354,6 +395,8 @@ function readZipPackage(
         warnings.push(`model.dat를 끝까지 풀지 못해 앞부분만 읽었습니다(${e instanceof Error ? e.message : String(e)})`);
       }
     }
+    // 파일 바이트는 여기까지 쓴다(꺼낸 model.dat·재질·스타일은 사본이다)
+    if (opts.releaseBytes) releaseFile(bytes);
     progress(0.4, '모형 요소 읽는 중');
     model = readModelDat(dat, (f) => progress(0.4 + 0.24 * f, '모형 요소 읽는 중'), { textured: texImages.keys() });
   } catch (e) {

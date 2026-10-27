@@ -22,6 +22,7 @@
  *       2716 투영 방향(f64×3, 종류 2·3), 2717 핀(무늬 위치 도구의 점 — 읽지 않는다)
  */
 
+import { EdgeTableBuilder, emptyEdges, emptyFaces, FaceTableBuilder, type SkpEdges, type SkpFaces } from './entities';
 import type { SkpUnitsMeta } from './meta';
 import { TlvReader, type TlvNode } from './tlv';
 import { readCurves, readGuideLine, readGuidePoint, readLinearDim, readRadialDim, readSection, readText, resolveLink, type AnnotEnv, type DimLink, type PointLookups } from './vffannot';
@@ -78,6 +79,10 @@ export interface SkpTextureMap {
   dir?: [number, number, number];
 }
 
+/**
+ * 면 하나(객체 꼴). 중간 모형은 면을 표(SkpFaces, src/entities.ts)로 둔다 — 이 꼴은 표를 만들 때(facesFrom)와
+ * 2020 이하 해석기가 읽는 동안, 시험·진단(faceAt)에 쓴다
+ */
 export interface SkpFace {
   /** 고리마다 정점 번호(SkpEntities.points 안). 첫 고리가 바깥, 나머지는 구멍(표본에서 확인) */
   loops: number[][];
@@ -97,6 +102,7 @@ export interface SkpFace {
   backMap?: SkpTextureMap;
 }
 
+/** 모서리 하나(객체 꼴). 중간 모형은 모서리를 표(SkpEdges)로 둔다 — 쓰임은 SkpFace와 같다 */
 export interface SkpEdge {
   a: number;
   b: number;
@@ -218,8 +224,10 @@ export interface SkpCurve {
 export interface SkpEntities {
   /** 정점 좌표 xyz…(인치) */
   points: Float64Array;
-  faces: SkpFace[];
-  edges: SkpEdge[];
+  /** 면 표(src/entities.ts) */
+  faces: SkpFaces;
+  /** 모서리 표 */
+  edges: SkpEdges;
   instances: SkpInstance[];
   curves?: SkpCurve[];
   texts?: SkpText[];
@@ -617,9 +625,9 @@ function readEntities(ctx: Ctx, n: TlvNode, tolerant: boolean): SkpEntities {
   });
   ctx.counts.vertices += pts.length / 3;
 
-  // 모서리(곡선 번호는 곡선을 읽은 뒤 곡선 차례로 바꾼다)
+  // 모서리(곡선 번호는 곡선을 읽은 뒤 곡선 차례로 바꾼다). 표로 쌓는다(큰 모형에서 객체 백만 개를 만들지 않게)
   const eIndex = new Map<number, number>();
-  const edges: SkpEdge[] = [];
+  const edgeTable = new EdgeTableBuilder();
   const edgeCurve = new Map<number, number>();
   list(part(TAG.EDGES), '모서리 목록', '모서리', (tag, start, end) => {
     if (tag !== TAG.EDGE) return;
@@ -636,18 +644,24 @@ function readEntities(ctx: Ctx, n: TlvNode, tolerant: boolean): SkpEntities {
     if (b.material !== undefined) e.material = b.material;
     if (b.id !== undefined) {
       e.pid = b.id;
-      if (!eIndex.has(b.id)) eIndex.set(b.id, edges.length);
+      if (!eIndex.has(b.id)) eIndex.set(b.id, edgeTable.length);
     }
     const curve = r.uint(r.first(node, TAG.EDGE_CURVE));
-    if (curve !== undefined) edgeCurve.set(edges.length, curve);
+    if (curve !== undefined) edgeCurve.set(edgeTable.length, curve);
     const attrs = readHeaderAttrs(r, b.header, warn);
     if (attrs) e.attrs = attrs;
-    edges.push(e);
+    edgeTable.push(e);
   });
+  const edges = edgeTable.done();
   ctx.counts.edges += edges.length;
+  /** 모서리 차례가 표 안인지(깨진 모서리를 건너뛴 자리를 가리키면 그 면·곡선은 깨진 것으로 본다 — 객체 목록일 때와 같게) */
+  const edgeIn = (i: number): number => {
+    if (!(i >= 0 && i < edges.length)) throw new RangeError('모서리 번호가 표 밖입니다');
+    return i;
+  };
 
-  // 면
-  const faces: SkpFace[] = [];
+  // 면(고리를 다 모은 뒤 표에 한 번에 더한다)
+  const faceTable = new FaceTableBuilder();
   list(part(TAG.FACES), '면 목록', '면', (tag, start, end) => {
     if (tag !== TAG.FACE) return;
     const node = { tag, start, end };
@@ -675,9 +689,9 @@ function readEntities(ctx: Ctx, n: TlvNode, tolerant: boolean): SkpEntities {
           missing.n++;
           return;
         }
-        const e = edges[ei]!;
+        edgeIn(ei);
         // 뒤집힘이면 모서리 끝 정점에서 시작한다(모든 표본에서 고리가 이어지는 것으로 확인)
-        loop.push(r.u8(r.first(u, TAG.USE_REVERSED)) ? e.b : e.a);
+        loop.push(r.u8(r.first(u, TAG.USE_REVERSED)) ? edges.b[ei]! : edges.a[ei]!);
         via.push(ei);
       });
       if (loop.length >= 3) {
@@ -707,8 +721,9 @@ function readEntities(ctx: Ctx, n: TlvNode, tolerant: boolean): SkpEntities {
         note(ctx, '깨진 무늬 투영을 건너뛰었습니다(기본 투영으로 칠합니다)');
       }
     }
-    faces.push(f);
+    faceTable.push(f);
   });
+  const faces = faceTable.done();
   ctx.counts.faces += faces.length;
 
   const out: SkpEntities = { points: Float64Array.from(pts), faces, edges, instances: [] };
@@ -774,8 +789,9 @@ function readEntities(ctx: Ctx, n: TlvNode, tolerant: boolean): SkpEntities {
     edgeMiddle: (pid) => {
       const i = eIndex.get(pid);
       if (i === undefined) return undefined;
-      const a = point(edges[i]!.a);
-      const z = point(edges[i]!.b);
+      edgeIn(i);
+      const a = point(edges.a[i]!);
+      const z = point(edges.b[i]!);
       return [(a[0] + z[0]) / 2, (a[1] + z[1]) / 2, (a[2] + z[2]) / 2];
     },
     instance: () => undefined,
@@ -787,8 +803,8 @@ function readEntities(ctx: Ctx, n: TlvNode, tolerant: boolean): SkpEntities {
     local,
     localArc: (edgePid) => {
       const i = eIndex.get(edgePid);
-      const c = i === undefined ? undefined : edges[i]!.curve;
-      const arc = c === undefined ? undefined : out.curves?.[c];
+      const c = i === undefined ? -1 : edges.curve[edgeIn(i)]!;
+      const arc = c < 0 ? undefined : out.curves?.[c];
       return arc?.center ? arc : undefined;
     },
     defer: (link, set) => ctx.pendingPoints.push({ link, set }),
@@ -899,12 +915,18 @@ function finish(ctx: Ctx, all: SkpEntities[], definitions: Map<number, SkpDefini
   }
   for (const a of ctx.pendingArcs) wantE.add(a.edge);
   const inst = new Map<number, Float64Array>();
-  const edgeAt = new Map<number, { ents: SkpEntities; edge: SkpEdge }>();
+  const edgeAt = new Map<number, { ents: SkpEntities; edge: number }>();
   for (const ents of all) {
     if (wantI.size)
       for (const i of ents.instances) if (i.pid !== undefined && wantI.has(i.pid) && !inst.has(i.pid)) inst.set(i.pid, i.matrix);
-    if (wantE.size)
-      for (const e of ents.edges) if (e.pid !== undefined && wantE.has(e.pid) && !edgeAt.has(e.pid)) edgeAt.set(e.pid, { ents, edge: e });
+    if (wantE.size) {
+      const pids = ents.edges.pid;
+      for (let e = 0; e < pids.length; e++) {
+        const pid = pids[e]!;
+        // NaN(영구 번호 없음)은 wantE에 없다
+        if (wantE.has(pid) && !edgeAt.has(pid)) edgeAt.set(pid, { ents, edge: e });
+      }
+    }
   }
   const verts = new Map<number, Vec3>();
   if (wantV.size) {
@@ -933,8 +955,8 @@ function finish(ctx: Ctx, all: SkpEntities[], definitions: Map<number, SkpDefini
     edgeMiddle: (pid) => {
       const f = edgeAt.get(pid);
       if (!f) return undefined;
-      const a = pt(f.ents, f.edge.a);
-      const z = pt(f.ents, f.edge.b);
+      const a = pt(f.ents, f.ents.edges.a[f.edge]!);
+      const z = pt(f.ents, f.ents.edges.b[f.edge]!);
       return [(a[0] + z[0]) / 2, (a[1] + z[1]) / 2, (a[2] + z[2]) / 2];
     },
     instance: (pid) => inst.get(pid),
@@ -948,7 +970,8 @@ function finish(ctx: Ctx, all: SkpEntities[], definitions: Map<number, SkpDefini
   if (unresolved) note(ctx, `붙은 치수 점 ${unresolved}개의 대상을 찾지 못해 저장된 위치를 씁니다`);
   for (const a of ctx.pendingArcs) {
     const f = edgeAt.get(a.edge);
-    const c = f && f.edge.curve !== undefined ? f.ents.curves?.[f.edge.curve] : undefined;
+    const k = f ? f.ents.edges.curve[f.edge]! : -1;
+    const c = f && k >= 0 ? f.ents.curves?.[k] : undefined;
     if (c && a.make(c)) continue;
     const i = a.list.indexOf(a.dim);
     if (i >= 0) a.list.splice(i, 1);
@@ -1103,7 +1126,7 @@ export function readModelDat(bytes: Uint8Array, onProgress?: (fraction: number) 
       true,
     );
 
-  const empty = (): SkpEntities => ({ points: new Float64Array(0), faces: [], edges: [], instances: [] });
+  const empty = (): SkpEntities => ({ points: new Float64Array(0), faces: emptyFaces(), edges: emptyEdges(), instances: [] });
   const modelEnts = at(sections.get(TAG.MODEL_ENTITIES), TAG.ENTITIES);
   let rootEnts = empty();
   if (!modelEnts) note(ctx, '모형 요소(01f6)를 찾지 못했습니다');
