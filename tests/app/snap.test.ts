@@ -334,3 +334,38 @@ describe('추정: 수직·중심', () => {
     expect(chooseSnap({ frame: topFrame, x: 115, y: 100, pick: null, scene, centers: [[0, 0, 0]] }).kind).toBe('free');
   });
 });
+
+describe('추정: 교차점(코어 0.9.0 segmentIntersection)', () => {
+  // 위에서 본 평행 투영: 화면 (100 + X, 100 − Y)
+  it('두 선분이 3D에서 안쪽끼리 만나면 교차점(빨강 ×), 끝점·중간점보다는 뒤·수직·모서리 위보다는 앞', () => {
+    // 다른 그룹의 모서리처럼 따로 묶인 두 선분이 (10, 10, 0)에서 엇갈린다
+    const scene: SnapScene = { meshes: [], lines: [lines('a', [[-40, 10, 0, 100, 10, 0]]), lines('b', [[10, -30, 0, 10, 110, 0]])] };
+    const s = snapWith(scene, 113, 87);
+    expect(s.kind).toBe('intersection');
+    expect(s.label).toBe('교차점');
+    close(s.point, [10, 10, 0]);
+    expect(s.edge).toBeDefined();
+    expect(s.other).toBeDefined();
+    // 시작점이 있어도(수직 발 후보가 있어도) 교차점이 앞선다
+    expect(snapWith(scene, 113, 87, { from: [-20, -20, 0] }).kind).toBe('intersection');
+    // 반경 밖이면 모서리 위
+    expect(snapWith(scene, 150, 90).kind).toBe('onEdge');
+  });
+
+  it('화면에서만 엇갈리는(깊이가 다른) 선분은 교차점이 아니다', () => {
+    const scene: SnapScene = { meshes: [], lines: [lines('a', [[-40, 10, 0, 100, 10, 0]]), lines('b', [[10, -30, 25, 10, 110, 25]])] };
+    expect(snapWith(scene, 113, 87).kind).not.toBe('intersection');
+  });
+
+  it('끝에서 만나는 꺾인 곳은 끝점이 맡는다', () => {
+    const scene: SnapScene = { meshes: [], lines: [lines('a', [[0, 0, 0, 60, 0, 0]]), lines('b', [[0, 0, 0, 0, 60, 0]])] };
+    expect(snapWith(scene, 102, 98).kind).toBe('endpoint');
+  });
+
+  it('보조선(점선 선분 묶음)과 모서리의 교차도 잡는다 — 묶음 origin을 더한 세계 좌표', () => {
+    const scene: SnapScene = { meshes: [], lines: [lines('edge', [[-50, -20, 0, 110, -20, 0]]), lines('guide', [[0, -60, 0, 0, 40, 0]], [5, 0, 0])] };
+    const s = snapWith(scene, 106, 121);
+    expect(s.kind).toBe('intersection');
+    close(s.point, [5, -20, 0]);
+  });
+});

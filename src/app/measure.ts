@@ -874,7 +874,7 @@ export class MeasureTool {
     this.g.append(svgEl('circle', { class: 'measure-point', cx: s[0], cy: s[1], r: 3.5, fill: 'currentColor', stroke: '#ffffff', 'stroke-width': 1 }));
   }
 
-  /** 추정 표식: 끝점 초록 원, 중간점 청록 원, 중심 초록 원과 십자, 수직 자홍 직각 표, 모서리 위 빨강 사각형, 면 위 파랑 마름모, 축 위 축 색 작은 사각형 */
+  /** 추정 표식: 끝점 초록 원, 중간점 청록 원, 중심 초록 원과 십자, 교차점 빨강 ×, 수직 자홍 직각 표, 모서리 위 빨강 사각형, 면 위 파랑 마름모, 축 위 축 색 작은 사각형 */
   private marker(f: ViewFrame, snap: Snap): void {
     const s = screenPoint(f, snap.point, 20);
     if (!s) return;
@@ -887,6 +887,11 @@ export class MeasureTool {
       el = svgEl('g', { class: base.class, 'data-kind': snap.kind });
       el.append(svgEl('circle', { cx: x, cy: y, r: 6, fill: 'none', stroke: '#ffffff', 'stroke-width': 3 }), svgEl('circle', { cx: x, cy: y, r: 6, fill: 'none', stroke: color, 'stroke-width': 1.75 }));
       el.append(svgEl('path', { d: `M${x - 3.5},${y}h7M${x},${y - 3.5}v7`, stroke: color, 'stroke-width': 1.5 }));
+    } else if (snap.kind === 'intersection') {
+      // 교차점: 흰 테두리를 두른 빨강 ×(SketchUp 교차점 표식)
+      const d = `M${x - 5},${y - 5}L${x + 5},${y + 5}M${x + 5},${y - 5}L${x - 5},${y + 5}`;
+      el = svgEl('g', { class: base.class, 'data-kind': snap.kind });
+      el.append(svgEl('path', { d, stroke: '#ffffff', 'stroke-width': 4.5, 'stroke-linecap': 'round' }), svgEl('path', { d, stroke: color, 'stroke-width': 2.25, 'stroke-linecap': 'round' }));
     } else if (snap.kind === 'perpendicular') {
       // 직각 표(ㄴ 모양)
       el = svgEl('path', { class: base.class, 'data-kind': snap.kind, d: `M${x - 6},${y - 6}v12h12`, fill: 'none', stroke: color, 'stroke-width': 2.5, 'stroke-linejoin': 'round' });
