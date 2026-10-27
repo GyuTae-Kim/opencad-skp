@@ -531,6 +531,11 @@ describe('측정 도구: 추론 잠금(Shift·화살표·단추)과 나란함', 
     const rubber = r.q('line.measure-rubber.measure-parallel');
     expect(rubber?.getAttribute('stroke')).toBe('#c800c8');
     expect(r.q('.measure-parallel-ref')).not.toBeNull();
+    // 커서가 나란한 선에서 2° 벗어나 선 위 가장 가까운 점까지는 50·cos 2° = 49.97 mm — 보인 값은 반올림이라 SketchUp처럼 "~"
+    expect(r.tip()).toBe('모서리와 나란히 · ~ 50 mm');
+    // 나란한 선 바로 위(45°)를 가리키면 정확히 50 mm
+    const [ex, ey] = at(45, 50);
+    r.move(ex, ey);
     expect(r.tip()).toBe('모서리와 나란히 · 50 mm');
     expect(r.key('ArrowDown')).toBe(true);
     expect(r.tool.inferenceLock).toMatchObject({ kind: 'parallel', source: 'key' });
