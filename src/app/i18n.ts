@@ -1,5 +1,6 @@
 import { createLanguageMenu } from 'opencad-site-kit/i18n/language-menu';
-import { VIEW_LABELS } from 'opencad-viewer3d';
+// 코어 입구가 다시 내보내는 것과 같은 객체(작은 모듈 — 첫 화면에 코어 전체를 넣지 않는다, core.ts)
+import { VIEW_LABELS } from 'opencad-viewer3d/camera';
 import { CUBE_FACES } from 'opencad-viewer3d/viewcube';
 /** Localize only presentation DOM. CAD data, input values and command keys stay intact. */
 import { currentLanguage, languages, languageUrl, metadataForLanguage, registerCatalog, sourceMessage, translate } from '../../site/i18n-core.mjs';

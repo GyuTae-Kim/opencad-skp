@@ -4,7 +4,6 @@
  * meta가 비었거나 옛 꼴이어도 장면(그물 이름·묶음)에서 최소한의 목록을 만든다.
  */
 import type { IndexRange, Pick3d, RangeSelection, Scene3d, SectionPlane } from 'opencad-viewer3d';
-import { MAX_SECTION_PLANES } from 'opencad-viewer3d/section';
 import type { SkpImages } from '../images';
 import type {
   SkpAnnotationItems,
@@ -51,6 +50,12 @@ import {
 } from './tree';
 
 export type PanelTab = 'tags' | 'outline' | 'entity' | 'info';
+
+/**
+ * 코어가 한 번에 자르는 단면 수(코어 section.ts MAX_SECTION_PLANES와 같은 값 — 시험이 견준다).
+ * 코어 모듈은 문서를 열 때 나눠 받으므로(core.ts) 첫 화면 묶음에 단면 계산을 넣지 않으려고 값을 둔다
+ */
+export const MAX_SECTION_PLANES = 6;
 
 /** 주석 묶음 종류(meta.annotationItems의 칸) */
 export type AnnotationKind = keyof SkpAnnotationItems;

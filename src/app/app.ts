@@ -9,18 +9,10 @@
  * - 패널 가장자리를 끌어 폭(좁은 화면은 시트 높이)을 바꾼다. 좁은 화면에서 시트를 열고 닫아도 확대해 둔 보기는 지킨다.
  * - 자동 확인용으로 window.opencadApp에 상태를 둔다.
  */
-import {
-  VIEW_LABELS,
-  Viewer3d,
-  type Pick3d,
-  type IndexRange,
-  type PickEvent,
-  type Projection,
-  type RenderMode,
-  type SectionAxis,
-  type ViewName,
-} from 'opencad-viewer3d';
-import { lerpCamera, type CameraState, type ViewFrame } from 'opencad-viewer3d/camera';
+// 코어 입구(Viewer3d — 그리기·고르기)는 문서를 열 때 나눠 받는다(core.ts). 여기서는 타입과 작은 모듈만 가져온다
+import type { Pick3d, IndexRange, PickEvent, Projection, RenderMode, SectionAxis, ViewName, Viewer3d } from 'opencad-viewer3d';
+import { VIEW_LABELS, lerpCamera, type CameraState, type ViewFrame } from 'opencad-viewer3d/camera';
+import { loadViewerCore } from './core';
 import { dragStartPx } from 'opencad-viewer3d/pointer';
 import { ParseClient } from './client';
 import { AnnotationLabels, occludedBy } from './annotations';
@@ -1004,6 +996,8 @@ export class SkpViewerApp implements PanelHost {
     // 앞 파일을 아직 해석 중이면 멈추고(동기 해석이라 기다리면 늦어진다) 새 파일을 읽는다
     if (this.parsingSeq) this.client.cancel();
     this.parsingSeq = seq;
+    // 3D 뷰어 코어를 워커 해석과 함께 받기 시작한다(첫 문서만 — 실패는 아래 ensureViewer가 알린다)
+    if (!this.viewer) void loadViewerCore().catch(() => undefined);
     try {
       const res = await this.client.open(
         name,
@@ -1034,6 +1028,8 @@ export class SkpViewerApp implements PanelHost {
       this.setBusy(name, isBigScene(res) ? 0 : 0.99, '화면에 올리는 중');
       await new Promise<void>((r) => requestAnimationFrame(() => setTimeout(r, 0)));
       if (seq !== this.openSeq) return false;
+      // 코어를 아직 못 받았으면 기다린다(받지 못하면 '3D 보기를 열 수 없습니다' 알림, 열려 있던 문서는 그대로)
+      if (!(await this.ensureViewer()) || seq !== this.openSeq) return false;
       const doc = createDoc(name, size, res, { makeUrl: (b, mime) => URL.createObjectURL(new Blob([b as BlobPart], { type: mime })) });
       const uploaded = this.setDoc(doc, (done, total) => {
         if (seq === this.openSeq) this.setBusy(name, total ? done / total : 1, `화면에 올리는 중 · 묶음 ${fmtCount(done)}/${fmtCount(total)}`);
@@ -1059,7 +1055,8 @@ export class SkpViewerApp implements PanelHost {
    * 코어의 나눠 올리기(프레임마다 8 ms)로 올리고 progress(올린 묶음, 전체)를 알린다. 올리기가 끝나면 풀리는 약속을 돌려준다
    */
   private setDoc(d: SkpDoc, progress?: (done: number, total: number) => void): Promise<void> {
-    const v = this.ensureViewer();
+    // 뷰어는 openBuffer가 먼저 만든다(ensureViewer — 코어를 나눠 받는다)
+    const v = this.viewer;
     if (!v) {
       revokeImages(d);
       return Promise.resolve();
@@ -1178,9 +1175,13 @@ export class SkpViewerApp implements PanelHost {
     }
   }
 
-  private ensureViewer(): Viewer3d | null {
-    if (this.viewer) return this.viewer;
+  /** 뷰어를 한 번 만든다(코어 입구를 처음에 받는다). 받지 못했거나 WebGL2를 쓸 수 없으면 알리고 false */
+  private async ensureViewer(): Promise<boolean> {
+    if (this.viewer) return true;
     try {
+      const { Viewer3d } = await loadViewerCore();
+      // 기다리는 사이 다른 열기가 먼저 만들었으면 그것을 쓴다
+      if (this.viewer) return true;
       const v = new Viewer3d(this.els.viewHost, {
         theme: viewerTheme(this.theme, this.backdrop),
         projection: this.projection,
@@ -1227,10 +1228,10 @@ export class SkpViewerApp implements PanelHost {
           this.vcb.setLive(len === null || !d ? '' : formatLength(len * mmPerSceneUnit(d.scene.units), d.units));
         },
       });
-      return v;
+      return true;
     } catch (e) {
       this.showNotice('error', '3D 보기를 열 수 없습니다', errorText(e));
-      return null;
+      return false;
     }
   }
 
