@@ -34,6 +34,7 @@ export class Vcb {
   readonly input: HTMLInputElement;
   private readonly msg: HTMLElement;
   private readonly clearBtn: HTMLButtonElement;
+  private readonly guideCount: HTMLElement;
   private units: UnitsDisplay = DEFAULT_UNITS;
   private live = '';
   private editingValue = false;
@@ -54,7 +55,10 @@ export class Vcb {
     });
     this.msg = h('span', { id: `${id}-msg`, class: 'vcb-msg', role: 'status', 'aria-live': 'polite', hidden: true });
     const go = h('button', { class: 'vcb-btn', type: 'submit', title: '길이 넣기', 'aria-label': '길이 넣기', html: icon('enter', 16) });
-    this.clearBtn = h('button', { class: 'vcb-btn vcb-clear', type: 'button', hidden: true, html: icon('close', 14) });
+    // 안내점 지우기: 수를 함께 보여 측정 끝내기(✕)와 헷갈리지 않게
+    this.guideCount = h('span', { class: 'vcb-gn' });
+    this.clearBtn = h('button', { class: 'vcb-btn vcb-clear', type: 'button', hidden: true }, this.guideCount);
+    this.clearBtn.insertAdjacentHTML('beforeend', icon('close', 12));
     this.clearBtn.addEventListener('click', () => {
       this.opts.onClearGuides();
       this.setGuides(0);
@@ -125,6 +129,7 @@ export class Vcb {
   /** 안내점 수(있으면 지우기 단추) */
   setGuides(n: number): void {
     this.clearBtn.hidden = !(n > 0);
+    this.guideCount.textContent = n > 0 ? `안내점 ${n}` : '';
     const t = `안내점 ${n}개 지우기`;
     this.clearBtn.title = t;
     this.clearBtn.setAttribute('aria-label', t);

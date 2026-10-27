@@ -1755,6 +1755,15 @@ button.scene-card.sel {
   display: none;
 }
 
+/* 안내점 지우기: "안내점 3 ✕"(측정 끝내기 ✕와 헷갈리지 않게 수를 함께) */
+.vcb-clear {
+  width: auto;
+  gap: 4px;
+  padding: 0 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 /* 알림(읽지 못한 길이 등): 칸 위에 말풍선 */
 .vcb-msg {
   position: absolute;
@@ -1805,6 +1814,10 @@ button.scene-card.sel {
   .vcb-btn {
     width: 38px;
     height: 38px;
+  }
+
+  .vcb-clear {
+    width: auto;
   }
 }
 

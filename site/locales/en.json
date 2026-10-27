@@ -601,6 +601,7 @@
   "아직 읽지 않은 칸 {0}를 가리킵니다": "Pointing to an unread cell {0}",
   "안개": "Fog",
   "안내점": "Guide point",
+  "안내점 {0}": "Guide points {0}",
   "안내점 {0}개 지우기": "Clear {0} guide points",
   "안쪽 항목을 고르려면 3D에서 두 번 누르거나 목록에서 › 단추로 펼치세요.": "To select an inner item, double-click it in the 3D view or expand the list using the › button.",
   "안쪽이 더 있지만 노드가 많아 목록에 넣지 않았습니다": "There are more inner items, but they were omitted from the list due to a high number of nodes.",
