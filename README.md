@@ -140,8 +140,8 @@ SketchUp 형식은 공개 명세가 없습니다. 처음에는 인터넷에 공�
 휴대폰의 "홈 화면에 추가"로 OpenCAD 아이콘과 주소 막대 없는 앱 창(standalone)으로 엽니다. 그 창에서는 제목 막대를 노치·상태 표시줄 아래로 내립니다.
 제목 막대·상태 막대를 아래로 끌어도 당겨서 새로 고침되지 않고, 패널·시트 목록은 그대로 스크롤됩니다.
 
-**오프라인·새 버전·파일 받기(2026-10-21)**: 배포 빌드는 서비스 워커(`dist/sw.js` — `tools/sw-plugin.mjs`가 빌드 끝에 `tools/sw-template.js`에
-앱 파일 목록과 그 내용 해시(판)를 채워 만든다)를 둡니다. 설치할 때 앱 쪽(뿌리·언어 쪽)·스크립트·스타일·아이콘·앱 정보를 담아 오프라인으로도 열리고,
+**오프라인·새 버전·파일 받기(2026-10-21)**: 배포 빌드는 서비스 워커(`dist/sw.js` — 공용 사이트 도구가 빌드 끝에 `tools/sw-template.js`에
+앱 파일 목록과 그 내용 해시(판)를 채워 만든다, 설정은 `tools/site.mjs`)를 둡니다. 설치할 때 앱 쪽(뿌리·언어 쪽)·스크립트·스타일·아이콘·앱 정보를 담아 오프라인으로도 열리고,
 쪽(HTML)은 네트워크를 먼저 봐서(안 되면 캐시) 새 배포가 막히지 않습니다. 캐시를 먼저 쓰는 것은 미리 담은 목록과 빌드 결과(`assets/`)뿐이고,
 그 밖(`?open=`으로 받는 같은 출처 모형 파일 등)과 앱 범위 밖 주소는 가로채지 않아 바뀐 파일이 옛것으로 열리거나 연 모형이 캐시에 쌓이지 않습니다. 새 판은 설치만 하고 기다리다가 "새 버전이 있습니다" 알림에서 새로 고침을 고르면 바뀝니다(처음 설치는 바로).
 앱 정보에 Android 공유 받기(`share_target`: POST `…/share-target` — 워커가 파일을 이 브라우저의 최근 문서 IndexedDB에 넣고 `?shared=<id>`로 엶,
@@ -281,6 +281,8 @@ const scene = skpToScene(bytes, { textures: images.materials }); // Viewer3d.set
 | `src/materials.ts`, `src/scene.ts`, `src/solid.ts` | 재질(색·무늬)과 `Scene3d` 만들기(면은 earcut 삼각화, 무늬 좌표, 태그·재질 통계, outline), 닫힌 입체·부피 가리기 |
 | `src/projection.ts`, `src/colorize.ts` | 면 무늬 투영(평면 틀·행렬·원근 q), 색 바꾼 무늬의 화소 색 바꾸기 |
 | `tests/` | 해석기 시험(`tests/build.ts`는 시험용 바이트 만들기, `tests/mfcwrite.ts`는 2020 이하 꼴 바이트 만들기), `tests/app/`은 앱 순수 로직 시험 |
+| `tools/site.mjs`, `tools/sw-template.js` | 이 앱의 사이트 설정(앱 정보 원본·미리 담을 파일·서비스 워커 판 이름 짓기 — `vite.config.ts`와 시험이 같이 씀)과 오프라인 서비스 워커 본문. 언어 페이지·검색 정보·사이트맵·언어별 앱 정보·`dist/sw.js`는 [공용 사이트 도구](https://github.com/GyuTae-Kim/opencad-site-kit)의 Vite 플러그인이 이 설정으로 만든다 |
+| `site/i18n-core.mjs`, `site/i18n.mjs`, `site/locales/` | 공용 번역기에 이 앱의 사이트 정보(`site/metadata.json`)를 넘기고 사전을 넣는다 |
 | `scripts/sweep/` | 로컬 표본 폴더의 실제 파일을 한꺼번에 해석하고 두 결과를 견주는 개발 도구(아래 "실제 파일 훑기") |
 | `docs/formats/skp.md` | 형식 조사 기록 |
 
@@ -302,6 +304,21 @@ npm run preview
 0.7.0에서 쓰던 길이 0 윤곽선을 달아 늘 숨기는 꼼수(`addEdgeStubs`)는 0.7.1로 올리며 없앴습니다.
 측정 도구의 누르기 문턱은 코어의 `dragStartPx`(마우스·펜 4, 터치 10화소)를, 추정의 가운데·둘레 고르기는 코어 마우스 허용 거리(6화소)를 그대로 씁니다(터치 추정 반경 22화소가 코어 터치 허용 거리 14화소를 덮습니다).
 의존을 올릴 때는 `npm install "opencad-viewer3d@github:GyuTae-Kim/opencad-viewer3d#<태그>"`로 받아야 잠금 파일의 커밋이 바뀝니다.
+
+**공용 사이트 도구**: 다섯 언어 페이지·검색 정보·사이트맵·내용 수정일·언어별 앱 정보·서비스 워커 빌드, 공용 번역기, 언어 메뉴, 서비스 워커 등록·새 판 알림,
+방문 통계, 휴대폰 성능 비교 명령은 다른 OpenCAD 앱과 함께 쓰는 [opencad-site-kit](https://github.com/GyuTae-Kim/opencad-site-kit)
+(`github:GyuTae-Kim/opencad-site-kit#v0.1.3`, 잠금 커밋 `cb6d7e7`, 빌드 때만 써서 `devDependencies`)에 있습니다.
+이 앱에만 있는 값은 `tools/site.mjs`(앱 정보 원본, 미리 담을 파일, 서비스 워커 판 이름 짓기)와 `tools/sw-template.js`(서비스 워커 본문 — 주석까지 sw.js에 그대로 들어갑니다)에 둡니다.
+`check:seo`·`check:i18n`·`test:seo`·`update:content-dates`와 휴대폰 검사 워크플로의 성능 명령(`serve-performance`·`performance-summary`)은 도구의 `opencad-site` 명령입니다
+(워크플로는 기준 빌드 뒤 이 커밋으로 돌아와 `npm ci`를 다시 해 명령을 찾습니다). 도구 판을 올릴 때는 빌드 결과를 견줍니다.
+
+```bash
+npx vite build && cp -R dist .runtime/dist-before                                        # 올리기 전
+npm install -D "opencad-site-kit@github:GyuTae-Kim/opencad-site-kit#<태그>"               # package.json·잠금 파일을 함께
+npx vite build && npx opencad-site compare-dist .runtime/dist-before dist                 # 바뀐 파일과 처음 다른 곳
+```
+
+도구의 판 설명에 적힌 것 밖의 차이가 없으면, 스크립트가 바뀐 경우 내용 수정일을 갱신하고(아래 "검색·공유 메타데이터와 콘텐츠 수정일") 빌드·시험을 돌립니다.
 
 ### 실제 파일 훑기
 

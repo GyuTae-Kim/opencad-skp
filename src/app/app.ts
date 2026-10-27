@@ -28,7 +28,7 @@ import { ExportDialog, type ExportContext } from './exporter';
 import { edgeGeometry } from './faces';
 import { copyText } from './clipboard';
 import { HISTORY_LIMIT, HISTORY_SETTLE_MS, ViewHistory } from './history';
-import { beginOpen, showAnalyticsSettings, trackExport, type OpenAttempt } from './analytics';
+import { beginOpen, showAnalyticsSettings, trackExport, type OpenAttempt } from 'opencad-site-kit/analytics';
 import { MeasureTool, type MeasureMode, type MeasureToolResult } from './measure';
 import {
   baseFovOf,
