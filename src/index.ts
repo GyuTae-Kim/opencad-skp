@@ -72,9 +72,11 @@ export interface SkpOptions {
   maxUvVertices?: number;
   /**
    * 미리 푼 꾸러미 항목(이름 → 풀린 바이트, 지금은 'model.dat'만 본다). 워커가 브라우저 내장 풀기로 먼저 푼 것을 넘기면
-   * 해석기가 다시 풀지 않는다(길이가 목록의 원래 크기와 같을 때만 — 다르면 예전처럼 직접 푼다). 2021+ 파일만
+   * 해석기가 다시 풀지 않는다(길이가 목록의 원래 크기와 같을 때만 — 다르면 예전처럼 직접 푼다). 2021+ 파일만.
+   * 해석기는 'model.dat' 항목을 꺼낸 뒤 이 Map에서 지운다: 모형 요소를 다 읽으면 풀린 바이트(큰 모형은 수백 MB)가
+   * 장면을 만드는 동안 남지 않게 한다(부르는 쪽도 그 바이트를 따로 붙들지 않아야 놓인다)
    */
-  inflated?: ReadonlyMap<string, Uint8Array>;
+  inflated?: Map<string, Uint8Array>;
 }
 
 /** 무늬를 입힐 재질 수 기본 한도 */
@@ -333,6 +335,9 @@ function readZipPackage(
     for (const [k, v] of textureImages(materials, opts, warnings, folders)) texImages.set(k, v);
     progress(0.2, 'model.dat 푸는 중');
     const unpacking = (f: number): void => progress(0.2 + 0.19 * f, 'model.dat 푸는 중');
+    // 미리 푼 바이트는 꺼내고 Map에서 지운다(쓰지 않는 길이여도) — 이 함수가 끝나면 장면을 만드는 동안 붙드는 곳이 없다
+    const pre = opts.inflated?.get('model.dat');
+    opts.inflated?.delete('model.dat');
     let dat: Uint8Array;
     if (found.salvaged || modelItem.truncated) {
       const part = readZipItemPartial(bytes, modelItem, unpacking);
@@ -342,7 +347,6 @@ function readZipPackage(
         warnings.push('model.dat가 잘렸거나 압축이 깨져 앞부분만 읽었습니다 — 일부 형상이 빠졌을 수 있습니다');
       }
     } else {
-      const pre = opts.inflated?.get('model.dat');
       try {
         dat = pre && pre.length === modelItem.size ? pre : readZipItem(bytes, modelItem, unpacking);
       } catch (e) {

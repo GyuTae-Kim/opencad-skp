@@ -244,8 +244,10 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
     }
   }
   const datBytes = inflated?.get('model.dat')?.length;
-  // 진단만 하려고 붙들면 그 버퍼가 끝까지 살아 메모리를 잘못 잰다 — 약한 참조로
+  // 진단만 하려고 붙들면 그 버퍼가 끝까지 살아 메모리를 잘못 잰다 — 약한 참조로. 약한 참조를 만든 작업(job)이 끝날 때까지는
+  // 대상이 살아 있으므로(WeakRef KeepDuringJob) 해석 전에 한 번 쉰다 — 쉬지 않으면 model.dat가 장면 단계 끝까지 남아 보인다
   const datBuffer = mem && inflated ? new WeakRef(inflated.get('model.dat')!.buffer) : undefined;
+  if (datBuffer) await new Promise((r) => setTimeout(r, 0));
 
   // 워커: 그림을 먼저 꺼낸다(2020 이하는 여기서 모형을 다 읽고 해석기가 이어 쓴다). 그림은 없어도 된다
   meter.enter('images');

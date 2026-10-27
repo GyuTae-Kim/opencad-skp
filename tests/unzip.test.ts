@@ -64,12 +64,16 @@ describe('내장 풀기로 model.dat 미리 풀기', () => {
     const pre = (await preinflateSkp(bytes, 1))!;
     const a = skpToScene(bytes, { outline: true });
     const b = skpToScene(bytes, { outline: true, inflated: pre });
+    // 해석기는 꺼내 쓴 항목을 Map에서 지운다(장면을 만드는 동안 풀린 바이트를 붙들지 않게)
+    expect(pre.has('model.dat')).toBe(false);
     expect(b.meshes.map((m) => [...m.positions].length)).toEqual(a.meshes.map((m) => [...m.positions].length));
     expect(b.meta?.faces).toBe(400);
     expect(b.meta?.faces).toBe(a.meta?.faces);
     expect(b.lines.map((l) => l.positions.length)).toEqual(a.lines.map((l) => l.positions.length));
     // 길이가 맞지 않는 바이트(잘못 넘김)는 쓰지 않는다
-    const wrong = skpToScene(bytes, { inflated: new Map([['model.dat', new Uint8Array(10)]]) });
+    const bad = new Map([['model.dat', new Uint8Array(10)]]);
+    const wrong = skpToScene(bytes, { inflated: bad });
+    expect(bad.size).toBe(0);
     expect(wrong.meta?.faces).toBe(400);
     expect(wrong.warnings ?? []).toEqual(a.warnings ?? []);
   });

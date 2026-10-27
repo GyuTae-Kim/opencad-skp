@@ -34,7 +34,8 @@ async function open(req: ParseRequest): Promise<ParseResult> {
   const t0 = performance.now();
   const bytes = new Uint8Array(req.bytes);
   const name = req.name.replace(/^.*[\\/]/, '');
-  // 큰 2021+ 모형의 model.dat는 브라우저 내장 풀기로 먼저 푼다(직접 푸는 것보다 몇 배 빠르다 — 안 되면 해석기가 직접 푼다)
+  // 큰 2021+ 모형의 model.dat는 브라우저 내장 풀기로 먼저 푼다(직접 푸는 것보다 몇 배 빠르다 — 안 되면 해석기가 직접 푼다).
+  // 해석기가 모형 요소를 읽고 나면 이 Map에서 그 항목을 지우므로, 여기서 풀린 바이트를 따로 붙들지 않는다
   let inflated: Map<string, Uint8Array> | undefined;
   if (bytes.length >= NATIVE_INFLATE_MIN_BYTES) {
     progress(0.01, 'model.dat 푸는 중');
