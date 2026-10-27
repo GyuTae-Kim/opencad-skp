@@ -20,6 +20,10 @@ import {
   pointAlong,
   type LiveKind,
   joinTip,
+  LOCK_HINTS,
+  LOCK_KEYS_HINT,
+  lockHint,
+  lockName,
   measureHint,
   planeAngle,
   protractorPlane,
@@ -131,6 +135,8 @@ interface Rig {
   hints: (string | null)[];
   lives: (number | null)[];
   liveKinds: LiveKind[];
+  /** onLock마다 잠근 방향 이름(각도기 화살표 평면은 plane-축) */
+  locks: (string | null)[];
   setCamera(c: CameraState): void;
   ptr(type: string, x: number, y: number, o?: { id?: number; button?: number; buttons?: number; pointerType?: string; shift?: boolean }): void;
   click(x: number, y: number, o?: { pointerType?: string; id?: number; shift?: boolean }): void;
@@ -179,7 +185,8 @@ function rig(scene: Pick<Scene3d, 'meshes' | 'lines' | 'units'>, cam: CameraStat
   const hints: (string | null)[] = [];
   const lives: (number | null)[] = [];
   const liveKinds: LiveKind[] = [];
-  const tool = new MeasureTool(viewer, overlay, {
+  const locks: (string | null)[] = [];
+  const tool: MeasureTool = new MeasureTool(viewer, overlay, {
     getScene: () => scene,
     getUnits: () => units,
     onResult: (r) => results.push(r),
@@ -188,6 +195,7 @@ function rig(scene: Pick<Scene3d, 'meshes' | 'lines' | 'units'>, cam: CameraStat
       lives.push(l);
       liveKinds.push(k);
     },
+    onLock: () => locks.push(lockName(tool.inferenceLock) ?? (tool.planeAxis ? `plane-${tool.planeAxis}` : null)),
   });
   const ptr: Rig['ptr'] = (type, x, y, o = {}) => {
     const e = new MouseEvent(type, { clientX: x, clientY: y, button: o.button ?? 0, buttons: o.buttons ?? 0, shiftKey: !!o.shift, bubbles: true });
@@ -203,6 +211,7 @@ function rig(scene: Pick<Scene3d, 'meshes' | 'lines' | 'units'>, cam: CameraStat
     hints,
     lives,
     liveKinds,
+    locks,
     setCamera(c) {
       camera = c;
       for (const cb of camCbs) cb(c);
@@ -423,6 +432,198 @@ describe('측정 도구: 각도기', () => {
     // 중심을 찍은 뒤에는 Shift를 떼도 평면이 그대로
     r.move(post[0] + 30, post[1]);
     expect(r.q('.measure-protractor')?.getAttribute('data-axis')).toBe('z');
+  });
+});
+
+describe('측정 도구: 추론 잠금(Shift·화살표·단추)과 나란함', () => {
+  const at = (deg: number, r: number): [number, number] => [100 + r * Math.cos((deg * Math.PI) / 180), 100 - r * Math.sin((deg * Math.PI) / 180)];
+  const near = (a: readonly number[], b: readonly number[]): void => a.forEach((v, i) => expect(v).toBeCloseTo(b[i]!, 6));
+
+  it('Shift: 지금 축 추론을 잠그고, 잠근 동안 축 밖을 가리키거나 찍어도 그 축 위, 떼면 풀린다', () => {
+    const r = rig({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 10, 0, 0]])] });
+    r.tool.setMode('tape');
+    // 시작점 전에는 잠글 방향이 없다
+    expect(r.key('Shift')).toBe(true);
+    expect(r.tool.inferenceLock).toBeNull();
+    r.key('Shift', 'keyup');
+    r.click(101, 100);
+    r.move(100, 40);
+    expect(r.tip()).toBe('녹색 축에 · 60 mm');
+    expect(r.key('Shift')).toBe(true);
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'y', source: 'shift' });
+    expect(r.locks.at(-1)).toBe('y');
+    // 축 밖(세계 60, 60)을 가리켜도 녹색 축 위 — 굵은 실선, 표식에 고리
+    r.move(160, 40, { shift: true });
+    const rubber = r.q('line.measure-rubber');
+    expect(rubber?.getAttribute('data-locked')).toBe('axis');
+    expect(rubber?.getAttribute('stroke')).toBe('#1a9e33');
+    expect(rubber?.getAttribute('stroke-dasharray')).toBeNull();
+    expect(r.q('.measure-lock-ring')).not.toBeNull();
+    expect(r.tip()).toBe('녹색 축에 · 잠금 · 60 mm');
+    // 떼면 풀린다
+    r.key('Shift', 'keyup');
+    expect(r.tool.inferenceLock).toBeNull();
+    expect(r.locks.at(-1)).toBeNull();
+    r.move(160, 40);
+    expect(r.q('.measure-lock-ring')).toBeNull();
+    // 이동의 shiftKey로도 뗀 것을 안다(keyup을 놓쳤을 때)
+    r.move(100, 40);
+    r.key('Shift');
+    expect(r.tool.inferenceLock?.axis).toBe('y');
+    r.move(160, 40);
+    expect(r.tool.inferenceLock).toBeNull();
+    // 다시 잠그고 축 밖을 찍으면 축 위 점, 찍으면 잠금이 풀린다
+    r.move(100, 40);
+    r.key('Shift', 'keyup');
+    r.key('Shift');
+    r.move(170, 30, { shift: true });
+    r.click(170, 30, { shift: true });
+    const res = r.results.at(-1);
+    expect(res?.kind).toBe('tape');
+    if (res?.kind !== 'tape') return;
+    near(res.b, [0, 70, 0]);
+    expect(res.distance).toBeCloseTo(70, 6);
+    expect(r.tool.inferenceLock).toBeNull();
+  });
+
+  it('화살표: → 빨강 · ↑ 파랑(같은 키를 다시 누르면 풀기), 잠근 축 밖을 찍어도 축 위, 끝점을 가리키면 그 높이', () => {
+    const r = rig({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 10, 0, 0]]), lines('h', [[50, 50, 30, 60, 50, 30]])] });
+    r.tool.setMode('tape');
+    // 줄자 시작점 전에는 화살표를 받지 않는다(앱이 다른 데 쓴다)
+    expect(r.key('ArrowUp')).toBe(false);
+    r.click(101, 100);
+    expect(r.key('ArrowRight')).toBe(true);
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'x', source: 'key' });
+    expect(r.key('ArrowRight')).toBe(true);
+    expect(r.tool.inferenceLock).toBeNull();
+    expect(r.key('ArrowUp')).toBe(true);
+    expect(r.key('ArrowRight')).toBe(true);
+    expect(r.tool.inferenceLock?.axis).toBe('x');
+    // 축 밖(세계 40, 40)을 찍어도 빨강 축 위
+    r.click(140, 60);
+    let res = r.results.at(-1);
+    if (res?.kind !== 'tape') throw new Error('tape');
+    near(res.b, [40, 0, 0]);
+    expect(r.tool.inferenceLock).toBeNull();
+    // 파랑 축을 잠그고 높이 30의 끝점을 가리키면 그 높이로(옮겨 온 점에서 가는 점선)
+    r.click(101, 100);
+    r.key('ArrowUp');
+    r.move(150, 50);
+    expect(r.tip()).toBe('파랑 축에 · 잠금 · 30 mm');
+    expect(r.q('.measure-lock-from')).not.toBeNull();
+    expect(r.q('.measure-lock-from-point')?.getAttribute('fill')).toBe('#00a000');
+    r.click(150, 50);
+    res = r.results.at(-1);
+    if (res?.kind !== 'tape') throw new Error('tape');
+    near(res.b, [0, 0, 30]);
+    expect(res.dz).toBeCloseTo(30, 6);
+  });
+
+  it('지나간 모서리와 나란하면 자홍 나란함, ↓로 잠그고 다시 누르면 풀기(커서 밑이 아니어도 지나간 모서리로)', () => {
+    const r = rig({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 10, 0, 0]]), lines('d', [[-90, -60, 0, -60, -30, 0]])] });
+    r.tool.setMode('tape');
+    r.click(101, 100);
+    // 45° 모서리를 지나간 뒤 시작점에서 그와 나란한 쪽으로
+    r.move(25, 145);
+    const [x, y] = at(47, 50);
+    r.move(x, y);
+    expect(r.q('.measure-snap-parallel')?.getAttribute('fill')).toBe('#c800c8');
+    const rubber = r.q('line.measure-rubber.measure-parallel');
+    expect(rubber?.getAttribute('stroke')).toBe('#c800c8');
+    expect(r.q('.measure-parallel-ref')).not.toBeNull();
+    expect(r.tip()).toBe('모서리와 나란히 · 50 mm');
+    expect(r.key('ArrowDown')).toBe(true);
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'parallel', source: 'key' });
+    expect(r.locks.at(-1)).toBe('parallel');
+    r.move(170, 60);
+    expect(r.q('line.measure-rubber')?.getAttribute('data-locked')).toBe('parallel');
+    expect(r.key('ArrowDown')).toBe(true);
+    expect(r.tool.inferenceLock).toBeNull();
+    // 커서 밑이 축 추론이어도 ↓는 앞서 지나간 모서리와 나란히
+    r.move(100, 160);
+    expect(r.key('ArrowDown')).toBe(true);
+    expect(r.tool.inferenceLock?.kind).toBe('parallel');
+    r.click(170, 60);
+    const res = r.results.at(-1);
+    if (res?.kind !== 'tape') throw new Error('tape');
+    near(res.b, [55, 55, 0]);
+  });
+
+  it('잠금 단추(손가락 기기): 방향을 잡는 동안만, 본 방향이 없으면 false, 축을 주면 그 축 — 탭한 점이 잠근 선 위로', () => {
+    const r = rig({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 10, 0, 0]])] });
+    r.tool.setMode('tape');
+    expect(r.tool.directing).toBe(false);
+    expect(r.tool.setInferenceLock(true)).toBe(false);
+    const tap = (x: number, y: number): void => {
+      r.ptr('pointerdown', x, y, { pointerType: 'touch', buttons: 1 });
+      r.ptr('pointerup', x, y, { pointerType: 'touch' });
+      r.overlay.paintNow();
+    };
+    tap(101, 100);
+    expect(r.tool.directing).toBe(true);
+    // 손가락은 커서가 없어 아직 본 방향 추론이 없다
+    expect(r.tool.setInferenceLock(true)).toBe(false);
+    expect(r.tool.inferenceLock).toBeNull();
+    expect(r.tool.setInferenceLock('x')).toBe(true);
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'x', source: 'button' });
+    tap(140, 60);
+    const res = r.results.at(-1);
+    if (res?.kind !== 'tape') throw new Error('tape');
+    near(res.b, [40, 0, 0]);
+    expect(r.tool.inferenceLock).toBeNull();
+    // 커서가 보기를 떠난 뒤 누른 단추는 방향을 잡는 동안 마지막으로 본 방향 추론
+    r.click(101, 100);
+    r.move(100, 40);
+    r.ptr('pointerleave', 0, 0);
+    r.overlay.paintNow();
+    expect(r.tool.setInferenceLock(true)).toBe(true);
+    expect(r.tool.inferenceLock?.axis).toBe('y');
+    expect(r.tool.setInferenceLock(false)).toBe(false);
+    expect(r.tool.inferenceLock).toBeNull();
+    // Esc로 점을 취소하면 잠금도 풀린다
+    r.tool.setInferenceLock('z');
+    expect(r.key('Escape')).toBe(true);
+    expect(r.tool.inferenceLock).toBeNull();
+    expect(r.locks.at(-1)).toBeNull();
+  });
+
+  it('각도기: 중심 전 →·←·↑는 각도기 평면을 그 축에 고정(다시 누르면 풀기, Esc가 먼저 푼다), 중심을 찍으면 그 평면', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('protractor');
+    expect(r.key('ArrowRight')).toBe(true);
+    expect(r.tool.planeAxis).toBe('x');
+    expect(r.locks.at(-1)).toBe('plane-x');
+    r.move(102, 103);
+    const disk = r.q('.measure-protractor');
+    expect(disk?.getAttribute('data-axis')).toBe('x');
+    expect(disk?.classList.contains('is-locked')).toBe(true);
+    expect(r.key('ArrowRight')).toBe(true);
+    expect(r.tool.planeAxis).toBeNull();
+    r.key('ArrowLeft');
+    expect(r.tool.planeAxis).toBe('y');
+    expect(r.key('Escape')).toBe(true);
+    expect(r.tool.planeAxis).toBeNull();
+    expect(r.tool.mode).toBe('protractor');
+    r.key('ArrowRight');
+    r.click(102, 103);
+    expect(r.tool.planeAxis).toBeNull();
+    r.move(150, 60);
+    expect(r.q('.measure-protractor')?.getAttribute('data-axis')).toBe('x');
+  });
+
+  it('잠금 안내 글: 방향을 잡는 동안 잠근 방향, 키보드 기기는 Shift·화살표, 각도기 중심 전 화살표 평면', () => {
+    expect(lockHint('tape', 1, null, null)).toBe(LOCK_KEYS_HINT);
+    expect(lockHint('tape', 1, null, null, true)).toBeNull();
+    expect(lockHint('tape', 1, 'x', null, true)).toBe('빨강 축으로 잠금');
+    expect(lockHint('tape', 0, 'x', null)).toBeNull();
+    expect(lockHint('protractor', 2, 'parallel', null)).toBe(LOCK_HINTS.parallel);
+    expect(lockHint('protractor', 0, null, 'z')).toBe('파랑 각도기로 고정');
+    expect(lockHint('protractor', 0, null, null)).toBeNull();
+    expect(lockHint(null, 1, 'x', null)).toBeNull();
+    expect(lockName({ kind: 'perpendicular', label: '면에 수직' })).toBe('facePerpendicular');
+    expect(lockName({ kind: 'perpendicular', label: '모서리에 수직' })).toBe('perpendicular');
+    expect(lockName({ kind: 'axis', axis: 'z', label: '파랑 축에' })).toBe('z');
+    expect(lockName(null)).toBeNull();
   });
 });
 

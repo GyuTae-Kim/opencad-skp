@@ -25,6 +25,11 @@
  *   커서(결과) 쪽으로 친 거리만큼 띄워 둔다(거리는 모서리에 수직으로 잰다). 결과는 시작점 → 안내점(안내선에 내린 발) 줄자 결과로 바꾼다.
  *   각도기에서 각도를 치면(applyAngle — 도, 경사 1:6) 중심을 지나 기준 방향에서 그 각도만큼 커서(잰 방향) 쪽으로 돈 안내선을 둔다(음수는 반대쪽).
  *   안내점·안내선은 모형에 넣지 않는 보기 전용 표시라 새 문서·clearGuides까지 남으며, 안내점은 끝점처럼, 안내선은 모서리 위처럼 붙는다.
+ * 추론 잠금(SketchUp "Locking inference"): 방향을 잡는 동안(줄자 끝점·각도기 기준 방향·잴 방향) Shift를 누르고 있으면 지금 커서 밑 방향 추론
+ *   (빨강·녹색·파랑 축, 모서리와 나란히, 시작점에서 내린 수직)을 잠그고 떼면 푼다. →·←·↑는 빨강·녹색·파랑 축, ↓는 모서리와 나란히·수직
+ *   (지금 커서 밑 것, 없으면 앞서 지나간 모서리와 나란히)을 잠그고 같은 키를 다시 누르면 푼다. 손가락 기기는 앱의 잠금 단추(setInferenceLock).
+ *   잠그면 그 선 위에만 찍고(다른 점을 가리키면 그 점을 선에 내린 자리 — 높이 옮겨 재기), 점을 찍거나 취소·지우기를 하면 풀린다.
+ *   각도기 중심을 찍기 전 →·←·↑는 각도기 평면을 그 축에 고정한다(빨강·녹색·파랑 각도기, 다시 누르면 풀기).
  * 그리기는 덧그림 층의 SVG 묶음(g.measure)과 DOM 라벨(div.measure-layer)로 하고, 숫자 글은 모형 단위(units.ts)로 쓴다.
  */
 import type { Viewer3d } from 'opencad-viewer3d';
@@ -39,19 +44,25 @@ import {
   AXIS_COLORS,
   AXIS_DIRS,
   CORE_PICK_TOLERANCE_PX,
+  FACE_PERPENDICULAR_LABEL,
   SNAP_COLORS,
   SNAP_RADIUS_PX,
   TOUCH_SNAP_RADIUS_PX,
+  axisInferenceLock,
   axisOf,
   chooseSnap,
   closestOnLine,
+  lockOf,
+  parallelInferenceLock,
   probeOffsets,
   rayPlane,
   type Axis,
   type AxisDirs,
   type GuideLine,
+  type InferenceLock,
   type Ray,
   type Snap,
+  type SnapKind,
 } from './snap';
 
 export type { GuideLine } from './snap';
@@ -101,6 +112,70 @@ export interface MeasureToolOptions {
    * 아니면 각도기 결과 각도(도). 없으면 null. 값이나 종류가 바뀔 때만 부른다
    */
   onLive?: (value: number | null, kind: LiveKind) => void;
+  /** 추론 잠금이나 화살표로 고정한 각도기 평면이 바뀌면(측정 띠 잠금 단추·잠금 안내를 맞춘다) */
+  onLock?: () => void;
+}
+
+/** 잠근 곳: Shift(떼면 풀린다)·화살표 키·앱 단추 */
+export type LockSource = 'shift' | 'key' | 'button';
+
+/** 지금 잠근 방향 추론 */
+export type MeasureLock = InferenceLock & { source: LockSource };
+
+/** 잠근 방향 이름(잠금 안내): 축 · 모서리와 나란히 · 모서리에 수직 · 면에 수직 */
+export type LockName = Axis | 'parallel' | 'perpendicular' | 'facePerpendicular';
+
+/** 잠근 방향 안내(상태 줄·측정 띠에서 measureHint 다음에 따로 보인다) */
+export const LOCK_HINTS: Readonly<Record<LockName, string>> = Object.freeze({
+  x: '빨강 축으로 잠금',
+  y: '녹색 축으로 잠금',
+  z: '파랑 축으로 잠금',
+  parallel: '모서리와 나란히 잠금',
+  perpendicular: '모서리에 수직으로 잠금',
+  facePerpendicular: '면에 수직으로 잠금',
+});
+
+/** 화살표로 고정한 각도기 평면(그 축이 법선 — SketchUp의 빨강·녹색·파랑 각도기) */
+export const PLANE_HINTS: Readonly<Record<Axis, string>> = Object.freeze({ x: '빨강 각도기로 고정', y: '녹색 각도기로 고정', z: '파랑 각도기로 고정' });
+
+/** 키보드 기기에서 방향을 잡는 동안 잠그는 법 */
+export const LOCK_KEYS_HINT = 'Shift·화살표로 방향 잠금';
+
+/** 툴팁에서 잠근 추정 이름 뒤에 붙는 글 */
+export const LOCKED_LABEL = '잠금';
+
+/** 화살표 → 축(SketchUp: 오른쪽 빨강, 왼쪽 녹색, 위 파랑 — ↓는 나란히·수직) */
+const ARROW_AXES: Readonly<Record<string, Axis>> = Object.freeze({ ArrowRight: 'x', ArrowLeft: 'y', ArrowUp: 'z' });
+
+/** 지나간 모서리로 기억하는 추정(나란함 기준) */
+const REF_KINDS: ReadonlySet<SnapKind> = new Set(['endpoint', 'midpoint', 'onEdge', 'perpendicular']);
+
+/** 잠근 방향 → 잠금 안내 이름 */
+export function lockName(l: Pick<InferenceLock, 'kind' | 'axis' | 'label'> | null | undefined): LockName | null {
+  if (!l) return null;
+  if (l.kind === 'axis') return l.axis ?? null;
+  if (l.kind === 'parallel') return 'parallel';
+  return l.label === FACE_PERPENDICULAR_LABEL ? 'facePerpendicular' : 'perpendicular';
+}
+
+/** 방향을 잡는 중인지(줄자 끝점·각도기 기준 방향·잴 방향 — 시작점을 지나는 선을 잠글 수 있다) */
+export function directingPoints(mode: MeasureMode | null, points: number): boolean {
+  return (mode === 'tape' && points === 1) || (mode === 'protractor' && (points === 1 || points === 2));
+}
+
+/**
+ * 잠금 안내: 방향을 잡는 중이면 잠근 방향, 잠그지 않았으면 키보드 기기에만 Shift·화살표 안내(손가락 기기는 측정 띠 잠금 단추).
+ * 각도기 중심을 찍기 전에는 화살표로 고정한 평면. 상태 줄·측정 띠는 measureHint 다음에 따로 둔다(번역이 안내 글을 한 덩어리로 찾게)
+ */
+export function lockHint(mode: MeasureMode | null, points: number, lock: LockName | null, plane: Axis | null, touch = false): string | null {
+  if (directingPoints(mode, points)) return lock ? LOCK_HINTS[lock] : touch ? null : LOCK_KEYS_HINT;
+  if (mode === 'protractor' && points === 0 && plane) return PLANE_HINTS[plane];
+  return null;
+}
+
+/** 툴팁의 추정 이름: 잠갔으면 "빨강 축에 · 잠금" */
+export function snapTipLabel(s: Pick<Snap, 'label' | 'locked'>): string {
+  return s.locked ? joinTip(s.label, LOCKED_LABEL) : s.label;
 }
 
 /** 측정값 칸 값의 종류(줄자 길이 · 각도기 각도) */
@@ -419,6 +494,18 @@ export class MeasureTool {
   /** 마지막으로 알린 측정값 칸 값과 종류(undefined = 아직 알리지 않음) */
   private lastLive: number | null | undefined = undefined;
   private lastLiveKind: LiveKind | null = null;
+  /** 잠근 방향 추론(Shift는 떼면, 화살표·단추는 다시 누르면 풀린다 — 점을 찍거나 취소하면 모두 풀린다) */
+  private lockValue: MeasureLock | null = null;
+  /** Shift가 눌려 있는지(키와 포인터 이동의 shiftKey로 본다) */
+  private shiftDown = false;
+  /** 커서가 앞서 지나간 모서리(나란함·↓ 잠금의 기준) */
+  private parallelRef: [V3, V3] | null = null;
+  /** 방향을 잡는 동안 마지막으로 본 방향 추론(커서가 보기를 떠난 뒤 누른 잠금 단추) */
+  private lastLockable: InferenceLock | null = null;
+  /** 화살표로 고정한 각도기 평면의 축(중심을 찍기 전) */
+  private planeAxisValue: Axis | null = null;
+  /** 마지막으로 알린 잠금·평면(onLock) */
+  private lockNote: [MeasureLock | null, Axis | null] = [null, null];
   private readonly g: SVGGElement;
   private readonly layer: HTMLDivElement;
   private readonly tip: HTMLDivElement;
@@ -453,6 +540,12 @@ export class MeasureTool {
     this.off.push(capture(trap, 'pointermove', (e) => this.onAimMove(e)));
     this.off.push(capture(trap, 'pointerup', (e) => this.onAimUp(e, false)));
     this.off.push(capture(trap, 'pointercancel', (e) => this.onAimUp(e, true)));
+    // 창이 초점을 잃으면 Shift를 뗀 것으로 본다(떼기 keyup을 놓치지 않게)
+    if (typeof window !== 'undefined')
+      on(window, 'blur', () => {
+        this.setShift(false);
+        this.setPlaneLock(false);
+      });
     this.off.push(
       viewer.onCameraChange(() => {
         if (!this.modeValue) return;
@@ -497,6 +590,37 @@ export class MeasureTool {
     return this.guideLns;
   }
 
+  /** 방향을 잡는 중인지(줄자 끝점·각도기 기준 방향·잴 방향 — 잠글 수 있다) */
+  get directing(): boolean {
+    return directingPoints(this.modeValue, this.pts.length);
+  }
+
+  /** 지금 잠근 방향 추론(없으면 null) */
+  get inferenceLock(): Readonly<MeasureLock> | null {
+    return this.lockValue;
+  }
+
+  /** 화살표로 고정한 각도기 평면의 축(중심을 찍기 전, 없으면 null) */
+  get planeAxis(): Axis | null {
+    return this.planeAxisValue;
+  }
+
+  /**
+   * 앱 단추로 잠그기(손가락 기기 — Shift가 없다). true = 지금 커서·조준 밑 방향 추론(없으면 방향을 잡는 동안 마지막으로 본 것),
+   * 축 이름 = 그 축, false = 풀기. 방향을 잡는 중에만 잠그고, 잠갔으면 true
+   */
+  setInferenceLock(on: boolean | Axis): boolean {
+    if (on === false) {
+      this.setLock(null);
+      return false;
+    }
+    if (!this.directing) return false;
+    const l = on === true ? (lockOf(this.freshHover()) ?? this.lastLockable) : axisInferenceLock(on, this.axes);
+    if (!l) return false;
+    this.setLock({ ...l, source: 'button' });
+    return true;
+  }
+
   /** 줄자 시작점이 모서리 위라 친 길이가 나란한 안내선이 되는지 */
   get edgeStart(): boolean {
     return this.modeValue === 'tape' && (this.pts.length ? !!this.startEdge : !!this.resultEdge);
@@ -513,12 +637,18 @@ export class MeasureTool {
 
   /** 진행 중 측정의 커서 추정(그리기를 기다리지 않고 지금 커서 자리에서). 손가락·끌기 중이면 null */
   private cursorSnap(): Snap | null {
+    this.freshHover();
+    return this.cursor && this.cursor.type !== 'touch' && !this.dragging ? this.hover : null;
+  }
+
+  /** 지금 표식의 추정(그리기를 기다리지 않고 — 손가락 기기는 탭한 자리 것) */
+  private freshHover(): Snap | null {
     const f = this.overlay.frame();
     if (this.hoverDirty && f) {
       this.hoverDirty = false;
       this.updateHover(f);
     }
-    return this.cursor && this.cursor.type !== 'touch' && !this.dragging ? this.hover : null;
+    return this.hover;
   }
 
   /**
@@ -545,6 +675,7 @@ export class MeasureTool {
     if (!end) return 'direction';
     this.pts = [];
     this.startEdge = null;
+    this.dropLock();
     if (edge) this.guideLns = [...this.guideLns, { point: end, dir: unit(sub(edge[1], edge[0])) }].slice(-MAX_GUIDE_LINES);
     else this.guidePts = [...this.guidePts, end].slice(-MAX_GUIDE_POINTS);
     this.setResult(tapeResult(a, end), edge);
@@ -578,6 +709,7 @@ export class MeasureTool {
     const end = addScaled(c, dir, Math.hypot(...sub(base, c)));
     this.pts = [];
     this.normal = null;
+    this.dropLock();
     const at: V3 = [c[0], c[1], c[2]];
     this.guideLns = [...this.guideLns, { point: at, dir }].slice(-MAX_GUIDE_LINES);
     this.setResult(protractorResult(c, base, end, n));
@@ -615,6 +747,9 @@ export class MeasureTool {
     this.startEdge = null;
     this.normal = null;
     this.centers = [];
+    this.dropLock();
+    this.parallelRef = null;
+    this.planeAxisValue = null;
     this.dropResult();
     this.hoverDirty = true;
     this.refreshHint();
@@ -623,8 +758,9 @@ export class MeasureTool {
 
   /**
    * 키(keydown·keyup 모두 넘긴다). 처리했으면 true.
-   * Esc: 진행 중 점 취소 → 결과 지우기 → (지울 것이 없으면) false — 앱이 도구를 끈다.
-   * Shift(각도기, 중심을 찍기 전): 누르고 있는 동안 커서 밑 평면 고정.
+   * Esc: 진행 중 점 취소 → 화살표로 고정한 각도기 평면 풀기 → 결과 지우기 → (지울 것이 없으면) false — 앱이 도구를 끈다.
+   * Shift: 누르고 있는 동안 방향을 잡는 중이면 지금 방향 추론 잠금, 각도기 중심을 찍기 전이면 커서 밑 평면 고정.
+   * →·←·↑·↓(keydown): 축·나란히 잠금 켜고 끄기, 각도기 중심을 찍기 전에는 →·←·↑로 각도기 평면 고정(앱은 목록·입력 칸의 화살표를 넘기지 않는다).
    */
   handleKey(e: KeyboardEvent): boolean {
     if (!this.modeValue) return false;
@@ -634,6 +770,10 @@ export class MeasureTool {
         this.pts = [];
         this.startEdge = null;
         this.normal = null;
+        this.dropLock();
+        this.hoverDirty = true;
+      } else if (this.planeAxisValue) {
+        this.planeAxisValue = null;
         this.hoverDirty = true;
       } else if (this.resultValue) {
         this.dropResult();
@@ -643,11 +783,79 @@ export class MeasureTool {
       this.overlay.invalidate();
       return true;
     }
-    if (e.key === 'Shift' && this.modeValue === 'protractor') {
-      this.setPlaneLock(e.type !== 'keyup');
+    if (e.key === 'Shift') {
+      const down = e.type !== 'keyup';
+      if (this.modeValue === 'protractor') this.setPlaneLock(down);
+      this.setShift(down);
+      return true;
+    }
+    if (e.type === 'keydown' && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.startsWith('Arrow') && this.arrowLock(e.key)) {
+      e.preventDefault();
       return true;
     }
     return false;
+  }
+
+  /** 화살표 잠금(SketchUp): 처리했으면 true */
+  private arrowLock(key: string): boolean {
+    const axis = Object.prototype.hasOwnProperty.call(ARROW_AXES, key) ? ARROW_AXES[key]! : null;
+    if (key !== 'ArrowDown' && !axis) return false;
+    if (this.directing) {
+      const cur = this.lockValue;
+      if (axis) {
+        if (cur?.kind === 'axis' && cur.axis === axis) this.setLock(null);
+        else this.setLock({ ...axisInferenceLock(axis, this.axes), source: 'key' });
+        return true;
+      }
+      // ↓: 모서리와 나란히·수직(자홍) 잠금 켜고 끄기 — 지금 커서 밑 나란함·수직, 없으면 앞서 지나간 모서리와 나란히
+      if (cur && cur.kind !== 'axis') {
+        this.setLock(null);
+        return true;
+      }
+      const h = lockOf(this.freshHover());
+      const l = h && h.kind !== 'axis' ? h : this.parallelRef ? parallelInferenceLock(this.parallelRef) : null;
+      if (!l) return false;
+      this.setLock({ ...l, source: 'key' });
+      return true;
+    }
+    // 각도기 중심을 찍기 전: 각도기 평면을 그 축에 고정(같은 키를 다시 누르면 풀기)
+    if (this.modeValue === 'protractor' && !this.pts.length && axis) {
+      this.planeAxisValue = this.planeAxisValue === axis ? null : axis;
+      this.hoverDirty = true;
+      this.refreshHint();
+      this.overlay.invalidate();
+      return true;
+    }
+    return false;
+  }
+
+  /** 잠금 두기·풀기(null) */
+  private setLock(l: MeasureLock | null): void {
+    if (!l && !this.lockValue) return;
+    this.lockValue = l;
+    this.hoverDirty = true;
+    this.refreshHint();
+    this.overlay.invalidate();
+  }
+
+  /** 점을 찍거나 취소하면 잠금과 본 방향 추론을 버린다(알림은 뒤따르는 refreshHint가) */
+  private dropLock(): void {
+    this.lockValue = null;
+    this.lastLockable = null;
+  }
+
+  /**
+   * Shift 눌림(키와 포인터 이동의 shiftKey): 누르는 순간 방향을 잡는 중이면 지금 표식의 방향 추론을 잠그고, 떼면 Shift로 잠근 것을 푼다.
+   * 방향 추론이 없을 때 누르면 아무것도 잠그지 않는다(SketchUp처럼 추론이 보일 때 누른다)
+   */
+  private setShift(down: boolean): void {
+    if (down === this.shiftDown) return;
+    this.shiftDown = down;
+    if (down) {
+      if (this.lockValue || !this.directing) return;
+      const l = lockOf(this.freshHover());
+      if (l) this.setLock({ ...l, source: 'shift' });
+    } else if (this.lockValue?.source === 'shift') this.setLock(null);
   }
 
   /**
@@ -712,7 +920,16 @@ export class MeasureTool {
       axisDirs: this.opts.getAxes?.() ?? null,
       guides: this.guidePts,
       guideLines: this.guideLns,
+      parallelRef: this.parallelRef,
+      lock: this.pts.length ? this.lockValue : null,
     });
+  }
+
+  /** 지나간 모서리(나란함 기준)와, 방향을 잡는 동안 본 방향 추론을 기억한다 */
+  private learn(snap: Snap): void {
+    if (snap.locked) return;
+    if (snap.edge && REF_KINDS.has(snap.kind)) this.parallelRef = [snap.edge[0], snap.edge[1]];
+    if (this.directing) this.lastLockable = lockOf(snap) ?? this.lastLockable;
   }
 
   /** 축 고정·각도기 평면의 축(모형의 그리기 축 또는 세계 축) */
@@ -778,6 +995,8 @@ export class MeasureTool {
     }
     const type = e.pointerType || 'mouse';
     if (type === 'touch' || e.buttons) return;
+    // Shift 잠금은 옮기기 전 자리에서 보인 추론으로(키를 못 받은 사이 눌렀거나 뗐어도 이동의 shiftKey로 맞춘다)
+    this.setShift(!!e.shiftKey);
     this.cursor = { x: p.x, y: p.y, type };
     if (this.modeValue === 'protractor') this.setPlaneLock(!!e.shiftKey);
     this.hoverDirty = true;
@@ -889,12 +1108,23 @@ export class MeasureTool {
     }
   }
 
+  /** 각도기 중심을 찍을 때의 평면: 화살표로 고정한 축 평면, 없으면 추정 밑 면·카메라를 가장 정면으로 보는 축 평면 */
+  private centerPlane(snap: Pick<Snap, 'normal'> | null, f: ViewFrame): V3 {
+    const a = this.planeAxisValue;
+    if (a) {
+      const n = this.axes[a];
+      return [n[0], n[1], n[2]];
+    }
+    return protractorPlane(snap, forwardOf(f), this.axes).normal;
+  }
+
   /** 점 찍기(누르기·탭) */
   private place(x: number, y: number, type: string, shift = false): void {
     const f = this.overlay.frame();
     if (!f) return;
     const snap = this.snapAt(x, y, type, f);
     if (!snap) return;
+    this.learn(snap);
     const ray = screenRay(f, x, y);
     if (this.modeValue === 'tape') {
       // 빈 곳(형상·축 추정이 없음)은 찍지 않는다
@@ -915,10 +1145,13 @@ export class MeasureTool {
     } else if (this.modeValue === 'protractor') {
       if (!this.pts.length) {
         if (snap.kind === 'free') return;
-        if (shift && !this.planeLock) this.planeLock = protractorPlane(snap, forwardOf(f), this.axes).normal;
+        const plane = this.centerPlane(snap, f);
+        if (shift && !this.planeLock) this.planeLock = plane;
         this.dropResult();
-        this.normal = this.planeLock ?? protractorPlane(snap, forwardOf(f), this.axes).normal;
+        this.normal = this.planeLock ?? plane;
         this.pts = [snap.point];
+        // 화살표로 고정한 평면은 이 측정에 쓴다
+        this.planeAxisValue = null;
       } else {
         const c = this.pts[0]!;
         const n = this.normal ?? protractorPlane(null, forwardOf(f), this.axes).normal;
@@ -933,6 +1166,8 @@ export class MeasureTool {
         }
       }
     }
+    // 점을 찍으면 잠금을 푼다(다음 방향은 새 추론으로 — Shift는 다시 눌러 잠근다)
+    this.dropLock();
     // 터치(정밀 조준 포함)는 커서가 없으니 찍은 자리의 추정을 표식으로 남긴다
     if (type === 'touch' || type === 'aim') {
       this.cursor = { x, y, type: 'touch' };
@@ -976,14 +1211,24 @@ export class MeasureTool {
     this.cancelTap = false;
     this.stopAimTimer();
     this.aimId = null;
+    this.dropLock();
+    this.parallelRef = null;
+    this.planeAxisValue = null;
     this.dropResult();
   }
 
+  /** 안내 글(바뀌면 onHint)과 잠금·화살표 평면(바뀌면 onLock) 알리기 */
   private refreshHint(): void {
     const h = measureHint(this.modeValue, this.pts.length, !!this.resultValue, this.opts.touch?.() ?? false, this.edgeStart);
-    if (h === this.lastHint) return;
-    this.lastHint = h;
-    this.opts.onHint?.(h);
+    if (h !== this.lastHint) {
+      this.lastHint = h;
+      this.opts.onHint?.(h);
+    }
+    const [lock, plane] = this.lockNote;
+    if (lock !== this.lockValue || plane !== this.planeAxisValue) {
+      this.lockNote = [this.lockValue, this.planeAxisValue];
+      this.opts.onLock?.();
+    }
   }
 
   // ───────────────────────── 그리기 ─────────────────────────
@@ -1002,8 +1247,9 @@ export class MeasureTool {
     this.hover = snap;
     this.hoverPoint = null;
     if (!snap) return;
+    this.learn(snap);
     if (this.modeValue === 'protractor') {
-      if (!this.pts.length) this.hoverPlane = protractorPlane(snap, forwardOf(f), this.axes).normal;
+      if (!this.pts.length) this.hoverPlane = this.centerPlane(snap, f);
       else this.hoverPoint = protractorPoint(screenRay(f, c.x, c.y), snap, this.pts[0]!, this.normal ?? this.axes.z);
     }
   }
@@ -1035,35 +1281,39 @@ export class MeasureTool {
     else if (r?.kind === 'protractor') this.drawAngle(f, r.center, r.a, r.b, r.normal, ang(r.angle), true);
 
     const snap = this.dragging ? null : this.hover;
-    let tip: string | null = snap ? snap.label : null;
+    let tip: string | null = snap ? snapTipLabel(snap) : null;
+    // 나란함의 기준 모서리(자홍 점선)·잠근 선으로 옮겨 온 점(가는 점선) — 커서가 있을 때
+    const live = snap && this.cursor?.type !== 'touch' ? snap : null;
+    if (live?.kind === 'parallel' && live.edge) this.segment(f, live.edge[0], live.edge[1], 'measure-parallel-ref', { stroke: SNAP_COLORS.parallel, 'stroke-width': 2.5, 'stroke-dasharray': '2 4' });
+    if (live?.from) this.lockFrom(f, live);
     if (this.modeValue === 'tape') {
       const a = this.pts[0];
       if (a) {
         this.dot(f, a);
-        if (snap && this.cursor?.type !== 'touch') {
-          this.rubber(f, a, snap.point, snap.axis);
-          tip = joinTip(snap.label, len(Math.hypot(...sub(snap.point, a))));
+        if (live) {
+          this.rubber(f, a, live.point, live);
+          tip = joinTip(snapTipLabel(live), len(Math.hypot(...sub(live.point, a))));
         }
       }
     } else {
       const [c, base] = this.pts;
       const n = this.normal;
       if (!c) {
-        if (snap && snap.kind !== 'free') this.disk(f, snap.point, this.planeLock ?? this.hoverPlane ?? protractorPlane(snap, forwardOf(f), this.axes).normal, !!this.planeLock);
+        if (snap && snap.kind !== 'free') this.disk(f, snap.point, this.planeLock ?? this.hoverPlane ?? this.centerPlane(snap, f), !!this.planeLock || !!this.planeAxisValue);
       } else if (n) {
         this.disk(f, c, n, false);
         this.dot(f, c);
         const cur = this.dragging || this.cursor?.type === 'touch' ? null : this.hoverPoint;
         if (!base) {
-          if (cur) this.rubber(f, c, cur, snap?.axis);
+          if (cur) this.rubber(f, c, cur, snap);
         } else {
           this.segment(f, c, base, 'measure-ray');
           this.dot(f, base);
           if (cur) {
             const deg = planeAngle(sub(base, c), sub(cur, c), n);
             this.drawAngle(f, c, base, cur, n, null, false);
-            this.rubber(f, c, cur, snap?.axis);
-            tip = joinTip(snap?.label ?? '', ang(deg));
+            this.rubber(f, c, cur, snap);
+            tip = joinTip(snap ? snapTipLabel(snap) : '', ang(deg));
           }
         }
       }
@@ -1166,15 +1416,39 @@ export class MeasureTool {
     this.g.append(svgEl('line', { class: cls, x1: s[0], y1: s[1], x2: s[2], y2: s[3], stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linecap': 'round', ...attrs }));
   }
 
-  /** 진행 중 선(시작점 → 커서). 축 고정이면 그 축 색 */
-  private rubber(f: ViewFrame, a: readonly number[], b: readonly number[], axis: Axis | undefined): void {
+  /**
+   * 진행 중 선(시작점 → 커서). 축 고정이면 그 축 색, 나란함은 자홍(SketchUp 관례).
+   * 잠갔으면 굵은 실선(축 색, 나란함·수직은 자홍 — SketchUp 추론 잠금처럼)
+   */
+  private rubber(f: ViewFrame, a: readonly number[], b: readonly number[], snap: Snap | null | undefined): void {
     const attrs: Record<string, string | number> = { 'stroke-dasharray': '6 4' };
-    if (axis) {
-      attrs.stroke = AXIS_COLORS[axis];
+    const axis = snap?.axis;
+    const color = lockColor(snap);
+    let cls = 'measure-rubber';
+    if (color && (axis || snap!.kind === 'parallel' || snap!.locked)) {
+      attrs.stroke = color;
       attrs['stroke-width'] = 2;
-      attrs['data-axis'] = axis;
     }
-    this.segment(f, a, b, axis ? `measure-rubber measure-axis-${axis}` : 'measure-rubber', attrs);
+    if (axis) {
+      attrs['data-axis'] = axis;
+      cls += ` measure-axis-${axis}`;
+    }
+    if (snap?.kind === 'parallel') cls += ' measure-parallel';
+    if (snap?.locked) {
+      delete attrs['stroke-dasharray'];
+      attrs['stroke-width'] = 3;
+      attrs['data-locked'] = snap.kind;
+      cls += ' measure-locked';
+    }
+    this.segment(f, a, b, cls, attrs);
+  }
+
+  /** 잠근 선으로 옮겨 온 점: 커서 밑 점에서 잠근 선 위 점까지 가는 점선과 그 점의 작은 원 */
+  private lockFrom(f: ViewFrame, s: Snap): void {
+    const color = lockColor(s) ?? 'currentColor';
+    this.segment(f, s.from!, s.point, 'measure-lock-from', { stroke: color, 'stroke-width': 1.25, 'stroke-dasharray': '2 3' });
+    const p = screenPoint(f, s.from!, 20);
+    if (p) this.g.append(svgEl('circle', { class: 'measure-lock-from-point', cx: p[0], cy: p[1], r: 3.5, fill: SNAP_COLORS[s.fromKind ?? 'endpoint'], stroke: '#ffffff', 'stroke-width': 1 }));
   }
 
   private dot(f: ViewFrame, p: readonly number[]): void {
@@ -1210,6 +1484,15 @@ export class MeasureTool {
       el = svgEl('rect', { ...base, x: x - h, y: y - h, width: 2 * h, height: 2 * h });
     }
     this.g.append(el);
+    // 잠근 추정: 표식에 고리(흰 테두리를 두른 잠근 선 색)
+    if (snap.locked) {
+      const ring = svgEl('g', { class: 'measure-lock-ring' });
+      ring.append(
+        svgEl('circle', { cx: x, cy: y, r: 9.5, fill: 'none', stroke: '#ffffff', 'stroke-width': 3.5, 'stroke-opacity': 0.85 }),
+        svgEl('circle', { cx: x, cy: y, r: 9.5, fill: 'none', stroke: lockColor(snap) ?? color, 'stroke-width': 1.75 }),
+      );
+      this.g.append(ring);
+    }
   }
 
   /** 각도기 원판(평면 위 원과 15° 눈금). 축 평면이면 그 축 색 */
@@ -1297,6 +1580,13 @@ function capture(el: EventTarget, type: string, fn: (e: PointerEvent) => void): 
 
 function now(): number {
   return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+/** 방향 추론 선 색: 축은 그 축 색, 나란함·수직은 자홍. 방향 추론이 아니면 null */
+function lockColor(s: Snap | null | undefined): string | null {
+  if (!s) return null;
+  if (s.axis) return AXIS_COLORS[s.axis];
+  return s.kind === 'parallel' || s.kind === 'perpendicular' ? SNAP_COLORS[s.kind] : null;
 }
 
 /** 눈이 보는 방향 */
