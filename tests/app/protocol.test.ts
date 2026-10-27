@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Scene3d } from 'opencad-viewer3d/types';
-import { collectTransfers, errorText, sceneHasGeometry } from '../../src/app/protocol';
+import { collectTransfers, emptySceneNotice, errorText, sceneHasGeometry } from '../../src/app/protocol';
+import { skpToScene } from '../../src/index';
+import { entities, modelDat, skpFile } from '../build';
 
 const scene = (o: Partial<Scene3d> = {}): Scene3d => ({ name: 's', units: 'mm', meshes: [], lines: [], ...o });
 
@@ -52,5 +54,28 @@ describe('sceneHasGeometry · errorText', () => {
     expect(errorText(new Error('깨짐'))).toBe('깨짐');
     expect(errorText(new TypeError(''))).toBe('TypeError');
     expect(errorText('글')).toBe('글');
+  });
+});
+
+describe('빈 장면 알림', () => {
+  it('깨지지 않은 빈 SketchUp 모형은 "비어 있습니다"(정보), 정의만 있으면 그 수', () => {
+    const empty = skpToScene(skpFile(modelDat({ root: entities(undefined, {}) })));
+    expect(sceneHasGeometry(empty)).toBe(false);
+    const n = emptySceneNotice(empty, 'a.skp');
+    expect(n.kind).toBe('info');
+    expect(n.title).toBe('"a.skp" 모형이 비어 있습니다');
+    expect(n.text).toContain('그릴 면·모서리가 없습니다');
+    const onlyDefs = emptySceneNotice(scene({ warnings: [], meta: { version: '26.1.1', definitions: 3 } }), 'b.skp');
+    expect(onlyDefs.kind).toBe('info');
+    expect(onlyDefs.text).toContain('컴포넌트 정의 3개');
+  });
+
+  it('경고가 있거나 깨졌거나 SketchUp 파일이 아니면 "열지 못했습니다"와 첫 경고', () => {
+    const notSkp = skpToScene(new Uint8Array([1, 2, 3, 4]));
+    expect(emptySceneNotice(notSkp, 'x.skp')).toEqual({ kind: 'error', title: '"x.skp" 파일을 열지 못했습니다', text: notSkp.warnings![0] });
+    expect(emptySceneNotice(scene({ meta: { version: '15.0.1', damaged: true } }), 'y.skp')).toMatchObject({ kind: 'error', text: '그릴 면이나 모서리를 찾지 못했습니다.' });
+    // 모형 요소 절이 없는 꾸러미는 해석기 경고와 함께
+    const noRoot = scene({ warnings: ['모형 요소(01f6)를 찾지 못했습니다'], meta: { version: '21.0.339' } });
+    expect(emptySceneNotice(noRoot, 'z.skp')).toMatchObject({ kind: 'error', text: '모형 요소(01f6)를 찾지 못했습니다' });
   });
 });

@@ -86,6 +86,25 @@ export function sceneHasGeometry(s: Scene3d): boolean {
   );
 }
 
+/**
+ * 그릴 것이 없는 장면의 알림. 해석기가 까닭(경고)을 남겼거나 깨진 파일이면 "열지 못했습니다"와 첫 경고,
+ * 깨지지 않은 SketchUp 파일인데 형상이 없으면 빈 모형이라고 알린다(SketchUp도 빈 화면으로 연다 —
+ * 정의만 있고 놓인 것이 없으면 그 수를 함께)
+ */
+export function emptySceneNotice(s: Scene3d, name: string): { kind: 'error' | 'info'; title: string; text: string } {
+  const meta = (s.meta ?? {}) as { damaged?: boolean; version?: string; definitions?: number };
+  const why = s.warnings?.[0];
+  if (why || meta.damaged || !meta.version) return { kind: 'error', title: `"${name}" 파일을 열지 못했습니다`, text: why ?? '그릴 면이나 모서리를 찾지 못했습니다.' };
+  const defs = meta.definitions ?? 0;
+  return {
+    kind: 'info',
+    title: `"${name}" 모형이 비어 있습니다`,
+    text: defs
+      ? `SketchUp 파일은 맞지만 모형에 놓인 형상이 없습니다(컴포넌트 정의 ${defs.toLocaleString('en-US')}개는 있지만 하나도 놓이지 않았습니다).`
+      : 'SketchUp 파일은 맞지만 그릴 면·모서리가 없습니다. SketchUp에서 형상을 넣고 저장했는지 확인해 주세요.',
+  };
+}
+
 /** 오류 값 → 사람이 읽는 글 */
 export function errorText(e: unknown): string {
   if (e instanceof Error) return e.message || e.name;

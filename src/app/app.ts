@@ -105,7 +105,7 @@ import type { LaunchRequest } from './launch';
 import { PANEL_WIDTH_DEFAULT, SHEET_DEFAULT, clampPanelWidth, clampSheetFraction, readLayout, storeLayout, type StoredLayout } from './layout';
 import { Panel, type PanelHost } from './panel';
 import { RecentStore, canKeepRecent, nameOfRecentId, recentTimeText, type RecentEntry } from './recent';
-import { errorText, sceneHasGeometry } from './protocol';
+import { emptySceneNotice, errorText, sceneHasGeometry } from './protocol';
 import { deviceHints, textureLimitsFor, type TextureLimits } from './texlimits';
 import { THEME_CHOICES, applyThemeChoice, readStoredTheme, resolveTheme, storeTheme, systemPrefersDark, themeChoiceOf, type ThemeChoice, type ThemeName } from './theme';
 import { childrenOf, isAncestor, isSplit, nodeBox, nodePath, normalizeRanges, type PickMode } from './tree';
@@ -982,8 +982,8 @@ export class SkpViewerApp implements PanelHost {
       }
       if (!sceneHasGeometry(res.scene)) {
         attempt.error('empty');
-        const why = res.scene.warnings?.[0] ?? '그릴 면이나 모서리를 찾지 못했습니다.';
-        this.showNotice('error', `"${name}" 파일을 열지 못했습니다`, why);
+        const n = emptySceneNotice(res.scene, name);
+        this.showNotice(n.kind, n.title, n.text);
         return false;
       }
       // GPU에 올리기: 작은 모형은 한 번에(그 전에 단계 글을 한 번 그린다), 큰 모형은 프레임마다 나눠 올리며 실제 진행을 보인다

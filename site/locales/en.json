@@ -1,4 +1,5 @@
 {
+  "\"{0}\" 모형이 비어 있습니다": "The model \"{0}\" is empty",
   "\"{0}\" 정의의 인스턴스 {1}개를 모두 고릅니다": "Selects all {1} instances of the \"{0}\" definition",
   "\"{0}\" 파일은 SketchUp 3~5의 아주 옛 형식으로 저장되어 있습니다. 이 뷰어는 SketchUp 6·7·8·2013~2026 파일을 읽습니다. SketchUp 6 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.": "The \"{0}\" file is saved in a very old format from SketchUp 3-5. This viewer reads SketchUp 6·7·8·2013~2026 files. Please save and open again in SketchUp 6 or later (preferably 2021 or later).",
   "\"{0}\" 파일을 받지 못했습니다": "File \"{0}\" was not received",
@@ -88,6 +89,8 @@
   "SketchUp 모형": "SketchUp Mockup",
   "SketchUp 뷰어": "SketchUp Viewer",
   "SketchUp 파일 열기 (.skp)": "Open SketchUp file (.skp)",
+  "SketchUp 파일은 맞지만 그릴 면·모서리가 없습니다. SketchUp에서 형상을 넣고 저장했는지 확인해 주세요.": "This is a valid SketchUp file, but it has no faces or edges to draw. Check that geometry was added and saved in SketchUp.",
+  "SketchUp 파일은 맞지만 모형에 놓인 형상이 없습니다(컴포넌트 정의 {0}개는 있지만 하나도 놓이지 않았습니다).": "This is a valid SketchUp file, but nothing is placed in the model ({0} component definitions exist, but none of them is placed).",
   "SketchUp 파일을 끌어다 놓거나 눌러서 열기": "Drag and drop or tap to open a SketchUp file",
   "SketchUp 파일을 브라우저에서 3D로 보기": "View SketchUp files in 3D in your browser",
   "SketchUp 파일을 읽지 못했습니다: {0}": "Failed to read SketchUp file: {0}",
