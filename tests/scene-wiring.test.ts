@@ -13,6 +13,7 @@ vi.mock('../src/model', async (importOriginal) => {
 });
 
 import { skpToScene } from '../src/index';
+import { EDGE_COLOR } from '../src/scene';
 import { entities, modelDat, skpFile, styleXml, utf8 } from './build';
 
 const at = (x: number, y = 0, z = 0): Float64Array => Float64Array.from([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1]);
@@ -113,6 +114,35 @@ describe('skpToScene meta 잇기', () => {
       expect(m.treeInfo!.definitionDescription).toEqual(['설명']);
       expect(m.treeInfo!.area[0]).toBeCloseTo(25.4 * 25.4, 6);
       expect(m.attributes![m.modelAttrs!]).toEqual({ ModelProperties: { Name: '집' } });
+    } finally {
+      hold.model = null;
+    }
+  });
+
+  it('모서리 색: 모형 스타일의 모서리 색(ForegroundColor, style.xml 1014)으로 모형 모서리를 칠하고, 없으면 기본 색', () => {
+    hold.model = handModel();
+    try {
+      // 회색 5b5b5b(SketchUp "모서리 색: 모두 같게"를 회색으로 둔 스타일), 장면 스타일은 빨강
+      const grey = 0x5b | (0x5b << 8) | (0x5b << 16) | (255 << 24);
+      const red = 255 | (255 << 24);
+      const bytes = skpFile(modelDat({ root: entities(undefined, {}) }), {
+        extra: [
+          { name: 'styles/Style/style.xml', data: utf8(styleXml([[1014, 4, String(grey)]])) },
+          { name: 'styles/Scene/style.xml', data: utf8(styleXml([[1014, 4, String(red)]])) },
+        ],
+      });
+      const s = skpToScene(bytes);
+      const m = s.meta as Record<string, unknown> & SkpMetaExtras;
+      const g = 0x5b / 255;
+      expect(m.style!.edgeColor).toEqual([g, g, g]);
+      const edges = s.lines.filter((l) => l.id.startsWith('skp-edges-'));
+      expect(edges.length).toBeGreaterThan(0);
+      for (const l of edges) expect(l.color).toEqual([g, g, g, 1]);
+      // 장면 스타일의 모서리 색은 화면이 장면을 고를 때 건다(meta에만)
+      expect(m.pages![0]!.style!.edgeColor).toEqual([1, 0, 0]);
+      // 스타일이 모서리 색을 모르면 예전 기본 색
+      const plain = skpToScene(skpFile(modelDat({ root: entities(undefined, {}) })));
+      for (const l of plain.lines.filter((x) => x.id.startsWith('skp-edges-'))) expect(l.color).toEqual(EDGE_COLOR);
     } finally {
       hold.model = null;
     }

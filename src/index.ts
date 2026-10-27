@@ -163,6 +163,7 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
   }
   const front = style?.front;
   const back = style?.back;
+  const edge = style?.edgeColor;
   let parts: ReturnType<typeof buildSceneParts>;
   try {
     progress(0.65, '면 삼각화·인스턴스 펼치는 중');
@@ -173,6 +174,8 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
       ...(front && front.every(Number.isFinite) ? { defaultFaceColor: [front[0], front[1], front[2], 1] as const } : {}),
       // 앞·뒤 재질이 다른 면은 뒷면 색·무늬를 따로(재질 없는 뒷면은 스타일 뒷면 색)
       ...(back && back.every(Number.isFinite) ? { defaultBackColor: [back[0], back[1], back[2], 1] as const } : {}),
+      // 모형 스타일의 모서리 색(SketchUp 기본은 검정, 회색 모서리 스타일도 있다)
+      ...(edge && edge.every(Number.isFinite) ? { edgeColor: [edge[0], edge[1], edge[2], 1] as const } : {}),
       onProgress: (f) => progress(0.65 + 0.3 * f, '면 삼각화·인스턴스 펼치는 중'),
     };
     if (sceneTex.size) build.textures = sceneTex;

@@ -880,6 +880,8 @@ export interface BuildOptions {
    * 없으면 재질 없는 뒷면은 앞면과 같은 색으로 둔다
    */
   defaultBackColor?: Rgba;
+  /** 모서리 색(기본 EDGE_COLOR) — 모형 스타일의 모서리 색(ForegroundColor, SketchUp 스타일 "모서리 색: 모두 같게")을 넘긴다 */
+  edgeColor?: Rgba;
   /** 큰 좌표 기준(장면 단위). 기본은 LARGE_COORD_INCH × scale(= 100 m). Infinity면 origin을 쓰지 않는다 */
   originThreshold?: number;
   /** 무늬를 입힐 재질(model.dat 재질 번호 → 무늬 id·한 장 크기). 없으면 무늬 좌표를 만들지 않는다 */
@@ -966,6 +968,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   const maxPlacements = opts.maxPlacements ?? MAX_PLACEMENTS;
   const defaultColor = opts.defaultFaceColor ?? DEFAULT_FACE_COLOR;
   const defaultBack = opts.defaultBackColor ?? null;
+  const edgeColor = opts.edgeColor ?? EDGE_COLOR;
 
   // ── 진행: 삼각화한 면 수(정의마다 한 번)와 펼친 배치 수의 반반 ──
   const totalFaces = Math.max(1, model.counts.faces);
@@ -2449,7 +2452,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     }
     segments += n;
     const id = `skp-edges-${lines.length}`;
-    const edgeSet: LineSet3d = { id, name: `모서리 · ${tag}`, positions, color: EDGE_COLOR, group: tag };
+    const edgeSet: LineSet3d = { id, name: `모서리 · ${tag}`, positions, color: edgeColor, group: tag };
     if (dashedTags.has(tag)) edgeSet.dashed = true;
     lines.push(withOrigin(edgeSet));
     tagStat(tag).edges += n;
@@ -2460,7 +2463,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     if (!lb.pos.n) continue;
     const tag = layerName(lb.layer);
     const id = `skp-reveal-edges-${lines.length}`;
-    const l: LineSet3d = { id, name: `장면에서 보이는 숨긴 개체 모서리 · ${tag}`, positions: lb.pos.done(), color: EDGE_COLOR, group: tag };
+    const l: LineSet3d = { id, name: `장면에서 보이는 숨긴 개체 모서리 · ${tag}`, positions: lb.pos.done(), color: edgeColor, group: tag };
     if (dashedTags.has(tag)) l.dashed = true;
     if (lb.origin) l.origin = lb.origin;
     lines.push(l);

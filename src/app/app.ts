@@ -340,6 +340,8 @@ export class SkpViewerApp implements PanelHost {
   private styleBg: Rgb | null = null;
   /** 스타일의 하늘·지면(코어 하늘·땅 기울기 바탕, 없으면 null) */
   private styleSky: BackgroundOptions | null = null;
+  /** 지금 스타일의 모서리 색(모형 스타일, 장면을 고르면 그 장면 스타일 — 모형 모서리 묶음에 건다) */
+  private styleEdge: Rgb | null = null;
   /** 배경에 묻히는 선 색 바꾸기(와이어프레임·숨은 선·X-ray, linecontrast.ts) */
   private readonly lineContrast = new LineContrast();
   private hiddenRanges = new Map<number, IndexRange[]>();
@@ -1104,6 +1106,7 @@ export class SkpViewerApp implements PanelHost {
     // 배경: 모형 스타일의 배경 색(장면을 고르면 그 장면 스타일의 색으로 바뀐다)
     this.styleBg = styleBackground(d.style);
     this.styleSky = skyBackground(d.style);
+    this.styleEdge = d.style?.edgeColor ?? null;
     this.applyTheme();
     this.labels?.setData(d.texts, d.dimensions, d.scene.units, d.units);
     this.refreshAnnotations();
@@ -1689,11 +1692,15 @@ export class SkpViewerApp implements PanelHost {
     const bg = styleBackground(plan.style);
     // 하늘·지면은 장면 스타일이 켜고 끔을 알 때만(모르면 그대로)
     const skyKnown = plan.style && (plan.style.sky !== undefined || plan.style.ground !== undefined);
+    // 장면 스타일의 모서리 색(SketchUp 스타일 "모서리 색: 모두 같게")
+    const edge = plan.style?.edgeColor;
+    const edgeChanged = !!edge && (!this.styleEdge || edge.some((x, i) => x !== this.styleEdge![i]));
+    if (edge) this.styleEdge = edge;
     if (bg || skyKnown) {
       if (bg) this.styleBg = bg;
       if (skyKnown) this.styleSky = skyBackground(plan.style);
       this.applyTheme();
-    }
+    } else if (edgeChanged) this.applyLineContrast();
     d.page = index;
     for (const t of d.tags) v.setGroupVisible(t.name, !tagHidden(d, t.name));
     this.refreshItemVisibility();
@@ -2833,6 +2840,7 @@ export class SkpViewerApp implements PanelHost {
           [...d.scene.lines, ...(d.scene.points ?? [])],
           { mode: this.renderMode, theme: this.theme, backdrop: this.backdrop, sky: this.fileBg ? this.styleSky : null },
           (id) => d.annotationKind.get(id) === 'sectionPlanes',
+          this.styleEdge,
         )
       : new Map();
     this.lineContrast.apply(v, want);
