@@ -326,7 +326,7 @@ npm run preview
 
 **공용 사이트 도구**: 다섯 언어 페이지·검색 정보·사이트맵·내용 수정일·언어별 앱 정보·서비스 워커 빌드, 공용 번역기, 언어 메뉴, 서비스 워커 등록·새 판 알림,
 방문 통계, 휴대폰 성능 비교 명령은 다른 OpenCAD 앱과 함께 쓰는 [opencad-site-kit](https://github.com/GyuTae-Kim/opencad-site-kit)
-(`github:GyuTae-Kim/opencad-site-kit#v0.1.3`, 잠금 커밋 `cb6d7e7`, 빌드 때만 써서 `devDependencies`)에 있습니다.
+(`github:GyuTae-Kim/opencad-site-kit#v0.1.4`, 잠금 커밋 `a1de400`, 빌드 때만 써서 `devDependencies`)에 있습니다.
 이 앱에만 있는 값은 `tools/site.mjs`(앱 정보 원본, 미리 담을 파일, 서비스 워커 판 이름 짓기)와 `tools/sw-template.js`(서비스 워커 본문 — 주석까지 sw.js에 그대로 들어갑니다)에 둡니다.
 `check:seo`·`check:i18n`·`test:seo`·`update:content-dates`와 휴대폰 검사 워크플로의 성능 명령(`serve-performance`·`performance-summary`)은 도구의 `opencad-site` 명령입니다
 (워크플로는 기준 빌드 뒤 이 커밋으로 돌아와 `npm ci`를 다시 해 명령을 찾습니다). 도구 판을 올릴 때는 빌드 결과를 견줍니다.
