@@ -1,7 +1,7 @@
 /**
  * 요소 묶음(1388) 안 곡선·주석 읽기: 곡선·호(1396·1397), 문자(1398), 선형 치수(1399), 반지름·지름 치수(139a),
  * 보조선·보조점(1391·1392), 단면 평면(1393 + 활성 1394). 좌표는 그 묶음의 로컬 인치다.
- * 뜻은 2026-10 PRISME 엔진(SketchUp C API를 비교 기준으로 맞춘 해석기)의 형식 지식을 옮긴 것이다(docs/formats/skp.md).
+ * 뜻은 2026-10 비공개 참조 해석기(SketchUp C API를 비교 기준으로 맞춘 해석기)의 형식 지식을 옮긴 것이다(docs/formats/skp.md).
  * 항목 하나를 읽는 함수는 깨진 곳에서 예외를 던질 수 있다 — 부르는 쪽(model.ts)이 항목 단위로 감싼다.
  */
 
@@ -169,7 +169,7 @@ function dimBase(env: AnnotEnv, holder: TlvNode, kind: SkpDimension['kind']): Sk
 }
 
 /**
- * 선형 치수의 잰 축과 띄움(엔진 linear_layout): 정렬 0(또는 없음) = 두 점 방향, 1 = x축, 2 = 법선×x축, 그 밖 = 모름.
+ * 선형 치수의 잰 축과 띄움(참조 해석기와 같다): 정렬 0(또는 없음) = 두 점 방향, 1 = x축, 2 = 법선×x축, 그 밖 = 모름.
  * 띄움 = unit(법선 × 축) · 거리(인치).
  */
 export function linearLayout(start: Vec3, end: Vec3, normal: Vec3 | undefined, xaxis: Vec3 | undefined, alignment: number | undefined, distance: number | undefined): { axis?: Vec3; offset?: Vec3 } {
@@ -349,7 +349,7 @@ function edgeIn(edges: Pick<SkpEdges, 'length'>, e: number): number {
 }
 
 /**
- * 곡선을 이은 차례(엔진 _chain_edges): 첫 모서리에서 출발해 이어지는 모서리를 하나씩 따라간다.
+ * 곡선을 이은 차례(참조 해석기와 같다): 첫 모서리에서 출발해 이어지는 모서리를 하나씩 따라간다.
  * 끝 모서리(같은 묶음의 다른 모서리)가 첫 모서리의 끝 정점만 공유하면 시작 정점 쪽으로 떠난다(닫힌 곡선을 바른 방향으로).
  * 첫 모서리가 곡선의 것이 아니면 오름차순 그대로, 닿지 못한 모서리는 오름차순으로 뒤에 붙인다.
  */

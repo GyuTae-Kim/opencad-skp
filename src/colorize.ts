@@ -1,6 +1,6 @@
 /**
  * 색을 바꾼 무늬(재질 type 2: 무늬를 고른 뒤 색을 바꾼 재질). 파일은 원래 그림과 새 색만 갖고 있고 SketchUp이 그릴 때 그림 색을 바꾼다.
- * 그 규칙(PRISME 서비스 뷰어 skp_viewer_colorize.js의 기록 — SketchUp 재질 미리보기와 견주어 확인한 것)을 RGBA 화소에 적용한다.
+ * 그 규칙(비공개 참조 뷰어의 기록 — SketchUp 재질 미리보기와 견주어 확인한 것)을 RGBA 화소에 적용한다.
  *
  * HLS(색상 0~360, 밝기·채도 0~1). C = 재질 색, A = 그림 평균색(material.xml avgColor, 없으면 화소 평균):
  * - shift(colorizeType 0, 기본): h' = h + (hC − hA),  tint(colorizeType 1): h' = hC

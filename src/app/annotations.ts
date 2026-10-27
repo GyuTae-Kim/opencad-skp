@@ -6,7 +6,7 @@
  *   화면 고정 글은 화면 비율 자리(왼쪽 위 기준), 치수 글은 글 자리 가운데. 치수 글이 선에 맞춰 놓이면(alignedText) 치수선 방향으로
  *   돌리되 아래·오른쪽에서 읽히게 한다(세로는 위로 읽는다).
  * - 글: 치수 글이 비었거나 '<>'가 들어 있으면 잰 값을 모형 단위 글로 채운다.
- * - 글꼴: 화면 크기 글은 pointSize pt × 96/72 px(Windows SketchUp 규칙 — 파일 글꼴이 Windows 글꼴이라 PRISME도 이것을 따른다),
+ * - 글꼴: 화면 크기 글은 pointSize pt × 96/72 px(Windows SketchUp 규칙 — 파일 글꼴이 Windows 글꼴이라 비공개 참조 뷰어도 이것을 따른다),
  *   세계 크기 글(worldHeight)은 그 깊이에서 화소로 바꾼다 — 2px보다 작으면 숨기고 512px에서 자른다. 굵게·기울임·색도 파일을 따른다.
  * - 숨김: 화면 밖·눈 뒤, 끈 종류(글·치수), 숨긴 태그, 숨긴 노드(조상 포함은 부른 쪽 판정), 숨긴 형상(hidden: true, 숨긴 형상 보기가 꺼졌을 때),
  *   단면에 잘린 쪽(글 자리 기준).
@@ -15,8 +15,8 @@
  * - 많을 때: 한 번에 그리는 라벨은 LABEL_LIMIT(400)개까지, DOM 요소는 모아 두고 다시 쓴다(바뀐 속성만 쓴다).
  * - 가림(형상 뒤 글 숨기기): 카메라가 OCCLUSION_SETTLE_MS 멈추면 라벨 기준점(지시선 글은 붙는 점, 치수·지시선 없는 글은 글 자리)의
  *   화면 자리에서 부른 쪽의 가림 판정(코어 고르기 — 단면에 잘린 쪽·숨긴 항목은 고르지 않는다)으로 형상에 가린 라벨을 숨긴다.
- *   움직이는 동안은 앞의 판정을 쓰고(PRISME처럼 멈춘 뒤 CPU 광선), 화면 고정 글은 가리지 않는다. 한 번에 OCCLUSION_LIMIT개까지 판정한다.
- * 규칙은 PRISME 서비스 SKP 뷰어(skp_viewer_annotations.js)에서 옮겼다.
+ *   움직이는 동안은 앞의 판정을 쓰고(참조 뷰어처럼 멈춘 뒤 CPU 광선), 화면 고정 글은 가리지 않는다. 한 번에 OCCLUSION_LIMIT개까지 판정한다.
+ * 규칙은 참조 뷰어의 문자·치수 라벨 코드에서 옮겼다.
  */
 import { projectToScreen, worldPerPixel, type ViewFrame } from 'opencad-viewer3d/camera';
 import type { SkpDimensionMeta, SkpFontMeta, Vec3 } from '../meta';

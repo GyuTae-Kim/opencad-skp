@@ -4,7 +4,7 @@
  *
  * 입력은 꾸러미 꼴(EntityInput)이라 그룹·컴포넌트 노드뿐 아니라 재질·바로 놓인 형상·모형에도 쓴다(없는 칸은 행을 만들지 않는다).
  * 길이·넓이는 장면 단위로 받아 mm로 바꾼 뒤 모형 단위 글(units.ts)로 쓴다.
- * 규칙은 PRISME 서비스 SKP 뷰어(skp_viewer_model.js entityInfo, skp_viewer_trays.js entityRows·attributeText)에서 옮겼다.
+ * 규칙은 비공개 참조 뷰어의 엔티티 정보와 속성 표시 코드에서 옮겼다.
  */
 import type { SkpAttrDictsMeta, SkpAttrValueMeta, SkpTreeInfo } from '../meta';
 import { formatArea, formatLength, formatVolume, withLengthUnit, type UnitsDisplay } from './units';

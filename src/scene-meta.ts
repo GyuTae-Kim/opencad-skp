@@ -8,7 +8,7 @@
  *   숨긴 개체 목록은 영구 번호라 나무 노드로 바꾼다: 정의 안 인스턴스 하나의 번호는 그 정의가 놓인 모든 자리의 노드가 된다.
  *   활성 단면 번호는 meta.sectionPlanes 차례(배치마다 하나)로 바꾼다.
  * - 속성 사전: 형 있는 값을 화면에 보일 글·수로 푼다(attrDictsMeta).
- * 형식 지식은 PRISME 엔진(SketchUp C API를 비교 기준으로 맞춘 해석기)의 뿌리 절 해석에서 옮겼다.
+ * 형식 지식은 비공개 참조 해석기(SketchUp C API를 비교 기준으로 맞춘 해석기)의 뿌리 절 해석에서 옮겼다.
  */
 import type { Scene3d } from 'opencad-viewer3d/types';
 import type { SkpAttrDictsMeta, SkpAttrValueMeta, SkpAxesMeta, SkpCameraMeta, SkpEdgeColorMode, SkpLocationMeta, SkpPageMeta, SkpShadowMeta, SkpStyleMeta, Vec3 } from './meta';
@@ -39,7 +39,7 @@ export function northAngleOf(north: readonly number[] | undefined): number | und
 
 /**
  * 모형 위치: 그림자 설정의 도시·나라·위경도·시간대·북쪽 각과 지리 참조 여부(모형 속성 GeoReference.UsesGeoReferencing).
- * 2020 이하는 GeoReference 사전에 위경도가 있으면 그 값(엔진 legacy와 같다). 아무 칸도 없으면 undefined
+ * 2020 이하는 GeoReference 사전에 위경도가 있으면 그 값(참조 해석기와 같다). 아무 칸도 없으면 undefined
  */
 export function locationMeta(model: Pick<SkpModel, 'shadowInfo' | 'properties'> & { root?: Pick<SkpModel['root'], 'attrs'> }): SkpLocationMeta | undefined {
   const s = model.shadowInfo;
@@ -50,7 +50,7 @@ export function locationMeta(model: Pick<SkpModel, 'shadowInfo' | 'properties'> 
   const out: SkpLocationMeta = { georeferenced: uses };
   if (s?.city) out.city = s.city;
   if (s?.country) out.country = s.country;
-  // 지리 참조를 쓰는 모형이면 GeoReference의 위경도(2020 이하 엔진과 같다), 아니면 그림자 설정의 위경도(GeoReference에는 기본값이 남아 있을 수 있다)
+  // 지리 참조를 쓰는 모형이면 GeoReference의 위경도(2020 이하 참조 해석기와 같다), 아니면 그림자 설정의 위경도(GeoReference에는 기본값이 남아 있을 수 있다)
   const lat = uses && typeof geo?.['Latitude'] === 'number' ? (geo['Latitude'] as number) : s?.latitude;
   const lon = uses && typeof geo?.['Longitude'] === 'number' ? (geo['Longitude'] as number) : s?.longitude;
   if (lat !== undefined && Number.isFinite(lat) && Math.abs(lat) <= 90) out.latitude = lat;
@@ -66,7 +66,7 @@ export function axesMeta(a: SkpAxes | undefined, scale: number): SkpAxesMeta | u
   if (!a) return undefined;
   return { origin: [a.origin[0] * scale, a.origin[1] * scale, a.origin[2] * scale], x: [...a.x], y: [...a.y], z: [...a.z] };
 }
-/** 장면 전환·지연 시간 상한(초) — 엔진 뷰어와 같게 */
+/** 장면 전환·지연 시간 상한(초) — 참조 뷰어와 같게 */
 export const MAX_TRANSITION_S = 60;
 export const MAX_DELAY_S = 3600;
 

@@ -1,7 +1,7 @@
 /**
  * model.dat 뿌리 절 읽기: 카메라(01fa), 렌더링(01fb), 태그·태그 폴더(01f8), 선 종류(0208), 스타일(0206), 장면(0207),
  * 글꼴(01fd), 문자·치수 기본값(01fe·01ff), 모형 속성(0209).
- * 뜻은 공개 표본 바이트로 추론한 것과 2026-10 PRISME 엔진(SketchUp C API를 비교 기준으로 맞춘 해석기)의 형식 지식을 옮긴 것이다.
+ * 뜻은 공개 표본 바이트로 추론한 것과 2026-10 비공개 참조 해석기(SketchUp C API를 비교 기준으로 맞춘 해석기)의 형식 지식을 옮긴 것이다.
  * 부르는 쪽(model.ts)이 절마다 try/catch로 감싼다 — 여기서 던진 예외는 그 절만 버리게 한다.
  */
 
@@ -62,7 +62,7 @@ export function readCamera(r: TlvReader, cam: TlvNode, warn: Warn): SkpCamera | 
 const PLACE_CHARS = 256;
 
 /**
- * 위치·그림자 6590(엔진 read_shadow_info와 같은 칸): 크기가 다르거나 수가 아닌 칸은 빠진다(보기 설정이라 모형을 거절하지 않는다)
+ * 위치·그림자 6590(참조 해석기와 같은 칸): 크기가 다르거나 수가 아닌 칸은 빠진다(보기 설정이라 모형을 거절하지 않는다)
  */
 export function readShadowInfo(r: TlvReader, rec: TlvNode): SkpShadowInfo {
   const out: SkpShadowInfo = {};

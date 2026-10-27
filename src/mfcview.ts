@@ -1,7 +1,7 @@
 /**
  * SketchUp 2020 이하(MFC)의 보기 자료: 카메라(CCamera), 렌더링 설정 덩어리, 스타일(CSkpStyle), 장면(CViewPage), 글꼴(CSkFont),
  * 선 종류(CCustomLineStyle)와 모형 꼬리(뿌리 요소 뒤: 위치·장면·축·문자/치수 기본값·글꼴·선 종류·스타일). 형상은 없다.
- * 형식 지식은 2026-10 PRISME 엔진(SketchUp C API를 비교 기준으로 맞춘 해석기)의 legacy 해석기에서 옮긴 것이다(docs/formats/skp.md).
+ * 형식 지식은 2026-10 비공개 참조 해석기(SketchUp C API를 비교 기준으로 맞춘 해석기)의 legacy 부분에서 옮긴 것이다(docs/formats/skp.md).
  *
  * 렌더링 설정은 클래스 꼬리표 없이 고정 길이 덩어리로 쓴다(CRenderingOptions 스키마마다 길이·칸 자리가 다르고, 장면 안에서는 8바이트 짧고,
  * SketchUp 2017+는 앞에 1바이트가 더 있다). SketchUp은 렌더링 설정을 스타일로 받치므로 색·켜고 끄기는 스타일 값이 이기고,
@@ -368,7 +368,7 @@ export class MfcView {
 
   /**
    * 줄 안에 쓴 CShadowInfo: 2021+ 6590과 같은 차례 — 앞머리, u32 시각, u8, 도시, 나라, f64 경도·위도·시간대, f64×3 북쪽, 4바이트 깃발,
-   * i32 밝음·어둠, 2바이트. 깃발 넷은 2020 이하 파일이 모두 0 1 1 0이라 어느 것이 그림자 보이기인지 몰라 넣지 않는다(엔진 legacy와 같다)
+   * i32 밝음·어둠, 2바이트. 깃발 넷은 2020 이하 파일이 모두 0 1 1 0이라 어느 것이 그림자 보이기인지 몰라 넣지 않는다(참조 해석기와 같다)
    */
   shadowInfo(): SkpShadowInfo {
     const st = this.st;

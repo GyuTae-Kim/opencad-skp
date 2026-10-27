@@ -6,7 +6,7 @@
  *     값의 상대 1e-6(또는 부른 쪽의 절대 허용치)보다 크게 다를 때만 반올림으로 본다.
  *   - 미터계 기호는 한 칸 띄우고("12 mm"), 피트·인치 기호는 붙인다(1' 2 3/8").
  *   - suppressUnits(단위 숨김)는 decimal 형식에서만 기호를 숨긴다(SketchUp도 다른 형식에서는 무시한다).
- * 규칙은 PRISME 서비스 SKP 뷰어(skp_viewer_units.js)에서 옮겼다. 입력은 mm, mm², mm³, 도.
+ * 규칙은 비공개 참조 뷰어의 단위 표기 코드에서 옮겼다. 입력은 mm, mm², mm³, 도.
  */
 
 import type { SkpUnitsMeta } from '../meta';

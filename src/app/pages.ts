@@ -9,7 +9,7 @@
  *   (도구가 쓴 파일은 틀의 기본 카메라가 남아 모형이 화면 밖일 수 있다 — 그때는 앱이 전체 보기).
  * - 세로 화면: 장면 카메라는 세로 시야각을 지키므로 휴대폰 세로 화면에서는 가로가 잘린다. 처음 카메라와 장면 전환은
  *   장면이 만든 가로 범위(파일의 고정 종횡비, 없으면 16:10)를 지키게 시야각(평행은 화면 높이)을 넓힌다(fitSceneCamera). 가로 화면은 그대로.
- * 규칙은 PRISME 서비스 SKP 뷰어(skp_viewer_camera.js·skp_viewer_scene.js)와 형식 명세(spec-root §2.5·§3)에서 옮겼다.
+ * 규칙은 비공개 참조 뷰어의 카메라·장면 코드와 그쪽 형식 명세에서 옮겼다.
  */
 import type { Box3, RenderMode } from 'opencad-viewer3d';
 import { DEFAULT_FOV, basisFromAngles, cameraBasis, cameraEye, dirToAngles, lerpCamera, type CameraState, type Projection } from 'opencad-viewer3d/camera';
