@@ -10,7 +10,7 @@
  *   그 언어 쪽 ?shared=<id>로 보낸다(파일은 서버로 가지 않는다). 60 MB보다 크면 최근 목록에 넣지 않고 한 번 쓸 자리(shared:…)에 둔다.
  */
 const VERSION = '__VERSION__';
-const ASSETS = __ASSETS__;
+const ASSETS = __PRECACHE__;
 const PREFIX = 'opencad-skp-';
 const CACHE = PREFIX + VERSION;
 const SCOPE = self.registration.scope;

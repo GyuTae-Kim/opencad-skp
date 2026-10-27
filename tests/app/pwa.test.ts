@@ -4,7 +4,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { parseLaunch } from '../../src/app/launch';
 import { canUseServiceWorker, consumeLaunchFiles, registerServiceWorker, type SwRegistration, type SwWorker } from '../../src/app/pwa';
 import { RecentStore, SHARED_MAX_AGE_MS, nameOfRecentId, staleSharedKeys, type RecentBackend, type RecentEntry } from '../../src/app/recent';
-import { precacheList, serviceWorkerSource } from '../../tools/sw-plugin.mjs';
+import { fillTemplate, listFiles, serviceWorkerValues } from 'opencad-site-kit/pwa/sw-plugin';
+import { offline, precache } from '../../tools/site.mjs';
+
+/** 이 앱의 미리 담을 목록·판 이름 짓기(tools/site.mjs) */
+const swOptions = { precache, sortUrls: true, version: offline.version };
 
 describe('서비스 워커 등록·새 판 알림', () => {
   const worker = (state = 'installed'): SwWorker & { msgs: unknown[]; fire: () => void } => {
@@ -149,14 +153,16 @@ describe('서비스 워커 만들기(빌드)', () => {
     ])
       writeFileSync(join(root, f!), c!);
     try {
-      const list = precacheList(root);
-      expect(list).toEqual(['./', 'assets/index-1.css', 'assets/index-1.js', 'en/', 'en/manifest.webmanifest', 'icon-192.png', 'manifest.webmanifest']);
-      const tpl = "const VERSION = '__VERSION__';\nconst ASSETS = __ASSETS__;";
-      const a = serviceWorkerSource(tpl, list, [{ name: 'x', content: 'a' }]);
-      const b = serviceWorkerSource(tpl, list, [{ name: 'x', content: 'b' }]);
+      const values = () => serviceWorkerValues(listFiles(root), (f) => readFileSync(join(root, f)), swOptions);
+      expect(values().precache).toEqual(['./', 'assets/index-1.css', 'assets/index-1.js', 'en/', 'en/manifest.webmanifest', 'icon-192.png', 'manifest.webmanifest']);
+      const tpl = "const VERSION = '__VERSION__';\nconst ASSETS = __PRECACHE__;";
+      const a = fillTemplate(tpl, values());
       expect(a).toMatch(/^const VERSION = "[0-9a-f]{16}";\nconst ASSETS = \["\.\/",/);
-      expect(a).not.toBe(b);
-      expect(serviceWorkerSource(tpl, list, [{ name: 'x', content: 'a' }])).toBe(a);
+      // 판은 미리 담는 파일의 내용 해시: 담지 않는 파일(소스 맵)이 바뀌면 같고, 담는 파일이 바뀌면 다르다
+      writeFileSync(join(root, 'assets/index-1.js.map'), 'm2');
+      expect(fillTemplate(tpl, values())).toBe(a);
+      writeFileSync(join(root, 'assets/index-1.js'), 'b');
+      expect(fillTemplate(tpl, values())).not.toBe(a);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -202,7 +208,7 @@ function runServiceWorker(network: (url: string) => Response | Promise<Response>
     return res;
   };
   const template = readFileSync(new URL('../../tools/sw-template.js', import.meta.url), 'utf8');
-  const src = serviceWorkerSource(template, ['./', 'en/', 'assets/index-1.js', 'icon-192.png', 'manifest.webmanifest'], [{ name: 'x', content: 'a' }]);
+  const src = fillTemplate(template, { version: '0123456789abcdef', precache: ['./', 'en/', 'assets/index-1.js', 'icon-192.png', 'manifest.webmanifest'] });
   new Function('self', 'caches', 'fetch', 'indexedDB', src)(self, caches, fetchFn, {});
   const cacheName = [...src.matchAll(/const VERSION = "([0-9a-f]{16})"/g)][0]![1]!;
   const fire = async (url: string, extra: Record<string, unknown> = {}): Promise<Response | undefined> => {
