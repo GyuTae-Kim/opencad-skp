@@ -49,7 +49,8 @@ async function open(req: ParseRequest): Promise<ParseResult> {
   } catch {
     /* 그림은 없어도 된다 */
   }
-  const scene = skpToScene(bytes, { name, outline: true, extras: true, smooth: true, onProgress: progress, textures: images?.materials, inflated });
+  // 파일 바이트는 해석기가 모형 요소를 읽기 전에 떼어 놓는다(releaseBytes — 그림은 위에서 먼저 꺼냈다)
+  const scene = skpToScene(bytes, { name, outline: true, extras: true, smooth: true, onProgress: progress, textures: images?.materials, inflated, releaseBytes: true });
   inflated = undefined;
   const result: ParseResult = { scene, ms: 0 };
   if (images && (images.model || images.materials.length || images.components.length || images.scenes.length)) result.images = images;

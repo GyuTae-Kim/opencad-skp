@@ -142,7 +142,7 @@ describe('probe: 앱 워커와 같은 해석 길', () => {
   it('워커와 같은 skpToScene 선택·내장 풀기 조건을 쓴다', () => {
     const worker = readFileSync(join(root, 'src/worker/parse.worker.ts'), 'utf8');
     const probe = readFileSync(join(root, 'scripts/sweep/probe.ts'), 'utf8');
-    const call = 'skpToScene(bytes, { name, outline: true, extras: true, smooth: true, onProgress: progress, textures: images?.materials, inflated })';
+    const call = 'skpToScene(bytes, { name, outline: true, extras: true, smooth: true, onProgress: progress, textures: images?.materials, inflated, releaseBytes: true })';
     expect(worker).toContain(call);
     expect(probe).toContain(call);
     expect(worker).toContain('bytes.length >= NATIVE_INFLATE_MIN_BYTES');
@@ -153,7 +153,10 @@ describe('probe: 앱 워커와 같은 해석 길', () => {
   it('2021+ 꼴: 내장 풀기 길을 타도 직접 해석과 같은 지표', async () => {
     const bytes = gridSkp(20);
     const direct = skpToScene(bytes, { outline: true, extras: true, smooth: true });
-    const r = await probeSkp(bytes, { name: 'grid.skp', inflateMin: 1 });
+    // probe는 워커처럼 해석기가 파일 버퍼를 떼어 놓게 한다 — 사본을 넘긴다
+    const copy = bytes.slice();
+    const r = await probeSkp(copy, { name: 'grid.skp', inflateMin: 1 });
+    expect(copy.length).toBe(0);
     expect(r.inflated).toBe(true);
     expect(r.header).toMatchObject({ major: 26, container: 'zip' });
     expect(r.metrics.faces).toBe(400);
@@ -162,7 +165,7 @@ describe('probe: 앱 워커와 같은 해석 길', () => {
     expect(r.metrics.seg).toBe(direct.lines.reduce((s, l) => s + l.positions.length / 6, 0));
     expect(Object.keys(r.ms)).toEqual(expect.arrayContaining(['total', 'inflate', 'images', 'unpack', 'parse', 'scene']));
     // 기본 문턱(1 MB)보다 작으면 워커처럼 직접 푼다
-    const small = await probeSkp(bytes);
+    const small = await probeSkp(bytes.slice());
     expect(small.inflated).toBe(false);
     expect(small.ms.inflate).toBeUndefined();
     expect(small.metrics).toEqual(r.metrics);

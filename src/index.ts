@@ -92,6 +92,27 @@ export interface SkpOptions {
    * 장면을 만드는 동안 남지 않게 한다(부르는 쪽도 그 바이트를 따로 붙들지 않아야 놓인다)
    */
   inflated?: Map<string, Uint8Array>;
+  /**
+   * 파일 바이트를 다 쓰면(2021+는 꾸러미의 재질·스타일을 읽고 model.dat를 꺼낸 뒤, 2020 이하는 모형을 읽은 뒤) 그 버퍼를 떼어 놓는다
+   * (ArrayBuffer.prototype.transfer(0) — 넘긴 bytes는 길이 0이 된다). 파일 바이트를 더 쓰지 않는 쪽(앱 워커)이 모형 요소를 읽고
+   * 장면을 만드는 동안 파일 크기만큼 덜 잡게 켠다. bytes가 버퍼 전체를 보지 않거나 떼어 놓을 수 없으면 그대로 둔다. 켜면 그 뒤에
+   * 같은 bytes로 readSkpImages를 부를 수 없다(그림은 먼저 꺼낸다). 기본 false
+   */
+  releaseBytes?: boolean;
+}
+
+type Transfer = (this: ArrayBuffer, newByteLength?: number) => ArrayBuffer;
+
+/** 파일 버퍼를 떼어 놓는다(releaseBytes). 버퍼 전체를 보는 바이트만, transfer가 없거나 떼어 놓을 수 없으면 그대로 */
+function releaseFile(bytes: Uint8Array): void {
+  const buf = bytes.buffer;
+  const transfer = (buf as unknown as { transfer?: Transfer }).transfer;
+  if (typeof transfer !== 'function' || !(buf instanceof ArrayBuffer) || bytes.byteOffset !== 0 || bytes.byteLength !== buf.byteLength) return;
+  try {
+    transfer.call(buf, 0);
+  } catch {
+    /* 떼어 놓을 수 없는 버퍼는 그대로 둔다 */
+  }
 }
 
 /** 무늬를 입힐 재질 수 기본 한도 */
@@ -146,6 +167,7 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
         res = readMfcModel(bytes, header, (f) => progress(0.05 + 0.59 * f, '모형 요소 읽는 중'));
         rememberMfcImages(bytes, res.images);
       }
+      if (opts.releaseBytes) releaseFile(bytes);
       read = { model: res.model, materials: res.materials, styles: res.styles, damaged: false, texImages: textureImages(res.materials, opts, warnings) };
     } catch (e) {
       if (e instanceof MfcRefused) {
@@ -287,7 +309,7 @@ function readZipPackage(
   meta: Record<string, unknown>,
   warnings: string[],
   progress: (f: number, stage: string) => void,
-  opts: Pick<SkpOptions, 'textures' | 'maxTextures' | 'inflated'> = {},
+  opts: Pick<SkpOptions, 'textures' | 'maxTextures' | 'inflated' | 'releaseBytes'> = {},
 ): Package | Scene3d {
   let model: SkpModel;
   const materials = new Map<string, SkpMaterialInfo>();
@@ -373,6 +395,8 @@ function readZipPackage(
         warnings.push(`model.dat를 끝까지 풀지 못해 앞부분만 읽었습니다(${e instanceof Error ? e.message : String(e)})`);
       }
     }
+    // 파일 바이트는 여기까지 쓴다(꺼낸 model.dat·재질·스타일은 사본이다)
+    if (opts.releaseBytes) releaseFile(bytes);
     progress(0.4, '모형 요소 읽는 중');
     model = readModelDat(dat, (f) => progress(0.4 + 0.24 * f, '모형 요소 읽는 중'), { textured: texImages.keys() });
   } catch (e) {

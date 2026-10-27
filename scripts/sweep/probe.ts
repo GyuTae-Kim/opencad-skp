@@ -1,7 +1,7 @@
 /**
  * 훑기 도구가 파일 하나를 해석하는 길(probe). 앱 워커(src/worker/parse.worker.ts)와 같은 차례·같은 선택으로 부른다:
  * 큰 2021+ 파일은 model.dat를 내장 풀기(DecompressionStream)로 먼저 풀고(inflated) → 그림을 꺼내고(readSkpImages) →
- * 같은 선택으로 skpToScene. 무늬 그림 손질(createImageBitmap)과 화면으로 넘기기는 브라우저 일이라 하지 않는다.
+ * 같은 선택으로 skpToScene(해석기가 다 쓴 파일 버퍼를 떼어 놓는다 — releaseBytes, 넘긴 bytes는 길이 0이 된다). 무늬 그림 손질(createImageBitmap)과 화면으로 넘기기는 브라우저 일이라 하지 않는다.
  * 워커의 선택이 바뀌면 여기도 같이 바꾼다(tests/sweep.test.ts가 두 파일의 호출 글자를 견준다).
  *
  * 단계와 시간: inflate(워커의 내장 풀기) · images(그림 꺼내기 — 2020 이하는 여기서 모형을 다 읽는다) ·
@@ -290,6 +290,16 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
   const h = readSkpHeader(bytes);
   const name = opts.name ?? 'model.skp';
   const zipPath = h?.container === 'zip';
+  // 워커처럼 해석기가 파일 버퍼를 떼어 놓으므로(releaseBytes) 파일 바이트로 알 것은 먼저 잰다
+  const header = headerInfo(bytes);
+  let zipDatBytes: number | undefined;
+  if (mem && h && zipPath)
+    try {
+      zipDatBytes = findSkpZipItems(bytes, h.bodyOffset).items?.find((d) => d.name === 'model.dat')?.size;
+    } catch {
+      /* 꾸러미가 깨졌으면 모른다 */
+    }
+  const fileBuffer = bytes.buffer;
   const t0 = performance.now();
 
   // 워커: 큰 2021+ 모형의 model.dat는 브라우저 내장 풀기로 먼저 푼다
@@ -323,7 +333,7 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
   const progress = (fraction: number): void => {
     meter.enter(fraction >= 0.65 ? 'scene' : zipPath && fraction < 0.4 ? 'unpack' : 'parse');
   };
-  const scene = skpToScene(bytes, { name, outline: true, extras: true, smooth: true, onProgress: progress, textures: images?.materials, inflated });
+  const scene = skpToScene(bytes, { name, outline: true, extras: true, smooth: true, onProgress: progress, textures: images?.materials, inflated, releaseBytes: true });
   inflated = undefined;
   meter.close();
   const total = performance.now() - t0;
@@ -375,7 +385,7 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
   const ms: ProbeResult['ms'] = { total: Math.round(total) };
   for (const [s, a] of meter.acc) ms[s] = Math.round(a.ms);
   const result: ProbeResult = {
-    header: headerInfo(bytes),
+    header,
     inflated: datBytes !== undefined,
     ms,
     metrics,
@@ -438,21 +448,14 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
       peakHeapExternalMB: MB(peakSum),
       sceneBuffersMB,
       sceneBackingMB: MB(backingBytes),
-      sceneHoldsFile: backing.has(bytes.buffer),
+      sceneHoldsFile: backing.has(fileBuffer),
       imagesMB: MB(imageBytes),
     };
     if (datBuffer) {
       const b = datBuffer.deref();
       result.mem.sceneHoldsModelDat = !!b && backing.has(b);
     }
-    let dat = datBytes;
-    if (dat === undefined && h && zipPath) {
-      try {
-        dat = findSkpZipItems(bytes, h.bodyOffset).items?.find((d) => d.name === 'model.dat')?.size;
-      } catch {
-        /* 꾸러미가 깨졌으면 모른다 */
-      }
-    }
+    const dat = datBytes ?? zipDatBytes;
     if (dat !== undefined) result.mem.modelDatMB = MB(dat);
   }
   return result;
