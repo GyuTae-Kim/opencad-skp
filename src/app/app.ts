@@ -56,7 +56,7 @@ import {
   unwidenSceneCamera,
   type SceneFit,
 } from './pages';
-import { DEFAULT_UNITS, mmPerSceneUnit } from './units';
+import { DEFAULT_UNITS, formatLength, mmPerSceneUnit } from './units';
 import { Overlay } from './overlay';
 import { cardName, cardRows, entityInfo } from './entity';
 import { h, icon } from './dom';
@@ -75,6 +75,7 @@ import {
   hiddenNodeRanges,
   isBigScene,
   itemVisible,
+  nodeHiddenByUser,
   annotationHiddenRanges,
   nodeSelection,
   pickDeepest,
@@ -100,7 +101,8 @@ import {
   type Selection,
   type SkpDoc,
 } from './doc';
-import { MAX_FILE_BYTES, SKP_ACCEPT, baseName, fmtCount, formatBytes, formatMs } from './format';
+import { MAX_FILE_BYTES, SKP_ACCEPT, baseName, fmtCount, formatBytes, formatMs, rgbCss } from './format';
+import { AnnotationMarks } from './dimmarks';
 import { VIEW_KEY_OF, VIEW_MENU, isEditableTarget, isViewKey, keyAction } from './keys';
 import type { LaunchRequest } from './launch';
 import { PANEL_WIDTH_DEFAULT, SHEET_DEFAULT, clampPanelWidth, clampSheetFraction, readLayout, storeLayout, type StoredLayout } from './layout';
@@ -112,12 +114,13 @@ import { THEME_CHOICES, applyThemeChoice, readStoredTheme, resolveTheme, storeTh
 import { childrenOf, isAncestor, isSplit, nodeBox, nodePath, normalizeRanges, type PickMode } from './tree';
 import { cameraForBox, keepViewOnHeightChange } from './view';
 import { cssHex, isLightBackground, loadFileBackground, safeStorage, skyBackground, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
-import type { BackgroundOptions } from 'opencad-viewer3d';
+import type { BackgroundOptions, Rgba } from 'opencad-viewer3d';
 import { DEFAULT_EDGE_COLOR, LineContrast, edgeLooks, lineColorOverrides } from './linecontrast';
 import { openShortcutsDialog } from './shortcuts';
-import type { Rgb, SkpShadowMeta, SkpStyleMeta } from '../meta';
+import type { Rgb, SkpEdgeColorMode, SkpShadowMeta, SkpStyleMeta } from '../meta';
 import { fogFor, lightingForShadow, shadowOrDefault, sunForShadow, usesSun } from './sun';
 import { WalkStick } from './joystick';
+import { Vcb, vcbStartKey } from './vcb';
 
 export const APP_TITLE = 'OpenCAD SketchUp 뷰어';
 const TOOLS_URL = 'https://gyutae-kim.github.io/opencad';
@@ -197,6 +200,10 @@ export interface AppSnapshot {
   labelsOccluded: number;
   /** 측정 도구(줄자·각도기, 꺼져 있으면 null) */
   measureMode: MeasureMode | null;
+  /** 측정값 칸으로 찍은 안내점 수 */
+  measureGuides: number;
+  /** 측정값 칸이 보이는지·지금 글·측정 띠 안에 있는지 */
+  vcb: { shown: boolean; value: string; inBand: boolean };
   /** 고른 것의 종류(outline·node·material·item·face·edge, 없으면 null) */
   selectionKind: Selection['kind'] | null;
   /** 장면 재생 중인지 */
@@ -322,6 +329,11 @@ export class SkpViewerApp implements PanelHost {
     typeof window.matchMedia === 'function' ? window.matchMedia(`(max-width: ${NARROW_WIDTH - 0.02}px), (pointer: coarse) and (max-height: 499.98px)`) : null;
   /** 손가락이 주인 기기(휴대폰·태블릿): 측정 안내·파일 고르기를 맞춘다 */
   private readonly coarseQuery: MediaQueryList | null = typeof window.matchMedia === 'function' ? window.matchMedia('(pointer: coarse)') : null;
+  /** 측정 띠를 쓰는 화면(styles.css .measure-bar와 같은 조건): 측정값 칸을 띠 안 둘째 줄로 옮긴다 */
+  private readonly bandQuery: MediaQueryList | null =
+    typeof window.matchMedia === 'function' ? window.matchMedia(`(max-width: ${NARROW_WIDTH - 0.02}px), (pointer: coarse)`) : null;
+  /** 측정값 칸(VCB): 줄자 길이를 보이고 쳐서 넣는다 */
+  private vcb!: Vcb;
   private projection: Projection = 'perspective';
   private renderMode: RenderMode = 'shadedEdges';
   private theme: ThemeName;
@@ -346,6 +358,8 @@ export class SkpViewerApp implements PanelHost {
   private styleSky: BackgroundOptions | null = null;
   /** 지금 스타일의 모서리 색(모형 스타일, 장면을 고르면 그 장면 스타일 — 모형 모서리 묶음에 건다) */
   private styleEdge: Rgb | null = null;
+  /** 지금 스타일의 모서리 색 방식(재질별·축별, 모두 같게면 null) — 모서리 묶음의 정점 색(doc.edgeColoring)을 보일지 정한다 */
+  private styleEdgeMode: SkpEdgeColorMode | null = null;
   /** 배경에 묻히는 선 색 바꾸기(와이어프레임·숨은 선·X-ray, linecontrast.ts) */
   private readonly lineContrast = new LineContrast();
   private hiddenRanges = new Map<number, IndexRange[]>();
@@ -362,6 +376,10 @@ export class SkpViewerApp implements PanelHost {
   private overlay: Overlay | null = null;
   /** 문자·치수 라벨 */
   private labels: AnnotationLabels | null = null;
+  /** 치수·지시선 끝 표시(화면 크기, dimmarks.ts) */
+  private marks: AnnotationMarks | null = null;
+  /** 선 색 대비로 바꾼 주석·모서리 선 색(id → 색) — 끝 표시도 같은 색 */
+  private lineColorWant: ReadonlyMap<string, Rgba> = new Map();
   /** 줄자·각도기(코어 두 점 측정 대신) */
   private measureTool: MeasureTool | null = null;
   /** 측정 도구 안내 글(상태 막대·패널 아래 띠) */
@@ -589,7 +607,20 @@ export class SkpViewerApp implements PanelHost {
       updLater,
     );
     updLater.addEventListener('click', () => (updateBar.hidden = true));
-    const stage = h('div', { class: 'stage' }, viewHost, sceneTabs, measureBar, selBar, camBar, this.stick.el, start, notice, busy, updateBar);
+    // 측정값 칸(VCB): 넓은 화면은 3D 보기 오른쪽 아래, 측정 띠를 쓰는 화면은 띠 안 둘째 줄(placeVcb)
+    this.vcb = new Vcb({
+      onSubmit: (mm) => this.submitLength(mm),
+      onClearGuides: () => {
+        this.measureTool?.clearGuides();
+        this.refreshStatus();
+      },
+      returnFocus: () => {
+        // 손가락 기기는 자판만 내리고, 키보드는 3D 보기로 돌아가 다음 측정을 잇는다
+        if (this.coarseQuery?.matches) this.vcb.input.blur();
+        else this.viewer?.canvas.focus({ preventScroll: true });
+      },
+    });
+    const stage = h('div', { class: 'stage' }, viewHost, sceneTabs, measureBar, selBar, camBar, this.vcb.el, this.stick.el, start, notice, busy, updateBar);
     this.exportDialog = new ExportDialog(
       {
         docName: () => this.doc?.name ?? 'model',
@@ -875,6 +906,8 @@ export class SkpViewerApp implements PanelHost {
     });
     // 휴대폰(좁은 화면·낮은 가로 화면)에서는 뷰 큐브를 줄인다
     this.phoneQuery?.addEventListener('change', () => this.viewer?.setViewCubeSize(this.viewCubeSize()));
+    // 넓은 화면 ↔ 측정 띠 화면이 바뀌면 측정값 칸을 옮긴다
+    this.bandQuery?.addEventListener('change', () => this.placeVcb());
   }
 
   // ───────────────────────── 열기 ─────────────────────────
@@ -1080,6 +1113,8 @@ export class SkpViewerApp implements PanelHost {
     v.highlightRanges(null);
     v.setHighlightSegments(null);
     this.measureTool?.clear();
+    this.measureTool?.clearGuides();
+    this.vcb.setUnits(d.units);
     // 부드러운 모서리·숨긴 형상은 처음에 숨긴다(장면 범위에는 들어 있지 않다)
     this.refreshItemVisibility();
     // 파일에서 숨긴 태그·태그 폴더는 처음부터 숨긴다
@@ -1118,8 +1153,10 @@ export class SkpViewerApp implements PanelHost {
     this.styleBg = styleBackground(d.style);
     this.styleSky = skyBackground(d.style);
     this.styleEdge = d.style?.edgeColor ?? null;
+    this.styleEdgeMode = d.style?.edgeColorMode ?? null;
     this.applyTheme();
     this.labels?.setData(d.texts, d.dimensions, d.scene.units, d.units);
+    this.marks?.setData(d.annotationMarks);
     this.refreshAnnotations();
     if (old && old !== d) revokeImages(old);
     this.panel.show(d);
@@ -1166,6 +1203,8 @@ export class SkpViewerApp implements PanelHost {
       this.labels = new AnnotationLabels(this.overlay);
       // 형상 뒤의 글·치수는 숨긴다(카메라가 멈추면 라벨 기준점에서 코어 고르기로 판정)
       this.labels.setOcclusion((p, x, y, f) => this.labelOccluded(p, x, y, f));
+      this.marks = new AnnotationMarks(this.overlay);
+      this.marks.setOcclusion((p, x, y, f) => this.labelOccluded(p, x, y, f));
       this.measureTool = new MeasureTool(v, this.overlay, {
         getScene: () => this.doc?.scene ?? null,
         getUnits: () => this.doc?.units ?? DEFAULT_UNITS,
@@ -1181,6 +1220,11 @@ export class SkpViewerApp implements PanelHost {
         getAxes: () => {
           const a = this.doc?.axes;
           return a ? { x: a.x, y: a.y, z: a.z } : null;
+        },
+        // 측정값 칸: 줄자 진행 중이면 시작점 → 커서 길이, 다 재면 그 거리(모형 단위 글)
+        onLive: (len) => {
+          const d = this.doc;
+          this.vcb.setLive(len === null || !d ? '' : formatLength(len * mmPerSceneUnit(d.scene.units), d.units));
         },
       });
       return v;
@@ -1705,8 +1749,14 @@ export class SkpViewerApp implements PanelHost {
     const skyKnown = plan.style && (plan.style.sky !== undefined || plan.style.ground !== undefined);
     // 장면 스타일의 모서리 색(SketchUp 스타일 "모서리 색: 모두 같게")
     const edge = plan.style?.edgeColor;
-    const edgeChanged = !!edge && (!this.styleEdge || edge.some((x, i) => x !== this.styleEdge![i]));
+    let edgeChanged = !!edge && (!this.styleEdge || edge.some((x, i) => x !== this.styleEdge![i]));
     if (edge) this.styleEdge = edge;
+    // 장면 스타일의 모서리 색 방식(스타일을 쓰는 장면만 — 재질별·축별이 아니면 모두 같게)
+    if (plan.style) {
+      const mode = plan.style.edgeColorMode ?? null;
+      if (mode !== this.styleEdgeMode) edgeChanged = true;
+      this.styleEdgeMode = mode;
+    }
     if (bg || skyKnown) {
       if (bg) this.styleBg = bg;
       if (skyKnown) this.styleSky = skyBackground(plan.style);
@@ -2007,6 +2057,7 @@ export class SkpViewerApp implements PanelHost {
     }
     this.rangedIds = next;
     if (d.selection?.kind === 'node') this.applySelection(d.selection, false);
+    this.refreshMarks();
   }
 
   /** 문자·치수 라벨을 보이기 상태(태그·숨긴 노드·켜고 끄기)에 맞춰 다시 그린다 */
@@ -2031,6 +2082,38 @@ export class SkpViewerApp implements PanelHost {
       showHidden: d.showHidden,
       section: sec ? { normal: sec.normal, offset: sec.offset } : null,
       sections,
+    });
+    this.refreshMarks();
+  }
+
+  /**
+   * 치수·지시선 끝 표시(화면 크기)를 그 선분 묶음과 같이 보이게: 묶음이 보일 때(태그·주석 켜고 끄기·숨김·숨긴 그룹 — 코어에 건 것과 같은 판정),
+   * 표시가 놓인 노드가 숨지 않았을 때, 그 묶음을 자르는 단면의 남는 쪽. 색은 묶음이 지금 띠는 색(선 색 대비로 바꾼 색)
+   */
+  private refreshMarks(): void {
+    const m = this.marks;
+    const d = this.doc;
+    const v = this.viewer;
+    if (!m) return;
+    if (!d || !v || !Object.keys(d.annotationMarks).length) {
+      m.setVisibility(null);
+      return;
+    }
+    const lineOf = (id: string): (typeof d.scene.lines)[number] | undefined => {
+      const li = d.lineIndex.get(id);
+      return li === undefined ? undefined : d.scene.lines[li];
+    };
+    const want = this.lineColorWant;
+    m.setVisibility({
+      lineVisible: (id) => {
+        const li = d.lineIndex.get(id);
+        const l = li === undefined ? undefined : d.scene.lines[li];
+        return !!l && itemVisible(d, d.scene.meshes.length + li!) && !(l.group && tagHidden(d, l.group));
+      },
+      nodeHidden: (n) => nodeHiddenByUser(d, n),
+      color: (id) => rgbCss(want.get(id) ?? lineOf(id)?.color ?? DEFAULT_EDGE_COLOR),
+      faint: (id) => !!lineOf(id)?.dashed,
+      sections: v.sections.map((s) => ({ normal: s.normal, offset: s.offset, items: s.items ?? null })),
     });
   }
 
@@ -2774,6 +2857,13 @@ export class SkpViewerApp implements PanelHost {
     }
     const v = this.viewer;
     const tool = this.measureTool;
+    // 줄자 시작점을 찍은 뒤 숫자를 치면 측정값 칸으로(SketchUp처럼 — 그동안 1~7 보기 키는 칸이 받는다)
+    if (tool?.mode === 'tape' && tool.pointCount === 1 && !isEditableTarget(ev.target) && vcbStartKey(ev) && this.vcb.shown && !this.busy) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.vcb.begin(ev.key);
+      return;
+    }
     if (tool?.active && !isEditableTarget(ev.target)) {
       if (tool.handleKey(ev)) {
         ev.stopPropagation();
@@ -2926,9 +3016,12 @@ export class SkpViewerApp implements PanelHost {
           { mode: this.renderMode, theme: this.theme, backdrop: this.backdrop, sky: this.fileBg ? this.styleSky : null },
           (id) => d.annotationKind.get(id) === 'sectionPlanes',
           this.styleEdge,
+          !!d.edgeColoring && this.styleEdgeMode === d.edgeColoring,
         )
       : new Map();
     this.lineContrast.apply(v, want);
+    this.lineColorWant = want;
+    this.refreshMarks();
     this.applyEdgeLooks();
   }
 
@@ -3077,6 +3170,42 @@ export class SkpViewerApp implements PanelHost {
     e.selPart.title = part === 'edge' ? '누른 모서리 하나의 길이(곡선이면 곡선 전체)만 보기' : '누른 면 하나의 넓이만 보기';
   }
 
+  /**
+   * 측정값 칸 자리·보이기: 줄자에서만. 넓은 화면은 3D 보기 오른쪽 아래에 늘(SketchUp 측정값 칸처럼 지금 길이를 보인다),
+   * 측정 띠를 쓰는 화면은 띠 안 둘째 줄에 줄자 결과·안내점이 있을 때만(커서가 없어 결과의 방향으로 넣는다 — 그 전에는 띠를 작게)
+   */
+  private placeVcb(): void {
+    const tool = this.measureTool;
+    const band = !!this.bandQuery?.matches;
+    const host = band ? this.els.measureBar : this.els.measureBar.parentElement;
+    if (host && this.vcb.el.parentElement !== host) {
+      // 띠 안에서는 결과 줄 다음, 기록·알림 앞
+      if (band) host.insertBefore(this.vcb.el, this.els.measureLog);
+      else host.insertBefore(this.vcb.el, this.els.measureBar.nextSibling);
+    }
+    const tape = !!this.doc && tool?.mode === 'tape';
+    const show = tape && (!band || tool!.result?.kind === 'tape' || tool!.guides.length > 0);
+    this.vcb.show(show);
+    this.vcb.setGuides(tool?.guides.length ?? 0);
+    this.els.measureBar.classList.toggle('has-vcb', band && show);
+  }
+
+  /** 측정값 칸에 친 길이(mm) 넣기 → 못 넣었으면 알릴 글 */
+  private submitLength(mm: number): string | null {
+    const d = this.doc;
+    const tool = this.measureTool;
+    if (!d || !tool) return null;
+    const r = tool.applyLength(mm / mmPerSceneUnit(d.scene.units));
+    if (r === 'ok') {
+      this.refreshStatus();
+      return null;
+    }
+    if (r === 'zero') return '0이 아닌 길이를 치세요';
+    if (r === 'direction') return '커서를 잴 방향으로 옮긴 뒤 치세요';
+    if (r === 'start') return '먼저 시작점을 누르세요';
+    return null;
+  }
+
   /** 측정 띠: 결과(거리와 축별 길이·각도)나 다음에 누를 곳 안내 */
   private refreshMeasureBar(): void {
     const e = this.els;
@@ -3084,6 +3213,7 @@ export class SkpViewerApp implements PanelHost {
     const tool = this.measureTool;
     const on = !!d && !!tool?.active;
     e.measureBar.hidden = !on;
+    this.placeVcb();
     if (!on || !d || !tool) return;
     const t = e.measureText;
     t.replaceChildren();
@@ -3151,6 +3281,8 @@ export class SkpViewerApp implements PanelHost {
       labels: this.labels?.size ?? 0,
       labelsOccluded: this.labels?.occludedCount ?? 0,
       measureMode: this.measureTool?.mode ?? null,
+      measureGuides: this.measureTool?.guides.length ?? 0,
+      vcb: { shown: this.vcb.shown, value: this.vcb.input.value, inBand: this.vcb.el.parentElement === this.els.measureBar },
       selectionKind: d?.selection?.kind ?? null,
       slideshow: this.sliding,
       fileBackground: this.fileBg,

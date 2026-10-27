@@ -20,7 +20,7 @@ import type { SkpMetaExtras } from './meta';
 import { MfcRefused, readMfcModel, rememberMfcImages, takeMfcResult } from './mfcmodel';
 import { readModelDat, type SkpModel } from './model';
 import { buildSceneParts, type SceneTexture } from './scene';
-import { axesMeta, cameraMeta, locationMeta, pagesMeta, shadowMeta, styleFor, unitsFor } from './scene-meta';
+import { axesMeta, cameraMeta, edgeColoringFor, locationMeta, pagesMeta, shadowMeta, styleFor, unitsFor } from './scene-meta';
 import { parseStyleXml } from './styles';
 import { findSkpZipItems, readZipItem, readZipItemPartial } from './zip';
 
@@ -208,6 +208,14 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
   const front = style?.front;
   const back = style?.back;
   const edge = style?.edgeColor;
+  // 모서리 색 "재질별·축별"(모형 스타일, 아니면 스타일을 쓰는 장면): 모서리 묶음에 정점 색을 단다
+  let edgeColoring: ReturnType<typeof edgeColoringFor>;
+  try {
+    edgeColoring = edgeColoringFor(model, style, styles, u.scale);
+  } catch {
+    edgeColoring = undefined;
+  }
+  const axes = model.axes;
   let parts: ReturnType<typeof buildSceneParts>;
   try {
     progress(0.65, '면 삼각화·인스턴스 펼치는 중');
@@ -220,6 +228,7 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
       ...(back && back.every(Number.isFinite) ? { defaultBackColor: [back[0], back[1], back[2], 1] as const } : {}),
       // 모형 스타일의 모서리 색(SketchUp 기본은 검정, 회색 모서리 스타일도 있다)
       ...(edge && edge.every(Number.isFinite) ? { edgeColor: [edge[0], edge[1], edge[2], 1] as const } : {}),
+      ...(edgeColoring ? { edgeColoring, ...(axes ? { axes: [axes.x, axes.y, axes.z] } : {}) } : {}),
       onProgress: (f) => progress(0.65 + 0.3 * f, '면 삼각화·인스턴스 펼치는 중'),
     };
     if (sceneTex.size) build.textures = sceneTex;
@@ -249,6 +258,7 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
   // 면·곡선 고르기(화면의 면 넓이·곡선 길이): 그물마다 면 경계, 모서리 묶음마다 선분의 곡선 번호
   meta.faceRuns = parts.faceRuns;
   if (parts.segmentCurves) meta.segmentCurves = parts.segmentCurves;
+  if (parts.edgeColoring) meta.edgeColoring = parts.edgeColoring;
   Object.assign(meta, extrasMeta(model, u.scale, styles, style, parts, warnings));
   // 화면이 알림을 띄울지 가리는 표시: 깨지거나 잘린 곳(damaged), 출력 한도(limited)
   if (damaged || model.damaged) meta.damaged = true;
@@ -472,6 +482,7 @@ function extrasMeta(
   if (parts.sectionPlanes) out.sectionPlanes = parts.sectionPlanes;
   if (parts.annotationItems) out.annotationItems = parts.annotationItems;
   if (parts.annotationRuns) out.annotationRuns = parts.annotationRuns;
+  if (parts.annotationMarks) out.annotationMarks = parts.annotationMarks;
   if (parts.attributes) out.attributes = parts.attributes;
   if (parts.modelAttrs !== undefined) out.modelAttrs = parts.modelAttrs;
   if (parts.treeInfo) out.treeInfo = parts.treeInfo;

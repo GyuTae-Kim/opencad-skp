@@ -11,7 +11,7 @@
  * 형식 지식은 PRISME 엔진(SketchUp C API를 비교 기준으로 맞춘 해석기)의 뿌리 절 해석에서 옮겼다.
  */
 import type { Scene3d } from 'opencad-viewer3d/types';
-import type { SkpAttrDictsMeta, SkpAttrValueMeta, SkpAxesMeta, SkpCameraMeta, SkpLocationMeta, SkpPageMeta, SkpShadowMeta, SkpStyleMeta, Vec3 } from './meta';
+import type { SkpAttrDictsMeta, SkpAttrValueMeta, SkpAxesMeta, SkpCameraMeta, SkpEdgeColorMode, SkpLocationMeta, SkpPageMeta, SkpShadowMeta, SkpStyleMeta, Vec3 } from './meta';
 import type { SkpAttr, SkpAttrDicts, SkpAxes, SkpCamera, SkpModel, SkpRenderingRaw, SkpShadowInfo } from './model';
 import { resolveStyle } from './styles';
 
@@ -114,6 +114,25 @@ export function styleFor(raw: SkpRenderingRaw | undefined, styles: ReadonlyMap<s
   if (!raw && !items) return undefined;
   const s = resolveStyle(raw, items, scale);
   return s && typeof s === 'object' && Object.keys(s).length ? s : undefined;
+}
+
+/**
+ * 모서리 묶음에 정점 색으로 칠할 모서리 색 방식: 모형 스타일이 재질별·축별이면 그것, 아니면 스타일을 쓰는 첫 장면의 것(없으면 없음 — 모두 같게).
+ * 장면마다 방식이 다르면 화면은 이 방식의 정점 색과 한 색(모두 같게) 사이만 바꾼다
+ */
+export function edgeColoringFor(
+  model: Pick<SkpModel, 'pages'>,
+  modelStyle: SkpStyleMeta | undefined,
+  styles: ReadonlyMap<string, Map<number, string>> | undefined,
+  scale = 1,
+): SkpEdgeColorMode | undefined {
+  if (modelStyle?.edgeColorMode) return modelStyle.edgeColorMode;
+  for (const p of model.pages ?? []) {
+    if (!(Number.isFinite(p.flags) && p.flags & PAGE_USE_STYLE)) continue;
+    const m = styleFor(p.rendering, styles, scale)?.edgeColorMode;
+    if (m) return m;
+  }
+  return undefined;
 }
 
 export interface PagesContext {

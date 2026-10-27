@@ -5,10 +5,8 @@ import { parseLaunch } from '../../src/app/launch';
 import { canUseServiceWorker, consumeLaunchFiles, registerServiceWorker, type SwRegistration, type SwWorker } from 'opencad-site-kit/pwa/client';
 import { RecentStore, SHARED_MAX_AGE_MS, nameOfRecentId, staleSharedKeys, type RecentBackend, type RecentEntry } from '../../src/app/recent';
 import { fillTemplate, listFiles, serviceWorkerValues } from 'opencad-site-kit/pwa/sw-plugin';
-import { offline, precache } from '../../tools/site.mjs';
+import { offline } from '../../tools/site.mjs';
 
-/** 이 앱의 미리 담을 목록·판 이름 짓기(tools/site.mjs) */
-const swOptions = { precache, sortUrls: true, version: offline.version };
 
 describe('서비스 워커 등록·새 판 알림', () => {
   const worker = (state = 'installed'): SwWorker & { msgs: unknown[]; fire: () => void } => {
@@ -153,7 +151,7 @@ describe('서비스 워커 만들기(빌드)', () => {
     ])
       writeFileSync(join(root, f!), c!);
     try {
-      const values = () => serviceWorkerValues(listFiles(root), (f) => readFileSync(join(root, f)), swOptions);
+      const values = () => serviceWorkerValues(listFiles(root), (f) => readFileSync(join(root, f)), offline);
       expect(values().precache).toEqual(['./', 'assets/index-1.css', 'assets/index-1.js', 'en/', 'en/manifest.webmanifest', 'icon-192.png', 'manifest.webmanifest']);
       const tpl = "const VERSION = '__VERSION__';\nconst ASSETS = __PRECACHE__;";
       const a = fillTemplate(tpl, values());

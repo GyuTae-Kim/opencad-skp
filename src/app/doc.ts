@@ -8,6 +8,8 @@ import { MAX_SECTION_PLANES } from 'opencad-viewer3d/section';
 import type { SkpImages } from '../images';
 import type {
   SkpAnnotationItems,
+  SkpAnnotationMarks,
+  SkpEdgeColorMode,
   SkpAttrDictsMeta,
   SkpAxesMeta,
   SkpLocationMeta,
@@ -240,6 +242,10 @@ export interface SkpDoc {
   annotationKind: Map<string, AnnotationKind>;
   /** 주석 선분 묶음 id → 나무 노드 구간(선분 차례 start[k]부터 노드 node[k] — 숨긴 노드 안 주석 선을 숨긴다). 나무가 없으면 비어 있다 */
   annotationRuns: Map<string, AnnotationRuns>;
+  /** 치수·지시선 선분 묶음 id → 화면 크기로 그릴 끝 표시·연장선 넘침(meta.annotationMarks, 꼴이 맞는 칸만) */
+  annotationMarks: Record<string, SkpAnnotationMarks>;
+  /** 모형 모서리 묶음이 정점 색으로 띤 모서리 색 방식(meta.edgeColoring — 재질별·축별, 없으면 null) */
+  edgeColoring: SkpEdgeColorMode | null;
   attributes: SkpAttrDictsMeta[];
   modelAttrs: number | null;
   treeInfo: SkpTreeInfo | null;
@@ -720,6 +726,22 @@ export function folderTags(d: Pick<SkpDoc, 'tags' | 'tagFolders'>, folder: numbe
   return d.tags.filter((t) => t.folder >= 0 && inside(t.folder)).map((t) => t.name);
 }
 
+/** meta.annotationMarks → 치수·지시선 묶음 id → 표시(주석 항목이 아니거나 배열 꼴·길이가 맞지 않는 칸은 버린다) */
+export function readAnnotationMarks(v: unknown, kinds: ReadonlyMap<string, AnnotationKind>): Record<string, SkpAnnotationMarks> {
+  const out: Record<string, SkpAnnotationMarks> = {};
+  if (!v || typeof v !== 'object') return out;
+  for (const [id, raw] of Object.entries(v as Record<string, unknown>)) {
+    const k = kinds.get(id);
+    if (k !== 'dimensions' && k !== 'leaders') continue;
+    const m = raw as Partial<SkpAnnotationMarks> | null;
+    if (!m || !(m.geom instanceof Float64Array) || !(m.kind instanceof Uint8Array) || !(m.span instanceof Float64Array) || !(m.node instanceof Int32Array)) continue;
+    const n = m.kind.length;
+    if (!n || m.geom.length !== n * 9 || m.span.length !== n || m.node.length !== n) continue;
+    out[id] = { geom: m.geom, kind: m.kind, span: m.span, node: m.node };
+  }
+  return out;
+}
+
 /** 주석 선분 묶음의 나무 노드 구간(meta.annotationRuns 한 칸) */
 export interface AnnotationRuns {
   start: Uint32Array;
@@ -759,6 +781,8 @@ export function readMetaExtras(scene: Scene3d): Pick<
   | 'annotationItems'
   | 'annotationKind'
   | 'annotationRuns'
+  | 'annotationMarks'
+  | 'edgeColoring'
   | 'attributes'
   | 'modelAttrs'
   | 'treeInfo'
@@ -793,6 +817,7 @@ export function readMetaExtras(scene: Scene3d): Pick<
   if (annotationItems) for (const k of Object.keys(annotationItems) as AnnotationKind[]) for (const id of annotationItems[k]) annotationKind.set(id, k);
   const tree = readTree(scene);
   const annotationRuns = readAnnotationRuns(m.annotationRuns, annotationKind, tree?.count ?? 0);
+  const annotationMarks = readAnnotationMarks(m.annotationMarks, annotationKind);
   const info = m.treeInfo && typeof m.treeInfo === 'object' ? (m.treeInfo as SkpTreeInfo) : null;
   const infoOk = !!info && !!tree && info.attrs instanceof Int32Array && info.attrs.length === tree.count && info.size instanceof Float32Array && info.size.length === tree.count * 3;
   return {
@@ -811,6 +836,8 @@ export function readMetaExtras(scene: Scene3d): Pick<
     annotationItems,
     annotationKind,
     annotationRuns,
+    annotationMarks,
+    edgeColoring: m.edgeColoring === 'material' || m.edgeColoring === 'axis' ? m.edgeColoring : null,
     attributes: objects<SkpAttrDictsMeta>(m.attributes),
     modelAttrs: num(m.modelAttrs),
     treeInfo: infoOk ? info : null,

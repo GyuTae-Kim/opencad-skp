@@ -42,6 +42,9 @@ export interface SkpCameraMeta {
 /** 면 스타일 */
 export type SkpFaceStyle = 'wireframe' | 'hiddenLine' | 'shaded' | 'textured' | 'monochrome';
 
+/** 모서리 색 방식(SketchUp 스타일 "모서리 색"): 재질별 · 축별. 모두 같게는 값이 없다(edgeColor 한 색) */
+export type SkpEdgeColorMode = 'material' | 'axis';
+
 /** 스타일(렌더링 설정 + style.xml을 합친 값). 모르는 값은 빠진다 */
 export interface SkpStyleMeta {
   name?: string;
@@ -61,6 +64,11 @@ export interface SkpStyleMeta {
   front?: Rgb;
   back?: Rgb;
   edgeColor?: Rgb;
+  /**
+   * 모서리 색 방식(EdgeColorMode — 레코드 7348·style.xml 1002): 'material' 재질별(모서리 재질, 없으면 감싼 인스턴스 재질, 그것도 없으면 edgeColor),
+   * 'axis' 축별(그리기 축과 나란한 모서리는 축 색, 나머지는 edgeColor). 모두 같게(1)·모름이면 없다
+   */
+  edgeColorMode?: SkpEdgeColorMode;
   hiddenGeometry?: boolean;
   hiddenObjects?: boolean;
   axes?: boolean;
@@ -201,6 +209,18 @@ export interface SkpDimensionMeta {
   node: number;
 }
 
+/** 주석 선분 묶음 하나의 화면 크기 표시(meta.annotationMarks 한 칸). 표시 n개 */
+export interface SkpAnnotationMarks {
+  /** 표시마다 9개(세계): 끝점 xyz, 바깥 방향 xyz(단위 — 화살이 가리키는 쪽, 넘침은 이쪽으로 긋는다), 치수 평면에서 선에 수직 xyz(단위) */
+  geom: Float64Array;
+  /** 표시마다 꼴: 1 빗금 · 2 점 · 3 닫힌 화살 · 4 열린 화살 · 5 연장선 넘침 */
+  kind: Uint8Array;
+  /** 표시마다 그 표시가 붙은 선(치수선·지시선·반지름)의 세계 길이 — 화면에서 짧은 선은 표시를 줄인다 */
+  span: Float64Array;
+  /** 표시마다 놓인 나무 노드(-1 = 모형에 바로) — 숨긴 그룹·컴포넌트 안 표시는 숨긴다 */
+  node: Int32Array;
+}
+
 /** 단면 평면(배치마다 하나). plane = [a, b, c, d]: a·x+b·y+c·z+d ≥ 0 쪽이 남는다(세계) */
 export interface SkpSectionPlaneMeta {
   name: string;
@@ -283,12 +303,22 @@ export interface SkpMetaExtras {
    */
   annotationRuns?: Record<string, { start: Uint32Array; node: Int32Array }>;
   /**
+   * 치수·지시선 선분 묶음(annotationItems의 id)마다 화면 크기로 그릴 끝 표시(화살·빗금·점)와 연장선 넘침. 선분 묶음에는 선만 있고,
+   * 화면은 이 표시를 그 묶음이 보일 때(같은 태그·숨김·노드·단면) 덧그림 층에 같은 화소 크기로 그린다(확대·축소해도 크기가 그대로)
+   */
+  annotationMarks?: Record<string, SkpAnnotationMarks>;
+  /**
    * 그물마다(scene.meshes 차례) 면 경계: 면 k의 삼각형은 [runs[k], runs[k + 1])(마지막 면은 그물 끝까지).
    * 해석기가 면마다 삼각형을 이어 붙이므로 고른 삼각형(Pick3d.raw)이 든 SketchUp 면 하나를 구간으로 찾는다
    */
   faceRuns?: Uint32Array[];
   /** 모서리 묶음마다(scene.lines 차례) 선분의 놓인 곡선 번호(-1 = 곡선 아님, 같은 수 = 같은 곡선의 한 배치). 곡선이 없는 묶음·주석은 null */
   segmentCurves?: (Int32Array | null)[];
+  /**
+   * 모형 모서리 묶음(skp-edges-*·skp-reveal-edges-*)이 정점 색(LineSet3d.colors)으로 띤 모서리 색 방식(SketchUp "모서리 색: 재질별·축별").
+   * 모형 스타일이 그 방식이거나(아니면) 스타일을 쓰는 장면이 그 방식일 때만. 화면은 지금 스타일이 모두 같게면 묶음 색(color) 한 색으로 덮는다
+   */
+  edgeColoring?: SkpEdgeColorMode;
   /** 위치(정보 탭)·그림자 설정·그리기 축 */
   location?: SkpLocationMeta;
   shadow?: SkpShadowMeta;

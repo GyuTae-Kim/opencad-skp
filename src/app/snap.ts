@@ -1,11 +1,15 @@
 /**
  * 측정 도구의 추정(스냅, 순수 함수): 커서 둘레에서 SketchUp처럼 붙을 점을 고른다.
  *
- * - 차례: 끝점(초록 원)·호의 중심(초록 원) → 중간점(청록 원) → 수직(자홍, 시작점에서 모서리에 내린 발) → 모서리 위(빨강 사각형)
+ * - 차례: 끝점(초록 원)·호의 중심(초록 원) → 중간점(청록 원) → 교차점(빨강 ×, 커서 둘레 두 모서리가 3D에서 만나는 점)
+ *   → 수직(자홍, 시작점에서 모서리에 내린 발) → 모서리 위(빨강 사각형)
  *   → 그물 삼각형 꼭짓점(끝점) → 면에 수직(자홍, 시작점에서 커서 밑 면 평면에 내린 발) → 면 위(파랑 마름모).
  *   같은 차례면 커서에 가까운 것. 추정 반경은 화면 10화소(터치는 넓게).
  * - 호·원의 중심: 커서 밑(둘레 포함) 곡선 선분의 중심(부른 쪽이 curveCenter로 잰다)과, 앞서 지나간 곡선의 중심(centers —
  *   SketchUp처럼 호를 한 번 훑고 가운데로 가면 붙는다).
+ * - 교차점(SketchUp "교차점" 추정): 커서·둘레에서 고른 선분 두 개가 3D에서 만나는 곳(두 선분 모두 안쪽 — 끝에서 만나는 꺾인 곳·T자는 끝점이 맡는다).
+ *   다른 그룹의 모서리끼리, 보조선과 모서리처럼 SketchUp이 나누지 않은 교차를 잡는다. 화면에서만 엇갈리는 선분(깊이가 다름)은 잡지 않는다.
+ *   계산은 코어 0.9.0 순수 함수 segmentIntersection(허용치는 그 자리 반 화소의 세계 길이)을 쓴다.
  * - 수직: 시작점(from)이 있을 때만 — 모서리 직선에 내린 발이 선분 안이면, 면은 커서 밑 면의 평면에 내린 발(벽과 벽 사이 거리).
  * - 시작점(from)이 있고 결과가 면 위·빈 곳이면, 커서가 시작점에서 축 방향(화면 각 6° 안)으로 가면 그 축 위로 고정한다
  *   (빨강 X · 초록 Y · 파랑 Z).
@@ -20,6 +24,7 @@ import type { LineSet3d, Mesh3d, Pick3d } from 'opencad-viewer3d/types';
 import { projectToScreen, screenRay, viewDepth, worldPerPixel, type ViewFrame } from 'opencad-viewer3d/camera';
 import type { V3 } from 'opencad-viewer3d/math';
 import { PICK_TOLERANCE_PX } from 'opencad-viewer3d/pointer';
+import { segmentIntersection } from 'opencad-viewer3d/inference';
 
 /**
  * 그물 정점 → 세계 점: 묶음 원점(origin)을 더한 뒤 배치 행렬(matrix, 4×4 열 우선)을 곱한다(코어 math의 modelMatrix·transformPoint와 같은 계산).
@@ -36,7 +41,7 @@ function placePoint(matrix: ArrayLike<number> | undefined, origin: readonly numb
   return [(m[0]! * x + m[4]! * y + m[8]! * z + m[12]!) * iw, (m[1]! * x + m[5]! * y + m[9]! * z + m[13]!) * iw, (m[2]! * x + m[6]! * y + m[10]! * z + m[14]!) * iw];
 }
 
-export type SnapKind = 'endpoint' | 'midpoint' | 'center' | 'perpendicular' | 'onEdge' | 'onFace' | 'axis' | 'free';
+export type SnapKind = 'endpoint' | 'midpoint' | 'center' | 'intersection' | 'perpendicular' | 'onEdge' | 'onFace' | 'axis' | 'free';
 export type Axis = 'x' | 'y' | 'z';
 
 /** 추정 결과(좌표는 세계 = 장면 단위) */
@@ -45,6 +50,8 @@ export interface Snap {
   point: V3;
   /** 끝점·중간점·모서리 위: 그 선분(세계) */
   edge?: [V3, V3];
+  /** 교차점: 만나는 다른 선분(세계) */
+  other?: [V3, V3];
   /** 커서 밑이 면이면 그 면의 세계 법선(눈 쪽) — 각도기 평면에 쓴다 */
   normal?: V3;
   /** 축 고정이면 그 축 */
@@ -62,6 +69,9 @@ export interface SnapScene {
   meshes: readonly Mesh3d[];
   lines: readonly LineSet3d[];
 }
+
+/** 측정값 칸으로 찍은 안내점에 붙는 추정 글(끝점처럼 붙는다 — SketchUp "안내점") */
+export const GUIDE_POINT_LABEL = '안내점';
 
 /** 면에 수직 추정 글(모서리에 수직은 SNAP_LABELS.perpendicular) */
 export const FACE_PERPENDICULAR_LABEL = '면에 수직';
@@ -85,11 +95,14 @@ export const CORE_PICK_TOLERANCE_PX = PICK_TOLERANCE_PX;
 export const AXIS_LOCK_DEG = 6;
 /** 시작점에서 이만큼(화소) 떨어져야 축 고정을 본다(가까우면 각이 흔들린다) */
 export const AXIS_LOCK_MIN_PX = 12;
+/** 교차점을 볼 선분 수 상한(커서·둘레에서 고른 서로 다른 선분 — 짝은 이것의 제곱 반) */
+export const MAX_INTERSECTION_SEGMENTS = 16;
 
 export const SNAP_LABELS: Readonly<Record<SnapKind, string>> = Object.freeze({
   endpoint: '끝점',
   midpoint: '중간점',
   center: '중심',
+  intersection: '교차점',
   perpendicular: '모서리에 수직',
   onEdge: '모서리에',
   onFace: '면에',
@@ -97,11 +110,12 @@ export const SNAP_LABELS: Readonly<Record<SnapKind, string>> = Object.freeze({
   free: '',
 });
 export const AXIS_LABELS: Readonly<Record<Axis, string>> = Object.freeze({ x: '빨강 축에', y: '녹색 축에', z: '파랑 축에' });
-/** 추정 표식 색(SketchUp: 끝점 초록, 중간점 청록, 모서리 빨강, 면 파랑) */
+/** 추정 표식 색(SketchUp: 끝점 초록, 중간점 청록, 교차점·모서리 빨강, 면 파랑) */
 export const SNAP_COLORS: Readonly<Record<SnapKind, string>> = Object.freeze({
   endpoint: '#00a000',
   midpoint: '#00b4b4',
   center: '#00a000',
+  intersection: '#dc0000',
   perpendicular: '#c800c8',
   onEdge: '#dc0000',
   onFace: '#1e46dc',
@@ -308,17 +322,22 @@ export interface SnapInput {
   centers?: readonly V3[];
   /** 축 고정에 쓸 축(모형의 그리기 축, 없으면 세계 축) */
   axisDirs?: AxisDirs | null;
+  /** 측정값 칸으로 찍은 안내점(세계) — 끝점처럼 붙는다 */
+  guides?: readonly V3[];
 }
 
 interface Cand {
-  kind: 'endpoint' | 'midpoint' | 'center' | 'perpendicular' | 'onEdge';
+  kind: 'endpoint' | 'midpoint' | 'center' | 'intersection' | 'perpendicular' | 'onEdge';
   point: V3;
   rank: number;
   dist: number;
   edge?: [V3, V3];
+  other?: [V3, V3];
   id: string;
   /** 코어가 이미 보이는 것으로 고른 점(가림 판정 생략) */
   trusted: boolean;
+  /** 종류 글 대신 쓸 글(안내점) */
+  label?: string;
 }
 
 /** 점 p에서 직선(a, b)에 내린 발과 그 매개변수(a = 0, b = 1). 선분 길이가 0이면 null */
@@ -355,6 +374,8 @@ export function chooseSnap(o: SnapInput): Snap {
   // 선분(SketchUp 모서리): 커서에서 고른 선 + 둘레에서 고른 선
   const seen = new Set<string>();
   const scene = o.scene;
+  /** 교차점을 볼 선분(그 자리 반 화소의 세계 길이 tol과 함께) */
+  const near: { seg: [V3, V3]; id: string; tol: number }[] = [];
   for (const p of [pick, ...(o.probes ?? [])]) {
     if (!p || p.kind !== 'line' || !scene) continue;
     const key = `${p.id}#${p.raw ?? p.index}`;
@@ -375,10 +396,21 @@ export function chooseSnap(o: SnapInput): Snap {
     const c = o.curveCenter?.(p) ?? null;
     if (c) push({ kind: 'center', point: c, rank: 0, id: p.id, trusted: false });
     const center = p === pick;
-    push({ kind: 'onEdge', point: center ? [...p.point] : rayClosestOnSegment(ray, a, b), rank: 2, edge: seg, id: p.id, trusted: center });
+    const on = center ? ([...p.point] as V3) : rayClosestOnSegment(ray, a, b);
+    push({ kind: 'onEdge', point: on, rank: 2, edge: seg, id: p.id, trusted: center });
+    if (near.length < MAX_INTERSECTION_SEGMENTS) near.push({ seg, id: p.id, tol: 0.5 * worldPerPixel(f, Math.max(viewDepth(f, on), 0)) });
   }
+  // 두 선분이 3D에서 만나는 점(둘 다 안쪽)
+  for (let i = 0; i < near.length; i++)
+    for (let j = i + 1; j < near.length; j++) {
+      const s = near[i]!, t = near[j]!;
+      const x = segmentIntersection(s.seg[0], s.seg[1], t.seg[0], t.seg[1], Math.max(s.tol, t.tol));
+      if (x) push({ kind: 'intersection', point: x, rank: 1.25, edge: s.seg, other: t.seg, id: s.id, trusted: false });
+    }
   // 앞서 지나간 곡선의 중심
   for (const c of o.centers ?? []) push({ kind: 'center', point: [c[0], c[1], c[2]], rank: 0, id: '', trusted: false });
+  // 측정값 칸으로 찍은 안내점(덧그림이라 형상에 가리지 않는다)
+  for (const g of o.guides ?? []) push({ kind: 'endpoint', point: [g[0], g[1], g[2]], rank: 0, id: '', trusted: true, label: GUIDE_POINT_LABEL });
   // 점 묶음(있으면 끝점처럼)
   if (pick && pick.kind === 'point') push({ kind: 'endpoint', point: [...pick.point], rank: 0, id: pick.id, trusted: true });
   // 그물 윤곽선(코어 윤곽선 고르기 — 카메라를 보는 그물의 모서리): 고른 점을 모서리 위로
@@ -393,8 +425,9 @@ export function chooseSnap(o: SnapInput): Snap {
   let snap: Snap | null = null;
   for (const c of cands) {
     if (!c.trusted && o.visible && !o.visible(c.point)) continue;
-    snap = { kind: c.kind, point: c.point, label: SNAP_LABELS[c.kind], id: c.id };
+    snap = { kind: c.kind, point: c.point, label: c.label ?? SNAP_LABELS[c.kind], id: c.id };
     if (c.edge) snap.edge = c.edge;
+    if (c.other) snap.other = c.other;
     break;
   }
   // 면에 수직: 시작점에서 커서 밑 면의 평면에 내린 발이 추정 반경 안이면(맞은편 벽까지의 거리)

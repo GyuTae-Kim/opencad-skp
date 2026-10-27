@@ -4,7 +4,9 @@
  * 치수선 배치는 PRISME 뷰어(dimensionGeometry)와 같다:
  *   A = S + offset, B = (잰 축이 있으면) A + u·((E−S)·u), 아니면 E + offset. 잰 값 = |(E−S)·u|(축이 없으면 |E−S|).
  *   연장선 S→A·E→B(길이가 있을 때만)는 치수선 너머로 조금 더 긋는다.
- * 뷰어는 끝 표시·연장선 넘침을 화면 크기(9·6 화소)로 그리지만, 장면 선분은 세계 좌표라 크기(mark)를 세계 길이로 받는다.
+ * 뷰어는 끝 표시·연장선 넘침을 화면 크기(9·6 화소)로 그린다. 장면 선분은 세계 좌표라 크기를 정할 수 없으므로 치수·지시선은
+ * 선(치수선·연장선·지시선)만 장면 선분으로 내고, 끝 표시·연장선 넘침은 자리·방향만 표시 목록(MarkSink → meta.annotationMarks)으로 넘겨
+ * 앱이 덧그림 층에 매 화면 같은 화소 크기로 그린다(linearLines·leaderLines·radialLines). 단면 기호는 그룹 크기에 맞춘 세계 크기 그대로(endMark).
  * 끝 표시 꼴(빗금·점·열린·닫힌 화살표)도 뷰어를 따랐다(화살 날개 ±20°, 닫힌 화살은 밑변과 채움선 몇 개).
  */
 import type { Vec3 } from './meta';
@@ -115,6 +117,40 @@ export function linearSegments(out: number[], L: LinearLayout, perp: Vec3, arrow
   if (!d) return;
   endMark(out, L.a, mulS(d, -1), perp, arrow, mark);
   endMark(out, L.b, d, perp, arrow, mark);
+}
+
+/** 끝 표시 꼴 번호(meta.annotationMarks.kind): 1 빗금 · 2 점 · 3 닫힌 화살 · 4 열린 화살 */
+export const MARK_KIND: Readonly<Record<Exclude<Arrow, 'none'>, number>> = Object.freeze({ slash: 1, dot: 2, closed: 3, open: 4 });
+/** 표시 꼴 번호: 연장선 넘침(그 점에서 dir 쪽으로 선을 조금 더 긋는다) */
+export const MARK_OVERSHOOT = 5;
+
+/**
+ * 화면 크기로 그릴 표시 하나를 받는다: p 끝점(세계), dir 바깥 방향(단위 — 화살은 이쪽을 가리킨다, 넘침은 이쪽으로 긋는다),
+ * perp 치수 평면에서 선에 수직(단위), kind 꼴 번호, span 그 표시가 붙은 선의 세계 길이(짧은 선은 앱이 표시를 줄인다)
+ */
+export type MarkSink = (p: Vec3, dir: Vec3, perp: Vec3, kind: number, span: number) => void;
+
+/** 끝 표시 하나를 표시 목록으로(없음·모르는 꼴은 넣지 않는다) */
+export function pushEndMark(marks: MarkSink, p: Vec3, dir: Vec3, perp: Vec3, kind: Arrow | undefined, span: number): void {
+  if (!kind || kind === 'none') return;
+  const k = MARK_KIND[kind];
+  if (k) marks(p, dir, perp, k, span);
+}
+
+/** 선형 치수: 치수선 + 연장선(치수선까지)은 선분으로, 두 끝 표시·연장선 넘침은 표시 목록으로 */
+export function linearLines(out: number[], L: LinearLayout, perp: Vec3, arrow: Arrow | undefined, marks: MarkSink): void {
+  seg(out, L.a, L.b);
+  const span = len(sub(L.b, L.a));
+  for (const ext of [L.extA, L.extB]) {
+    if (!ext) continue;
+    seg(out, ext[0], ext[1]);
+    const d = unit(sub(ext[1], ext[0]));
+    if (d) marks(ext[1], d, perp, MARK_OVERSHOOT, span);
+  }
+  const d = unit(sub(L.b, L.a));
+  if (!d) return;
+  pushEndMark(marks, L.a, mulS(d, -1), perp, arrow, span);
+  pushEndMark(marks, L.b, d, perp, arrow, span);
 }
 
 /** 선 P + t·d를 상자에 맞춰 자른 [t0, t1]. 상자를 지나지 않으면 null */

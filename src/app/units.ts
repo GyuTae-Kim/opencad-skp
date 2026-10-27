@@ -239,3 +239,68 @@ export function unitsLabel(d: UnitsDisplay): string {
   if (d.lengthFormat === 'engineering') return `${fmt} · 소수 ${precisionOf(d.lengthPrecision, 2)}자리`;
   return `${fmt} · 1/${2 ** precisionOf(d.lengthPrecision, 3)}"`;
 }
+
+/**
+ * 측정값 칸(VCB)에 친 길이 글 → mm(못 읽으면 null). SketchUp 측정값 칸처럼 단위를 붙여 칠 수 있고, 단위가 없으면 모형 단위로 읽는다
+ * (십진 → 길이 단위, 건축·분수 → 인치, 공학 → 피트). 받는 꼴: 1200 · 1200mm · 1.2 m · 120 cm · 1,5(소수 쉼표 — 점이 없을 때) ·
+ * 5' · 5'6" · 5' 6 1/2" · 5'-6" · 6 1/2" · 3/4" · 48in · 4ft. 앞의 −는 반대 방향, 앞의 ~(칸에 보이던 반올림 표시)는 건너뛴다.
+ * 쉼표: decimalComma(소수 쉼표를 쓰는 언어 — usesDecimalComma)면 소수점이다. 아니면 세 자리 묶음(1,500 · 12,345.5)은 천 단위 구분으로
+ * 빼고(1,500을 1.5로 읽어 천 배 짧은 안내점을 찍지 않게), 그 밖의 쉼표(1,5)는 점이 없을 때 소수점으로 읽는다.
+ */
+export function parseLength(text: string, d: UnitsDisplay = DEFAULT_UNITS, decimalComma = false): number | null {
+  let s = String(text ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[″“”]/g, '"')
+    .replace(/[′‘’]/g, "'");
+  if (!s) return null;
+  let sign = 1;
+  if (/^[-+−]/.test(s)) {
+    if (s[0] !== '+') sign = -1;
+    s = s.slice(1).trim();
+  }
+  s = s.replace(/^~\s*/, '');
+  if (!decimalComma && /^\d{1,3}(?:,\d{3})+(?![\d,])/.test(s)) s = s.replace(/^[\d,]+/, (m) => m.replace(/,/g, ''));
+  if (!s.includes('.')) s = s.replace(/,/g, '.');
+  const NUM = String.raw`(?:\d+(?:\.\d*)?|\.\d+)`;
+  const FRAC = String.raw`(\d+)\s*/\s*(\d+)`;
+  const frac = (n?: string, m?: string): number | null => {
+    if (n === undefined || m === undefined) return 0;
+    const den = Number(m);
+    return den > 0 ? Number(n) / den : null;
+  };
+  let mm: number | null = null;
+  const fi = new RegExp(`^(${NUM})\\s*(?:'|ft|feet|foot)\\s*(?:-\\s*)?(?:(${NUM})?\\s*(?:${FRAC})?\\s*(?:"|in|inch|inches)?)?$`).exec(s);
+  if (fi) {
+    const f = frac(fi[3], fi[4]);
+    if (f === null) return null;
+    mm = (Number(fi[1]) * 12 + (fi[2] ? Number(fi[2]) : 0) + f) * 25.4;
+  } else {
+    const nu = new RegExp(`^(${NUM})?\\s*(?:${FRAC})?\\s*([a-z]+|"|')?$`).exec(s);
+    if (!nu || (nu[1] === undefined && nu[2] === undefined)) return null;
+    const f = frac(nu[2], nu[3]);
+    if (f === null) return null;
+    let unit: LengthUnitName;
+    if (nu[4]) {
+      const u = ALIASES[nu[4]];
+      if (!u) return null;
+      unit = u;
+    } else unit = d.lengthFormat === 'decimal' ? d.lengthUnit : d.lengthFormat === 'engineering' ? 'feet' : 'inch';
+    mm = ((nu[1] !== undefined ? Number(nu[1]) : 0) + f) * MM_PER[unit];
+  }
+  return Number.isFinite(mm) && Math.abs(mm) < 1e15 ? sign * mm : null;
+}
+
+/** 측정값 칸이 숫자 자판(소수점만)으로 충분한지: 십진 미터계·인치·피트 소수 꼴. 건축·분수는 ' " / 가 필요하다 */
+export function decimalKeypadFits(d: UnitsDisplay = DEFAULT_UNITS): boolean {
+  return d.lengthFormat === 'decimal' || d.lengthFormat === 'engineering';
+}
+
+/** 이 언어가 소수점으로 쉼표를 쓰는지(독일어 등 — 측정값 칸이 1,5를 1.5로 읽는다) */
+export function usesDecimalComma(lang: string | null | undefined): boolean {
+  try {
+    return new Intl.NumberFormat(lang || undefined).formatToParts(1.5).find((p) => p.type === 'decimal')?.value === ',';
+  } catch {
+    return false;
+  }
+}

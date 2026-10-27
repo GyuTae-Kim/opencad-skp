@@ -110,17 +110,32 @@ describe('주석 펼치기', () => {
     expect(items.leaders.every((id) => /^skp-leaders-\d+$/.test(id))).toBe(true);
     expect(items.sectionPlanes.every((id) => /^skp-sections-\d+$/.test(id))).toBe(true);
     expect(items.dimensions.map((id) => byId.get(id)!.group).sort()).toEqual(['Dims', 'Layer0']);
-    // 지시선은 숨긴 글 것을 빼고 하나: 글 자리 → 붙는 점 + 닫힌 화살
+    // 지시선은 숨긴 글 것을 빼고 하나: 글 자리 → 붙는 점(선만), 닫힌 화살은 화면 크기 표시(meta.annotationMarks)
     expect(items.leaders).toHaveLength(1);
     const leader = segs(byId.get(items.leaders[0]!)!);
-    expect(leader[0]).toEqual([3, 3, 3, 1, 1, 0]);
-    expect(leader.length).toBe(1 + 2 + 1 + 4);
-    // 치수선 A(0,-2,0) → B(10,-2,0), 연장선 S→A·E→B는 치수선 너머로, 빗금 끝 표시 둘
-    const dimLines = segs(byId.get(items.dimensions.find((id) => byId.get(id)!.group === 'Dims')!)!);
+    expect(leader).toEqual([[3, 3, 3, 1, 1, 0]]);
+    const marks = p.annotationMarks!;
+    const lm = marks[items.leaders[0]!]!;
+    expect([...lm.kind]).toEqual([3]);
+    expect([...lm.node]).toEqual([-1]);
+    close([...lm.geom.slice(0, 3)], [1, 1, 0]);
+    close([...lm.geom.slice(3, 6)], [-2 / Math.sqrt(17), -2 / Math.sqrt(17), -3 / Math.sqrt(17)]);
+    close([lm.span[0]!], [Math.sqrt(17)]);
+    // 치수선 A(0,-2,0) → B(10,-2,0), 연장선 S→A·E→B는 치수선까지(선분 셋), 넘침 둘·빗금 끝 표시 둘은 화면 크기 표시
+    const dimId = items.dimensions.find((id) => byId.get(id)!.group === 'Dims')!;
+    const dimLines = segs(byId.get(dimId)!);
     expect(dimLines[0]).toEqual([0, -2, 0, 10, -2, 0]);
-    expect(dimLines[1]!.slice(0, 3)).toEqual([0, 0, 0]);
-    expect(dimLines[1]![4]!).toBeLessThan(-2);
-    expect(dimLines).toHaveLength(5);
+    expect(dimLines[1]).toEqual([0, 0, 0, 0, -2, 0]);
+    expect(dimLines).toHaveLength(3);
+    const dm = marks[dimId]!;
+    // 넘침(연장선 방향 −Y로) 둘, 빗금(바깥쪽: A는 −X, B는 +X) 둘
+    expect([...dm.kind]).toEqual([5, 5, 1, 1]);
+    close([...dm.geom.slice(0, 6)], [0, -2, 0, 0, -1, 0]);
+    close([...dm.geom.slice(18, 24)], [0, -2, 0, -1, 0, 0]);
+    close([...dm.geom.slice(27, 33)], [10, -2, 0, 1, 0, 0]);
+    expect([...dm.span]).toEqual([10, 10, 10, 10]);
+    // 표시는 그 표시가 붙은 선분 묶음 것만(보조선·단면 기호는 없다)
+    expect(Object.keys(marks).sort()).toEqual([...items.dimensions, ...items.leaders].sort());
     // 끝없는 보조선은 넓힌 장면 범위(대각선의 10%)에서 자르고 점선, 끝 있는 보조선은 그대로
     const guideSet = byId.get(items.guides.find((id) => id.startsWith('skp-guides-'))!)!;
     expect(guideSet.dashed).toBe(true);

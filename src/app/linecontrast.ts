@@ -118,6 +118,8 @@ export function readableLineColor(color: Rgba, behind: readonly Rgb[], base: 'li
 export interface ColoredItem {
   id: string;
   color?: Rgba;
+  /** 정점 색(모서리 색 "재질별·축별"로 칠한 모형 모서리 묶음) */
+  colors?: Float32Array;
 }
 
 /** 파일 스타일의 모서리 색을 받는 선분 묶음(모형 모서리 — 부드러운·숨긴 모서리·주석 선은 아니다) */
@@ -131,17 +133,19 @@ const sameRgba = (a: Rgba, b: Rgba): boolean => a[0] === b[0] && a[1] === b[1] &
  * 덮어쓸 색(id → 색). skip(id)이 참인 항목(단면 평면 표시)과 색이 없는 항목(코어가 테마 선 색으로 그린다)은 뺀다.
  * edgeColor(지금 스타일의 모서리 색 — 장면 스타일이 바꿀 수 있다)를 주면 모형 모서리 묶음은 그 색이 바탕이고,
  * 배경이 선 뒤인 방식(와이어프레임·숨은 선·X-ray)에서는 그 바탕 색이 배경과 대비가 모자랄 때 읽히는 색으로 바꾼다.
- * 결과가 장면에 적힌 색과 같으면 넣지 않는다(모형 스타일 색 그대로인 음영 방식은 비어 있다)
+ * 결과가 장면에 적힌 색과 같으면 넣지 않는다(모형 스타일 색 그대로인 음영 방식은 비어 있다).
+ * 정점 색을 단 모형 모서리 묶음(모서리 색 "재질별·축별")은 keepVertexColors(지금 스타일이 그 방식)면 대비가 모자랄 때만 한 색으로 덮고,
+ * 아니면(지금 스타일이 모두 같게) 늘 한 색(스타일 모서리 색 또는 대비 색)으로 덮는다 — 정점 색은 묶음 색이 없을 때만 보이므로
  */
 export function lineColorOverrides(
   items: Iterable<ColoredItem>,
   view: LineView,
   skip: (id: string) => boolean = () => false,
   edgeColor: Rgb | null = null,
+  keepVertexColors = false,
 ): Map<string, Rgba> {
   const out = new Map<string, Rgba>();
   const behind = lineBackdrops(view);
-  if (!behind && !edgeColor) return out;
   const base = viewBase(view.theme, view.backdrop);
   const memo = new Map<string, Rgba | null>();
   for (const it of items) {
@@ -155,7 +159,9 @@ export function lineColorOverrides(
       if (!memo.has(k)) memo.set(k, (r = readableLineColor(c, behind, base)));
     }
     const want = r ?? c;
-    if (!sameRgba(want, c0)) out.set(it.id, want);
+    if (it.colors && isModelEdgeSet(it.id)) {
+      if (!keepVertexColors || r) out.set(it.id, want);
+    } else if (!sameRgba(want, c0)) out.set(it.id, want);
   }
   return out;
 }
