@@ -46,7 +46,7 @@ export const METRIC_KEYS = [
 ];
 
 export const USAGE = `쓰는 법: npm run sweep -- [--dirs <폴더1>:<폴더2>] [--out .runtime/sweep/<이름>] [--jobs N] [--limit N]
-                      [--min-mb N] [--timeout 초]
+                      [--min-mb N] [--timeout 초] [--mem]
   폴더를 재귀로 훑어 .skp를 고르고 내용 sha256으로 같은 파일을 뺀 뒤 앱 워커와 같은 길로 해석합니다.
   표본 폴더는 --dirs나 환경 변수 OPENCAD_SWEEP_DIRS(쌍점으로 구분)로 줍니다. 둘 다 없으면 이 안내만 찍고 끝납니다.
   --out     결과 폴더(기본 .runtime/sweep/<UTC 시각>) — records.jsonl(파일마다 한 줄)과 summary.json. 이미 결과가 있으면 멈춥니다
@@ -54,6 +54,7 @@ export const USAGE = `쓰는 법: npm run sweep -- [--dirs <폴더1>:<폴더2>] 
   --limit   같은 파일을 뺀 뒤 앞에서 N개만
   --min-mb  이 크기(MB) 이상인 파일만
   --timeout 파일 하나 시간 한도(초, 기본 300) — 넘거나 프로세스가 죽으면 예외로 적고 다음 파일로
+  --mem     파일마다 새 프로세스로 해석하며 단계별(풀기·그림·해석·장면) 최대 heap·rss를 잽니다(느립니다)
 비교: npm run sweep:compare -- <전 결과 폴더> <후 결과 폴더> [--top N] [--json <파일>] [--fail-on-change]`;
 
 /**
@@ -70,6 +71,7 @@ export function parseArgs(argv, env = {}, cpus = 2) {
     limit: /** @type {number | null} */ (null),
     minMb: 0,
     timeoutSec: 300,
+    mem: false,
     help: false,
     errors: /** @type {string[]} */ ([]),
   };
@@ -114,6 +116,9 @@ export function parseArgs(argv, env = {}, cpus = 2) {
         if (n !== null) opts.timeoutSec = n;
         break;
       }
+      case '--mem':
+        opts.mem = true;
+        break;
       case '-h':
       case '--help':
         opts.help = true;
@@ -201,6 +206,12 @@ function fileBrief(r) {
   if (r.inflated) out.inflated = true;
   if (r.heapMB !== undefined) out.heapMB = r.heapMB;
   if (r.rssMB !== undefined) out.rssMB = r.rssMB;
+  if (r.mem) {
+    out.peakHeapMB = r.mem.peakHeapMB;
+    out.peakExternalMB = r.mem.peakExternalMB;
+    out.peakRssMB = r.mem.peakRssMB;
+    if (r.mem.maxRssMB !== undefined) out.maxRssMB = r.mem.maxRssMB;
+  }
   return out;
 }
 
@@ -222,7 +233,7 @@ export function summarize(records, info = {}) {
   const stageNames = ['inflate', 'images', 'unpack', 'parse', 'scene'];
   const times = { total: [] };
   for (const s of stageNames) times[s] = [];
-  const mem = { heapMB: [], rssMB: [] };
+  const mem = { heapMB: [], rssMB: [], peakHeapMB: [], peakExternalMB: [], peakRssMB: [], maxRssMB: [] };
   let warningFiles = 0;
   let exceptionFiles = 0;
   let inflated = 0;
@@ -267,6 +278,12 @@ export function summarize(records, info = {}) {
     }
     if (r.heapMB !== undefined) mem.heapMB.push(r.heapMB);
     if (r.rssMB !== undefined) mem.rssMB.push(r.rssMB);
+    if (r.mem) {
+      mem.peakHeapMB.push(r.mem.peakHeapMB);
+      mem.peakExternalMB.push(r.mem.peakExternalMB);
+      mem.peakRssMB.push(r.mem.peakRssMB);
+      if (r.mem.maxRssMB !== undefined) mem.maxRssMB.push(r.mem.maxRssMB);
+    }
   }
   const sortEd = (o) => Object.fromEntries(Object.keys(o).sort(editionOrder).map((k) => [k, o[k]]));
   const timingMs = {};
@@ -326,7 +343,7 @@ export function formatSummary(s) {
   const t = s.timingMs?.total;
   if (t?.n) lines.push(`해석 시간(ms) p50 ${t.p50} · p90 ${t.p90} · p95 ${t.p95} · p99 ${t.p99} · 최대 ${t.max}`);
   for (const b of (s.largest ?? []).slice(0, 5)) {
-    const memText = b.heapMB !== undefined ? ` heap +${b.heapMB} MB · rss ${b.rssMB} MB` : '';
+    const memText = b.peakRssMB !== undefined ? ` 최대 heap ${b.peakHeapMB} MB · 최대 rss ${b.maxRssMB ?? b.peakRssMB} MB` : b.heapMB !== undefined ? ` heap +${b.heapMB} MB · rss ${b.rssMB} MB` : '';
     lines.push(`  큰 파일 ${b.sha256} ${b.sizeMB} MB ${b.edition} ${b.class} ${b.ms?.total ?? '-'} ms${memText}`);
   }
   return lines.join('\n');

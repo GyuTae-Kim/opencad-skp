@@ -13,6 +13,7 @@ export interface SweepOptions {
   limit: number | null;
   minMb: number;
   timeoutSec: number;
+  mem: boolean;
   help: boolean;
   errors: string[];
 }

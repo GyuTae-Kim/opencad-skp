@@ -52,8 +52,8 @@ describe('훑기 순수 함수', () => {
     expect(parseArgs([], {}, 10).dirs).toEqual([]);
     expect(parseArgs([], { OPENCAD_SWEEP_DIRS: '/a:/b' }, 10).dirs).toEqual(['/a', '/b']);
     expect(parseArgs(['--dirs', '/c'], { OPENCAD_SWEEP_DIRS: '/a:/b' }, 10).dirs).toEqual(['/c']);
-    const o = parseArgs(['--jobs', '3', '--limit=2', '--timeout', '10', '--min-mb', '5', '--out', 'x'], {}, 10);
-    expect(o).toMatchObject({ jobs: 3, limit: 2, timeoutSec: 10, minMb: 5, out: 'x', errors: [] });
+    const o = parseArgs(['--jobs', '3', '--limit=2', '--mem', '--timeout', '10', '--min-mb', '5', '--out', 'x'], {}, 10);
+    expect(o).toMatchObject({ jobs: 3, limit: 2, mem: true, timeoutSec: 10, minMb: 5, out: 'x', errors: [] });
     expect(parseArgs([], {}, 10).jobs).toBe(4);
     expect(parseArgs([], {}, 2).jobs).toBe(1);
     expect(parseArgs(['--jobs', '0', '--what'], {}, 2).errors).toHaveLength(2);
@@ -172,6 +172,22 @@ describe('probe: 앱 워커와 같은 해석 길', () => {
     const v4 = await probeSkp(mfcFile({ schemas: 'v4', root: squareEntities() }));
     expect(v4.flags).toContain('unsupported');
   });
+
+  it('mem: 단계별 최대·끝 heap과 장면 배열 크기', async () => {
+    const gc = (globalThis as { gc?: () => void }).gc;
+    const r = await probeSkp(gridSkp(10), { mem: true, gc, inflateMin: 1 });
+    const m = r.mem!;
+    expect(m.stages.scene).toBeTruthy();
+    expect(m.stages.parse).toBeTruthy();
+    expect(m.stages.inflate).toBeTruthy();
+    for (const s of Object.values(m.stages)) {
+      expect(s!.peakHeapMB).toBeGreaterThan(0);
+      expect(s!.peakRssMB).toBeGreaterThan(0);
+    }
+    expect(m.peakHeapMB).toBeGreaterThanOrEqual(m.stages.scene!.peakHeapMB);
+    expect(m.sceneBuffersMB['mesh.positions']).toBeGreaterThanOrEqual(0);
+    expect(m.modelDatMB).toBeDefined();
+  });
 });
 
 /** node로 scripts/sweep의 명령 하나를 돌린다(표본 폴더 환경 변수는 비운다) */
@@ -266,5 +282,23 @@ describe('훑기·비교 명령(합성 표본 폴더)', () => {
     const none = await run(['scripts/sweep/sweep.mjs', '--dirs', samples, '--out', join(dir, 'none'), '--min-mb', '100']);
     expect(none.code).toBe(0);
     expect(readFileSync(join(dir, 'none', 'records.jsonl'), 'utf8')).toBe('');
+  });
+
+  it('--mem: 파일마다 새 프로세스로 단계별 메모리와 최대 rss', async () => {
+    const out = join(dir, 'mem');
+    const r = await run(['scripts/sweep/sweep.mjs', '--dirs', samples, '--out', out, '--mem', '--limit', '2', '--jobs', '1']);
+    expect(r.code).toBe(0);
+    const records = readJsonl(join(out, 'records.jsonl'));
+    expect(records).toHaveLength(2);
+    const parsed = records.filter((x) => !x.error);
+    expect(parsed).toHaveLength(2);
+    for (const x of parsed) {
+      expect(x.mem.maxRssMB).toBeGreaterThan(0);
+      expect(x.mem.stages.images).toBeTruthy();
+    }
+    expect(parsed.find((x) => x.header)?.mem.stages.scene).toBeTruthy();
+    const summary = JSON.parse(readFileSync(join(out, 'summary.json'), 'utf8'));
+    expect(summary.options.mem).toBe(true);
+    expect(summary.memory.maxRssMB.n).toBe(parsed.length);
   });
 });
