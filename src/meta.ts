@@ -278,6 +278,11 @@ export interface SkpMetaExtras {
   sectionPlanes?: SkpSectionPlaneMeta[];
   annotationItems?: SkpAnnotationItems;
   /**
+   * 주석 선분 묶음(annotationItems의 선분 묶음 id)마다 나무 노드 구간: 선분 차례 start[k]부터 다음 구간 전까지가 노드 node[k](-1 = 모형에 바로) 안의 주석.
+   * 나무(outline)가 있고 그룹·컴포넌트 안에 주석이 있을 때만. 화면은 숨긴 노드의 구간을 숨긴다(문자·치수 라벨과 같게)
+   */
+  annotationRuns?: Record<string, { start: Uint32Array; node: Int32Array }>;
+  /**
    * 그물마다(scene.meshes 차례) 면 경계: 면 k의 삼각형은 [runs[k], runs[k + 1])(마지막 면은 그물 끝까지).
    * 해석기가 면마다 삼각형을 이어 붙이므로 고른 삼각형(Pick3d.raw)이 든 SketchUp 면 하나를 구간으로 찾는다
    */

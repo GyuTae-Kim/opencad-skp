@@ -192,6 +192,15 @@ export function eyeHeightFor(units: string): number | undefined {
   return mm ? 1676.4 / mm : undefined;
 }
 
+/**
+ * 걷기 선택(코어 0.8.0 setNavigation('walk', opts)): SketchUp 걷기처럼 눈높이 5′6″·두 번 누르면 서기에, 바닥 따라가기(중력)와
+ * 벽 앞 멈춤(부딪힘)은 켜고 끄는 값 그대로. 단위를 모르면 눈높이는 코어 기본
+ */
+export function walkOptionsFor(units: string, gravity: boolean, collide: boolean): { eyeHeight?: number; tapToStand: boolean; gravity: boolean; collide: boolean } {
+  const eye = eyeHeightFor(units);
+  return eye !== undefined ? { eyeHeight: eye, tapToStand: true, gravity, collide } : { tapToStand: true, gravity, collide };
+}
+
 /** 두 SketchUp 카메라가 같은 보기인지(눈·목표가 눈-목표 거리의 tolerance배 안, 투영·시야각·높이가 같음) */
 export function sameSkpCamera(a: SkpCameraMeta | null | undefined, b: SkpCameraMeta | null | undefined, tolerance = 1e-4): boolean {
   const x = readCamera(a);

@@ -6,11 +6,15 @@
  * 묻히던 문제를 고친다 — 밝은 테마에서는 모든 기본 선 색이 기준을 넘어 그대로다.
  * 음영·음영+모서리·무늬 없음·단색 방식은 선이 면 색 위에 있어(단색 면은 두 테마에서 같은 밝은 회색) 파일 색 그대로 둔다.
  * 단면 평면 표시(주황)는 뜻이 있는 색이라 바꾸지 않고, 고른 것 강조 색은 코어가 따로 칠한다. 태그 색 칠하기는 면(그물)에만 건다.
- * 숨은 모서리 점선과 외곽선(실루엣)은 코어가 이미 테마 선 색으로 그려 배경 위에서 묻히지 않는다(테스트가 확인).
+ * 모형 모서리 묶음의 바탕 색은 지금 스타일의 모서리 색이다(해석기가 모형 스타일 색으로 적고, 장면 스타일이 다른 색이면 여기서 바꾼다).
+ * 뒤 모서리 점선·외곽선(실루엣)·카메라를 보는 컴포넌트 윤곽선 색은 edgeLooks로 구해 코어 0.8.0 setRenderOptions에 넘긴다.
  */
 import { DARK_THEME, LIGHT_THEME, type BackgroundOptions, type RenderMode, type Rgba } from 'opencad-viewer3d';
 import type { Rgb } from '../meta';
 import { isLightBackground, luminance } from './backdrop';
+
+/** 스타일이 모서리 색을 모를 때 해석기가 쓰는 모서리 색(scene.ts EDGE_COLOR와 같은 값 — 시험이 맞춘다. 화면 묶음에 해석기를 넣지 않으려고 따로 둔다) */
+export const DEFAULT_EDGE_COLOR: Rgba = [0.12, 0.12, 0.12, 1];
 
 /** 선이 뒤 색과 이만큼은 달라야 읽힌다(WCAG 2.1 1.4.11 그래픽 대비) */
 export const MIN_LINE_CONTRAST = 3;
@@ -116,25 +120,72 @@ export interface ColoredItem {
   color?: Rgba;
 }
 
+/** 파일 스타일의 모서리 색을 받는 선분 묶음(모형 모서리 — 부드러운·숨긴 모서리·주석 선은 아니다) */
+export function isModelEdgeSet(id: string): boolean {
+  return id.startsWith('skp-edges-') || id.startsWith('skp-reveal-edges-');
+}
+
+const sameRgba = (a: Rgba, b: Rgba): boolean => a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3];
+
 /**
- * 덮어쓸 색(id → 색). skip(id)이 참인 항목(단면 평면 표시)과 색이 없는 항목(코어가 테마 선 색으로 그린다)은 빼고,
- * 배경이 선 뒤가 아닌 방식이면 비어 있다
+ * 덮어쓸 색(id → 색). skip(id)이 참인 항목(단면 평면 표시)과 색이 없는 항목(코어가 테마 선 색으로 그린다)은 뺀다.
+ * edgeColor(지금 스타일의 모서리 색 — 장면 스타일이 바꿀 수 있다)를 주면 모형 모서리 묶음은 그 색이 바탕이고,
+ * 배경이 선 뒤인 방식(와이어프레임·숨은 선·X-ray)에서는 그 바탕 색이 배경과 대비가 모자랄 때 읽히는 색으로 바꾼다.
+ * 결과가 장면에 적힌 색과 같으면 넣지 않는다(모형 스타일 색 그대로인 음영 방식은 비어 있다)
  */
-export function lineColorOverrides(items: Iterable<ColoredItem>, view: LineView, skip: (id: string) => boolean = () => false): Map<string, Rgba> {
+export function lineColorOverrides(
+  items: Iterable<ColoredItem>,
+  view: LineView,
+  skip: (id: string) => boolean = () => false,
+  edgeColor: Rgb | null = null,
+): Map<string, Rgba> {
   const out = new Map<string, Rgba>();
   const behind = lineBackdrops(view);
-  if (!behind) return out;
+  if (!behind && !edgeColor) return out;
   const base = viewBase(view.theme, view.backdrop);
   const memo = new Map<string, Rgba | null>();
   for (const it of items) {
-    const c = it.color;
-    if (!c || skip(it.id)) continue;
-    const k = c.join(',');
-    let r = memo.get(k);
-    if (r === undefined) memo.set(k, (r = readableLineColor(c, behind, base)));
-    if (r) out.set(it.id, r);
+    const c0 = it.color;
+    if (!c0 || skip(it.id)) continue;
+    const c: Rgba = edgeColor && isModelEdgeSet(it.id) ? [edgeColor[0], edgeColor[1], edgeColor[2], c0[3]] : c0;
+    let r: Rgba | null = null;
+    if (behind) {
+      const k = c.join(',');
+      r = memo.get(k) ?? null;
+      if (!memo.has(k)) memo.set(k, (r = readableLineColor(c, behind, base)));
+    }
+    const want = r ?? c;
+    if (!sameRgba(want, c0)) out.set(it.id, want);
   }
   return out;
+}
+
+/**
+ * 지금 보기에서 모형 모서리가 띠는 색: SketchUp처럼 스타일 모서리 색(없으면 기본 모서리 색)이고, 배경이 선 뒤인 방식에서는
+ * 모형 모서리 묶음과 같은 대비 규칙을 건다. "항상 카메라 보기" 컴포넌트(코어 billboard 그물)의 윤곽선(Mesh3d.edges — 코어 0.8.0 edgeColor)과
+ * 뒤 모서리 점선 색도 이것이다(코어 0.7.1은 와이어프레임·X-ray에서 그물 윤곽선을 재질 색으로 그려 어두운 재질이면 어두운 테마에 묻혔다)
+ */
+export function billboardEdgeColor(view: LineView, edgeColor: Rgb | null, fallback: Rgba): Rgba {
+  const c: Rgba = edgeColor ? [edgeColor[0], edgeColor[1], edgeColor[2], 1] : fallback;
+  const behind = lineBackdrops(view);
+  return (behind && readableLineColor(c, behind, viewBase(view.theme, view.backdrop))) || c;
+}
+
+/** 코어 0.8.0 선 색 선택(setRenderOptions): 그물 윤곽선 색, 뒤 모서리 점선 색, 외곽선(실루엣) 색 */
+export interface EdgeLooks {
+  /** 그물 윤곽선(카메라를 보는 컴포넌트)·뒤 모서리 점선 — 지금 방식에서 모형 모서리가 띠는 색 */
+  edge: Rgba;
+  /** 외곽선: 모서리 색을 굵게(SketchUp 윤곽선) — 바탕(배경·하늘·지면)과 3:1이 안 되면 읽히는 선 색 */
+  profile: Rgba;
+}
+
+export function edgeLooks(view: LineView, edgeColor: Rgb | null, fallback: Rgba): EdgeLooks {
+  const edge = billboardEdgeColor(view, edgeColor, fallback);
+  const c: Rgba = edgeColor ? [edgeColor[0], edgeColor[1], edgeColor[2], 1] : fallback;
+  // 외곽선은 어느 방식에서든 모형 둘레(바탕 앞)에 그려진다 — 바탕 색들은 와이어프레임 때와 같다
+  const behind = lineBackdrops({ ...view, mode: 'wireframe' })!;
+  const profile = readableLineColor(c, behind, viewBase(view.theme, view.backdrop)) ?? c;
+  return { edge, profile };
 }
 
 /** 코어 쪽(setItemColor — null이면 되돌림) */

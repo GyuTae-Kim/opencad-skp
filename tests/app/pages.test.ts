@@ -11,6 +11,7 @@ import {
   cameraShowsBox,
   delaySeconds,
   eyeHeightFor,
+  walkOptionsFor,
   isTwoPoint,
   rollFromUp,
   twoPointCamera,
@@ -163,6 +164,9 @@ describe('SketchUp 카메라 → 코어 카메라', () => {
     expect(withFov({ ...c, shiftY: undefined }, 1).shiftY).toBeUndefined();
     expect(eyeHeightFor('mm')).toBeCloseTo(1676.4, 9);
     expect(eyeHeightFor('inch')).toBeCloseTo(66, 9);
+    // 걷기 선택: 눈높이·두 번 누르기에 중력·부딪힘(코어 0.8.0)을 그대로, 단위를 모르면 코어 기본 눈높이
+    expect(walkOptionsFor('mm', true, false)).toEqual({ eyeHeight: 1676.4, tapToStand: true, gravity: true, collide: false });
+    expect(walkOptionsFor('unknown', false, true)).toEqual({ tapToStand: true, gravity: false, collide: true });
     expect(eyeHeightFor('m')).toBeCloseTo(1.6764, 9);
     expect(eyeHeightFor('unknown')).toBeUndefined();
   });

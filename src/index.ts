@@ -70,6 +70,11 @@ export interface SkpOptions {
   maxTextures?: number;
   /** 무늬 좌표를 다는 정점 수 한도(기본 scene.ts MAX_UV_VERTICES) */
   maxUvVertices?: number;
+  /**
+   * 미리 푼 꾸러미 항목(이름 → 풀린 바이트, 지금은 'model.dat'만 본다). 워커가 브라우저 내장 풀기로 먼저 푼 것을 넘기면
+   * 해석기가 다시 풀지 않는다(길이가 목록의 원래 크기와 같을 때만 — 다르면 예전처럼 직접 푼다). 2021+ 파일만
+   */
+  inflated?: ReadonlyMap<string, Uint8Array>;
 }
 
 /** 무늬를 입힐 재질 수 기본 한도 */
@@ -163,6 +168,7 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
   }
   const front = style?.front;
   const back = style?.back;
+  const edge = style?.edgeColor;
   let parts: ReturnType<typeof buildSceneParts>;
   try {
     progress(0.65, '면 삼각화·인스턴스 펼치는 중');
@@ -173,6 +179,8 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
       ...(front && front.every(Number.isFinite) ? { defaultFaceColor: [front[0], front[1], front[2], 1] as const } : {}),
       // 앞·뒤 재질이 다른 면은 뒷면 색·무늬를 따로(재질 없는 뒷면은 스타일 뒷면 색)
       ...(back && back.every(Number.isFinite) ? { defaultBackColor: [back[0], back[1], back[2], 1] as const } : {}),
+      // 모형 스타일의 모서리 색(SketchUp 기본은 검정, 회색 모서리 스타일도 있다)
+      ...(edge && edge.every(Number.isFinite) ? { edgeColor: [edge[0], edge[1], edge[2], 1] as const } : {}),
       onProgress: (f) => progress(0.65 + 0.3 * f, '면 삼각화·인스턴스 펼치는 중'),
     };
     if (sceneTex.size) build.textures = sceneTex;
@@ -262,7 +270,7 @@ function readZipPackage(
   meta: Record<string, unknown>,
   warnings: string[],
   progress: (f: number, stage: string) => void,
-  opts: Pick<SkpOptions, 'textures' | 'maxTextures'> = {},
+  opts: Pick<SkpOptions, 'textures' | 'maxTextures' | 'inflated'> = {},
 ): Package | Scene3d {
   let model: SkpModel;
   const materials = new Map<string, SkpMaterialInfo>();
@@ -275,7 +283,7 @@ function readZipPackage(
     progress(0.05, '꾸러미(ZIP) 목록 읽는 중');
     const found = findSkpZipItems(bytes, bodyOffset);
     const dir = found.items;
-    if (!dir) return emptyScene(name, [found.error ? `SketchUp 꾸러미(ZIP)가 깨졌습니다: ${found.error}` : 'SketchUp 꾸러미(ZIP)를 찾지 못했습니다'], meta);
+    if (!dir) return emptyScene(name, [found.error ? `SketchUp 꾸러미(ZIP)가 깨졌습니다: ${found.error}` : 'SketchUp 꾸러미(ZIP)를 찾지 못했습니다 — 파일이 잘렸거나(끝까지 받지 못함) 깨졌을 수 있습니다'], meta);
     const modelItem = dir.find((d) => d.name === 'model.dat');
     if (!modelItem)
       return emptyScene(
@@ -334,8 +342,9 @@ function readZipPackage(
         warnings.push('model.dat가 잘렸거나 압축이 깨져 앞부분만 읽었습니다 — 일부 형상이 빠졌을 수 있습니다');
       }
     } else {
+      const pre = opts.inflated?.get('model.dat');
       try {
-        dat = readZipItem(bytes, modelItem, unpacking);
+        dat = pre && pre.length === modelItem.size ? pre : readZipItem(bytes, modelItem, unpacking);
       } catch (e) {
         // 압축이 중간에 깨졌으면 앞부분이라도
         const part = readZipItemPartial(bytes, modelItem);
@@ -419,6 +428,7 @@ function extrasMeta(
   if (parts.dimensions) out.dimensions = parts.dimensions;
   if (parts.sectionPlanes) out.sectionPlanes = parts.sectionPlanes;
   if (parts.annotationItems) out.annotationItems = parts.annotationItems;
+  if (parts.annotationRuns) out.annotationRuns = parts.annotationRuns;
   if (parts.attributes) out.attributes = parts.attributes;
   if (parts.modelAttrs !== undefined) out.modelAttrs = parts.modelAttrs;
   if (parts.treeInfo) out.treeInfo = parts.treeInfo;

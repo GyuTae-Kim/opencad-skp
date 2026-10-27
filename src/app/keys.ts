@@ -14,7 +14,8 @@ export const VIEW_KEY_OF: Readonly<Partial<Record<ViewName, string>>> = Object.f
 /**
  * grid = 격자 켜고 끄기, viewer = Viewer3d.handleKey에 넘기기, clearSelection = 고른 것 지우기,
  * measureOff = 측정 끄기(측정 점이 없을 때 Esc — 첫 Esc는 뷰어가 점을 지운다), cancelOpen = 여는 중인 파일 그만 열기, open = 열기 상자,
- * page = 이전·다음 장면(PageUp·PageDown), tape = 줄자 켜고 끄기(T), walkOff = 걷기 끝내기(걷는 중 지울 것이 없는 Esc)
+ * page = 이전·다음 장면(PageUp·PageDown), tape = 줄자 켜고 끄기(T), walkOff = 걷기 끝내기(걷는 중 지울 것이 없는 Esc),
+ * help = 키보드 바로 가기 안내(?, 문서가 없어도)
  */
 export type KeyAction =
   | { kind: 'grid' }
@@ -25,7 +26,8 @@ export type KeyAction =
   | { kind: 'open' }
   | { kind: 'page'; delta: 1 | -1 }
   | { kind: 'tape' }
-  | { kind: 'walkOff' };
+  | { kind: 'walkOff' }
+  | { kind: 'help' };
 
 export interface KeyInput {
   key: string;
@@ -63,6 +65,8 @@ export function keyAction(k: KeyInput): KeyAction | null {
   const mod = !!(k.ctrl || k.meta);
   if (mod && !k.alt && (k.key === 'o' || k.key === 'O')) return { kind: 'open' };
   if (k.key === 'Escape' && k.busy && !mod && !k.alt) return { kind: 'cancelOpen' };
+  // ? = 바로 가기 안내(Shift+/ — 걷기 키와 겹치지 않는다)
+  if (k.key === '?' && !mod && !k.alt) return { kind: 'help' };
   if (!k.hasDoc) return null;
   if (mod || k.alt) return null;
   // 패널 목록·메뉴·슬라이더에 초점이 있으면 이동 키는 그쪽 것(걷기·장면 넘기기로 보내지 않는다)

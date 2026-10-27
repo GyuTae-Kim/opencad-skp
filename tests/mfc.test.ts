@@ -742,6 +742,40 @@ describe('깨진 파일·모르는 기록', () => {
     expect(m.warnings).toContain('모서리가 셋보다 적은 고리를 가진 면을 건너뛰었습니다');
   });
 
+  it('칸 번호가 깨진 정점 참조는 그 모서리와 그 모서리를 쓰는 면만 빼고 끝까지 읽는다(damaged)', () => {
+    // 두 사각형이 모서리 하나를 함께 쓰고, 둘째 사각형의 모서리 하나가 정점 대신 모서리 칸을 가리킨다
+    const sq = squareEntities();
+    const root = squareEntities({
+      vertices: [...sq.vertices!, [20, 0, 0], [20, 10, 0]],
+      edges: [...sq.edges!, { a: 1, b: 4 }, { a: 4, b: 5, brokenRef: true }, { a: 5, b: 2 }],
+      faces: [
+        sq.faces![0]!,
+        {
+          plane: [0, 0, 1, 0],
+          loops: [
+            {
+              uses: [
+                [4, false],
+                [5, false],
+                [6, false],
+                [1, true],
+              ],
+            },
+          ],
+        },
+      ],
+      instances: [{ def: 0, xform: move13(40, 0, 0) }],
+    });
+    const m = model({ definitions: [{ name: '판', entities: squareEntities() }], root });
+    expect(m.root.faces.length).toBe(1);
+    // 깨진 모서리만 빠지고, 뒤의 모서리·인스턴스까지 읽는다
+    expect(m.root.edges.length).toBe(6);
+    expect(m.root.instances.length).toBe(1);
+    expect(m.damaged).toBe(true);
+    expect(m.warnings.some((w) => w.includes('깨진 참조 1개를 건너뛰었습니다'))).toBe(true);
+    expect(m.warnings.some((w) => w.includes('형상을 읽다 멈췄습니다'))).toBe(false);
+  });
+
   it('바이트를 무작위로 망가뜨려도 던지지 않는다', () => {
     const bytes = full();
     let seed = 7;

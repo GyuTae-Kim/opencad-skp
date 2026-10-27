@@ -26,6 +26,12 @@ describe('language URLs and UI presentation', () => {
     expect(translate(example,'en')).toContain('FILE_A.skp');
     expect(translate(example,'en')).not.toBe(example);
   });
+  it('translates each line of a multi-line message, even when a trailing {0} would swallow the next line', () => {
+    // 경고 둘을 줄바꿈으로 이은 글: "…: {0}"의 {0}이 다음 줄까지 잡아 둘째 줄이 한국어로 남던 것(공용 번역기 맞춤)
+    const tip = 'SketchUp 파일을 읽지 못했습니다: model.dat\nZIP 지역 머리가 깨졌습니다: model.dat';
+    for (const {code} of languages.filter(item => item.code !== 'ko')) expect(translate(tip, code), code).not.toMatch(/[가-힣]/);
+    expect(translate(tip, 'en')).toBe(`${translate('SketchUp 파일을 읽지 못했습니다: model.dat', 'en')}\n${translate('ZIP 지역 머리가 깨졌습니다: model.dat', 'en')}`);
+  });
   it('translates every piece of a " · "-joined sentence, even when a short pattern would swallow the rest', () => {
     const hangul = /[가-힣]/;
     // "면 {0}"·"재질 {0}"·"모서리 · {0}"이 문장 끝까지 잡아 나머지가 한국어로 남던 줄(고른 것·재질 목록)

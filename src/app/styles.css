@@ -2369,3 +2369,97 @@ html:lang(zh-CN) { --font: -apple-system, "PingFang SC", "Microsoft YaHei", sans
     height: 36px;
   }
 }
+
+/* 3D 보기 캔버스: 코어가 캔버스에 outline:none을 직접 둔다 — 키보드로 왔을 때만 안쪽 테두리로 초점을 보인다 */
+.view-host canvas:focus-visible {
+  outline: 2px solid var(--accent) !important;
+  outline-offset: -2px;
+}
+
+/* 키보드 바로 가기 안내(? 키·앱 설정 메뉴) */
+.sc-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.sc-box {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: min(560px, 100%);
+  max-height: min(640px, calc(100dvh - 32px));
+  color: var(--text);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 10px 36px rgba(0, 0, 0, 0.35);
+}
+
+.sc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 10px 6px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sc-head h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.sc-body {
+  overflow: auto;
+  padding: 6px 16px 14px;
+}
+
+.sc-group h3 {
+  margin: 10px 0 4px;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sc-list {
+  display: grid;
+  /* 묶음마다 같은 칸 너비(넓은 화면) — 좁으면 키 너비만큼 */
+  grid-template-columns: 200px 1fr;
+  gap: 4px 14px;
+  margin: 0;
+}
+
+.sc-list dt {
+  margin: 0;
+}
+
+.sc-list dd {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.sc-keys kbd {
+  display: inline-block;
+  min-width: 1.2em;
+  margin: 0 2px 2px 0;
+  text-align: center;
+}
+
+@media (max-width: 479.98px) {
+  .sc-list {
+    grid-template-columns: minmax(96px, max-content) 1fr;
+  }
+}
+
+.sc-note {
+  margin: 12px 0 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.5;
+}

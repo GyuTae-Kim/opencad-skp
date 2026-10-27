@@ -72,12 +72,17 @@ function dataStart(b: Uint8Array, item: ZipItem): number {
   return p + 30 + u16(b, p + 26) + u16(b, p + 28);
 }
 
-/** 항목 내용을 꺼낸다(저장·DEFLATE만) */
-export function readZipItem(b: Uint8Array, item: ZipItem, onProgress?: (fraction: number) => void): Uint8Array {
+/** 항목의 저장된(압축된) 바이트 보기(복사 없음). 지역 머리가 깨졌거나 내용이 파일 끝을 넘으면 Error */
+export function zipItemData(b: Uint8Array, item: ZipItem): Uint8Array {
   const start = dataStart(b, item);
   const end = start + item.compressedSize;
   if (end > b.length || item.truncated) throw new Error(`ZIP 항목이 잘렸습니다: ${item.name}`);
-  const data = b.subarray(start, end);
+  return b.subarray(start, end);
+}
+
+/** 항목 내용을 꺼낸다(저장·DEFLATE만) */
+export function readZipItem(b: Uint8Array, item: ZipItem, onProgress?: (fraction: number) => void): Uint8Array {
+  const data = zipItemData(b, item);
   if (item.method === 0) return data.slice();
   if (item.method === 8) return inflateRaw(data, item.size, onProgress);
   throw new Error(`지원하지 않는 ZIP 압축 방식 ${item.method}: ${item.name}`);

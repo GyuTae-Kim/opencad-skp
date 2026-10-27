@@ -238,6 +238,8 @@ export interface SkpDoc {
   annotationItems: SkpAnnotationItems | null;
   /** 주석 항목 id → 종류(켜고 끄기용) */
   annotationKind: Map<string, AnnotationKind>;
+  /** 주석 선분 묶음 id → 나무 노드 구간(선분 차례 start[k]부터 노드 node[k] — 숨긴 노드 안 주석 선을 숨긴다). 나무가 없으면 비어 있다 */
+  annotationRuns: Map<string, AnnotationRuns>;
   attributes: SkpAttrDictsMeta[];
   modelAttrs: number | null;
   treeInfo: SkpTreeInfo | null;
@@ -718,6 +720,27 @@ export function folderTags(d: Pick<SkpDoc, 'tags' | 'tagFolders'>, folder: numbe
   return d.tags.filter((t) => t.folder >= 0 && inside(t.folder)).map((t) => t.name);
 }
 
+/** 주석 선분 묶음의 나무 노드 구간(meta.annotationRuns 한 칸) */
+export interface AnnotationRuns {
+  start: Uint32Array;
+  node: Int32Array;
+}
+
+/** meta.annotationRuns → 주석 항목 id → 구간. 주석 항목이 아니거나 꼴·노드 차례가 맞지 않는 칸은 버린다 */
+export function readAnnotationRuns(v: unknown, kinds: ReadonlyMap<string, AnnotationKind>, nodeCount: number): Map<string, AnnotationRuns> {
+  const out = new Map<string, AnnotationRuns>();
+  if (!v || typeof v !== 'object' || !nodeCount) return out;
+  for (const [id, r] of Object.entries(v as Record<string, unknown>)) {
+    if (!kinds.has(id) || !r || typeof r !== 'object') continue;
+    const { start, node } = r as Partial<AnnotationRuns>;
+    if (!(start instanceof Uint32Array) || !(node instanceof Int32Array) || start.length !== node.length || !start.length) continue;
+    let ok = true;
+    for (let k = 0; k < node.length && ok; k++) ok = node[k]! >= -1 && node[k]! < nodeCount && (k === 0 || start[k]! > start[k - 1]!);
+    if (ok) out.set(id, { start, node });
+  }
+  return out;
+}
+
 /** meta의 더한 칸(장면·스타일·주석·나무 정보) → 문서 칸. 꼴이 다르면 빈 값 */
 export function readMetaExtras(scene: Scene3d): Pick<
   SkpDoc,
@@ -735,6 +758,7 @@ export function readMetaExtras(scene: Scene3d): Pick<
   | 'sectionPlanesRaw'
   | 'annotationItems'
   | 'annotationKind'
+  | 'annotationRuns'
   | 'attributes'
   | 'modelAttrs'
   | 'treeInfo'
@@ -768,6 +792,7 @@ export function readMetaExtras(scene: Scene3d): Pick<
   const annotationKind = new Map<string, AnnotationKind>();
   if (annotationItems) for (const k of Object.keys(annotationItems) as AnnotationKind[]) for (const id of annotationItems[k]) annotationKind.set(id, k);
   const tree = readTree(scene);
+  const annotationRuns = readAnnotationRuns(m.annotationRuns, annotationKind, tree?.count ?? 0);
   const info = m.treeInfo && typeof m.treeInfo === 'object' ? (m.treeInfo as SkpTreeInfo) : null;
   const infoOk = !!info && !!tree && info.attrs instanceof Int32Array && info.attrs.length === tree.count && info.size instanceof Float32Array && info.size.length === tree.count * 3;
   return {
@@ -785,6 +810,7 @@ export function readMetaExtras(scene: Scene3d): Pick<
     sectionPlanesRaw: rawPlanes,
     annotationItems,
     annotationKind,
+    annotationRuns,
     attributes: objects<SkpAttrDictsMeta>(m.attributes),
     modelAttrs: num(m.modelAttrs),
     treeInfo: infoOk ? info : null,
@@ -1095,9 +1121,15 @@ export function itemVisible(d: SkpDoc, item: number): boolean {
   const ak = d.annotationKind.get(id);
   if (ak) {
     if (!annotationShown(d, ak)) return false;
-    // 주석 선분은 나무 노드로 나뉘어 있지 않다: 모형에 바로 놓인 형상을 숨기면(분리해서 보기 등) 함께 숨긴다
-    const loose = d.outline.findIndex((r) => r.kind === 'loose');
-    if (loose >= 0 && d.hiddenOutline.has(loose)) return false;
+    const runs = d.annotationRuns.get(id);
+    if (runs) {
+      // 구간마다 놓인 노드를 안다: 모든 구간의 노드를 숨겼으면 묶음째(일부만이면 annotationHiddenRanges가 그 구간만)
+      if (runs.node.every((n) => nodeHiddenByUser(d, n))) return false;
+    } else {
+      // 노드를 모르는 주석 선분(나무 없음): 모형에 바로 놓인 형상을 숨기면(분리해서 보기 등) 함께 숨긴다
+      const loose = d.outline.findIndex((r) => r.kind === 'loose');
+      if (loose >= 0 && d.hiddenOutline.has(loose)) return false;
+    }
   }
   if (d.extras) {
     if (d.extras.soft.has(id) && !d.showSoft) return false;
@@ -1209,10 +1241,10 @@ export function treeKindLabel(kind: number): string {
 }
 
 /**
- * 라벨용: 노드(-1 = 모형 바로 아래)가 보기에서 숨었는지 — 노드·조상이 숨었거나, 노드·조상 인스턴스의 태그가 숨었으면 참.
- * 모형 바로 아래 글은 바로 놓인 형상(loose)을 숨겼을 때 함께 숨긴다.
+ * 노드를 사용자가 보기에서 숨겼는지(나무 체크·숨기기·분리해서 보기 — 노드나 조상, 그 노드의 윗단계 목록 항목). 노드 -1(모형에 바로 놓인 것)은
+ * "바로 놓인 형상" 목록 항목을 숨겼을 때. 태그는 보지 않는다(주석 선분은 태그 묶음이라 뷰어가 따로 가린다)
  */
-export function nodeHiddenForLabels(d: SkpDoc, node: number): boolean {
+export function nodeHiddenByUser(d: Pick<SkpDoc, 'tree' | 'outline' | 'hiddenOutline' | 'hiddenNodes' | 'nodeOutline'>, node: number): boolean {
   const t = d.tree;
   if (node < 0 || !t || node >= t.count) {
     const loose = d.outline.findIndex((r) => r.kind === 'loose');
@@ -1220,7 +1252,53 @@ export function nodeHiddenForLabels(d: SkpDoc, node: number): boolean {
   }
   if (hiddenByNodes(t, d.hiddenNodes, node)) return true;
   const o = d.nodeOutline.get(nodePath(t, node)[0]!);
-  if (o !== undefined && d.hiddenOutline.has(o)) return true;
+  return o !== undefined && d.hiddenOutline.has(o);
+}
+
+/**
+ * 주석 선분 묶음에서 숨긴 노드의 구간(항목 차례 → 선분 구간). 묶음의 모든 구간을 숨겼으면 넣지 않는다(itemVisible이 묶음째 숨긴다)
+ */
+export function annotationHiddenRanges(d: SkpDoc): Map<number, IndexRange[]> {
+  const out = new Map<number, IndexRange[]>();
+  if (!d.annotationRuns.size || (!d.hiddenNodes.size && !d.hiddenOutline.size)) return out;
+  const memo = new Map<number, boolean>();
+  const hidden = (n: number): boolean => {
+    let v = memo.get(n);
+    if (v === undefined) memo.set(n, (v = nodeHiddenByUser(d, n)));
+    return v;
+  };
+  for (const [id, runs] of d.annotationRuns) {
+    const li = d.lineIndex.get(id);
+    const line = li === undefined ? undefined : d.scene.lines[li];
+    if (!line) continue;
+    const total = Math.floor(line.positions.length / 6);
+    const list: IndexRange[] = [];
+    let all = true;
+    for (let k = 0; k < runs.node.length; k++) {
+      if (!hidden(runs.node[k]!)) {
+        all = false;
+        continue;
+      }
+      const start = runs.start[k]!;
+      const end = k + 1 < runs.start.length ? runs.start[k + 1]! : total;
+      if (end <= start) continue;
+      const last = list[list.length - 1];
+      if (last && last.start + last.count === start) last.count += end - start;
+      else list.push({ start, count: end - start });
+    }
+    if (list.length && !all) out.set(d.scene.meshes.length + li!, list);
+  }
+  return out;
+}
+
+/**
+ * 라벨용: 노드(-1 = 모형 바로 아래)가 보기에서 숨었는지 — 노드·조상이 숨었거나, 노드·조상 인스턴스의 태그가 숨었으면 참.
+ * 모형 바로 아래 글은 바로 놓인 형상(loose)을 숨겼을 때 함께 숨긴다.
+ */
+export function nodeHiddenForLabels(d: SkpDoc, node: number): boolean {
+  const t = d.tree;
+  if (nodeHiddenByUser(d, node)) return true;
+  if (node < 0 || !t || node >= t.count) return false;
   for (let n = node, k = 0; n >= 0 && k < 64; n = t.parent[n]!, k++) {
     const tag = t.tagNames[t.tag[n]!];
     if (tag && tagHidden(d, tag)) return true;

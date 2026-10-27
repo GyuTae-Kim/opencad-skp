@@ -4,6 +4,10 @@ import {
   BACKGROUND_LINE_MODES,
   LineContrast,
   MIN_LINE_CONTRAST,
+  DEFAULT_EDGE_COLOR,
+  billboardEdgeColor,
+  edgeLooks,
+  isModelEdgeSet,
   THEME_LINE,
   contrastRatio,
   lineBackdrops,
@@ -204,5 +208,66 @@ describe('바뀐 것만 코어에 건다', () => {
     expect(calls.length).toBe(dark.size);
     expect(calls.every(([, c]) => c === null)).toBe(true);
     expect(lineColorOverrides(items, view('shadedEdges', 'dark'), skip).size).toBe(0);
+  });
+});
+
+describe('스타일 모서리 색(장면 스타일)', () => {
+  const grey: [number, number, number] = [0.36, 0.36, 0.36];
+  const red: [number, number, number] = [1, 0, 0];
+
+  it('모형 모서리 묶음만 스타일 모서리 색을 받는다(부드러운·숨긴 모서리·주석·안내선은 아니다)', () => {
+    expect(isModelEdgeSet('skp-edges-0')).toBe(true);
+    expect(isModelEdgeSet('skp-reveal-edges-1')).toBe(true);
+    for (const id of ['skp-soft-2', 'skp-hidden-edges-3', 'skp-dims-4', 'skp-guides-5']) expect(isModelEdgeSet(id)).toBe(false);
+    const want = lineColorOverrides(SCENE_LINES, view('shadedEdges', 'light'), skipSection, red);
+    expect([...want.keys()].sort()).toEqual(['skp-edges-0', 'skp-reveal-edges-1']);
+    expect(want.get('skp-edges-0')).toEqual([1, 0, 0, 1]);
+  });
+
+  it('장면에 적힌 색과 같은 스타일 색이면 덮어쓰지 않는다(모형 스타일 그대로)', () => {
+    const lines = [{ id: 'skp-edges-0', color: [grey[0], grey[1], grey[2], 1] as Rgba }];
+    expect(lineColorOverrides(lines, view('shaded', 'light'), undefined, grey).size).toBe(0);
+    expect(lineColorOverrides(lines, view('shaded', 'dark'), undefined, null).size).toBe(0);
+  });
+
+  it('배경이 선 뒤인 방식에서는 스타일 색에 대비 규칙을 건다: 어두운 테마의 빨강은 그대로, 회색은 밝은 선', () => {
+    const dark = view('wireframe', 'dark');
+    const redWant = lineColorOverrides(SCENE_LINES, dark, skipSection, red);
+    // 빨강(휘도 0.21)은 남색 바탕과 3:1을 넘지 못하면 밝은 선, 넘으면 빨강 — 어느 쪽이든 3:1 이상
+    for (const id of ['skp-edges-0', 'skp-reveal-edges-1']) expect(minContrast(redWant.get(id)!, lineBackdrops(dark)!)).toBeGreaterThanOrEqual(MIN_LINE_CONTRAST);
+    const greyWant = lineColorOverrides(SCENE_LINES, dark, skipSection, grey);
+    expect(greyWant.get('skp-edges-0')).toEqual(THEME_LINE.dark);
+    // 밝은 테마의 회색 모서리는 그대로 회색(대비 충분)
+    expect(lineColorOverrides(SCENE_LINES, view('wireframe', 'light'), skipSection, grey).get('skp-edges-0')).toEqual([...grey, 1]);
+  });
+
+  it('카메라를 보는 컴포넌트 윤곽선 색: 스타일 모서리 색, 배경이 선 뒤인 방식에서는 대비 규칙', () => {
+    expect(billboardEdgeColor(view('shadedEdges', 'dark'), grey, EDGE_COLOR)).toEqual([...grey, 1]);
+    expect(billboardEdgeColor(view('shadedEdges', 'light'), null, EDGE_COLOR)).toEqual(EDGE_COLOR);
+    expect(billboardEdgeColor(view('xray', 'dark'), null, EDGE_COLOR)).toEqual(THEME_LINE.dark);
+    expect(billboardEdgeColor(view('wireframe', 'light'), [0, 0, 0], EDGE_COLOR)).toEqual([0, 0, 0, 1]);
+  });
+});
+
+describe('코어 0.8.0 선 색 선택(edgeLooks)', () => {
+  it('화면 쪽 기본 모서리 색은 해석기의 EDGE_COLOR와 같다', () => {
+    expect(DEFAULT_EDGE_COLOR).toEqual(EDGE_COLOR);
+  });
+
+  it('그물 윤곽선·뒤 모서리 색 = 지금 방식에서 모형 모서리가 띠는 색, 외곽선 = 바탕과 읽히는 모서리 색', () => {
+    const grey: [number, number, number] = [0.36, 0.36, 0.36];
+    // 밝은 테마 음영: 스타일 색 그대로
+    expect(edgeLooks(view('shaded', 'light'), grey, EDGE_COLOR)).toEqual({ edge: [...grey, 1], profile: [...grey, 1] });
+    // 어두운 테마 음영: 모서리는 면 위라 그대로, 외곽선은 남색 바탕 앞이라 밝은 선
+    const darkShaded = edgeLooks(view('shaded', 'dark'), null, EDGE_COLOR);
+    expect(darkShaded.edge).toEqual(EDGE_COLOR);
+    expect(darkShaded.profile).toEqual(THEME_LINE.dark);
+    // 어두운 테마 와이어프레임·X-ray: 카메라를 보는 컴포넌트 윤곽선도 밝은 선(재질 색에 묻히지 않게)
+    for (const m of ['wireframe', 'xray', 'hiddenLine'] as const) {
+      const l = edgeLooks(view(m, 'dark'), [0, 0, 0], EDGE_COLOR);
+      expect(minContrast(l.edge, lineBackdrops(view(m, 'dark'))!)).toBeGreaterThanOrEqual(MIN_LINE_CONTRAST);
+    }
+    // 흰 배경 파일은 어두운 테마에서도 검은 외곽선(SketchUp처럼)
+    expect(edgeLooks(view('shaded', 'dark', [1, 1, 1]), [0, 0, 0], EDGE_COLOR).profile).toEqual([0, 0, 0, 1]);
   });
 });

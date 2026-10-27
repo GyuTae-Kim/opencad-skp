@@ -277,13 +277,26 @@ export class ExportDialog {
     return !!this.el;
   }
 
+  /** 대화 상자를 연 곳(닫을 때 초점을 돌려준다 — 키보드로 연 사람이 제자리를 잃지 않게) */
+  private opener: HTMLElement | null = null;
+
   close(): void {
-    this.el?.remove();
+    const el = this.el;
+    if (!el) return;
+    // 초점이 상자 안(또는 아무 데도 없음)이었을 때만 연 곳으로 돌려준다(사용자가 이미 다른 곳을 눌렀으면 그대로)
+    const active = document.activeElement;
+    const restore = !active || active === document.body || el.contains(active);
+    el.remove();
     this.el = null;
+    const o = this.opener;
+    this.opener = null;
+    if (restore && o?.isConnected) o.focus();
   }
 
   open(): void {
     this.close();
+    const active = document.activeElement;
+    this.opener = active instanceof HTMLElement && active !== document.body ? active : null;
     const ctx = this.host.context();
     if (!ctx) return;
     const cv = ctx.viewer.canvas;

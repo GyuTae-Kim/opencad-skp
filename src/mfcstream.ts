@@ -35,6 +35,11 @@ const MAX_CLASS_NAME = 64;
 const CLASS = Symbol('class');
 /** 칸을 읽고 있는 객체의 값(읽는 함수가 칸 값을 먼저 정하지 않았을 때) */
 export const IN_PROGRESS = Symbol('in-progress');
+/**
+ * 너그럽게 읽은 참조가 맞지 않을 때의 값(readObject의 lenient). 참조 꼬리표는 클래스와 관계없이 2(또는 6)바이트라
+ * 칸 번호 하나가 깨져도 뒤 바이트 줄은 그대로다 — 그 참조만 버리고 이어 읽는다
+ */
+export const BAD_REF = Symbol('bad-ref');
 
 /** 클래스 하나를 읽는 함수: 받은 칸 번호 → 그 객체의 값(참조로 다시 돌려줄 값) */
 export type MfcReadFn = (slot: number) => unknown;
@@ -57,6 +62,9 @@ export class MfcStream {
   maxRecords: number;
   /** 새 객체를 하나 읽을 때마다(진행 알림용) */
   onObject: (() => void) | undefined;
+  /** 너그럽게 읽다 버린 참조 수와 첫 자리(readObject의 lenient) */
+  badRefs = 0;
+  firstBadRef = -1;
 
   constructor(b: Uint8Array, pos: number, maxRecords: number) {
     this.b = b;
@@ -188,8 +196,10 @@ export class MfcStream {
   /**
    * 객체 포인터 하나: 읽는 함수의 값(참조면 그 칸의 값), 없음이면 null.
    * expected를 주면 그 클래스가 아닌 객체·참조는 깨진 것으로 본다.
+   * lenient면 이미 읽은 객체를 가리키는 참조가 맞지 않을 때(아직 없는 칸·클래스 칸·다른 클래스) 던지지 않고 BAD_REF를 돌려준다
+   * (새 객체는 그 뒤 바이트를 읽는 법이 클래스마다 달라 늘 던진다).
    */
-  readObject(expected?: ReadonlySet<string>): unknown {
+  readObject(expected?: ReadonlySet<string>, lenient = false): unknown {
     const at = this.pos;
     let tag = this.u16();
     if (tag === 0) {
@@ -204,13 +214,20 @@ export class MfcStream {
       return this.newObject(this.className(tag & ~CLASS_TAG, at), expected, at);
     }
     // 이미 읽은 객체 참조
-    if (tag >= this.names.length) throw new MfcError('corrupt', `아직 읽지 않은 칸 ${tag}를 가리킵니다`, at);
+    if (tag >= this.names.length) return this.badRef(lenient, `아직 읽지 않은 칸 ${tag}를 가리킵니다`, at);
     const value = this.values[tag];
-    if (value === CLASS) throw new MfcError('corrupt', `클래스 칸 ${tag}를 객체로 가리킵니다`, at);
+    if (value === CLASS) return this.badRef(lenient, `클래스 칸 ${tag}를 객체로 가리킵니다`, at);
     const name = this.names[tag]!;
-    if (expected && !expected.has(name)) throw new MfcError('corrupt', `${[...expected].join('/')} 자리에 ${name} 참조가 있습니다`, at);
+    if (expected && !expected.has(name)) return this.badRef(lenient, `${[...expected].join('/')} 자리에 ${name} 참조가 있습니다`, at);
     this.lastClass = name;
     return value;
+  }
+
+  private badRef(lenient: boolean, message: string, at: number): typeof BAD_REF {
+    if (!lenient) throw new MfcError('corrupt', message, at);
+    if (!this.badRefs++) this.firstBadRef = at;
+    this.lastClass = '';
+    return BAD_REF;
   }
 
   private newClassObject(expected: ReadonlySet<string> | undefined, at: number): unknown {

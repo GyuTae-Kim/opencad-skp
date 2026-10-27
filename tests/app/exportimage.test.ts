@@ -133,6 +133,26 @@ describe('그림 저장 창', () => {
     x.open();
     (parent.querySelector('.export-dialog .icon-btn') as HTMLButtonElement).click();
     expect(parent.querySelector('.export-dialog')).toBeNull();
+    // 연 단추로 초점을 돌려준다(Esc·닫기 모두). 사용자가 상자 밖을 눌러 초점이 옮겨 갔으면 그대로 둔다
+    const opener = document.createElement('button');
+    document.body.append(opener);
+    opener.focus();
+    x.open();
+    expect(parent.querySelector('.export-dialog')!.contains(document.activeElement)).toBe(true);
+    parent.querySelector('.export-dialog')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(document.activeElement).toBe(opener);
+    opener.focus();
+    x.open();
+    (parent.querySelector('.export-dialog .icon-btn') as HTMLButtonElement).focus();
+    (parent.querySelector('.export-dialog .icon-btn') as HTMLButtonElement).click();
+    expect(document.activeElement).toBe(opener);
+    const other = document.createElement('input');
+    document.body.append(other);
+    opener.focus();
+    x.open();
+    other.focus();
+    x.close();
+    expect(document.activeElement).toBe(other);
     // 문서가 없으면 열지 않는다
     const none = new ExportDialog({ docName: () => '', context: () => null, notify: vi.fn(), track: vi.fn() }, parent);
     none.open();
