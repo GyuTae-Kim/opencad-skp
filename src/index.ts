@@ -283,7 +283,7 @@ function readZipPackage(
     progress(0.05, '꾸러미(ZIP) 목록 읽는 중');
     const found = findSkpZipItems(bytes, bodyOffset);
     const dir = found.items;
-    if (!dir) return emptyScene(name, [found.error ? `SketchUp 꾸러미(ZIP)가 깨졌습니다: ${found.error}` : 'SketchUp 꾸러미(ZIP)를 찾지 못했습니다'], meta);
+    if (!dir) return emptyScene(name, [found.error ? `SketchUp 꾸러미(ZIP)가 깨졌습니다: ${found.error}` : 'SketchUp 꾸러미(ZIP)를 찾지 못했습니다 — 파일이 잘렸거나(끝까지 받지 못함) 깨졌을 수 있습니다'], meta);
     const modelItem = dir.find((d) => d.name === 'model.dat');
     if (!modelItem)
       return emptyScene(

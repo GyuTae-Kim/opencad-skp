@@ -85,7 +85,7 @@
   "SketchUp {0} 파일은 SketchUp 3~5의 아주 옛 형식(모형 스키마 {1})이라 아직 읽지 못합니다. SketchUp 6 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.": "SketchUp {0} 文件是 SketchUp 3-5 中非常旧的格式（模型架构 {1}），尚无法读取。请保存并在 SketchUp 6 或更高版本（最好是 2021 或更高版本）中再次打开。",
   "SketchUp {0} 파일의 형식(모형 스키마 {1}, 렌더링 스키마 {2})은 확인한 SketchUp 6~2020 형식과 달라 읽지 못합니다.": "SketchUp {0} 文件的格式（模型架构 {1}、渲染架构 {2}）与确认的 SketchUp 6~2020 格式不同，因此无法读取。",
   "SketchUp 꾸러미(ZIP)가 깨졌습니다: {0}": "SketchUp 包 (ZIP) 已损坏：{0}",
-  "SketchUp 꾸러미(ZIP)를 찾지 못했습니다": "未找到 SketchUp 包 (ZIP)",
+  "SketchUp 꾸러미(ZIP)를 찾지 못했습니다 — 파일이 잘렸거나(끝까지 받지 못함) 깨졌을 수 있습니다": "未找到 SketchUp 包（ZIP）— 文件可能被截断（未完整下载）或已损坏",
   "SketchUp 모형": "SketchUp 样机",
   "SketchUp 뷰어": "SketchUp 查看器",
   "SketchUp 파일 열기 (.skp)": "打开 SketchUp 文件 (.skp)",
