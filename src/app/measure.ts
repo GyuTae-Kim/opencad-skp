@@ -9,7 +9,9 @@
  *   2. 도구 단추: `tool.setMode('tape' | 'protractor' | null)`(같은 단추를 다시 누르면 null). 장면을 바꾸면 `tool.clear()`.
  *   3. `viewer.onPick`: `tool.active`이면 무시한다(이 도구가 그 누르기를 쓴다).
  *   4. 창 keydown·keyup(캡처 단계): `tool.handleKey(e)`가 true면 처리 끝. Esc keydown에서 false면(지울 것이 없음) 앱이 도구를 끈다.
- *   5. 앱을 닫을 때 `tool.dispose()`.
+ *      그보다 먼저(도구를 끈 동안에도) `tool.undoKey(e)`가 true면 안내 되돌리기·다시 하기로 처리 끝.
+ *   5. 측정값 칸을 만들었으면 `tool.mountUndo(칸)`(측정 띠의 되돌리기 단추), 보기 설정 메뉴에 `tool.showGuidesItem()`, 새 문서면 `tool.clearGuides(true)`.
+ *   6. 앱을 닫을 때 `tool.dispose()`.
  *
  * 입력: 캔버스 포인터 이벤트를 엿본다(막지 않는다). 왼쪽 단추·탭을 코어의 끌기 시작 거리(tapSlopPx — 마우스·펜 4화소,
  * 터치 10화소) 안에서 떼면 점 찍기, 끌기·오른쪽·가운데 단추·두 손가락은 코어 궤도·이동·확대 그대로(그 거리 안의 손가락 떨림은
@@ -27,6 +29,10 @@
  *   커서(결과) 쪽으로 친 거리만큼 띄워 둔다(거리는 모서리에 수직으로 잰다). 결과는 시작점 → 안내점(안내선에 내린 발) 줄자 결과로 바꾼다.
  *   각도기에서 각도를 치면(applyAngle — 도, 경사 1:6) 중심을 지나 기준 방향에서 그 각도만큼 커서(잰 방향) 쪽으로 돈 안내선을 둔다(음수는 반대쪽).
  *   안내점·안내선은 모형에 넣지 않는 보기 전용 표시라 새 문서·clearGuides까지 남으며, 안내점은 끝점처럼, 안내선은 모서리 위처럼 붙는다.
+ *   도구를 끈 뒤에도 안내는 그린다(SketchUp처럼 늘 보인다 — 고르기·지우기는 도구를 켠 동안). 안내 보이기(setGuidesShown, 이 브라우저에 기억)를 끄면
+ *   그리지도 붙지도 고르지도 않고, 숨긴 채 안내를 두거나 되돌리면 다시 켠다.
+ * 안내 되돌리기·다시 하기: 안내 두기(칸·누르기·두 번 누르기)와 지우기(하나·모두)마다 그 전 안내 배열을 쌓아(MAX_GUIDE_UNDO단계) undo·redo로 오간다.
+ *   측정 결과·진행 중 점은 건드리지 않는다. 안내 배열은 고치지 않고 늘 새로 만들므로 배열을 통째로 기억한다.
  * 안내 두기(SketchUp 줄자·각도기의 "+" — 이 뷰어는 재기만이 기본): 켜면(setGuideMode, 키보드는 Ctrl — Mac은 Option — 만 눌렀다 떼기)
  *   줄자 둘째 누르기가 안내를 둔다 — 모서리 위에서 시작했으면 그 모서리와 나란히 둘째 점을 지나는 안내선(결과는 모서리에 수직인 거리),
  *   끝점·꼭짓점 같은 점에서 시작했으면 둘째 점에 안내점. 각도기는 셋째 누르기가 중심을 지나 잰 방향으로 안내선을 둔다. 결과는 재기만과 같이 남긴다.
@@ -46,6 +52,9 @@ import { clickCount, dragStartPx, type LastClick } from 'opencad-viewer3d/pointe
 import type { Scene3d } from 'opencad-viewer3d/types';
 import { projectToScreen, screenRay, viewDepth, worldPerPixel, type ViewFrame } from 'opencad-viewer3d/camera';
 import type { V3 } from 'opencad-viewer3d/math';
+import { safeStorage } from './backdrop';
+import { icon } from './dom';
+import { isEditableTarget } from './keys';
 import { screenPoint, screenSegment, svgEl, type Overlay } from './overlay';
 import { formatAngle, formatLength, mmPerSceneUnit, type UnitsDisplay } from './units';
 import {
@@ -138,8 +147,10 @@ export interface MeasureToolOptions {
   onLock?: () => void;
   /** 안내 두기를 켜고 끄는 키(눌렀다 떼기 — 기본 Control, Mac은 'Alt' = Option) */
   guideKey?: GuideKey;
-  /** 안내 두기를 켜고 끄거나 안내점·안내선이 늘고 줄면(측정 띠 단추·측정값 칸의 안내 수를 맞춘다) */
+  /** 안내 두기를 켜고 끄거나 안내점·안내선이 늘고 줄거나, 되돌리기 목록·안내 보이기가 바뀌면(측정 띠 단추·측정값 칸의 안내 수를 맞춘다) */
   onGuides?: () => void;
+  /** 안내 보이기를 기억하는 곳(없으면 이 브라우저 localStorage, null이면 기억하지 않음) */
+  storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
 }
 
 /** 잠근 곳: Shift(떼면 풀린다)·화살표 키·앱 단추 */
@@ -188,6 +199,14 @@ export type LengthApply = 'ok' | 'mode' | 'start' | 'direction' | 'zero';
 /** 측정값 칸으로 각도를 넣은 결과: ok, 각도기가 아님(mode), 중심·기준 방향·결과가 없음(start), 돌릴 쪽을 모름(direction), 0°(zero) */
 export type AngleApply = LengthApply;
 
+/** 측정값 칸에 넣지 못한 까닭 글(넣었거나 도구가 다르면 null) — 칸 위 말풍선 */
+export function applyMessage(r: LengthApply, angle: boolean): string | null {
+  if (r === 'zero') return angle ? '0이 아닌 각도를 치세요' : '0이 아닌 길이를 치세요';
+  if (r === 'direction') return angle ? '커서를 돌릴 쪽으로 옮긴 뒤 치세요' : '커서를 잴 방향으로 옮긴 뒤 치세요';
+  if (r === 'start') return angle ? '먼저 중심점과 기준 방향을 누르세요' : '먼저 시작점을 누르세요';
+  return null;
+}
+
 /** 안내점을 기억하는 수(넘으면 오래된 것부터 버린다) */
 export const MAX_GUIDE_POINTS = 50;
 
@@ -196,6 +215,47 @@ export const MAX_GUIDE_LINES = 50;
 
 /** 기억해 두는 지나간 곡선 중심 수 */
 export const RECENT_CENTERS = 4;
+
+/** 안내 되돌리기 단계 수(넘으면 오래된 것부터 버린다) */
+export const MAX_GUIDE_UNDO = 100;
+
+/** 안내 보이기 설정을 이 브라우저에 기억하는 열쇠('0' = 숨김) */
+export const GUIDES_SHOWN_KEY = 'opencad-skp.guides';
+
+/** 보기 설정 메뉴의 안내 보이기 항목 글 */
+export const GUIDES_SHOWN_LABEL = '안내점·안내선 보이기';
+
+/** 측정 띠의 안내 되돌리기 단추 글 */
+export const GUIDE_UNDO_LABEL = '방금 바꾼 안내 되돌리기';
+
+/** 되돌리기 아이콘(반시계로 도는 화살표 — 다시 재기의 ← 아이콘과 다르게) */
+const UNDO_PATHS = '<path d="M3.5 7.5v5.5H9"/><path d="M20.5 17a8.5 8.5 0 0 0-14.5-6L3.5 13"/>';
+
+/** 되돌리기 목록 한 칸: 그때의 안내점·안내선 배열(배열은 고치지 않고 늘 새로 만들므로 통째로 기억한다) */
+interface GuideSnapshot {
+  pts: V3[];
+  lns: GuideLine[];
+}
+
+/**
+ * 안내 되돌리기·다시 하기 키(keydown): Ctrl·⌘+Z는 되돌리기, Ctrl·⌘+Shift+Z와 Ctrl+Y는 다시 하기(Alt·Option이 함께면 아니다).
+ * 글자는 key로 보고, 라틴 글자가 아니면(한글 자판 등) 물리 키(code)로 본다
+ */
+export function guideUndoKey(e: Pick<KeyboardEvent, 'key' | 'code' | 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'>): 'undo' | 'redo' | null {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return null;
+  const k = /^[a-z]$/i.test(e.key) ? e.key.toLowerCase() : e.code === 'KeyZ' ? 'z' : e.code === 'KeyY' ? 'y' : '';
+  if (k === 'z') return e.shiftKey ? 'redo' : 'undo';
+  // ⌘Y는 Mac 브라우저의 방문 기록이라 Ctrl+Y만
+  return k === 'y' && e.ctrlKey && !e.shiftKey ? 'redo' : null;
+}
+
+/** 보기 설정 메뉴 항목 꼴(앱 메뉴가 그대로 쓴다) */
+export interface GuideMenuItem {
+  label: string;
+  checked: boolean;
+  toggle: true;
+  run: () => void;
+}
 
 /** 이 도구가 쓰는 뷰어 기능(시험에서 가짜로 바꿀 수 있게) */
 export type MeasureViewer = Pick<Viewer3d, 'canvas' | 'pick' | 'getCamera' | 'onCameraChange' | 'getRenderMode' | 'section'> & Partial<Pick<Viewer3d, 'sections'>>;
@@ -566,6 +626,15 @@ export class MeasureTool {
   private lastClick: LastClick = { t: -Infinity, x: 0, y: 0, n: 0 };
   /** 바로 앞 줄자 누르기가 모서리에 붙었으면 그 모서리와 되돌릴 것(두 번 누르기 안내선) */
   private lastTap: TapMemo | null = null;
+  /** 안내 되돌리기·다시 하기 목록(새것이 뒤 — 안내를 두고 지울 때마다 그 전 상태를 쌓는다, 새 문서면 비운다) */
+  private undoList: GuideSnapshot[] = [];
+  private redoList: GuideSnapshot[] = [];
+  /** 안내 보이기(보기 설정 — 끄면 안내를 그리지 않고, 붙지도 고르지도 않는다) */
+  private shownValue: boolean;
+  private readonly storage: Pick<Storage, 'getItem' | 'setItem'> | null;
+  /** 측정 띠(측정값 칸 줄)의 되돌리기 단추(mountUndo로 붙인다) */
+  private undoBtn: HTMLButtonElement | null = null;
+  private readonly painter = (f: ViewFrame): void => this.paint(f);
   private readonly g: SVGGElement;
   private readonly layer: HTMLDivElement;
   private readonly tip: HTMLDivElement;
@@ -577,6 +646,14 @@ export class MeasureTool {
     private readonly overlay: MeasureOverlay,
     private readonly opts: MeasureToolOptions,
   ) {
+    this.storage = opts.storage === undefined ? safeStorage() : opts.storage;
+    let shown = true;
+    try {
+      shown = this.storage?.getItem(GUIDES_SHOWN_KEY) !== '0';
+    } catch {
+      /* 못 읽으면 보인다 */
+    }
+    this.shownValue = shown;
     this.g = svgEl('g', { class: 'measure' });
     this.layer = document.createElement('div');
     this.layer.className = 'measure-layer';
@@ -705,19 +782,173 @@ export class MeasureTool {
     this.hoverDirty = true;
     this.refreshHint();
     this.overlay.invalidate();
-    this.opts.onGuides?.();
+    this.notifyGuides();
   }
 
-  /** 안내점·안내선 모두 지우기 */
-  clearGuides(): void {
-    if (!this.guidePts.length && !this.guideLns.length) return;
-    this.guidePts = [];
-    this.guideLns = [];
+  /**
+   * 안내점·안내선 모두 지우기(측정값 칸의 ✕ — 되돌릴 수 있다). forget이면 되돌리기·다시 하기 목록도 비운다(새 문서를 열 때 —
+   * 안내는 그 모형의 자리라 다른 모형으로 되돌리지 않는다)
+   */
+  clearGuides(forget = false): void {
+    const had = this.undoList.length + this.redoList.length > 0;
+    if (forget) {
+      this.undoList = [];
+      this.redoList = [];
+    }
+    if (!this.guidePts.length && !this.guideLns.length) {
+      if (forget && had) this.notifyGuides();
+      return;
+    }
+    this.setGuides([], [], !forget);
     this.selGuide = null;
     this.selPlacedStart = false;
     this.hoverDirty = true;
     this.overlay.invalidate();
+    this.notifyGuides();
+  }
+
+  /** 되돌릴 안내 변경이 있는지 */
+  get canUndo(): boolean {
+    return this.undoList.length > 0;
+  }
+
+  /** 다시 할 안내 변경이 있는지 */
+  get canRedo(): boolean {
+    return this.redoList.length > 0;
+  }
+
+  /** 안내 되돌리기(두기·지우기 하나 — 측정 결과·진행 중 점은 그대로). 되돌렸으면 true */
+  undo(): boolean {
+    return this.step(this.undoList, this.redoList);
+  }
+
+  /** 되돌린 안내 변경 다시 하기. 했으면 true */
+  redo(): boolean {
+    return this.step(this.redoList, this.undoList);
+  }
+
+  /**
+   * 되돌리기·다시 하기 키(Ctrl·⌘+Z, Ctrl·⌘+Shift+Z, Ctrl+Y — keydown). 도구를 끈 동안에도 받는다(안내는 늘 보이므로).
+   * 입력 칸(측정값 칸·찾기 칸 등)의 키는 받지 않아 브라우저 기본 동작(글 되돌리기)이 된다. 되돌릴 것이 없으면 받지 않는다. 받았으면 true
+   */
+  undoKey(e: KeyboardEvent): boolean {
+    if (e.type !== 'keydown' || this.disposed || isEditableTarget(e.target)) return false;
+    const k = guideUndoKey(e);
+    if (!k) return false;
+    // Ctrl을 눌러 Z를 쳤으니 Ctrl 떼기는 안내 두기 전환이 아니다
+    this.modTap = false;
+    if (!(k === 'undo' ? this.undo() : this.redo())) return false;
+    e.preventDefault();
+    return true;
+  }
+
+  /** from 목록의 마지막 상태로 돌아가고 지금 상태는 to 목록에 쌓는다 */
+  private step(from: GuideSnapshot[], to: GuideSnapshot[]): boolean {
+    const s = from.pop();
+    if (!s || this.disposed) return false;
+    to.push({ pts: this.guidePts, lns: this.guideLns });
+    this.guidePts = s.pts;
+    this.guideLns = s.lns;
+    // 숨긴 안내를 되돌리면 다시 보인다(무엇이 바뀌었는지 보이게)
+    this.reveal();
+    if (!this.selectedGuide) {
+      this.selGuide = null;
+      this.selPlacedStart = false;
+    }
+    this.hoverDirty = true;
+    this.overlay.invalidate();
+    this.notifyGuides();
+    return true;
+  }
+
+  /** 안내점·안내선 배열 바꾸기(record면 그 전 상태를 되돌리기 목록에 쌓고 다시 하기 목록은 비운다) */
+  private setGuides(pts: V3[], lns: GuideLine[], record = true): void {
+    if (pts === this.guidePts && lns === this.guideLns) return;
+    if (record) {
+      this.undoList.push({ pts: this.guidePts, lns: this.guideLns });
+      if (this.undoList.length > MAX_GUIDE_UNDO) this.undoList.shift();
+      this.redoList = [];
+    }
+    this.guidePts = pts;
+    this.guideLns = lns;
+  }
+
+  /** 안내 보이기(보기 설정 — 기본 켬, 이 브라우저에 기억) */
+  get guidesShown(): boolean {
+    return this.shownValue;
+  }
+
+  /** 안내 보이기 켜고 끄기: 끄면 안내를 그리지 않고 추정·고르기에서도 뺀다(고른 안내는 푼다). 안내를 두거나 되돌리면 다시 켠다 */
+  setGuidesShown(on: boolean): void {
+    if (this.disposed || on === this.shownValue) return;
+    this.shownValue = on;
+    try {
+      this.storage?.setItem(GUIDES_SHOWN_KEY, on ? '1' : '0');
+    } catch {
+      /* 비공개 창 등 — 이번만 */
+    }
+    if (!on) {
+      this.selGuide = null;
+      this.selPlacedStart = false;
+    }
+    this.hoverDirty = true;
+    this.overlay.invalidate();
+    this.notifyGuides();
+  }
+
+  /** 보기 설정 메뉴의 "안내점·안내선 보이기" 항목(앱 메뉴 꼴) */
+  showGuidesItem(): GuideMenuItem {
+    return { label: GUIDES_SHOWN_LABEL, checked: this.shownValue, toggle: true, run: () => this.setGuidesShown(!this.shownValue) };
+  }
+
+  /**
+   * 측정값 칸(host)에 안내 되돌리기 단추를 붙인다(고른 안내 지우기 단추 앞). 측정 띠 안에서만 보이고(CSS — 키보드는 Ctrl·⌘+Z),
+   * 되돌릴 것이 있을 때만 나온다
+   */
+  mountUndo(host: HTMLElement): void {
+    let b = this.undoBtn;
+    if (!b) {
+      b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'vcb-btn vcb-undo';
+      b.title = GUIDE_UNDO_LABEL;
+      b.setAttribute('aria-label', GUIDE_UNDO_LABEL);
+      b.innerHTML = icon('', 16).replace('</svg>', `${UNDO_PATHS}</svg>`);
+      b.addEventListener('click', () => this.undo());
+      this.undoBtn = b;
+    }
+    host.insertBefore(b, host.querySelector('.vcb-del'));
+    b.hidden = !this.canUndo;
+  }
+
+  /** 숨긴 안내를 다시 보인다(안내를 두거나 되돌렸을 때) */
+  private reveal(): void {
+    if (!this.shownValue) this.setGuidesShown(true);
+  }
+
+  /**
+   * 안내가 바뀐 뒤: 덧그림을 붙이거나 떼고(도구를 끈 동안에도 안내가 보이면 그린다), 되돌리기 단추를 맞추고 앱에 알린다
+   */
+  private notifyGuides(): void {
+    this.syncPainter();
+    if (this.undoBtn) this.undoBtn.hidden = !this.canUndo;
     this.opts.onGuides?.();
+  }
+
+  /** 덧그림 붙이기·떼기: 도구를 켰거나, 끈 동안에도 보이는 안내가 있으면 그린다 */
+  private syncPainter(): void {
+    const on = !this.disposed && (!!this.modeValue || (this.shownValue && this.guidePts.length + this.guideLns.length > 0));
+    if (on) {
+      if (!this.g.isConnected) this.overlay.svg.append(this.g);
+      if (!this.layer.isConnected) this.overlay.labels.append(this.layer);
+      this.overlay.set(PAINTER_KEY, this.painter);
+    } else {
+      this.overlay.set(PAINTER_KEY, null);
+      this.g.replaceChildren();
+      this.layer.replaceChildren();
+      this.g.remove();
+      this.layer.remove();
+    }
   }
 
   /** 고른 안내의 종류(안내점·안내선, 없으면 null) — 안내를 누르면 고르고(방금 둔 안내도), 다른 곳을 누르거나 Esc·다시 재기면 푼다 */
@@ -739,8 +970,8 @@ export class MeasureTool {
     this.selGuide = null;
     this.selPlacedStart = false;
     if (!kind || !s) return false;
-    if (kind === 'point') this.guidePts = this.guidePts.filter((g) => g !== s);
-    else this.guideLns = this.guideLns.filter((g) => g !== s);
+    if (kind === 'point') this.setGuides(this.guidePts.filter((g) => g !== s), this.guideLns);
+    else this.setGuides(this.guidePts, this.guideLns.filter((g) => g !== s));
     if (cancel) {
       this.pts = [];
       this.startEdge = null;
@@ -750,7 +981,7 @@ export class MeasureTool {
     this.hoverDirty = true;
     this.refreshHint();
     this.overlay.invalidate();
-    this.opts.onGuides?.();
+    this.notifyGuides();
     return true;
   }
 
@@ -763,32 +994,34 @@ export class MeasureTool {
     this.selPlacedStart = !!ref && placedStart;
     if (!changed) return;
     this.overlay.invalidate();
-    this.opts.onGuides?.();
+    this.notifyGuides();
   }
 
-  /** 추정이 붙은 안내(안내점·안내선 객체 — 없으면 null) */
+  /** 추정이 붙은 안내(안내점·안내선 객체 — 없으면 null, 숨긴 안내는 붙지 않는다) */
   private guideAt(snap: Snap): GuideRef | null {
     const g = snap.guide;
-    if (!g) return null;
+    if (!g || !this.shownValue) return null;
     return (g.kind === 'point' ? this.guidePts[g.index] : this.guideLns[g.index]) ?? null;
   }
 
-  /** 안내점 두기(같은 자리에 이미 있으면 그것) — 오래된 것부터 MAX_GUIDE_POINTS개까지 */
+  /** 안내점 두기(같은 자리에 이미 있으면 그것) — 오래된 것부터 MAX_GUIDE_POINTS개까지. 숨긴 안내는 다시 보인다 */
   private addGuidePoint(p: V3): V3 {
+    this.reveal();
     const same = this.guidePts.find((g) => samePoint(g, p));
     if (same) return same;
     const g: V3 = [p[0], p[1], p[2]];
-    this.guidePts = [...this.guidePts, g].slice(-MAX_GUIDE_POINTS);
+    this.setGuides([...this.guidePts, g].slice(-MAX_GUIDE_POINTS), this.guideLns);
     return g;
   }
 
-  /** 안내선 두기(같은 직선이 이미 있으면 그것) — 오래된 것부터 MAX_GUIDE_LINES개까지 */
+  /** 안내선 두기(같은 직선이 이미 있으면 그것) — 오래된 것부터 MAX_GUIDE_LINES개까지. 숨긴 안내는 다시 보인다 */
   private addGuideLine(point: V3, dir: V3): GuideLine {
+    this.reveal();
     const u = unit(dir);
     const same = this.guideLns.find((g) => sameLine(g, point, u));
     if (same) return same;
     const gl: GuideLine = { point: [point[0], point[1], point[2]], dir: u };
-    this.guideLns = [...this.guideLns, gl].slice(-MAX_GUIDE_LINES);
+    this.setGuides(this.guidePts, [...this.guideLns, gl].slice(-MAX_GUIDE_LINES));
     return gl;
   }
 
@@ -883,6 +1116,14 @@ export class MeasureTool {
     return 'ok';
   }
 
+  /**
+   * 측정값 칸에 친 값 넣기(앱의 칸 넣기): 각도기 각도(도) 또는 줄자 길이(mm — mmPerUnit으로 장면 단위로 바꾼다).
+   * 넣었으면 null, 못 넣었으면 알릴 글(applyMessage)
+   */
+  applyValue(value: number, angle: boolean, mmPerUnit = 1): string | null {
+    return applyMessage(angle ? this.applyAngle(value) : this.applyLength(value / mmPerUnit), angle);
+  }
+
   /** 도구 켜기·바꾸기·끄기(null). 진행 중 점과 결과는 지운다 */
   setMode(mode: MeasureMode | null): void {
     if (this.disposed) return;
@@ -890,16 +1131,11 @@ export class MeasureTool {
     if (!same) this.reset();
     this.modeValue = mode;
     this.viewer.canvas.style.cursor = mode ? 'crosshair' : '';
-    if (mode) {
-      if (!this.g.isConnected) this.overlay.svg.append(this.g);
-      if (!this.layer.isConnected) this.overlay.labels.append(this.layer);
-      this.overlay.set(PAINTER_KEY, (f) => this.paint(f));
-    } else {
-      this.overlay.set(PAINTER_KEY, null);
-      this.g.replaceChildren();
-      this.layer.replaceChildren();
-      this.g.remove();
-      this.layer.remove();
+    // 끄면 결과·표식은 바로 지우고, 보이는 안내가 있으면 그것만 다시 그린다(안내는 도구를 끈 뒤에도 보인다)
+    this.syncPainter();
+    if (!mode) {
+      const f = this.g.isConnected ? this.overlay.frame() : null;
+      if (f) this.paint(f);
       this.notifyLive(null);
     }
     this.refreshHint();
@@ -1107,8 +1343,9 @@ export class MeasureTool {
       curveCenter,
       centers: this.centers,
       axisDirs: this.opts.getAxes?.() ?? null,
-      guides: this.guidePts,
-      guideLines: this.guideLns,
+      // 숨긴 안내에는 붙지 않는다
+      guides: this.shownValue ? this.guidePts : [],
+      guideLines: this.shownValue ? this.guideLns : [],
       parallelRef: this.parallelRef,
       lock: this.pts.length ? this.lockValue : null,
     });
@@ -1142,6 +1379,9 @@ export class MeasureTool {
     if (this.disposed) return;
     this.setMode(null);
     this.disposed = true;
+    // 도구를 끈 뒤에도 그리던 안내와 되돌리기 단추도 뗀다
+    this.syncPainter();
+    this.undoBtn?.remove();
     for (const f of this.off.splice(0)) f();
     this.presses.clear();
   }
@@ -1522,8 +1762,8 @@ export class MeasureTool {
   }
 
   private paint(f: ViewFrame): void {
-    if (!this.modeValue) return;
-    if (this.hoverDirty) {
+    const mode = this.modeValue;
+    if (mode && this.hoverDirty) {
       this.hoverDirty = false;
       this.updateHover(f);
     }
@@ -1532,17 +1772,23 @@ export class MeasureTool {
     if (this.layer.parentNode !== this.overlay.labels) this.overlay.labels.append(this.layer);
     this.g.replaceChildren();
     this.layer.replaceChildren();
+    const shown = this.shownValue;
+
+    // 안내선은 맨 아래(결과 선·표식이 그 위에 보이게). 테두리는 선 색(글자 색)과 반대 밝기 — 어두운 테마의 흰 점선이 흰 테두리에 묻히지 않게
+    if (shown && this.guideLns.length) {
+      const halo = haloFor(typeof getComputedStyle === 'function' ? getComputedStyle(this.g).color : '');
+      for (const gl of this.guideLns) this.guideLineMark(f, gl, halo, gl === this.selGuide ? 'is-selected' : '');
+    }
+    // 도구를 끈 동안: 안내만(SketchUp처럼 늘 보인다 — 고르기·지우기는 줄자·각도기를 켠 동안)
+    if (!mode) {
+      if (shown) for (const g of this.guidePts) this.guideMark(f, g);
+      return;
+    }
     const scene = this.opts.getScene();
     const units = this.opts.getUnits();
     const k = mmPerSceneUnit(scene?.units);
     const len = (d: number): string => formatLength(d * k, units);
     const ang = (deg: number): string => formatAngle(deg, units);
-
-    // 안내선은 맨 아래(결과 선·표식이 그 위에 보이게). 테두리는 선 색(글자 색)과 반대 밝기 — 어두운 테마의 흰 점선이 흰 테두리에 묻히지 않게
-    if (this.guideLns.length) {
-      const halo = haloFor(typeof getComputedStyle === 'function' ? getComputedStyle(this.g).color : '');
-      for (const gl of this.guideLns) this.guideLineMark(f, gl, halo, gl === this.selGuide ? 'is-selected' : '');
-    }
     const r = this.resultValue;
     if (r?.kind === 'tape') this.drawTape(f, r, len(r.distance));
     else if (r?.kind === 'protractor') this.drawAngle(f, r.center, r.a, r.b, r.normal, ang(r.angle), true);
@@ -1596,7 +1842,7 @@ export class MeasureTool {
         }
       }
     }
-    for (const g of this.guidePts) this.guideMark(f, g, g === this.selGuide);
+    if (shown) for (const g of this.guidePts) this.guideMark(f, g, g === this.selGuide);
     if (snap && snap.kind !== 'free') this.marker(f, snap);
     if (this.aimId !== null && this.cursor) this.reticle(this.cursor.x, this.cursor.y);
     // 안내 두기: 커서 오른쪽 위에 + (SketchUp 줄자·각도기 커서의 +)

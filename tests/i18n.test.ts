@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
 const { JSDOM } = createRequire(import.meta.url)('jsdom');
 import { installLocalization } from '../src/app/i18n';
-import { guideKeyHint, lockHint, measureHint } from '../src/app/measure';
+import { GUIDE_UNDO_LABEL, GUIDES_SHOWN_LABEL, guideKeyHint, lockHint, measureHint } from '../src/app/measure';
 import { SHORTCUTS } from '../src/app/shortcuts';
 import { chunkFailText } from '../src/app/core';
 import { catalogs, currentLanguage, languageUrl, languages, translate } from '../site/i18n.mjs';
@@ -60,7 +60,9 @@ describe('language URLs and UI presentation', () => {
     // 안내 두기(누르기로 안내점·안내선): 키 안내(키 이름은 그대로 끼운다)·측정 띠 단추·알림·바로 가기
     for (const guide of [false, true]) for (const key of ['Control', 'Alt'] as const) texts.add(guideKeyHint('tape', 0, guide, key) ?? '');
     for (const t of ['안내 두기', '안내 두기: 누르기로 안내점·안내선 두기(다시 누르면 재기만)', '안내 두기 켬: 누르면 안내점·안내선을 둡니다', '안내 두기 끔: 재기만 합니다', '다시 재기',
-      '고른 안내점 지우기', '고른 안내선 지우기', '고른 안내점 지우기 (Delete)', '고른 안내선 지우기 (Delete)']) texts.add(t);
+      '고른 안내점 지우기', '고른 안내선 지우기', '고른 안내점 지우기 (Delete)', '고른 안내선 지우기 (Delete)',
+      // 안내 되돌리기 단추(측정 띠)·보기 설정의 안내 보이기
+      GUIDE_UNDO_LABEL, GUIDES_SHOWN_LABEL]) texts.add(t);
     for (const g of SHORTCUTS) for (const item of g.items) texts.add(item.label);
     for (const t of ['각도', '각도 넣기', '각도를 치세요', '각도를 읽지 못했습니다', '각도(도, 경사 1:6)를 치고 Enter: 중심을 지나 그 각도로 돈 안내선을 둡니다',
       '안내선 3', '안내 5', '안내점 2', '안내선 2개 지우기', '안내점 1개와 안내선 2개 지우기', '안내선에', '안내선에 · 45.0°', '0이 아닌 각도를 치세요',
@@ -82,6 +84,9 @@ describe('language URLs and UI presentation', () => {
     expect(translate('안내점 2', 'en')).toBe('Guide points 2');
     expect(translate('Option: 안내 두기', 'en')).toBe('Option: place guides');
     expect(translate('Ctrl: 안내 두기 끄기', 'de')).toBe('Ctrl: Hilfslinien nicht mehr setzen');
+    // "{0} 보이기" 틀이 아니라 제 글로(안내점·안내선이 한국어로 남지 않게)
+    expect(translate(GUIDES_SHOWN_LABEL, 'en')).toBe('Show guide points and guide lines');
+    expect(translate('안내점·안내선을 두거나 지운 것 되돌리기(100단계)', 'ja')).toBe('ガイド点・ガイド線の配置や消去を元に戻す（100段階まで）');
   });
   it('translates the split-chunk loading and failure notices (measuring tools, 3D view)', () => {
     const hangul = /[가-힣]/;

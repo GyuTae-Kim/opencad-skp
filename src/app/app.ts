@@ -1172,7 +1172,8 @@ export class SkpViewerApp implements PanelHost {
     v.highlightRanges(null);
     v.setHighlightSegments(null);
     this.measureTool?.clear();
-    this.measureTool?.clearGuides();
+    // 안내와 되돌리기 목록은 그 모형의 것이라 새 문서면 비운다
+    this.measureTool?.clearGuides(true);
     this.vcb.setUnits(d.units);
     // 부드러운 모서리·숨긴 형상은 처음에 숨긴다(장면 범위에는 들어 있지 않다)
     this.refreshItemVisibility();
@@ -1319,6 +1320,8 @@ export class SkpViewerApp implements PanelHost {
       },
     });
     this.measureTool = tool;
+    // 측정 띠의 안내 되돌리기 단추(측정값 칸 줄)
+    tool.mountUndo(this.vcb.el);
     return tool;
   }
 
@@ -2855,6 +2858,8 @@ export class SkpViewerApp implements PanelHost {
       { label: '외곽선(윤곽 굵게)', checked: this.profilesOn, toggle: true, sep: true, run: () => this.setProfiles(!this.profilesOn) },
       { label: '뒤 모서리(숨은 선에서 점선)', checked: this.backEdgesOn, toggle: true, run: () => this.setBackEdges(!this.backEdgesOn) },
       { label: '태그 색으로 칠하기', checked: this.colorByTag, toggle: true, run: () => this.setColorByTag(!this.colorByTag) },
+      // 줄자·각도기로 둔 안내점·안내선(측정 도구 조각이 항목을 준다 — 문서를 열 때 받는다)
+      ...(this.measureTool ? [this.measureTool.showGuidesItem()] : []),
       { label: '그림자(파일의 날짜·시각·위치)', checked: this.shadowsOn, toggle: true, sep: true, run: () => this.setShadows(!this.shadowsOn) },
       { label: '안개', checked: this.fogOn, toggle: true, run: () => this.setFogOn(!this.fogOn) },
       { label: '걷기(1인칭)', icon: 'walk', checked: this.walking, toggle: true, sep: true, run: () => this.setWalk(!this.walking) },
@@ -2986,6 +2991,11 @@ export class SkpViewerApp implements PanelHost {
     }
     const v = this.viewer;
     const tool = this.measureTool;
+    // 안내 되돌리기·다시 하기(Ctrl·⌘+Z, Ctrl+Y·Ctrl·⌘+Shift+Z — 도구를 끈 동안에도, 입력 칸은 브라우저 몫)
+    if (tool?.undoKey(ev)) {
+      ev.stopPropagation();
+      return;
+    }
     // 줄자 시작점·각도기 기준 방향을 찍은 뒤 숫자를 치면 측정값 칸으로(SketchUp처럼 — 그동안 1~7 보기 키는 칸이 받는다)
     const typing = (tool?.mode === 'tape' && tool.pointCount === 1) || (tool?.mode === 'protractor' && tool.pointCount === 2);
     if (typing && !isEditableTarget(ev.target) && vcbStartKey(ev) && this.vcb.shown && !this.busy) {
@@ -3328,7 +3338,7 @@ export class SkpViewerApp implements PanelHost {
     const mode = this.doc ? (tool?.mode ?? null) : null;
     if (mode) this.vcb.setKind(mode === 'protractor' ? 'angle' : 'length');
     const guides = (tool?.guides.length ?? 0) + (tool?.guideLines.length ?? 0);
-    const show = !!mode && (!band || tool!.result?.kind === mode || guides > 0);
+    const show = !!mode && (!band || tool!.result?.kind === mode || guides > 0 || tool!.canUndo);
     this.vcb.show(show);
     this.vcb.setGuides(tool?.guides.length ?? 0, tool?.guideLines.length ?? 0);
     this.vcb.setSelected(mode ? (tool?.selectedGuide ?? null) : null);
@@ -3340,16 +3350,10 @@ export class SkpViewerApp implements PanelHost {
     const d = this.doc;
     const tool = this.measureTool;
     if (!d || !tool) return null;
-    const angle = kind === 'angle';
-    const r = angle ? tool.applyAngle(value) : tool.applyLength(value / mmPerSceneUnit(d.scene.units));
-    if (r === 'ok') {
-      this.refreshStatus();
-      return null;
-    }
-    if (r === 'zero') return angle ? '0이 아닌 각도를 치세요' : '0이 아닌 길이를 치세요';
-    if (r === 'direction') return angle ? '커서를 돌릴 쪽으로 옮긴 뒤 치세요' : '커서를 잴 방향으로 옮긴 뒤 치세요';
-    if (r === 'start') return angle ? '먼저 중심점과 기준 방향을 누르세요' : '먼저 시작점을 누르세요';
-    return null;
+    // 넣기와 못 넣은 까닭 글은 측정 도구 조각에(첫 화면 JS를 늘리지 않게)
+    const err = tool.applyValue(value, kind === 'angle', mmPerSceneUnit(d.scene.units));
+    if (!err) this.refreshStatus();
+    return err;
   }
 
   /** 측정 띠: 결과(거리와 축별 길이·각도)나 다음에 누를 곳 안내 */

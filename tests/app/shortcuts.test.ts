@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { keyAction } from '../../src/app/keys';
+import { guideUndoKey } from '../../src/app/measure';
 import { SHORTCUTS, openShortcutsDialog } from '../../src/app/shortcuts';
 
 const press = (el: Element, key: string, shiftKey = false): void => {
@@ -28,6 +29,27 @@ describe('키보드 바로 가기 안내', () => {
     expect(keyAction({ key: 'PageDown', hasDoc: true, hasPages: true })).toEqual({ kind: 'page', delta: 1 });
     // 모든 줄에 키와 하는 일이 있다
     for (const g of SHORTCUTS) for (const it of g.items) expect(it.keys.length && it.label.length).toBeTruthy();
+  });
+
+  it('안내 되돌리기·다시 하기 줄의 키는 측정 도구가 그대로 받는다', () => {
+    const items = SHORTCUTS.flatMap((g) => g.items);
+    const undo = items.find((it) => it.label.includes('되돌리기'))!;
+    const redo = items.find((it) => it.label.includes('다시 하기'))!;
+    // "Ctrl+Shift+Z" → 수정 키와 글자
+    const key = (s: string): Parameters<typeof guideUndoKey>[0] => {
+      const parts = s.split('+');
+      const has = (m: string): boolean => parts.includes(m);
+      return { key: parts.at(-1)!.toLowerCase(), code: '', ctrlKey: has('Ctrl'), metaKey: has('⌘'), altKey: false, shiftKey: has('Shift') };
+    };
+    expect(undo.keys).toEqual(['Ctrl+Z', '⌘+Z']);
+    for (const k of undo.keys) expect(guideUndoKey(key(k)), k).toBe('undo');
+    expect(redo.keys.length).toBe(3);
+    for (const k of redo.keys) expect(guideUndoKey(key(k)), k).toBe('redo');
+    // 창 키 규칙(keys.ts)은 이 키들을 뷰어로 보내지 않는다(측정 도구가 먼저 받는다)
+    for (const k of [...undo.keys, ...redo.keys]) {
+      const e = key(k);
+      expect(keyAction({ key: e.key, ctrl: e.ctrlKey, meta: e.metaKey, hasDoc: true }), k).toBeNull();
+    }
   });
 
   it('대화 상자: 닫기 단추에 초점, Tab은 안에서만, Esc·바깥 누르기로 닫으면 연 곳에 초점', () => {

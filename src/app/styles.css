@@ -1824,6 +1824,15 @@ button.scene-card.sel {
   width: auto;
 }
 
+/* 안내 되돌리기(measure.ts mountUndo): 측정 띠 안에서만 — 넓은 화면은 Ctrl·⌘+Z */
+.vcb .vcb-undo {
+  display: none;
+}
+
+.measure-bar .vcb-undo:not([hidden]) {
+  display: inline-flex;
+}
+
 @media (pointer: coarse) {
   /* 휴대폰 자판이 화면을 확대하지 않게 16px, 누르기 쉬운 높이 */
   .vcb-input {

@@ -43,6 +43,12 @@ import {
   edgeOfTap,
   guideKeyFor,
   guideKeyHint,
+  GUIDE_UNDO_LABEL,
+  GUIDES_SHOWN_KEY,
+  GUIDES_SHOWN_LABEL,
+  MAX_GUIDE_UNDO,
+  applyMessage,
+  guideUndoKey,
 } from '../../src/app/measure';
 import type { V3 } from 'opencad-viewer3d/math';
 import { Overlay, frameFor } from '../../src/app/overlay';
@@ -1639,5 +1645,358 @@ describe('측정 도구: 모서리 두 번 누르기(그 모서리 위 안내선
     dbl(r, 170, 101);
     expect(r.tool.guideLines).toHaveLength(0);
     expect(r.tool.pointCount).toBe(1);
+  });
+});
+
+/** 안내 보이기를 기억하는 가짜 저장소(시험끼리 섞이지 않게) */
+const memStore = (): Pick<Storage, 'getItem' | 'setItem'> & { m: Map<string, string> } => {
+  const m = new Map<string, string>();
+  return { m, getItem: (k) => m.get(k) ?? null, setItem: (k, v) => void m.set(k, v) };
+};
+
+describe('측정 도구: 안내 되돌리기·다시 하기(Ctrl·⌘+Z)', () => {
+  // 두 번 누르기는 시간에 기대므로 시계를 손으로 옮긴다(앞 describe와 같게)
+  let clock = 0;
+  beforeEach(() => {
+    clock = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+  /** 3D 보기(또는 target)에서 keydown 하나 → undoKey가 받았는지와 기본 동작을 막았는지 */
+  const press = (r: Rig, init: KeyboardEventInit, target: EventTarget = r.canvas): { handled: boolean; prevented: boolean } => {
+    const e = new KeyboardEvent('keydown', { ...init, bubbles: true, cancelable: true });
+    let handled = false;
+    target.addEventListener('keydown', (ev) => void (handled = r.tool.undoKey(ev as KeyboardEvent)), { once: true });
+    target.dispatchEvent(e);
+    return { handled, prevented: e.defaultPrevented };
+  };
+
+  it('되돌리기·다시 하기 키(한글 자판은 물리 키)와 측정값 칸 알림 글', () => {
+    const k = (key: string, o: { code?: string; ctrl?: boolean; meta?: boolean; alt?: boolean; shift?: boolean } = {}): ReturnType<typeof guideUndoKey> =>
+      guideUndoKey({ key, code: o.code ?? '', ctrlKey: !!o.ctrl, metaKey: !!o.meta, altKey: !!o.alt, shiftKey: !!o.shift });
+    expect(k('z', { ctrl: true })).toBe('undo');
+    expect(k('z', { meta: true })).toBe('undo');
+    expect(k('Z', { ctrl: true, shift: true })).toBe('redo');
+    expect(k('z', { meta: true, shift: true })).toBe('redo');
+    expect(k('y', { ctrl: true })).toBe('redo');
+    // ⌘Y는 Mac 브라우저 몫, Alt·Option과 함께·수정 키 없이·다른 글자는 아니다
+    expect(k('y', { meta: true })).toBeNull();
+    expect(k('Y', { ctrl: true, shift: true })).toBeNull();
+    expect(k('z', { ctrl: true, alt: true })).toBeNull();
+    expect(k('z')).toBeNull();
+    expect(k('x', { ctrl: true })).toBeNull();
+    expect(k('ㅋ', { ctrl: true, code: 'KeyZ' })).toBe('undo');
+    expect(k('ㅋ', { meta: true, shift: true, code: 'KeyZ' })).toBe('redo');
+    expect(k('ㅛ', { ctrl: true, code: 'KeyY' })).toBe('redo');
+    // 측정값 칸 알림(넣기는 측정 도구 조각에서)
+    expect(applyMessage('ok', false)).toBeNull();
+    expect(applyMessage('mode', true)).toBeNull();
+    expect(applyMessage('zero', true)).toBe('0이 아닌 각도를 치세요');
+    expect(applyMessage('zero', false)).toBe('0이 아닌 길이를 치세요');
+    expect(applyMessage('start', false)).toBe('먼저 시작점을 누르세요');
+    expect(applyMessage('direction', true)).toBe('커서를 돌릴 쪽으로 옮긴 뒤 치세요');
+  });
+
+  it('칸으로·안내 두기로 둔 안내, 하나 지우기, 모두 지우기를 하나씩 되돌리고 다시 한다 — 측정 결과·진행 중 점은 그대로', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    expect(r.tool.canUndo).toBe(false);
+    expect(r.tool.undo()).toBe(false);
+    // 1) 칸으로 안내점 (30, 0)
+    r.click(102, 103);
+    r.move(160, 101);
+    expect(r.tool.applyValue(30, false)).toBeNull();
+    const p1 = r.tool.guides[0]!;
+    expect(r.tool.canUndo).toBe(true);
+    // 2) 안내 두기로 끝점 (0, 50)에 안내점
+    r.tool.setGuideMode(true);
+    clock += 1000;
+    r.click(102, 103);
+    clock += 1000;
+    r.click(101, 51);
+    expect(r.tool.guides).toHaveLength(2);
+    const p2 = r.tool.guides[1]!;
+    // 3) 안내점 (30, 0)을 눌러 골라 하나 지우기(그 누르기의 시작점도 거둔다)
+    clock += 1000;
+    r.click(130, 101);
+    expect(r.tool.selectedGuide).toBe('point');
+    expect(r.tool.deleteSelectedGuide()).toBe(true);
+    expect(r.tool.guides).toEqual([p2]);
+    // 4) 모두 지우기
+    r.tool.clearGuides();
+    expect(r.tool.guides).toHaveLength(0);
+    const result = r.tool.result;
+    const calls = r.guideCalls();
+    // 되돌리기: 모두 지우기 → 하나 지우기 → 안내 두기 → 칸
+    expect(r.tool.undo()).toBe(true);
+    expect(r.tool.guides).toEqual([p2]);
+    expect(r.guideCalls()).toBe(calls + 1);
+    expect(r.tool.undo()).toBe(true);
+    expect(r.tool.guides).toEqual([p1, p2]);
+    r.overlay.paintNow();
+    expect(r.qa('.measure-guide')).toHaveLength(2);
+    expect(r.tool.undo()).toBe(true);
+    expect(r.tool.guides).toEqual([p1]);
+    expect(r.tool.undo()).toBe(true);
+    expect(r.tool.guides).toHaveLength(0);
+    expect(r.tool.canUndo).toBe(false);
+    expect(r.tool.undo()).toBe(false);
+    expect(r.tool.result).toBe(result);
+    // 다시 하기
+    expect(r.tool.canRedo).toBe(true);
+    expect(r.tool.redo()).toBe(true);
+    expect(r.tool.redo()).toBe(true);
+    expect(r.tool.guides).toEqual([p1, p2]);
+    // 진행 중 측정은 되돌리기와 상관없다
+    clock += 1000;
+    r.click(198, 101);
+    expect(r.tool.pointCount).toBe(1);
+    expect(r.tool.undo()).toBe(true);
+    expect(r.tool.pointCount).toBe(1);
+    expect(r.tool.guides).toEqual([p1]);
+    // 새로 바꾸면 다시 하기 목록은 비운다
+    r.tool.clearGuides();
+    expect(r.tool.canRedo).toBe(false);
+    expect(r.tool.redo()).toBe(false);
+    expect(r.tool.undo()).toBe(true);
+    expect(r.tool.guides).toEqual([p1]);
+  });
+
+  it('모서리 두 번 누르기 안내선·각도기 칸 안내선도 되돌리고, 되돌린 안내가 고른 것이면 푼다', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    clock += 1000;
+    r.click(170, 101);
+    r.click(171, 102);
+    expect(r.tool.guideLines).toHaveLength(1);
+    expect(r.tool.selectedGuide).toBe('line');
+    r.tool.setMode('protractor');
+    for (const [x, y] of [[101, 101], [197, 102], [101, 51]] as const) {
+      clock += 1000;
+      r.click(x, y);
+    }
+    expect(r.tool.result?.kind).toBe('protractor');
+    expect(r.tool.applyValue(45, true)).toBeNull();
+    expect(r.tool.guideLines).toHaveLength(2);
+    expect(r.tool.selectedGuide).toBe('line');
+    const angleResult = r.tool.result;
+    expect(r.tool.undo()).toBe(true);
+    expect(r.tool.guideLines).toHaveLength(1);
+    // 고른 안내선(방금 둔 것)이 없어졌으니 고른 것이 없다 — 휴지통 단추가 사라진다
+    expect(r.tool.selectedGuide).toBeNull();
+    expect(r.tool.result).toBe(angleResult);
+    expect(r.tool.undo()).toBe(true);
+    expect(r.tool.guideLines).toHaveLength(0);
+    expect(r.tool.redo()).toBe(true);
+    expect(Math.abs(r.tool.guideLines[0]!.dir[0])).toBeCloseTo(1, 12);
+  });
+
+  it('키: 3D 보기에서는 Ctrl·⌘+Z가 되돌리고 Ctrl+Y·Shift+Z가 다시 한다(도구를 끈 동안에도), 입력 칸·되돌릴 것이 없으면 받지 않는다', () => {
+    const r = rig(EDGES());
+    expect(press(r, { key: 'z', ctrlKey: true })).toEqual({ handled: false, prevented: false });
+    r.tool.setMode('tape');
+    r.click(102, 103);
+    clock += 1000;
+    r.click(198, 101);
+    expect(r.tool.applyLength(30)).toBe('ok');
+    // 측정값 칸·찾기 칸 같은 입력 칸은 브라우저 몫(글 되돌리기)
+    const input = document.createElement('input');
+    document.body.append(input);
+    expect(press(r, { key: 'z', ctrlKey: true }, input)).toEqual({ handled: false, prevented: false });
+    expect(r.tool.guides).toHaveLength(1);
+    // Ctrl을 누른 채 Z: 되돌리고, 뒤따르는 Ctrl 떼기는 안내 두기 전환이 아니다
+    expect(r.key('Control')).toBe(false);
+    expect(press(r, { key: 'z', ctrlKey: true })).toEqual({ handled: true, prevented: true });
+    expect(r.tool.guides).toHaveLength(0);
+    expect(r.key('Control', 'keyup')).toBe(false);
+    expect(r.tool.guideMode).toBe(false);
+    // 도구를 끈 동안에도(안내는 늘 보인다)
+    r.tool.setMode(null);
+    expect(press(r, { key: 'Z', metaKey: true, shiftKey: true })).toEqual({ handled: true, prevented: true });
+    expect(r.tool.guides).toHaveLength(1);
+    r.overlay.paintNow();
+    expect(r.qa('.measure-guide')).toHaveLength(1);
+    expect(press(r, { key: 'z', metaKey: true }).handled).toBe(true);
+    expect(r.tool.guides).toHaveLength(0);
+    r.overlay.paintNow();
+    expect(r.q('g.measure')).toBeNull();
+    expect(press(r, { key: 'y', ctrlKey: true }).handled).toBe(true);
+    expect(r.tool.guides).toHaveLength(1);
+    // 다시 할 것이 없으면 받지 않는다(브라우저 몫)
+    expect(press(r, { key: 'y', ctrlKey: true })).toEqual({ handled: false, prevented: false });
+    // keyup은 받지 않는다
+    expect(r.tool.undoKey(new KeyboardEvent('keyup', { key: 'z', ctrlKey: true }))).toBe(false);
+    expect(r.tool.guides).toHaveLength(1);
+  });
+
+  it(`${MAX_GUIDE_UNDO}단계까지 기억하고(오래된 것부터 버림), 새 문서(clearGuides(true))면 목록을 비운다`, () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    r.click(102, 103);
+    clock += 1000;
+    r.click(198, 101);
+    for (let i = 1; i <= MAX_GUIDE_UNDO + 5; i++) expect(r.tool.applyLength(i)).toBe('ok');
+    expect(r.tool.guides).toHaveLength(MAX_GUIDE_POINTS);
+    let n = 0;
+    while (r.tool.undo()) n++;
+    expect(n).toBe(MAX_GUIDE_UNDO);
+    // 가장 오래된 다섯 단계는 버렸다: 그 다섯 안내점(1~5)이 남는다
+    expect(r.tool.guides.map((g) => Math.round(g[0]))).toEqual([1, 2, 3, 4, 5]);
+    while (r.tool.redo()) n--;
+    expect(n).toBe(0);
+    expect(r.tool.guides).toHaveLength(MAX_GUIDE_POINTS);
+    expect(Math.round(r.tool.guides.at(-1)![0])).toBe(MAX_GUIDE_UNDO + 5);
+    // 새 문서: 안내와 함께 목록도(되돌려 다른 모형에 옛 안내가 나오지 않게)
+    r.tool.undo();
+    const calls = r.guideCalls();
+    r.tool.clearGuides(true);
+    expect(r.tool.guides).toHaveLength(0);
+    expect(r.tool.canUndo).toBe(false);
+    expect(r.tool.canRedo).toBe(false);
+    expect(r.guideCalls()).toBe(calls + 1);
+    // 안내가 없어도 목록이 있었으면 알린다(되돌리기 단추를 숨기게)
+    expect(r.tool.applyLength(3)).toBe('ok');
+    r.tool.undo();
+    expect(r.tool.guides).toHaveLength(0);
+    const calls2 = r.guideCalls();
+    r.tool.clearGuides(true);
+    expect(r.tool.canRedo).toBe(false);
+    expect(r.guideCalls()).toBe(calls2 + 1);
+    r.tool.clearGuides(true);
+    expect(r.guideCalls()).toBe(calls2 + 1);
+  });
+
+  it('측정 띠의 되돌리기 단추: 고른 안내 지우기 단추 앞에 붙고, 되돌릴 것이 있을 때만 보이며 누르면 하나 되돌린다', () => {
+    const r = rig(EDGES());
+    const host = document.createElement('form');
+    const del = document.createElement('button');
+    del.className = 'vcb-del';
+    host.append(document.createElement('input'), del);
+    document.body.append(host);
+    r.tool.mountUndo(host);
+    const b = host.querySelector<HTMLButtonElement>('.vcb-undo')!;
+    expect(b.nextElementSibling).toBe(del);
+    expect(b.type).toBe('button');
+    expect(b.hidden).toBe(true);
+    expect(b.getAttribute('aria-label')).toBe(GUIDE_UNDO_LABEL);
+    expect(b.title).toBe(GUIDE_UNDO_LABEL);
+    expect(b.querySelectorAll('svg path')).toHaveLength(2);
+    r.tool.setMode('tape');
+    r.click(102, 103);
+    clock += 1000;
+    r.click(198, 101);
+    expect(r.tool.applyLength(30)).toBe('ok');
+    expect(b.hidden).toBe(false);
+    b.click();
+    expect(r.tool.guides).toHaveLength(0);
+    expect(b.hidden).toBe(true);
+    // 다시 붙여도 하나
+    r.tool.mountUndo(host);
+    expect(host.querySelectorAll('.vcb-undo')).toHaveLength(1);
+    r.tool.dispose();
+    expect(host.querySelector('.vcb-undo')).toBeNull();
+  });
+});
+
+describe('측정 도구: 안내를 늘 보이기(보기 설정 "안내점·안내선 보이기")', () => {
+  it('도구를 끈 뒤에도 안내점·안내선을 그린다(결과·표식·고른 것은 지운다) — 카메라를 옮기면 따라가고 누르기는 받지 않는다', () => {
+    const r = rig(EDGES(), TOP, DEFAULT_UNITS, { storage: memStore() });
+    r.tool.setMode('tape');
+    // 모서리 위 (70, 0)에서 시작해 칸으로 나란한 안내선(y = 20), 끝점 (0, 0)에서 칸으로 안내점 (30, 0)
+    r.click(170, 101);
+    r.move(170, 60);
+    expect(r.tool.applyLength(20)).toBe('ok');
+    r.click(102, 103);
+    r.move(160, 101);
+    expect(r.tool.applyLength(30)).toBe('ok');
+    r.move(150, 150);
+    r.tool.setMode(null);
+    expect(r.q('g.measure')).not.toBeNull();
+    expect(r.qa('.measure-guide')).toHaveLength(1);
+    expect(r.qa('.measure-guide-line')).toHaveLength(1);
+    expect(r.q('.measure-label-length')).toBeNull();
+    expect(r.q('.is-selected')).toBeNull();
+    expect(r.q('.measure-tip')).toBeNull();
+    expect(r.q('[class*="measure-snap"]')).toBeNull();
+    const d = r.q('.measure-guide path')!.getAttribute('d');
+    r.setCamera({ ...TOP, target: [20, 0, 0] });
+    r.overlay.paintNow();
+    expect(r.q('.measure-guide path')!.getAttribute('d')).not.toBe(d);
+    // 끈 동안 누르기는 고르지도 찍지도 않는다
+    r.click(110, 101);
+    expect(r.tool.selectedGuide).toBeNull();
+    expect(r.tool.pointCount).toBe(0);
+    // 다시 켜면 그대로 붙는다
+    r.setCamera(TOP);
+    r.tool.setMode('tape');
+    r.move(131, 102);
+    expect(r.tip()).toBe('안내점');
+    // 도구를 버리면 안내 그림도 뗀다
+    r.tool.setMode(null);
+    r.tool.dispose();
+    expect(r.q('g.measure')).toBeNull();
+  });
+
+  it('안내 보이기를 끄면 그리지도 붙지도 고르지도 않고 이 브라우저에 기억한다 — 안내를 두거나 되돌리면 다시 켠다', () => {
+    const store = memStore();
+    const r = rig(EDGES(), TOP, DEFAULT_UNITS, { storage: store });
+    expect(r.tool.guidesShown).toBe(true);
+    const item = r.tool.showGuidesItem();
+    expect(item).toMatchObject({ label: GUIDES_SHOWN_LABEL, checked: true, toggle: true });
+    r.tool.setMode('tape');
+    r.click(102, 103);
+    r.move(160, 101);
+    expect(r.tool.applyLength(30)).toBe('ok');
+    expect(r.tool.selectedGuide).toBe('point');
+    const calls = r.guideCalls();
+    item.run();
+    expect(r.tool.guidesShown).toBe(false);
+    expect(store.m.get(GUIDES_SHOWN_KEY)).toBe('0');
+    expect(r.guideCalls()).toBeGreaterThan(calls);
+    expect(r.tool.selectedGuide).toBeNull();
+    expect(r.tool.showGuidesItem().checked).toBe(false);
+    r.overlay.paintNow();
+    expect(r.qa('.measure-guide')).toHaveLength(0);
+    // 숨긴 안내점에는 붙지 않고(그 밑 모서리에), 눌러도 고르지 않는다
+    r.move(131, 102);
+    expect(r.tip()).toBe('모서리에');
+    r.click(131, 102);
+    expect(r.tool.selectedGuide).toBeNull();
+    expect(r.tool.edgeStart).toBe(true);
+    // 끄면 도구를 꺼도 그리지 않는다
+    r.tool.setMode(null);
+    expect(r.q('g.measure')).toBeNull();
+    // 기억: 이 저장소를 쓰는 새 도구도 숨김
+    expect(rig(EDGES(), TOP, DEFAULT_UNITS, { storage: store }).tool.guidesShown).toBe(false);
+    // 안내를 두면 다시 켠다(둔 안내가 보이게)
+    r.tool.setMode('tape');
+    r.click(131, 102);
+    r.move(131, 60);
+    expect(r.tool.applyLength(10)).toBe('ok');
+    expect(r.tool.guidesShown).toBe(true);
+    expect(store.m.get(GUIDES_SHOWN_KEY)).toBe('1');
+    r.overlay.paintNow();
+    expect(r.qa('.measure-guide')).toHaveLength(1);
+    expect(r.qa('.measure-guide-line')).toHaveLength(1);
+    // 숨긴 채 되돌려도 다시 켠다(무엇이 바뀌었는지 보이게)
+    r.tool.setGuidesShown(false);
+    expect(r.tool.undo()).toBe(true);
+    expect(r.tool.guidesShown).toBe(true);
+    expect(r.tool.guideLines).toHaveLength(0);
+    // 저장소를 못 쓰면(비공개 창 등) 보이기로 시작하고 이번만 바꾼다
+    const broken = {
+      getItem: (): string | null => {
+        throw new Error('blocked');
+      },
+      setItem: (): void => {
+        throw new Error('blocked');
+      },
+    };
+    const b = rig(EDGES(), TOP, DEFAULT_UNITS, { storage: broken });
+    expect(b.tool.guidesShown).toBe(true);
+    b.tool.setGuidesShown(false);
+    expect(b.tool.guidesShown).toBe(false);
   });
 });
