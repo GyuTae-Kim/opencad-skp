@@ -113,6 +113,7 @@ import type { Rgb, SkpEdgeColorMode, SkpShadowMeta, SkpStyleMeta } from '../meta
 import { fogFor, lightingForShadow, shadowOrDefault, sunForShadow, usesSun } from './sun';
 import { WalkStick } from './joystick';
 import { Vcb, vcbStartKey, type VcbKind } from './vcb';
+import { FlashNote } from './flash';
 
 export const APP_TITLE = 'OpenCAD SketchUp 뷰어';
 const TOOLS_URL = 'https://gyutae-kim.github.io/opencad';
@@ -124,6 +125,8 @@ export const VIEW_CUBE_WIDE = 112;
 export const VIEW_CUBE_NARROW = 76;
 /** 정의의 인스턴스 모두에 맞춰 볼 때 범위를 셀 노드 수 한도 */
 const MAX_FIT_NODES = 5000;
+/** 측정 띠 알림 종류: 잠금 단추를 눌렀는데 잠글 방향이 없음(잠금이 걸리면 거둔다) */
+const NO_LOCK_FLASH = 'no-lock';
 
 const RENDER_MODES: [RenderMode, string, string][] = [
   ['shaded', '음영', 'shaded'],
@@ -343,9 +346,9 @@ export class SkpViewerApp implements PanelHost {
   private rangedIds = new Set<string>();
   /** 그림 저장 창 */
   private exportDialog: ExportDialog | null = null;
-  /** 최근 측정(새것이 앞)·측정 띠 알림 타이머 */
+  /** 최근 측정(새것이 앞)·측정 띠 알림 */
   private measureLog: MeasureToolResult[] = [];
-  private flashTimer = 0;
+  private measureNote: FlashNote | null = null;
   /** 곡선(묶음 차례#곡선 번호) → 중심(측정 "중심" 추정, 문서마다) */
   private curveCenters = new Map<string, [number, number, number] | null>();
   /** 파일·장면 스타일 배경 쓰기(사용자 설정)와 지금 스타일의 배경 색 */
@@ -1235,8 +1238,11 @@ export class SkpViewerApp implements PanelHost {
           this.refreshStatus();
           this.panel.refreshSelection();
         },
-        // 추론 잠금·화살표로 고정한 각도기 평면: 상태 줄·측정 띠의 잠금 안내와 잠금 단추
-        onLock: () => this.refreshStatus(),
+        // 추론 잠금·화살표로 고정한 각도기 평면: 상태 줄·측정 띠의 잠금 안내와 잠금 단추(잠그면 잠글 방향이 없다는 알림은 거둔다)
+        onLock: () => {
+          if (this.measureTool?.inferenceLock) this.measureNote?.drop(NO_LOCK_FLASH);
+          this.refreshStatus();
+        },
         touch: () => !!this.coarseQuery?.matches,
         curveCenter: (id, seg) => this.curveCenter(id, seg),
         // 모형의 그리기 축을 옮겼으면 줄자·각도기의 축 고정·기본 평면이 그 축을 따른다
@@ -1394,22 +1400,18 @@ export class SkpViewerApp implements PanelHost {
     this.refreshStatus();
   }
 
-  /** 측정 띠에 잠깐 알림(복사 등) */
-  private flashMeasure(text: string, ms = 1600): void {
-    const el = this.els.measureFlash;
-    el.textContent = text;
-    el.hidden = false;
-    clearTimeout(this.flashTimer);
-    this.flashTimer = window.setTimeout(() => (el.hidden = true), ms);
+  /** 측정 띠에 잠깐 알림(복사 등). kind를 붙이면 그 종류로 거둘 수 있다 */
+  private flashMeasure(text: string, ms = 1600, kind: string | null = null): void {
+    (this.measureNote ??= new FlashNote(this.els.measureFlash)).show(text, ms, kind);
   }
 
-  /** 측정 띠 잠금 단추: 잠겼으면 풀고, 아니면 지금 방향 추론을 잠근다(잠글 것이 없으면 맞추는 법을 알린다) */
+  /** 측정 띠 잠금 단추: 잠겼으면 풀고, 아니면 지금 방향 추론을 잠근다(잠글 것이 없으면 맞추는 법을 알린다 — 잠그면 거둔다) */
   private toggleMeasureLock(): void {
     const t = this.measureTool;
     if (!t?.directing) return;
     if (t.inferenceLock) t.setInferenceLock(false);
     else if (!t.setInferenceLock(true))
-      this.flashMeasure(this.coarseQuery?.matches ? '잠글 방향이 없습니다: 길게 눌러 조준하며 축·나란한 방향에 맞춘 뒤 누르세요' : '잠글 방향이 없습니다: 커서를 축·나란한 방향에 맞춘 뒤 누르세요', 3200);
+      this.flashMeasure(this.coarseQuery?.matches ? '잠글 방향이 없습니다: 길게 눌러 조준하며 축·나란한 방향에 맞춘 뒤 누르세요' : '잠글 방향이 없습니다: 커서를 축·나란한 방향에 맞춘 뒤 누르세요', 3200, NO_LOCK_FLASH);
     this.refreshStatus();
   }
 
