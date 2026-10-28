@@ -33,8 +33,13 @@ import {
   tapeResult,
   tapSlopPx,
   tooltipPosition,
+  type MeasureToolOptions,
   type MeasureToolResult,
   type MeasureViewer,
+  GUIDE_KEY_NAMES,
+  edgeFoot,
+  guideKeyFor,
+  guideKeyHint,
 } from '../../src/app/measure';
 import { Overlay, frameFor } from '../../src/app/overlay';
 import { DRAG_START_PX, TOUCH_DRAG_START_PX } from 'opencad-viewer3d';
@@ -137,6 +142,8 @@ interface Rig {
   liveKinds: LiveKind[];
   /** onLock마다 잠근 방향 이름(각도기 화살표 평면은 plane-축) */
   locks: (string | null)[];
+  /** onGuides를 부른 수(안내 두기 켜고 끄기·안내가 늘고 줄 때) */
+  guideCalls: () => number;
   setCamera(c: CameraState): void;
   ptr(type: string, x: number, y: number, o?: { id?: number; button?: number; buttons?: number; pointerType?: string; shift?: boolean }): void;
   click(x: number, y: number, o?: { pointerType?: string; id?: number; shift?: boolean }): void;
@@ -157,7 +164,8 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-function rig(scene: Pick<Scene3d, 'meshes' | 'lines' | 'units'>, cam: CameraState = TOP, units: UnitsDisplay = DEFAULT_UNITS): Rig {
+function rig(scene: Pick<Scene3d, 'meshes' | 'lines' | 'units'>, cam: CameraState = TOP, units: UnitsDisplay = DEFAULT_UNITS, extra: Partial<MeasureToolOptions> = {}): Rig {
+  let guideCalls = 0;
   const host = document.createElement('div');
   const canvas = document.createElement('canvas');
   Object.defineProperty(canvas, 'clientWidth', { get: () => W });
@@ -196,6 +204,8 @@ function rig(scene: Pick<Scene3d, 'meshes' | 'lines' | 'units'>, cam: CameraStat
       liveKinds.push(k);
     },
     onLock: () => locks.push(lockName(tool.inferenceLock) ?? (tool.planeAxis ? `plane-${tool.planeAxis}` : null)),
+    onGuides: () => void guideCalls++,
+    ...extra,
   });
   const ptr: Rig['ptr'] = (type, x, y, o = {}) => {
     const e = new MouseEvent(type, { clientX: x, clientY: y, button: o.button ?? 0, buttons: o.buttons ?? 0, shiftKey: !!o.shift, bubbles: true });
@@ -212,6 +222,7 @@ function rig(scene: Pick<Scene3d, 'meshes' | 'lines' | 'units'>, cam: CameraStat
     lives,
     liveKinds,
     locks,
+    guideCalls: () => guideCalls,
     setCamera(c) {
       camera = c;
       for (const cb of camCbs) cb(c);
@@ -1066,5 +1077,176 @@ describe('측정값 칸: 안내선(모서리와 나란히 · 각도기 각도)',
     expect(r.tool.applyAngle(1)).toBe('ok');
     for (let i = 2; i <= MAX_GUIDE_LINES + 3; i++) expect(r.tool.applyAngle(i)).toBe('ok');
     expect(r.tool.guideLines).toHaveLength(MAX_GUIDE_LINES);
+  });
+});
+
+describe('측정 도구: 안내 두기(누르기로 안내점·안내선 — SketchUp 줄자·각도기의 +)', () => {
+  // 모서리(EDGES)와 그 밑 바닥 면(z = 0, 보기 전체)
+  const FLOOR = (): Pick<Scene3d, 'meshes' | 'lines' | 'units'> => ({ ...EDGES(), meshes: [quad('f', -100, -100, 100, 100, 0)] });
+  const near = (a: readonly number[], b: readonly number[]): void => a.forEach((v, i) => expect(v).toBeCloseTo(b[i]!, 6));
+
+  it('안내 두기 키: Windows·Linux는 Ctrl, Mac은 Option — 안내 글은 키보드 기기에서 점을 찍기 전만', () => {
+    expect(guideKeyFor('Win32')).toBe('Control');
+    expect(guideKeyFor('Linux x86_64')).toBe('Control');
+    expect(guideKeyFor('MacIntel')).toBe('Alt');
+    expect(guideKeyFor('macOS')).toBe('Alt');
+    expect(guideKeyFor('iPad')).toBe('Alt');
+    expect(guideKeyFor(undefined)).toBe('Control');
+    expect(GUIDE_KEY_NAMES.Alt).toBe('Option');
+    expect(guideKeyHint('tape', 0, false)).toBe('Ctrl: 안내 두기');
+    expect(guideKeyHint('protractor', 0, true, 'Alt')).toBe('Option: 안내 두기 끄기');
+    expect(guideKeyHint('tape', 1, false)).toBeNull();
+    expect(guideKeyHint('tape', 0, false, 'Control', true)).toBeNull();
+    expect(guideKeyHint(null, 0, false)).toBeNull();
+    // 켜면 안내 글이 안내점·안내선을 말한다(손가락 기기는 키 설명 없이)
+    expect(measureHint('tape', 0, false, false, false, true)).toContain('안내를 둘 시작점');
+    expect(measureHint('tape', 1, false, false, false, true)).toContain('안내점을 둘 곳');
+    expect(measureHint('tape', 1, false, false, true, true)).toContain('나란한 안내선을 둘 곳');
+    expect(measureHint('protractor', 2, false, false, false, true)).toContain('안내선을 둘 방향');
+    for (const [mode, n, edge] of [['tape', 0, false], ['tape', 1, false], ['tape', 1, true], ['protractor', 2, false]] as const)
+      expect(measureHint(mode, n, false, true, edge, true)).not.toMatch(/Esc|Shift|Ctrl/);
+    expect(measureHint('tape', 0, false, true, false, true)).toContain('길게 누르면 정밀 조준');
+    // 결과가 있을 때·각도기 중심·기준 방향은 그대로
+    expect(measureHint('tape', 0, true, false, false, true)).toBe(measureHint('tape', 0, true));
+    expect(measureHint('protractor', 1, false, false, false, true)).toBe(measureHint('protractor', 1, false));
+  });
+
+  it('안내 두기 키만 눌렀다 떼면 켜고 끈다 — 그사이 다른 키·누르기가 있으면 그대로, 도구를 바꿔도 남는다', () => {
+    const r = rig(EDGES());
+    expect(r.key('Control')).toBe(false);
+    expect(r.key('Control', 'keyup')).toBe(false);
+    r.tool.setMode('tape');
+    expect(r.tool.guideMode).toBe(false);
+    expect(r.key('Control')).toBe(false);
+    expect(r.key('Control', 'keyup')).toBe(true);
+    expect(r.tool.guideMode).toBe(true);
+    expect(r.guideCalls()).toBe(1);
+    expect(r.hints.at(-1)).toContain('안내를 둘 시작점');
+    // Ctrl+O처럼 다른 키와 함께면 바꾸지 않는다
+    r.key('Control');
+    r.key('o');
+    expect(r.key('Control', 'keyup')).toBe(false);
+    expect(r.tool.guideMode).toBe(true);
+    // 누른 채 누르기(Ctrl+누르기)도 아니다
+    r.key('Control');
+    r.click(30, 170);
+    expect(r.key('Control', 'keyup')).toBe(false);
+    expect(r.tool.guideMode).toBe(true);
+    // Option(Alt)은 이 기기의 키가 아니다
+    r.key('Alt');
+    expect(r.key('Alt', 'keyup')).toBe(false);
+    // 도구를 바꾸거나 껐다 켜도 남는다
+    r.tool.setMode('protractor');
+    expect(r.tool.guideMode).toBe(true);
+    r.tool.setMode(null);
+    r.tool.setMode('tape');
+    expect(r.tool.guideMode).toBe(true);
+    r.key('Control');
+    r.key('Control', 'keyup');
+    expect(r.tool.guideMode).toBe(false);
+    expect(r.hints.at(-1)).toBe('줄자: 잴 시작점을 누르세요');
+    // Mac: Option
+    const m = rig(EDGES(), TOP, DEFAULT_UNITS, { guideKey: 'Alt' });
+    m.tool.setMode('tape');
+    m.key('Control');
+    expect(m.key('Control', 'keyup')).toBe(false);
+    m.key('Alt');
+    expect(m.key('Alt', 'keyup')).toBe(true);
+    expect(m.tool.guideMode).toBe(true);
+  });
+
+  it('재기만(기본)은 누르기로 안내를 두지 않는다', () => {
+    const r = rig(FLOOR());
+    r.tool.setMode('tape');
+    r.click(102, 103);
+    r.click(160, 60);
+    r.click(130, 101);
+    r.click(160, 60);
+    expect(r.results.at(-1)?.kind).toBe('tape');
+    expect(r.tool.guides).toHaveLength(0);
+    expect(r.tool.guideLines).toHaveLength(0);
+    r.overlay.paintNow();
+    expect(r.q('.measure-guide-plus')).toBeNull();
+  });
+
+  it('줄자를 점(끝점)에서 시작하면 둘째 누르기 자리에 안내점(같은 자리에 다시 누르면 늘지 않는다)', () => {
+    const r = rig(FLOOR());
+    r.tool.setMode('tape');
+    r.tool.setGuideMode(true);
+    r.move(102, 103);
+    expect(r.q('.measure-guide-plus')).not.toBeNull();
+    r.click(102, 103);
+    expect(r.hints.at(-1)).toContain('안내점을 둘 곳');
+    r.click(160, 60);
+    expect(r.tool.guides).toHaveLength(1);
+    near(r.tool.guides[0]!, [60, 40, 0]);
+    expect(r.tool.guideLines).toHaveLength(0);
+    const res = r.results.at(-1);
+    if (res?.kind !== 'tape') throw new Error('tape');
+    expect(res.distance).toBeCloseTo(Math.hypot(60, 40), 6);
+    r.overlay.paintNow();
+    expect(r.qa('.measure-guide')).toHaveLength(1);
+    // 그 안내점에서 다시 재면 같은 자리라 늘지 않는다
+    r.click(102, 103);
+    r.move(160, 60);
+    expect(r.tip()).toContain('안내점');
+    r.click(160, 60);
+    expect(r.tool.guides).toHaveLength(1);
+  });
+
+  it('줄자를 모서리 위에서 시작하면 둘째 점을 지나 그 모서리와 나란한 안내선, 결과는 모서리에 수직인 거리', () => {
+    const r = rig(FLOOR());
+    r.tool.setMode('tape');
+    r.tool.setGuideMode(true);
+    r.click(130, 101);
+    expect(r.tool.edgeStart).toBe(true);
+    expect(r.hints.at(-1)).toContain('나란한 안내선을 둘 곳');
+    // 면 위 (60, 40): 미리 보기 안내선과 모서리에 수직인 길이 40
+    r.move(160, 60);
+    expect(r.q('.measure-guide-line.is-preview')).not.toBeNull();
+    expect(r.lives.at(-1)).toBeCloseTo(40, 6);
+    expect(r.tip()).toBe('면에 · 40 mm');
+    const before = r.guideCalls();
+    r.click(160, 60);
+    expect(r.guideCalls()).toBe(before + 1);
+    expect(r.tool.guides).toHaveLength(0);
+    expect(r.tool.guideLines).toHaveLength(1);
+    const gl = r.tool.guideLines[0]!;
+    near(gl.dir, [1, 0, 0]);
+    expect(gl.point[1]).toBeCloseTo(40, 6);
+    const res = r.results.at(-1);
+    if (res?.kind !== 'tape') throw new Error('tape');
+    near(res.a, [30, 0, 0]);
+    near(res.b, [30, 40, 0]);
+    expect(res.distance).toBeCloseTo(40, 6);
+    r.overlay.paintNow();
+    expect(r.qa('.measure-guide-line:not(.is-preview)')).toHaveLength(1);
+    // 둘째 점이 모서리 직선 위면 안내선 없이 재기만
+    r.click(130, 101);
+    r.click(170, 101);
+    expect(r.tool.guideLines).toHaveLength(1);
+    expect((r.results.at(-1) as { distance: number }).distance).toBeCloseTo(40, 6);
+    // 발 자리 계산: 모서리 직선 위의 점은 null
+    expect(edgeFoot([0, 0, 0], [[0, 0, 0], [10, 0, 0]], [5, 0, 0])).toBeNull();
+    expect(edgeFoot([2, 0, 0], [[0, 0, 0], [10, 0, 0]], [7, 3, 4])).toEqual([2, 3, 4]);
+  });
+
+  it('각도기 셋째 누르기는 중심을 지나 잰 방향으로 안내선', () => {
+    const r = rig(FLOOR());
+    r.tool.setMode('protractor');
+    r.tool.setGuideMode(true);
+    r.click(101, 101);
+    r.click(197, 102);
+    expect(r.hints.at(-1)).toContain('안내선을 둘 방향');
+    r.move(160, 60);
+    expect(r.q('.measure-guide-line.is-preview')).not.toBeNull();
+    r.click(160, 60);
+    expect(r.tool.guideLines).toHaveLength(1);
+    const gl = r.tool.guideLines[0]!;
+    near(gl.point, [0, 0, 0]);
+    near(gl.dir, [0.6 / Math.hypot(0.6, 0.4), 0.4 / Math.hypot(0.6, 0.4), 0]);
+    const res = r.results.at(-1);
+    if (res?.kind !== 'protractor') throw new Error('protractor');
+    expect(res.angle).toBeCloseTo((Math.atan2(40, 60) * 180) / Math.PI, 6);
   });
 });

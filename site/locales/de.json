@@ -1007,5 +1007,20 @@
   "잠글 방향이 없습니다: 커서를 축·나란한 방향에 맞춘 뒤 누르세요": "Keine Richtung zum Sperren: Cursor an einer Achse oder parallelen Richtung ausrichten und dann drücken",
   "줄자 끝점·각도기 방향을 잡는 동안: 누르고 있으면 지금 방향(축·모서리와 나란히·수직) 잠금": "Beim Ausrichten des Maßband-Endpunkts oder einer Winkelmesser-Richtung: gedrückt halten, um die aktuelle Richtung zu sperren (Achse, parallel oder senkrecht zur Kante)",
   "줄자 끝점·각도기 방향을 잡는 동안: 빨강·녹색·파랑 축으로 잠금(다시 누르면 풀기), 각도기 중심 전에는 그 축 평면에 고정": "Beim Ausrichten des Maßband-Endpunkts oder einer Winkelmesser-Richtung: auf rote, grüne oder blaue Achse sperren (erneut drücken zum Entsperren); vor dem Winkelmesser-Mittelpunkt an der Ebene dieser Achse fixieren",
-  "줄자 끝점·각도기 방향을 잡는 동안: 모서리와 나란히·수직으로 잠금(다시 누르면 풀기)": "Beim Ausrichten des Maßband-Endpunkts oder einer Winkelmesser-Richtung: parallel oder senkrecht zur Kante sperren (erneut drücken zum Entsperren)"
+  "줄자 끝점·각도기 방향을 잡는 동안: 모서리와 나란히·수직으로 잠금(다시 누르면 풀기)": "Beim Ausrichten des Maßband-Endpunkts oder einer Winkelmesser-Richtung: parallel oder senkrecht zur Kante sperren (erneut drücken zum Entsperren)",
+  "줄자: 모서리와 나란한 안내선을 둘 곳을 누르세요": "Maßband: Stelle für eine Hilfslinie parallel zur Kante antippen",
+  "줄자: 모서리와 나란한 안내선을 둘 곳을 누르세요 · 길이를 치면 그 거리에 · Esc 취소": "Maßband: Stelle für eine Hilfslinie parallel zur Kante anklicken · Länge eintippen für diesen Abstand · Esc bricht ab",
+  "줄자: 안내점을 둘 곳을 누르세요": "Maßband: Stelle für einen Hilfspunkt antippen",
+  "줄자: 안내점을 둘 곳을 누르세요 · 길이를 치면 그 거리에 · Esc 취소": "Maßband: Stelle für einen Hilfspunkt anklicken · Länge eintippen für diesen Abstand · Esc bricht ab",
+  "줄자: 안내를 둘 시작점을 누르세요 · 길게 누르면 정밀 조준": "Maßband: Startpunkt für das Hilfselement antippen · Gedrückt halten für genaues Zielen",
+  "줄자: 안내를 둘 시작점을 누르세요 · 모서리 위면 나란한 안내선, 점이면 안내점": "Maßband: Startpunkt für das Hilfselement anklicken · auf einer Kante eine parallele Hilfslinie, auf einem Punkt ein Hilfspunkt",
+  "각도기: 안내선을 둘 방향의 점을 누르세요": "Winkelmesser: Punkt in Richtung der Hilfslinie antippen",
+  "각도기: 안내선을 둘 방향의 점을 누르세요 · 각도를 치면 그 각도에 · Esc 취소": "Winkelmesser: Punkt in Richtung der Hilfslinie anklicken · Winkel eintippen für diesen Winkel · Esc bricht ab",
+  "{0}: 안내 두기": "{0}: Hilfslinien setzen",
+  "{0}: 안내 두기 끄기": "{0}: Hilfslinien nicht mehr setzen",
+  "안내 두기": "Hilfslinien setzen",
+  "안내 두기: 누르기로 안내점·안내선 두기(다시 누르면 재기만)": "Hilfslinien setzen: Klicks setzen Hilfspunkte und Hilfslinien (erneut drücken = nur messen)",
+  "안내 두기 켬: 누르면 안내점·안내선을 둡니다": "Hilfslinien setzen an: Drücken setzt Hilfspunkte und Hilfslinien",
+  "안내 두기 끔: 재기만 합니다": "Hilfslinien setzen aus: nur messen",
+  "줄자·각도기: 안내 두기 켜고 끄기(그 키만 눌렀다 떼기, Mac은 Option) — 줄자 둘째·각도기 셋째 누르기로 안내점·안내선": "Maßband und Winkelmesser: Hilfslinien setzen ein/aus (nur diese Taste drücken und loslassen, am Mac Option) — der zweite Maßband- bzw. dritte Winkelmesser-Klick setzt einen Hilfspunkt oder eine Hilfslinie"
 }
