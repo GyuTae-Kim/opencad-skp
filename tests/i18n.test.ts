@@ -11,6 +11,32 @@ import { catalogs, currentLanguage, languageUrl, languages, translate } from '..
 let dispose: (() => void) | undefined;
 afterEach(() => { dispose?.(); vi.unstubAllGlobals(); });
 describe('language URLs and UI presentation', () => {
+  it.each(['en', 'ja', 'zh-CN', 'de'])('localizes scene playback controls and redraws without translating scene names in %s', async code => {
+    const dom = new JSDOM('<!doctype html><html><head><title>OpenCAD</title></head><body><div id="app"><header class="titlebar"></header><div class="scene-tabs" role="tablist" aria-label="장면"><button class="scene-play" title="장면 재생" aria-label="장면 재생"></button><button class="scene-tab" role="tab" title="장면 재생">장면 재생</button></div></div></body></html>', {url:languageUrl(metadataForLanguage('ko').url,code)});
+    for (const name of ['window','document','Node','Element','HTMLAnchorElement','MutationObserver','location','history','localStorage','CustomEvent']) vi.stubGlobal(name,(dom.window as unknown as Record<string,unknown>)[name]);
+    const root = document.getElementById('app')!;
+    dispose = await installLocalization(root);
+    const play = root.querySelector<HTMLButtonElement>('.scene-play')!;
+    expect(play.getAttribute('aria-label')).toBe(translate('장면 재생',code));
+    expect(play.getAttribute('aria-label')).not.toMatch(/[가-힣]/);
+    const replacement = play.cloneNode() as HTMLButtonElement;
+    replacement.title = '장면 재생 멈추기';
+    replacement.setAttribute('aria-label', '장면 재생 멈추기');
+    play.replaceWith(replacement);
+    await new Promise(resolve=>setTimeout(resolve,0));
+    expect(replacement.getAttribute('aria-label')).toBe(translate('장면 재생 멈추기',code));
+    expect(replacement.title).toBe(translate('장면 재생 멈추기',code));
+    expect(replacement.title).not.toMatch(/[가-힣]/);
+    const scene = root.querySelector<HTMLButtonElement>('.scene-tab')!;
+    expect(scene.textContent).toBe('장면 재생');
+    expect(scene.title).toBe('장면 재생');
+    // Changing language must traverse the toolbar while keeping model-authored names intact.
+    (document.querySelector('.language-list [data-language="ko"]') as HTMLButtonElement).click();
+    for (let i=0;i<4;i++) await new Promise(resolve=>setTimeout(resolve,0));
+    expect(replacement.getAttribute('aria-label')).toBe('장면 재생 멈추기');
+    expect(scene.textContent).toBe('장면 재생');
+    dispose(); dispose=undefined; dom.window.close();
+  });
   it('keeps launch parameters and fragments, with explicit language URLs', () => {
     expect(currentLanguage('https://example.test/opencad-skp/ja/?sample#view')).toBe('ja');
     expect(currentLanguage('https://example.test/opencad-skp/?lang=de')).toBe('de');
@@ -141,7 +167,7 @@ describe('language URLs and UI presentation', () => {
   });
   it('switches actual sharing image URLs and native control names while preserving source data', async () => {
     const korean = metadataForLanguage('ko');
-    const dom = new JSDOM(`<!doctype html><html><head><title>OpenCAD</title><meta property="og:image"><meta property="og:image:secure_url"><meta name="twitter:image"><script type="application/ld+json">{"@graph":[{"@type":"WebApplication"}]}</script></head><body><div id="app"><header class="titlebar"><button>열기</button></header><a id="brand" title="OpenCAD SketchUp 뷰어 처음 화면">OpenCAD</a><button id="theme" title="앱 설정 · 테마: 시스템 설정 따르기(지금 어두움) — 눌러서 바꾸기">Settings</button><div class="scene-tabs" aria-label="장면"><button title="열기">열기</button></div><span class="docname">열기.skp</span></div></body></html>`, {url:languageUrl(korean.url,'en')+'?sample#view'});
+    const dom = new JSDOM(`<!doctype html><html><head><title>OpenCAD</title><meta property="og:image"><meta property="og:image:secure_url"><meta name="twitter:image"><script type="application/ld+json">{"@graph":[{"@type":"WebApplication"}]}</script></head><body><div id="app"><header class="titlebar"><button>열기</button></header><a id="brand" title="OpenCAD SketchUp 뷰어 처음 화면">OpenCAD</a><button id="theme" title="앱 설정 · 테마: 시스템 설정 따르기(지금 어두움) — 눌러서 바꾸기">Settings</button><div class="scene-tabs" aria-label="장면"><button class="scene-tab" role="tab" title="열기">열기</button></div><span class="docname">열기.skp</span></div></body></html>`, {url:languageUrl(korean.url,'en')+'?sample#view'});
     for (const name of ['window','document','Node','Element','HTMLAnchorElement','MutationObserver','location','history','localStorage','CustomEvent']) vi.stubGlobal(name,(dom.window as unknown as Record<string,unknown>)[name]);
     const root = document.getElementById('app')!;
     dispose=await installLocalization(root);
