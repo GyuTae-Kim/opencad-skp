@@ -37,6 +37,6 @@
     "opencad-site-kit": "github:GyuTae-Kim/opencad-site-kit#v0.1.4",
     "typescript": "^7.0.2",
     "vite": "^7.3.7",
-    "vitest": "^3.2.7"
+    "vitest": "^4.1.12"
   }
 }
