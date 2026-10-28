@@ -17,6 +17,7 @@ import {
   axisOf,
   chooseSnap,
   directionLock,
+  edgeLineLock,
   footOnLine,
   footOnPlane,
   lockOf,
@@ -26,7 +27,9 @@ import {
   rayClosestOnSegment,
   segmentOfPick,
   triangleOfPick,
+  type AxisDirs,
   type InferenceLock,
+  type Snap,
   type SnapScene,
 } from '../../src/app/snap';
 import type { V3 } from 'opencad-viewer3d/math';
@@ -530,6 +533,92 @@ describe('추정: 방향 잠금(SketchUp 추론 잠금)', () => {
     expect(lockOf(at0, from)).toBeNull();
   });
 });
+
+describe('추정: 모서리 끝 방향 잠금을 코어 edgeLineLock(0.12.0)으로', () => {
+  /** 15차 전 앱 판정 그대로(코어로 옮기기 전) — 옮긴 뒤 값이 같은지 견준다 */
+  function before(s: Snap, from: readonly number[], axes: AxisDirs = AXIS_DIRS): InferenceLock | null {
+    const sub = (a: readonly number[], b: readonly number[]): V3 => [a[0]! - b[0]!, a[1]! - b[1]!, a[2]! - b[2]!];
+    const dot = (a: readonly number[], b: readonly number[]): number => a[0]! * b[0]! + a[1]! * b[1]! + a[2]! * b[2]!;
+    if (s.locked || !['endpoint', 'midpoint', 'intersection', 'onEdge'].includes(s.kind)) return null;
+    for (const e of [s.edge, s.other]) {
+      if (!e) continue;
+      const d = sub(e[1], e[0]);
+      const l = Math.hypot(...d);
+      if (!(l > 0)) continue;
+      const u: V3 = [d[0] / l, d[1] / l, d[2] / l];
+      const w = sub(from, e[0]);
+      const t = dot(w, u);
+      const scale = Math.max(l, Math.hypot(...w));
+      if (Math.hypot(w[0] - u[0] * t, w[1] - u[1] * t, w[2] - u[2] * t) > 1e-6 * scale) continue;
+      if (!(Math.hypot(...sub(s.point, from)) > 1e-9 * scale)) return null;
+      const axis = (['x', 'y', 'z'] as const).find((a) => Math.abs(dot(u, axes[a])) >= 1 - 1e-6);
+      return axis ? axisInferenceLock(axis, axes) : parallelInferenceLock(e);
+    }
+    return null;
+  }
+
+  /** 늘 같은 수열(시험이 흔들리지 않게) */
+  function rng(seed: number): () => number {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  it('여러 모서리·시작점·커서 점·그리기 축에서 15차 전 판정과 같다(축·나란함·잠그지 않음 모두 나온다)', () => {
+    const r = rng(15);
+    const f32 = (p: readonly number[]): V3 => [Math.fround(p[0]!), Math.fround(p[1]!), Math.fround(p[2]!)];
+    const turned: AxisDirs = { x: [0.8, 0.6, 0], y: [-0.6, 0.8, 0], z: [0, 0, 1] };
+    const counts = { axis: 0, parallel: 0, none: 0 };
+    for (let i = 0; i < 4000; i++) {
+      const big = r() < 0.3 ? 1e5 : 1;
+      const from: V3 = [(r() - 0.5) * 200 * big, (r() - 0.5) * 200 * big, (r() - 0.5) * 50 * big];
+      // 방향: 세계 축, 옮긴 그리기 축, 아무 방향
+      const pick = r();
+      const raw: V3 = pick < 0.25 ? [0, 0, 1] : pick < 0.45 ? [0.8, 0.6, 0] : pick < 0.55 ? [-0.6, 0.8, 0] : [r() - 0.5, r() - 0.5, r() - 0.5];
+      const len = (1 + r() * 300) * big;
+      const t0 = (r() - 0.5) * 4;
+      // 시작점이 직선 위, 조금 떨어짐(허용치 안·밖), 멀리 떨어짐
+      const off = [0, 0, 1e-9, 1e-7, 1e-5, 1e-2, 1][Math.floor(r() * 7)]! * len;
+      const side = unitOf3([raw[1], -raw[0], r() - 0.5]);
+      const e0: V3 = [from[0] - raw[0] * t0 * len + side[0] * off, from[1] - raw[1] * t0 * len + side[1] * off, from[2] - raw[2] * t0 * len + side[2] * off];
+      const e1: V3 = [e0[0] + raw[0] * len, e0[1] + raw[1] * len, e0[2] + raw[2] * len];
+      const edge: [V3, V3] = r() < 0.3 ? [f32(e0), f32(e1)] : [e0, e1];
+      const kind = (['endpoint', 'midpoint', 'intersection', 'onEdge', 'onFace', 'perpendicular'] as const)[Math.floor(r() * 6)]!;
+      const k = r() * 1.6 - 0.3;
+      // 커서 점: 모서리 위, 시작점 그대로(꼭짓점)
+      const point: V3 = r() < 0.1 ? [...from] : [edge[0][0] + (edge[1][0] - edge[0][0]) * k, edge[0][1] + (edge[1][1] - edge[0][1]) * k, edge[0][2] + (edge[1][2] - edge[0][2]) * k];
+      const s: Snap = { kind, point, label: '', edge: r() < 0.15 ? [[point[0] + 1, point[1] + 2, point[2] + 3], [point[0] + 4, point[1] - 1, point[2]]] : edge };
+      if (kind === 'intersection') s.other = edge;
+      if (r() < 0.05) s.locked = true;
+      const axes = r() < 0.5 ? AXIS_DIRS : turned;
+      const want = before(s, from, axes);
+      expect(edgeLineLock(s, from, axes)).toEqual(want);
+      counts[want ? (want.kind as 'axis' | 'parallel') : 'none']++;
+    }
+    expect(counts.axis).toBeGreaterThan(200);
+    expect(counts.parallel).toBeGreaterThan(200);
+    expect(counts.none).toBeGreaterThan(500);
+  });
+
+  it('다른 점은 커서 점이 시작점에서 상대 1e-9~1e-6 사이일 때뿐 — 코어처럼 같은 꼭짓점으로 보고 잠그지 않는다', () => {
+    const s: Snap = { kind: 'onEdge', point: [0, 5e-6, 0], label: '', edge: [[0, 0, 0], [0, 100, 0]] };
+    expect(before(s, [0, 0, 0])?.axis).toBe('y');
+    expect(edgeLineLock(s, [0, 0, 0])).toBeNull();
+    s.point = [0, 1e-3, 0];
+    expect(edgeLineLock(s, [0, 0, 0])).toEqual(before(s, [0, 0, 0]));
+  });
+});
+
+/** 단위 벡터(시험 자료용) */
+function unitOf3(u: readonly number[]): V3 {
+  const l = Math.hypot(u[0]!, u[1]!, u[2]!);
+  return [u[0]! / l, u[1]! / l, u[2]! / l];
+}
 
 describe('추정: 모서리에 수직(SketchUp 자홍 추론)', () => {
   const empty: SnapScene = { meshes: [], lines: [] };
