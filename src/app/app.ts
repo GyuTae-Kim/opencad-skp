@@ -12,7 +12,7 @@
 // 코어 입구(Viewer3d — 그리기·고르기)는 문서를 열 때 나눠 받는다(core.ts). 여기서는 타입과 작은 모듈만 가져온다
 import type { Pick3d, IndexRange, PickEvent, Projection, RenderMode, SectionAxis, ViewName, Viewer3d } from 'opencad-viewer3d';
 import { VIEW_LABELS, lerpCamera, type CameraState, type ViewFrame } from 'opencad-viewer3d/camera';
-import { loadViewerCore } from './core';
+import { FirstUse, chunkFailText, isChunkLoadError, loadMeasure, loadViewerCore } from './core';
 import { dragStartPx } from 'opencad-viewer3d/pointer';
 import { ParseClient } from './client';
 import { AnnotationLabels, occludedBy } from './annotations';
@@ -21,7 +21,9 @@ import { edgeGeometry } from './faces';
 import { copyText } from './clipboard';
 import { HISTORY_LIMIT, HISTORY_SETTLE_MS, ViewHistory } from './history';
 import { beginOpen, showAnalyticsSettings, trackExport, type OpenAttempt } from 'opencad-site-kit/analytics';
-import { MeasureTool, guideKeyFor, guideKeyHint, lockHint, lockName, type GuideKey, type MeasureMode, type MeasureToolResult } from './measure';
+// 측정 도구 자체(measure.ts·snap.ts)는 문서를 열 때 나눠 받는다(core.ts loadMeasure) — 여기서는 형과 작은 글·키 규칙만
+import type { MeasureTool, MeasureToolResult } from './measure';
+import { guideKeyFor, guideKeyHint, lockHint, lockName, type GuideKey, type MeasureMode } from './measurehints';
 import {
   baseFovOf,
   activeSections,
@@ -195,6 +197,8 @@ export interface AppSnapshot {
   labelsOccluded: number;
   /** 측정 도구(줄자·각도기, 꺼져 있으면 null) */
   measureMode: MeasureMode | null;
+  /** 측정 도구 조각을 처음 켤 때 받는 중이면 켜려는 도구(아니면 null) */
+  measureLoading: MeasureMode | null;
   /** 측정값 칸·안내 두기로 찍은 안내점 수 */
   measureGuides: number;
   /** 측정값 칸·안내 두기로 둔 안내선 수 */
@@ -386,8 +390,13 @@ export class SkpViewerApp implements PanelHost {
   private marks: AnnotationMarks | null = null;
   /** 선 색 대비로 바꾼 주석·모서리 선 색(id → 색) — 끝 표시도 같은 색 */
   private lineColorWant: ReadonlyMap<string, Rgba> = new Map();
-  /** 줄자·각도기(코어 두 점 측정 대신) */
+  /** 줄자·각도기(코어 두 점 측정 대신). 조각을 받으면 만든다(ensureMeasureTool) */
   private measureTool: MeasureTool | null = null;
+  /** 측정 도구를 받기 전에 켰을 때: 받는 동안 마지막으로 누른 도구를 받은 뒤에 켠다(다시 누르면 거둔다, 받지 못하면 알린다) */
+  private readonly measureFirstUse = new FirstUse<MeasureMode>(
+    () => this.ensureMeasureTool(),
+    (want, error) => this.measureArrived(want, error),
+  );
   /** 안내 두기를 켜고 끄는 키(SketchUp처럼 Windows·Linux는 Ctrl, Mac은 Option) */
   private readonly guideKey: GuideKey = guideKeyFor(
     typeof navigator === 'undefined' ? '' : ((navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ?? navigator.platform),
@@ -1049,6 +1058,8 @@ export class SkpViewerApp implements PanelHost {
     this.parsingSeq = seq;
     // 3D 뷰어 코어를 워커 해석과 함께 받기 시작한다(첫 문서만 — 실패는 아래 ensureViewer가 알린다)
     if (!this.viewer) void loadViewerCore().catch(() => undefined);
+    // 측정 도구 조각도 함께(처음 켤 때 기다리지 않게 — 실패는 처음 켤 때 알린다)
+    if (!this.measureTool) void loadMeasure().catch(() => undefined);
     try {
       const res = await this.client.open(
         name,
@@ -1257,42 +1268,58 @@ export class SkpViewerApp implements PanelHost {
       this.labels.setOcclusion((p, x, y, f) => this.labelOccluded(p, x, y, f));
       this.marks = new AnnotationMarks(this.overlay);
       this.marks.setOcclusion((p, x, y, f) => this.labelOccluded(p, x, y, f));
-      this.measureTool = new MeasureTool(v, this.overlay, {
-        getScene: () => this.doc?.scene ?? null,
-        getUnits: () => this.doc?.units ?? DEFAULT_UNITS,
-        onResult: (r) => this.onMeasure(r),
-        onHint: (t) => {
-          this.measureHint = t;
-          this.refreshStatus();
-          this.panel.refreshSelection();
-        },
-        // 추론 잠금·화살표로 고정한 각도기 평면: 상태 줄·측정 띠의 잠금 안내와 잠금 단추(잠그면 잠글 방향이 없다는 알림은 거둔다)
-        onLock: () => {
-          if (this.measureTool?.inferenceLock) this.measureNote?.drop(NO_LOCK_FLASH);
-          this.refreshStatus();
-        },
-        // 안내 두기 켜고 끄기·안내점·안내선 수: 측정 띠 단추·측정값 칸의 안내 수
-        onGuides: () => this.refreshStatus(),
-        guideKey: this.guideKey,
-        touch: () => !!this.coarseQuery?.matches,
-        curveCenter: (id, seg) => this.curveCenter(id, seg),
-        // 모형의 그리기 축을 옮겼으면 줄자·각도기의 축 고정·기본 평면이 그 축을 따른다
-        getAxes: () => {
-          const a = this.doc?.axes;
-          return a ? { x: a.x, y: a.y, z: a.z } : null;
-        },
-        // 측정값 칸: 줄자 진행 중이면 시작점 → 커서 길이, 다 재면 그 거리(모형 단위 글). 각도기는 커서 각도·결과 각도
-        onLive: (value, kind) => {
-          const d = this.doc;
-          this.vcb.setKind(kind);
-          this.vcb.setLive(value === null || !d ? '' : kind === 'angle' ? formatAngle(value, d.units) : formatLength(value * mmPerSceneUnit(d.scene.units), d.units));
-        },
-      });
+      // 측정 도구는 조각을 받는 대로 만든다(문서를 열 때 받기 시작했다 — 받지 못했으면 처음 켤 때 다시 받고 알린다)
+      void this.ensureMeasureTool().catch(() => undefined);
       return true;
     } catch (e) {
-      this.showNotice('error', '3D 보기를 열 수 없습니다', errorText(e));
+      this.showNotice('error', '3D 보기를 열 수 없습니다', isChunkLoadError(e) ? chunkFailText('viewer', navigator.onLine !== false) : errorText(e));
       return false;
     }
+  }
+
+  /**
+   * 측정 도구를 한 번 만든다(조각을 처음에 받는다 — 문서를 열 때 받기 시작한다). 뷰어가 아직 없으면 null, 받지 못하면 거부.
+   * 받는 사이 다른 부름이 먼저 만들었으면 그것을 준다
+   */
+  private async ensureMeasureTool(): Promise<MeasureTool | null> {
+    if (this.measureTool) return this.measureTool;
+    const { MeasureTool } = await loadMeasure();
+    const v = this.viewer;
+    const o = this.overlay;
+    if (this.measureTool || !v || !o) return this.measureTool;
+    const tool = new MeasureTool(v, o, {
+      getScene: () => this.doc?.scene ?? null,
+      getUnits: () => this.doc?.units ?? DEFAULT_UNITS,
+      onResult: (r) => this.onMeasure(r),
+      onHint: (t) => {
+        this.measureHint = t;
+        this.refreshStatus();
+        this.panel.refreshSelection();
+      },
+      // 추론 잠금·화살표로 고정한 각도기 평면: 상태 줄·측정 띠의 잠금 안내와 잠금 단추(잠그면 잠글 방향이 없다는 알림은 거둔다)
+      onLock: () => {
+        if (this.measureTool?.inferenceLock) this.measureNote?.drop(NO_LOCK_FLASH);
+        this.refreshStatus();
+      },
+      // 안내 두기 켜고 끄기·안내점·안내선 수: 측정 띠 단추·측정값 칸의 안내 수
+      onGuides: () => this.refreshStatus(),
+      guideKey: this.guideKey,
+      touch: () => !!this.coarseQuery?.matches,
+      curveCenter: (id, seg) => this.curveCenter(id, seg),
+      // 모형의 그리기 축을 옮겼으면 줄자·각도기의 축 고정·기본 평면이 그 축을 따른다
+      getAxes: () => {
+        const a = this.doc?.axes;
+        return a ? { x: a.x, y: a.y, z: a.z } : null;
+      },
+      // 측정값 칸: 줄자 진행 중이면 시작점 → 커서 길이, 다 재면 그 거리(모형 단위 글). 각도기는 커서 각도·결과 각도
+      onLive: (value, kind) => {
+        const d = this.doc;
+        this.vcb.setKind(kind);
+        this.vcb.setLive(value === null || !d ? '' : kind === 'angle' ? formatAngle(value, d.units) : formatLength(value * mmPerSceneUnit(d.scene.units), d.units));
+      },
+    });
+    this.measureTool = tool;
+    return tool;
   }
 
   private viewCubeSize(): number {
@@ -2275,7 +2302,7 @@ export class SkpViewerApp implements PanelHost {
     const d = this.doc;
     if (!v || !d) return;
     if (on) {
-      if (this.measureTool?.active) this.setMeasureMode(null);
+      if (this.measureTool?.active || this.measureFirstUse.wanted) this.setMeasureMode(null);
       this.stopSlideshow();
       this.unwidenScene();
       if (this.twoPointOn) this.setTwoPoint(false);
@@ -2533,23 +2560,47 @@ export class SkpViewerApp implements PanelHost {
   }
 
   /** 줄자 켜고 끄기 */
-  toggleMeasure(on = this.measureTool?.mode !== 'tape'): void {
+  toggleMeasure(on = this.measureModeNow !== 'tape'): void {
     this.setMeasureMode(on ? 'tape' : null);
   }
 
   /** 각도기 켜고 끄기 */
-  toggleProtractor(on = this.measureTool?.mode !== 'protractor'): void {
+  toggleProtractor(on = this.measureModeNow !== 'protractor'): void {
     this.setMeasureMode(on ? 'protractor' : null);
   }
 
+  /** 지금 켠 측정 도구(조각을 받는 중이면 받은 뒤 켤 도구 — 단추 눌림·다시 누르기가 이것을 따른다) */
+  private get measureModeNow(): MeasureMode | null {
+    return this.measureTool?.mode ?? this.measureFirstUse.wanted;
+  }
+
   private setMeasureMode(mode: MeasureMode | null): void {
+    if (!this.doc) return;
     const t = this.measureTool;
-    if (!t || !this.doc) return;
+    if (!t) {
+      // 측정 도구 조각을 아직 받지 못했다: 받은 뒤에 켠다(받는 동안 다시 누르면 바람만 바뀐다 — 받기는 한 번)
+      this.measureFirstUse.request(mode);
+      this.refreshToolbar();
+      this.refreshStatus();
+      return;
+    }
     // 측정은 궤도 보기에서(걷기의 끌기는 둘러보기다)
     if (mode && this.walking) this.setWalk(false);
     t.setMode(mode);
     if (!mode) this.doc.measure = null;
     this.panel.refreshSelection();
+    this.refreshToolbar();
+    this.refreshStatus();
+  }
+
+  /** 처음 켤 때 받던 측정 도구 조각이 왔다(또는 받지 못했다): 그때까지 바란 도구를 켜고, 받지 못했으면 바랐을 때만 알린다 */
+  private measureArrived(want: MeasureMode | null, error: unknown): void {
+    if (error) {
+      if (want) this.showNotice('error', '측정 도구를 열 수 없습니다', isChunkLoadError(error) ? chunkFailText('measure', navigator.onLine !== false) : errorText(error));
+    } else if (want && this.measureTool && this.doc) {
+      this.setMeasureMode(want);
+      return;
+    }
     this.refreshToolbar();
     this.refreshStatus();
   }
@@ -2965,7 +3016,7 @@ export class SkpViewerApp implements PanelHost {
       editable: isEditableTarget(ev.target),
       hasDoc: !!this.doc && !!v && !this.busy,
       measurePoints: tool?.pointCount ?? 0,
-      measureMode: !!tool?.active,
+      measureMode: !!tool?.active || !!this.measureFirstUse.wanted,
       busy: this.busy,
       hasPages: !!this.doc?.pages.length,
       walking: this.walking,
@@ -3170,8 +3221,15 @@ export class SkpViewerApp implements PanelHost {
     press(e.bgBtn, this.fileBg);
     press(e.cubeBtn, this.cubeOn);
     press(e.axesBtn, this.axesOn);
-    press(e.measureBtn, this.measureTool?.mode === 'tape');
-    press(e.protractorBtn, this.measureTool?.mode === 'protractor');
+    const mode = this.measureModeNow;
+    press(e.measureBtn, mode === 'tape');
+    press(e.protractorBtn, mode === 'protractor');
+    // 측정 도구 조각을 받는 동안 켤 단추(누르면 거둔다)
+    const loading = this.measureFirstUse.wanted;
+    for (const [b, m] of [[e.measureBtn, 'tape'], [e.protractorBtn, 'protractor']] as const) {
+      if (loading === m) b.setAttribute('aria-busy', 'true');
+      else b.removeAttribute('aria-busy');
+    }
     press(e.panelBtn, this.panelOpen && has);
     e.backBtn.disabled = !has || !this.history.canBack();
     e.fwdBtn.disabled = !has || !this.history.canForward();
@@ -3217,6 +3275,7 @@ export class SkpViewerApp implements PanelHost {
     let picked = false;
     if (d.measure) sel = measureText(d.measure, d.units, mmPerSceneUnit(d.scene.units));
     else if (this.measuring) sel = this.measureHint ?? '측정: 점을 누르세요';
+    else if (this.measureFirstUse.wanted) sel = '측정 도구를 받는 중…';
     else {
       sel = selectionText(d, d.selection, d.pick);
       picked = !!sel;
@@ -3383,6 +3442,7 @@ export class SkpViewerApp implements PanelHost {
       labels: this.labels?.size ?? 0,
       labelsOccluded: this.labels?.occludedCount ?? 0,
       measureMode: this.measureTool?.mode ?? null,
+      measureLoading: this.measureFirstUse.wanted,
       measureGuides: this.measureTool?.guides.length ?? 0,
       measureGuideLines: this.measureTool?.guideLines.length ?? 0,
       measureLock: lockName(this.measureTool?.inferenceLock),

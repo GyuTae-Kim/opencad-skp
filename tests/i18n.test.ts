@@ -5,6 +5,7 @@ const { JSDOM } = createRequire(import.meta.url)('jsdom');
 import { installLocalization } from '../src/app/i18n';
 import { guideKeyHint, lockHint, measureHint } from '../src/app/measure';
 import { SHORTCUTS } from '../src/app/shortcuts';
+import { chunkFailText } from '../src/app/core';
 import { catalogs, currentLanguage, languageUrl, languages, translate } from '../site/i18n.mjs';
 
 let dispose: (() => void) | undefined;
@@ -81,6 +82,19 @@ describe('language URLs and UI presentation', () => {
     expect(translate('안내점 2', 'en')).toBe('Guide points 2');
     expect(translate('Option: 안내 두기', 'en')).toBe('Option: place guides');
     expect(translate('Ctrl: 안내 두기 끄기', 'de')).toBe('Ctrl: Hilfslinien nicht mehr setzen');
+  });
+  it('translates the split-chunk loading and failure notices (measuring tools, 3D view)', () => {
+    const hangul = /[가-힣]/;
+    const texts = ['측정 도구를 받는 중…', '측정 도구를 열 수 없습니다', '3D 보기를 열 수 없습니다'];
+    for (const what of ['measure', 'viewer'] as const) for (const online of [false, true]) texts.push(chunkFailText(what, online));
+    for (const {code} of languages.filter(item => item.code !== 'ko'))
+      for (const t of texts) expect(translate(t, code), `${code}: ${t}`).not.toMatch(hangul);
+  });
+  it('translates parsing (해석 — reading the file) as parsing, not interpreting', () => {
+    for (const key of Object.keys(catalogs.en).filter(k => k.includes('해석'))) {
+      expect(catalogs.de[key], key).not.toMatch(/Dolmetsch|Interpretation/);
+      expect(catalogs['zh-CN'][key], key).not.toMatch(/译员|解释/);
+    }
   });
   it('updates dynamic UI and switches languages without changing document data or listeners', async () => {
     const dom = new JSDOM('<!doctype html><html><head><title>OpenCAD</title></head><body><div id="app"><header class="titlebar"><button>열기</button><span class="docname">열기</span></header><canvas></canvas><div class="anno-layer">열기</div><input value="열기" placeholder="열기"><div contenteditable="true">열기</div><div translate="no">열기</div><p id="status">열기</p></div></body></html>', {url:'https://gyutae-kim.github.io/opencad-skp/en/?sample#view'});
