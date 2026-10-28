@@ -566,6 +566,33 @@ describe('측정 도구: 추론 잠금(Shift·화살표·단추)과 나란함', 
     near(res.b, [55, 55, 0]);
   });
 
+  it('지나간 모서리에 수직이면 자홍 수직(기준 모서리 점선), ↓로 잠그면 "모서리에 수직"으로 잠금 — 찍은 점이 그 선 위', () => {
+    const r = rig({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 10, 0, 0]]), lines('d', [[-90, -60, 0, -60, -30, 0]])] });
+    r.tool.setMode('tape');
+    r.click(101, 100);
+    // 45° 모서리(가운데)를 지나간 뒤 시작점에서 그에 수직인 쪽(−45°에서 2° 벗어남)으로
+    r.move(25, 145);
+    const [x, y] = at(-43, 50);
+    r.move(x, y);
+    expect(r.q('.measure-snap-perpendicular')).not.toBeNull();
+    const rubber = r.q('line.measure-rubber.measure-perpendicular');
+    expect(rubber?.getAttribute('stroke')).toBe('#c800c8');
+    expect(r.q('.measure-parallel-ref')).not.toBeNull();
+    expect(r.tip()).toBe('모서리에 수직 · ~ 50 mm');
+    expect(r.key('ArrowDown')).toBe(true);
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'perpendicular', source: 'key' });
+    expect(r.locks.at(-1)).toBe('perpendicular');
+    // 잠근 채 다른 곳을 찍어도 그 선 위(세계 (70, 40)을 선에 내린 자리)
+    r.move(170, 60);
+    expect(r.q('line.measure-rubber')?.getAttribute('data-locked')).toBe('perpendicular');
+    expect(r.q('.measure-parallel-ref')).not.toBeNull();
+    r.click(170, 60);
+    const res = r.results.at(-1);
+    if (res?.kind !== 'tape') throw new Error('tape');
+    near(res.b, [15, -15, 0]);
+    expect(r.tool.inferenceLock).toBeNull();
+  });
+
   it('잠금 단추(손가락 기기): 방향을 잡는 동안만, 본 방향이 없으면 false, 축을 주면 그 축 — 탭한 점이 잠근 선 위로', () => {
     const r = rig({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 10, 0, 0]])] });
     r.tool.setMode('tape');

@@ -31,7 +31,7 @@
  * 안내 고르기·지우기: 안내점·안내선 위를 누르면(측정 점도 그대로 찍는다) 그 안내를 고르고(방금 둔 안내도 고른다), 다른 곳을 누르거나
  *   Esc·다시 재기면 푼다. Delete·Backspace(앱은 측정값 칸의 지우기 단추도)로 고른 안내 하나를 지운다 — 고른 누르기가 시작점도 찍었으면 그 점도 거둔다.
  * 추론 잠금(SketchUp "Locking inference"): 방향을 잡는 동안(줄자 끝점·각도기 기준 방향·잴 방향) Shift를 누르고 있으면 지금 커서 밑 방향 추론
- *   (빨강·녹색·파랑 축, 모서리와 나란히, 시작점에서 내린 수직)을 잠그고 떼면 푼다. →·←·↑는 빨강·녹색·파랑 축, ↓는 모서리와 나란히·수직
+ *   (빨강·녹색·파랑 축, 모서리와 나란히, 지나간 모서리에 수직, 시작점에서 내린 수직)을 잠그고 떼면 푼다. →·←·↑는 빨강·녹색·파랑 축, ↓는 모서리와 나란히·수직
  *   (지금 커서 밑 것, 없으면 앞서 지나간 모서리와 나란히)을 잠그고 같은 키를 다시 누르면 푼다. 손가락 기기는 앱의 잠금 단추(setInferenceLock).
  *   잠그면 그 선 위에만 찍고(다른 점을 가리키면 그 점을 선에 내린 자리 — 높이 옮겨 재기), 점을 찍거나 취소·지우기를 하면 풀린다.
  *   각도기 중심을 찍기 전 →·←·↑는 각도기 평면을 그 축에 고정한다(빨강·녹색·파랑 각도기, 다시 누르면 풀기).
@@ -1120,7 +1120,8 @@ export class MeasureTool {
   /** 지나간 모서리(나란함 기준)와, 방향을 잡는 동안 본 방향 추론을 기억한다 */
   private learn(snap: Snap): void {
     if (snap.locked) return;
-    if (snap.edge && REF_KINDS.has(snap.kind)) this.parallelRef = [snap.edge[0], snap.edge[1]];
+    // 모서리에 수직 추론의 edge는 이미 기준 모서리다
+    if (snap.edge && REF_KINDS.has(snap.kind) && !snap.inferred) this.parallelRef = [snap.edge[0], snap.edge[1]];
     if (this.directing) this.lastLockable = this.lockable(snap) ?? this.lastLockable;
   }
 
@@ -1511,7 +1512,9 @@ export class MeasureTool {
     let tip: string | null = snap ? snapTipLabel(snap) : null;
     // 나란함의 기준 모서리(자홍 점선)·잠근 선으로 옮겨 온 점(가는 점선) — 커서가 있을 때
     const live = snap && this.cursor?.type !== 'touch' ? snap : null;
-    if (live?.kind === 'parallel' && live.edge) this.segment(f, live.edge[0], live.edge[1], 'measure-parallel-ref', { stroke: SNAP_COLORS.parallel, 'stroke-width': 2.5, 'stroke-dasharray': '2 4' });
+    // 기준 모서리: 나란히, 지나간 모서리에 수직(추론·잠금)
+    if ((live?.kind === 'parallel' || (live?.kind === 'perpendicular' && (live.inferred || live.locked))) && live.edge)
+      this.segment(f, live.edge[0], live.edge[1], 'measure-parallel-ref', { stroke: SNAP_COLORS.parallel, 'stroke-width': 2.5, 'stroke-dasharray': '2 4' });
     if (live?.from) this.lockFrom(f, live);
     if (this.modeValue === 'tape') {
       const a = this.pts[0];
@@ -1682,7 +1685,7 @@ export class MeasureTool {
     const axis = snap?.axis;
     const color = lockColor(snap);
     let cls = 'measure-rubber';
-    if (color && (axis || snap!.kind === 'parallel' || snap!.locked)) {
+    if (color && (axis || snap!.kind === 'parallel' || snap!.inferred || snap!.locked)) {
       attrs.stroke = color;
       attrs['stroke-width'] = 2;
     }
@@ -1691,6 +1694,7 @@ export class MeasureTool {
       cls += ` measure-axis-${axis}`;
     }
     if (snap?.kind === 'parallel') cls += ' measure-parallel';
+    if (snap?.inferred) cls += ' measure-perpendicular';
     if (snap?.locked) {
       delete attrs['stroke-dasharray'];
       attrs['stroke-width'] = 3;
