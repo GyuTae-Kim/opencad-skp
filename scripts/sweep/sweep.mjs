@@ -1,7 +1,7 @@
 /**
  * 실제 파일 훑기: 로컬 표본 폴더를 재귀로 훑어 .skp를 고르고, 내용 sha256으로 같은 파일을 뺀 뒤
  * 앱 워커와 같은 길(scripts/sweep/probe.ts)로 해석해 파일마다 한 줄(records.jsonl)과 요약(summary.json)을 남긴다.
- *   npm run sweep -- [--dirs <폴더1>:<폴더2>] [--out .runtime/sweep/<이름>] [--jobs N] [--limit N] [--min-mb N] [--timeout 초] [--mem]
+ *   npm run sweep -- [--dirs <폴더1>:<폴더2>] [--out .runtime/sweep/<이름>] [--jobs N] [--limit N] [--min-mb N] [--timeout 초] [--mem] [--stream-min 바이트]
  * 표본 폴더가 없으면(--dirs도 OPENCAD_SWEEP_DIRS도 없음) 쓰는 법만 찍고 0으로 끝난다(CI에서 돌지 않는다).
  * probe.ts는 Vite로 한 파일(<out>/.probe/probe.mjs)로 묶어 Node 자식 프로세스(child.mjs)가 부른다 — 훑기는 Node만으로 돈다.
  * 파일 하나가 시간 한도를 넘거나 자식이 죽으면 그 파일을 예외로 적고 새 자식으로 이어 간다.
@@ -109,7 +109,7 @@ function sourceInfo(bundle) {
  * 자식 프로세스 jobs개로 파일을 나눠 해석한다. mem이면 파일마다 새 자식(그 파일의 최대 rss를 재려고)
  * @returns {Promise<void>}
  */
-function runPool(items, { bundle, jobs, timeoutSec, mem, onResult }) {
+function runPool(items, { bundle, jobs, timeoutSec, mem, streamMin, onResult }) {
   return new Promise((resolveAll, rejectAll) => {
     let next = 0;
     let started = false;
@@ -184,7 +184,7 @@ function runPool(items, { bundle, jobs, timeoutSec, mem, onResult }) {
           if (w.child.exitCode === null && w.child.signalCode === null) w.child.kill('SIGKILL');
         }, 5000).unref();
       }, timeoutSec * 1000);
-      w.child.send({ type: 'file', id: item.id, path: item.paths[0], mem });
+      w.child.send({ type: 'file', id: item.id, path: item.paths[0], mem, streamMin });
     };
     const refill = () => {
       while (workers.size < jobs && next < items.length) spawn();
@@ -276,6 +276,7 @@ async function main() {
     jobs: Math.min(opts.jobs, Math.max(1, selected.length)),
     timeoutSec: opts.timeoutSec,
     mem: opts.mem,
+    streamMin: opts.streamMin,
     onResult: (item, res) => {
       const rec = makeRecord(item, res);
       records.push(rec);
@@ -299,6 +300,7 @@ async function main() {
       minMb: opts.minMb,
       timeoutSec: opts.timeoutSec,
       mem: opts.mem,
+      streamMin: opts.streamMin,
       extensions: EXTENSIONS,
       skipDirs: SKIP_DIRS,
     },

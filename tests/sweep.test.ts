@@ -57,6 +57,10 @@ describe('훑기 순수 함수', () => {
     expect(parseArgs([], {}, 10).jobs).toBe(4);
     expect(parseArgs([], {}, 2).jobs).toBe(1);
     expect(parseArgs(['--jobs', '0', '--what'], {}, 2).errors).toHaveLength(2);
+    // 풀면서 읽는 문턱: 기본은 워커와 같게(null), 0이면 압축된 모든 2021+ 파일
+    expect(parseArgs([], {}, 2).streamMin).toBeNull();
+    expect(parseArgs(['--stream-min', '0'], {}, 2).streamMin).toBe(0);
+    expect(parseArgs(['--stream-min=-1'], {}, 2).errors).toHaveLength(1);
   });
 
   it('editionOf: 6~8은 그대로, 13 이상은 연도 꼴', () => {
@@ -139,35 +143,39 @@ describe('훑기 순수 함수', () => {
 });
 
 describe('probe: 앱 워커와 같은 해석 길', () => {
-  it('워커와 같은 skpToScene 선택·내장 풀기 조건을 쓴다', () => {
+  it('워커와 같은 skpToSceneAsync 선택·풀면서 읽는 문턱을 쓴다', () => {
     const worker = readFileSync(join(root, 'src/worker/parse.worker.ts'), 'utf8');
     const probe = readFileSync(join(root, 'scripts/sweep/probe.ts'), 'utf8');
-    const call = 'skpToScene(bytes, { name, outline: true, extras: true, smooth: true, onProgress: progress, textures: images?.materials, inflated, releaseBytes: true })';
-    expect(worker).toContain(call);
+    // probe는 그 뒤에 진단 알림(onModelRead)만 더 단다
+    const call = 'skpToSceneAsync(bytes, { name, outline: true, extras: true, smooth: true, onProgress: progress, textures: images?.materials, releaseBytes: true, streamMin';
+    expect(worker).toContain(call + ' });');
     expect(probe).toContain(call);
-    expect(worker).toContain('bytes.length >= NATIVE_INFLATE_MIN_BYTES');
+    expect(worker).toContain('const streamMin = STREAM_MIN_BYTES;');
+    expect(probe).toContain('const streamMin = opts.streamMin ?? STREAM_MIN_BYTES;');
     expect(worker).toContain('readSkpImages(bytes, {');
     expect(probe).toContain('readSkpImages(bytes, {');
   });
 
-  it('2021+ 꼴: 내장 풀기 길을 타도 직접 해석과 같은 지표', async () => {
+  it('2021+ 꼴: 풀면서 읽는 길을 타도 직접 해석과 같은 지표', async () => {
     const bytes = gridSkp(20);
     const direct = skpToScene(bytes, { outline: true, extras: true, smooth: true });
     // probe는 워커처럼 해석기가 파일 버퍼를 떼어 놓게 한다 — 사본을 넘긴다
     const copy = bytes.slice();
-    const r = await probeSkp(copy, { name: 'grid.skp', inflateMin: 1 });
+    const r = await probeSkp(copy, { name: 'grid.skp', streamMin: 1 });
     expect(copy.length).toBe(0);
     expect(r.inflated).toBe(true);
+    // 합성 격자에는 글꼴 절이 없어 정의 절을 통째로 들고 읽는다(풀면서 읽기는 같다)
+    expect(r.modelRead).toBe('held');
     expect(r.header).toMatchObject({ major: 26, container: 'zip' });
     expect(r.metrics.faces).toBe(400);
     expect(r.metrics.faces).toBe(direct.meta?.faces);
     expect(r.metrics.meshes).toBe(direct.meshes.length);
     expect(r.metrics.seg).toBe(direct.lines.reduce((s, l) => s + l.positions.length / 6, 0));
-    expect(Object.keys(r.ms)).toEqual(expect.arrayContaining(['total', 'inflate', 'images', 'unpack', 'parse', 'scene']));
-    // 기본 문턱(1 MB)보다 작으면 워커처럼 직접 푼다
+    expect(Object.keys(r.ms)).toEqual(expect.arrayContaining(['total', 'images', 'unpack', 'parse', 'scene']));
+    // 기본 문턱(1 MiB)보다 작으면 워커처럼 통째로 푼다
     const small = await probeSkp(bytes.slice());
     expect(small.inflated).toBe(false);
-    expect(small.ms.inflate).toBeUndefined();
+    expect(small.modelRead).toBe('whole');
     expect(small.metrics).toEqual(r.metrics);
     // 장면 출력 해시: 미리 풀든 직접 풀든 같고, 장면 이름(파일 이름)에 따라 바뀌지 않는다
     expect(r.digest).toMatch(/^[0-9a-f]{16}$/);
@@ -192,11 +200,11 @@ describe('probe: 앱 워커와 같은 해석 길', () => {
 
   it('mem: 단계별 최대·끝 heap과 장면 배열 크기', async () => {
     const gc = (globalThis as { gc?: () => void }).gc;
-    const r = await probeSkp(gridSkp(10), { mem: true, gc, inflateMin: 1 });
+    const r = await probeSkp(gridSkp(10), { mem: true, gc, streamMin: 1 });
     const m = r.mem!;
     expect(m.stages.scene).toBeTruthy();
     expect(m.stages.parse).toBeTruthy();
-    expect(m.stages.inflate).toBeTruthy();
+    expect(m.stages.images).toBeTruthy();
     for (const s of Object.values(m.stages)) {
       expect(s!.peakHeapMB).toBeGreaterThan(0);
       expect(s!.peakRssMB).toBeGreaterThan(0);

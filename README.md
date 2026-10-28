@@ -228,6 +228,13 @@ SketchUp 6·7·8·2013~2020에서 저장한 옛 파일도 같은 화면으로 �
   장면 배열은 쌓을 때 버린 버퍼를 곧바로 떼어 놓습니다(`src/grow.ts`). 165 MB 모형(면 64만 개, 모서리 106만 개)을 Node에서 열 때 가장 많이 쓰는 heap + external이
   2.1 GB에서 750 MB쯤으로, 해석 시간이 5.7초에서 3.7초로 줄었습니다. 헤드리스 Chrome에서 같은 모형을 열면 화면과 해석 워커가 도는 렌더러 프로세스가 2.7~3.1 GB에서 1.9 GB까지 씁니다.
   실제 파일 1,351개의 장면 출력(모든 배열 바이트와 meta)은 줄이기 전과 한 바이트도 다르지 않습니다.
+- 큰 모형 메모리(2026-10-28): 압축된 `model.dat`가 1 MiB를 넘는 2021+ 파일은 통째로 풀지 않고 브라우저 내장 풀기가 내는 조각을 받는 대로 읽습니다
+  (`skpToSceneAsync`, `src/modelstream.ts`). `model.dat`의 뿌리 절은 실제 파일 모두에서 설정·재질·태그·글꼴 → 정의(크기의 거의 전부) → 모형 요소 →
+  장면·스타일 차례라, 정의 절 밖의 작은 절은 따로 복사해 두고 정의는 하나씩 그 바이트만 받아 읽은 뒤 놓습니다. 붙은 치수 점이 가리키는 정점은
+  예전처럼 `model.dat`를 두 번째로 훑지 않고 첫 훑기에서 영구 번호로 적어 둡니다. 장면을 만들 때는 마지막 배치까지 놓은 정의의 삼각화 배열과
+  중간 모형 표를 바로 놓습니다. 165 MB 모형을 Node에서 열 때 가장 많이 쓰는 heap + external이 750 MB쯤에서 580 MB쯤으로,
+  헤드리스 Chrome의 해석 워커(V8 heap + ArrayBuffer)가 810~880 MB에서 615 MB쯤으로 줄었습니다. 실제 파일 1,375개의 장면 출력은 줄이기 전과 같습니다
+  (압축된 `model.dat`가 있는 2021+ 파일 888개를 모두 풀면서 읽게 해도 같음).
 - 한도: 펼친 면 정점 1,200만 · 선분 300만 · 인스턴스 배치 200만(서로를 여러 번 품는 정의) · 자기 자신을 품는 정의는 64겹(`meta.limited`).
   무늬: 무늬 재질 256개 · 무늬 좌표를 다는 정점 600만(넘으면 그 뒤 그물은 평균색), 그림은 `readSkpImages` 한도(개수 600·한 장 8 MB·전체 64 MB),
   화면은 기기에 따라 한 장 긴 변 2048(메모리 4 GB 이하·손가락+좁은 화면 1024, 2 GB 이하 512) 화소·GPU 예산 256(96·48) MB.
@@ -257,10 +264,15 @@ const scene = skpToScene(bytes, { name: 'model.skp' });
   고른 삼각형·선분에서 SketchUp 면 하나·곡선 하나를 찾습니다(화면의 면 넓이·곡선 길이). 해석기가 면마다 삼각형을 이어 붙이므로 출력 형상은 그대로입니다.
 - `annotations`(기본 켬) — 문자·치수·보조선·단면을 펼쳐 선분 묶음(`skp-dims-*`·`skp-leaders-*`·`skp-guides-*`·`skp-sections-*`, 보조점은 `scene.points`)과 `meta.texts`·`meta.dimensions`·`meta.sectionPlanes`로 냅니다(범위에는 넣지 않음). 주석이 없는 모형은 출력이 예전과 같습니다.
 - `onProgress(fraction, stage)` — 진행률(단계 안에서도 몇천 항목·몇 MB마다)을 알립니다(워커에서 진행 막대용).
+- `skpToSceneAsync(bytes, opts)` — `skpToScene`과 같은 장면을 내되, 압축된 `model.dat`가 `streamMin`(기본 `STREAM_MIN_BYTES` = 1 MiB) 이상인 2021+ 파일은
+  브라우저 내장 `DecompressionStream('deflate-raw')`로 조각조각 풀면서 읽습니다(풀린 `model.dat` 전체를 들지 않음 — 직접 쓴 풀기보다 몇 배 빠름).
+  내장 풀기가 없거나 실패하면 `skpToScene`처럼 직접 풀고, 뿌리·정의 목록의 꼬리표 길이가 깨진 꼴은 통째로 풀어 예전처럼 앞부분을 살립니다(같은 결과).
+  앱 워커가 이것을 씁니다. `onModelRead`는 어떻게 읽었는지(`stream`·`held` — 재질·글꼴 절이 정의 절보다 뒤에 오거나 없어 정의 절을 통째로 든 것 ·
+  `whole` · `shape` · `inflate`)를 알립니다.
 - `inflated` — 미리 푼 꾸러미 항목(`Map<'model.dat', Uint8Array>`). 길이가 ZIP 목록의 원래 크기와 같을 때만 쓰고 아니면 직접 풉니다.
-  앱 워커는 1 MB 넘는 2021+ `model.dat`를 브라우저 내장 `DecompressionStream('deflate-raw')`로 먼저 풀어 넘깁니다(`src/worker/unzip.ts` —
-  165 MB 모형에서 직접 쓴 풀기 2.7초 → 0.6초, 해석 전체 6.8 → 5.7초). 해석기는 꺼내 쓴 항목을 이 Map에서 지웁니다(모형 요소를 다 읽으면 풀린 바이트가 놓이게).
-- `releaseBytes: true` — 파일 바이트를 다 쓰면(2021+는 재질·스타일을 읽고 `model.dat`를 꺼낸 뒤, 2020 이하는 모형을 읽은 뒤) 그 버퍼를 떼어 놓습니다(넘긴 `bytes`는 길이 0이 됨).
+  해석기는 꺼내 쓴 항목을 이 Map에서 지웁니다(모형 요소를 다 읽으면 풀린 바이트가 놓이게).
+- `releaseBytes: true` — 파일 바이트를 다 쓰면(2021+는 재질·스타일을 읽고 `model.dat`를 꺼낸 뒤 — 풀면서 읽으면 `model.dat`를 다 읽은 뒤, 2020 이하는 모형을 읽은 뒤)
+  그 버퍼를 떼어 놓습니다(넘긴 `bytes`는 길이 0이 됨).
   앱 워커처럼 파일 바이트를 더 쓰지 않는 쪽이 파일 크기만큼 덜 잡게 켭니다. 그림은 그 전에 `readSkpImages`로 꺼내야 합니다. 기본은 꺼짐.
 - `readModelDat`이 내는 중간 모형(`SkpModel`)의 면·모서리는 형식 배열 표(`SkpFaces`·`SkpEdges`)입니다. 고리는 두 단계 구간(면 → 고리 `loopStart`, 고리 → 꼭짓점 `cornerStart`)이고,
   없는 번호는 NaN입니다. 면 하나를 객체로 보려면 `faceAt`·`edgeAt`, 객체 목록에서 표를 만들려면 `facesFrom`·`edgesFrom`을 씁니다.
@@ -312,12 +324,13 @@ const scene = skpToScene(bytes, { textures: images.materials }); // Viewer3d.set
 | `src/app/shortcuts.ts` | 키보드 바로 가기 목록과 안내 상자(? 키) |
 | `src/app/sample.ts`, `src/app/skpwrite.ts` | 예제 모형 만들기와 SKP 바이트 쓰기 도구(시험과 함께 씀) |
 | `src/app/dom.ts`, `src/app/styles.css` | DOM 도우미·아이콘, 스타일(밝은·어두운 테마) |
-| `src/worker/parse.worker.ts`, `src/worker/textures.ts`, `src/worker/unzip.ts` | 해석 워커, 무늬 손질(색 바꾸기·알파 재기 — OffscreenCanvas), 큰 `model.dat` 내장 풀기 |
+| `src/worker/parse.worker.ts`, `src/worker/textures.ts` | 해석 워커, 무늬 손질(색 바꾸기·알파 재기 — OffscreenCanvas) |
 | `src/index.ts` | 해석기 공개 입구(`skpToScene`, `readSkpImages`, 지원 판 범위) |
 | `src/header.ts` | 파일 머리와 판 |
 | `src/zip.ts`, `src/inflate.ts` | ZIP 꾸러미(잘린 파일은 지역 머리 따라가기)와 deflate 풀기(잘린 흐름은 앞부분만) |
 | `src/images.ts` | 꾸러미 안 그림(무늬·미리보기) 꺼내기 |
 | `src/tlv.ts`, `src/model.ts` | `model.dat` 꼬리표-길이-값 해석(형상·중간 모형 자료형) |
+| `src/modelstream.ts` | 큰 `model.dat`를 내장 풀기 조각으로 받으며 정의 하나씩 읽기(`skpToSceneAsync`) |
 | `src/entities.ts`, `src/grow.ts` | 중간 모형의 면·모서리·면 무늬 투영 표(형식 배열)와 객체 ↔ 표 바꾸기, 길이를 모르고 쌓는 형식 배열(표·장면 배열 — 버린 버퍼를 곧바로 떼어 놓는다) |
 | `src/mfcstream.ts`, `src/mfcstate.ts`, `src/mfcmodel.ts`, `src/mfcview.ts`, `src/mfcannot.ts` | SketchUp 6~2020 해석: MFC 객체 꼬리표·문자열, 앞머리·형 있는 값, 모형 본문·형상·재질·태그·정의, 카메라·스타일·장면·모형 꼬리, 주석 |
 | `src/vfftags.ts`, `src/vffcommon.ts`, `src/vffroot.ts`, `src/vffannot.ts` | 꼬리표 표, 형 있는 값·속성 사전·설정, 뿌리 절(카메라·장면·태그·폴더·스타일·글꼴), 주석(문자·치수·보조선·단면·곡선) |
@@ -392,12 +405,13 @@ npm run sweep:compare -- .runtime/sweep/before .runtime/sweep/after --fail-on-ch
 npm run sweep -- --dirs "$HOME/Downloads" --min-mb 25 --mem --jobs 1 --out .runtime/sweep/mem   # 큰 모형의 단계별 메모리
 ```
 
-- 폴더 아래를 모두 훑어 `.skp`를 고르고(`node_modules`, `.git`, `.claude` 폴더는 건너뜀) 내용이 같은 파일은 sha256으로 한 번만 엽니다. 해석은 앱 워커와 같은 차례로 합니다. 큰 2021 이후 파일은 `model.dat`를 내장 풀기로 먼저 풀고, 그림을 꺼낸 뒤 같은 선택으로 `skpToScene`을 부릅니다.
+- 폴더 아래를 모두 훑어 `.skp`를 고르고(`node_modules`, `.git`, `.claude` 폴더는 건너뜀) 내용이 같은 파일은 sha256으로 한 번만 엽니다. 해석은 앱 워커와 같은 차례로 합니다. 그림을 꺼낸 뒤 같은 선택으로 `skpToSceneAsync`를 부르고, 압축된 `model.dat`가 1 MiB 넘는 2021+ 파일은 내장 풀기로 풀면서 읽습니다.
+  `--stream-min 0`을 주면 압축된 모든 2021+ 파일이 그 길을 탑니다(풀면서 읽기를 고친 뒤 모든 파일로 견줄 때). 요약에 어떻게 읽었는지(`modelRead`)별 파일 수를 적습니다.
 - 해석은 Node 자식 프로세스 여러 개(`--jobs`, 기본은 CPU 절반이고 많아야 4)가 나눠 합니다. 파일 하나가 `--timeout`(기본 300초)을 넘거나 프로세스가 죽으면 그 파일을 예외로 적고 이어 갑니다.
 - 결과 폴더에는 파일마다 한 줄씩 적은 `records.jsonl`(열쇠는 내용 해시)과 요약 `summary.json`을 씁니다. 요약에는 판마다 정상, 경고, 빈 장면, 읽지 않는 판, SketchUp 파일 아님, 예외로 나눈 개수와 경고 종류별 파일 수, 면과 정의와 인스턴스 합, 해석 시간 백분위, 큰 파일의 시간과 메모리가 들어갑니다. 파일 경로는 `records.jsonl`에만 있으니 결과는 `.runtime/`(git이 무시함)에 두고 저장소에 넣지 않습니다.
 - 파일마다 장면 출력 해시(`digest` — 모든 그물·선분·점 배열의 바이트, 무늬, 경고, meta)를 적습니다. 해석기 자료 구조를 바꿀 때 좌표 하나가 바뀐 것까지 찾으려고 넣었습니다.
 - `sweep:compare`는 같은 해시끼리 견주어 분류가 바뀐 파일, 지표나 경고나 장면 출력 해시가 바뀐 파일(`--top` 개수만큼), 새 예외를 찍습니다(장면 출력 해시는 두 결과에 다 있을 때만 봅니다). `--fail-on-change`를 주면 바뀐 것이 있을 때 1로 끝납니다.
-- `--mem`은 파일마다 새 프로세스를 띄워 단계(풀기, 그림 꺼내기, 해석, 장면 만들기)마다 가장 컸던 heap, external, rss, 같은 때의 heap + external 합과 그 파일을 여는 동안의 최대 rss를 잽니다. 기계의 메모리가 빠듯하면 rss가 같은 코드에서도 수백 MB씩 흔들리므로 heap + external로 견줍니다. 단계마다 gc를 부르므로 이때 잰 시간은 다른 결과와 견주지 않습니다.
+- `--mem`은 파일마다 새 프로세스를 띄워 단계(그림 꺼내기, 꾸러미, 해석 — 풀면서 읽으면 풀기도 여기, 장면 만들기)마다 가장 컸던 heap, external, rss, 같은 때의 heap + external 합과 그 파일을 여는 동안의 최대 rss를 잽니다. 기계의 메모리가 빠듯하면 rss가 같은 코드에서도 수백 MB씩 흔들리므로 heap + external로 견줍니다. 단계마다 gc를 부르므로 이때 잰 시간은 다른 결과와 견주지 않습니다.
 - 폴더를 주지 않으면 쓰는 법만 찍고 끝나므로 CI에서는 돌지 않습니다.
 
 ## 배포
@@ -420,11 +434,11 @@ npm run sweep -- --dirs "$HOME/Downloads" --min-mb 25 --mem --jobs 1 --out .runt
 - 보여 주기: 땅 위 그림자(지면에 드리우기)·반투명 그물 그림자, 2020 이하 파일의 안개(렌더링 덩어리 자리를 모름)·그림자 켜기 깃발(CShadowInfo의 깃발 자리를 모름 — 그림자를 켠 옛 판 표본이 없음),
   한 칸에서 서로 겹친 닫힌 입체가 다섯 이상 겹겹이 쌓인 곳의 단면 채우기(넘친 것은 첫 묶음에서 홀짝), 카메라를 보는 컴포넌트의 부드러운·숨긴 모서리
 - 실제 표본(2024 판, 새 기능)으로 확인
-- 큰 모형의 메모리: 2026-10-27에 줄였지만 165 MB 파일은 아직 해석 프로세스가 heap + external로 750 MB쯤, 헤드리스 Chrome 렌더러 프로세스가 1.9 GB까지 써서 휴대폰에서는 열지 못할 수 있습니다.
-  남은 큰 몫은 모형 요소를 읽는 동안의 풀린 `model.dat`(323 MB — 풀면서 읽으면 줄일 수 있음), 장면을 만들 때 정의마다 삼각화해 둔 배열(위치는 f64)과 장면 배열(200 MB)이
-  함께 있는 때, 화면 쪽 JS heap(230 MB)입니다. 풀면서 읽으려면 해석기가 바뀌어야 합니다: 지금은 뿌리 절의 자리를 먼저 모은 뒤 재질·태그 → 정의 → 모형 요소 차례로
-  한 버퍼 안을 오가며 읽고, 치수 끝점·호 잇기(`pendingPoints`·`pendingArcs`)를 풀려고 모형 요소 노드를 버퍼 자리로 기억해 두 번째로 훑습니다.
-  정의·모형 요소 항목을 하나씩 받아 읽고 버리려면, 두 번째 훑기 대신 첫 훑기에서 그 끝점·모서리 후보를 영구 번호로 모아 두는 쪽으로 바꿔야 합니다
+- 큰 모형의 메모리: 2026-10-28에 `model.dat`를 풀면서 읽고 다 놓은 정의를 바로 놓아, 165 MB 파일이 해석 프로세스에서 heap + external로 580 MB쯤,
+  헤드리스 Chrome 해석 워커에서 615 MB쯤을 씁니다(화면까지 도는 렌더러 프로세스 전체는 기계의 메모리 사정에 따라 1.0~1.5 GB로 흔들림). 휴대폰에서는 아직 빠듯할 수 있습니다.
+  남은 큰 몫은 풀면서 읽는 동안의 파일 바이트(압축된 `model.dat`를 다 읽을 때까지 165 MB — 파일을 `Blob`으로 받아 필요한 자리만 읽으면 줄일 수 있음),
+  가장 큰 정의 하나의 바이트(정의 안은 곡선이 모서리보다 먼저 오는 등 앞으로만 읽을 수 없어 정의 하나는 통째로 받음 — 이 파일은 68 MB),
+  자라는 중간 모형 표(무늬 투영 포함 200 MB 남짓)와 그림(60 MB), 장면 배열(쌓는 동안 두 배까지 160~240 MB), 화면 쪽 JS heap(230 MB)입니다.
 
 ## 내력
 

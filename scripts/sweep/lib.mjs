@@ -46,7 +46,7 @@ export const METRIC_KEYS = [
 ];
 
 export const USAGE = `쓰는 법: npm run sweep -- [--dirs <폴더1>:<폴더2>] [--out .runtime/sweep/<이름>] [--jobs N] [--limit N]
-                      [--min-mb N] [--timeout 초] [--mem]
+                      [--min-mb N] [--timeout 초] [--mem] [--stream-min 바이트]
   폴더를 재귀로 훑어 .skp를 고르고 내용 sha256으로 같은 파일을 뺀 뒤 앱 워커와 같은 길로 해석합니다.
   표본 폴더는 --dirs나 환경 변수 OPENCAD_SWEEP_DIRS(쌍점으로 구분)로 줍니다. 둘 다 없으면 이 안내만 찍고 끝납니다.
   --out     결과 폴더(기본 .runtime/sweep/<UTC 시각>) — records.jsonl(파일마다 한 줄)과 summary.json. 이미 결과가 있으면 멈춥니다
@@ -54,7 +54,8 @@ export const USAGE = `쓰는 법: npm run sweep -- [--dirs <폴더1>:<폴더2>] 
   --limit   같은 파일을 뺀 뒤 앞에서 N개만
   --min-mb  이 크기(MB) 이상인 파일만
   --timeout 파일 하나 시간 한도(초, 기본 300) — 넘거나 프로세스가 죽으면 예외로 적고 다음 파일로
-  --mem     파일마다 새 프로세스로 해석하며 단계별(풀기·그림·해석·장면) 최대 heap·rss를 잽니다(느립니다)
+  --mem     파일마다 새 프로세스로 해석하며 단계별(그림·꾸러미·해석·장면) 최대 heap·rss를 잽니다(느립니다)
+  --stream-min  model.dat를 풀면서 읽는 문턱(압축 바이트, 기본은 워커와 같은 1 MiB). 0이면 압축된 모든 2021+ 파일이 그 길을 탑니다
 비교: npm run sweep:compare -- <전 결과 폴더> <후 결과 폴더> [--top N] [--json <파일>] [--fail-on-change]`;
 
 /**
@@ -72,6 +73,8 @@ export function parseArgs(argv, env = {}, cpus = 2) {
     minMb: 0,
     timeoutSec: 300,
     mem: false,
+    /** 풀면서 읽는 문턱(압축된 model.dat 바이트) — null이면 워커와 같은 기본 */
+    streamMin: /** @type {number | null} */ (null),
     help: false,
     errors: /** @type {string[]} */ ([]),
   };
@@ -119,6 +122,11 @@ export function parseArgs(argv, env = {}, cpus = 2) {
       case '--mem':
         opts.mem = true;
         break;
+      case '--stream-min': {
+        const n = intArg('--stream-min', value(), 0);
+        if (n !== null) opts.streamMin = Math.floor(n);
+        break;
+      }
       case '-h':
       case '--help':
         opts.help = true;
@@ -238,6 +246,8 @@ export function summarize(records, info = {}) {
   let warningFiles = 0;
   let exceptionFiles = 0;
   let inflated = 0;
+  /** 2021+ model.dat를 어떻게 읽었는지(stream 풀면서 · held 풀면서 읽었지만 정의 절은 통째로 · whole 통째로 · shape·inflate 풀면서 읽다 통째로 다시) */
+  const modelRead = {};
   for (const r of records) {
     const cls = r.class ?? classify(r);
     const ed = r.edition ?? editionOf(r.header?.major);
@@ -262,6 +272,7 @@ export function summarize(records, info = {}) {
     }
     for (const f of r.flags ?? []) bump(flags, f);
     if (r.inflated) inflated++;
+    if (r.modelRead) bump(modelRead, r.modelRead);
     const m = r.metrics ?? {};
     totals.faces += m.faces ?? 0;
     totals.edges += m.edges ?? 0;
@@ -308,6 +319,7 @@ export function summarize(records, info = {}) {
     exceptions: sortedCounts(exceptions),
     flags: sortedCounts(flags),
     inflatedFiles: inflated,
+    modelRead: sortedCounts(modelRead),
     totals,
     timingMs,
     memory,
@@ -339,7 +351,9 @@ export function formatSummary(s) {
     const all = s.byEditionAllFiles?.[ed] ?? {};
     lines.push([pad(ed, 6), ...cols.map((c) => pad(row[c] ? `${row[c]}(${all[c] ?? row[c]})` : '-', 14))].join(' | '));
   }
-  lines.push(`경고 파일 ${s.warningFiles ?? 0}개, 예외 ${s.exceptionFiles ?? 0}개, 내장 풀기 ${s.inflatedFiles ?? 0}개`);
+  lines.push(`경고 파일 ${s.warningFiles ?? 0}개, 예외 ${s.exceptionFiles ?? 0}개, 풀면서 읽기 ${s.inflatedFiles ?? 0}개`);
+  const again = Object.entries(s.modelRead ?? {}).filter(([k]) => k === 'held' || k === 'shape' || k === 'inflate');
+  if (again.length) lines.push(`  정의를 하나씩 읽지 못한 파일: ${again.map(([k, n]) => `${k} ${n}`).join(' · ')}`);
   for (const [code, n] of Object.entries(s.warningCodes ?? {}).slice(0, 12)) lines.push(`  경고 ${String(n).padStart(4)}  ${code}`);
   for (const [code, n] of Object.entries(s.exceptions ?? {}).slice(0, 12)) lines.push(`  예외 ${String(n).padStart(4)}  ${code}`);
   const t = s.timingMs?.total;
