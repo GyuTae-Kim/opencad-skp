@@ -76,6 +76,14 @@ export interface Snap {
   /** 잠근 선으로 옮겨 온 점(커서 밑 끝점 등)과 그 종류 */
   from?: V3;
   fromKind?: SnapKind;
+  /** 안내점·안내선에 붙었으면 그 안내(SnapInput.guides·guideLines 안 차례 — 누르면 그 안내를 고른다) */
+  guide?: GuideHit;
+}
+
+/** 붙은 안내: 안내점(guides) 또는 안내선(guideLines)과 그 차례 */
+export interface GuideHit {
+  kind: 'point' | 'line';
+  index: number;
 }
 
 /** 방향 추론 잠금(시작점을 지나는 선): 종류·단위 방향과 축·기준 모서리, 그 선 위 점의 추정 글 */
@@ -459,6 +467,8 @@ interface Cand {
   trusted: boolean;
   /** 종류 글 대신 쓸 글(안내점) */
   label?: string;
+  /** 안내점·안내선 후보면 그 안내 */
+  guide?: GuideHit;
 }
 
 /** 점 p에서 직선(a, b)에 내린 발과 그 매개변수(a = 0, b = 1). 선분 길이가 0이면 null */
@@ -523,14 +533,14 @@ export function chooseSnap(o: SnapInput): Snap {
   }
   // 측정값 칸으로 둔 안내선: 커서 광선에 가장 가까운 선 위 점(모서리 위처럼 — 덧그림이라 형상에 가리지 않는다).
   // 끝이 없는 선이라 교차점 계산에는 그 점 둘레(추정 반경의 네 배) 선분으로 넣는다
-  for (const gl of o.guideLines ?? []) {
+  for (const [index, gl] of (o.guideLines ?? []).entries()) {
     const q = closestOnLine(ray, gl.point, gl.dir);
     if (!q) continue;
     const wpp = worldPerPixel(f, Math.max(viewDepth(f, q), 0));
     const half = wpp * R * 4;
     if (!(half > 0)) continue;
     const seg: [V3, V3] = [along(q, gl.dir, -half), along(q, gl.dir, half)];
-    push({ kind: 'onEdge', point: q, rank: 2, edge: seg, id: '', trusted: true, label: GUIDE_LINE_LABEL });
+    push({ kind: 'onEdge', point: q, rank: 2, edge: seg, id: '', trusted: true, label: GUIDE_LINE_LABEL, guide: { kind: 'line', index } });
     if (near.length < MAX_INTERSECTION_SEGMENTS) near.push({ seg, id: '', tol: 0.5 * wpp, guide: true });
   }
   // 두 선분이 3D에서 만나는 점(둘 다 안쪽). 안내선끼리 만나는 점은 덧그림이라 가림을 보지 않는다
@@ -543,7 +553,7 @@ export function chooseSnap(o: SnapInput): Snap {
   // 앞서 지나간 곡선의 중심
   for (const c of o.centers ?? []) push({ kind: 'center', point: [c[0], c[1], c[2]], rank: 0, id: '', trusted: false });
   // 측정값 칸으로 찍은 안내점(덧그림이라 형상에 가리지 않는다)
-  for (const g of o.guides ?? []) push({ kind: 'endpoint', point: [g[0], g[1], g[2]], rank: 0, id: '', trusted: true, label: GUIDE_POINT_LABEL });
+  for (const [index, g] of (o.guides ?? []).entries()) push({ kind: 'endpoint', point: [g[0], g[1], g[2]], rank: 0, id: '', trusted: true, label: GUIDE_POINT_LABEL, guide: { kind: 'point', index } });
   // 점 묶음(있으면 끝점처럼)
   if (pick && pick.kind === 'point') push({ kind: 'endpoint', point: [...pick.point], rank: 0, id: pick.id, trusted: true });
   // 그물 윤곽선(코어 윤곽선 고르기 — 카메라를 보는 그물의 모서리): 고른 점을 모서리 위로
@@ -561,6 +571,7 @@ export function chooseSnap(o: SnapInput): Snap {
     snap = { kind: c.kind, point: c.point, label: c.label ?? SNAP_LABELS[c.kind], id: c.id };
     if (c.edge) snap.edge = c.edge;
     if (c.other) snap.other = c.other;
+    if (c.guide) snap.guide = { ...c.guide };
     break;
   }
   // 면에 수직: 시작점에서 커서 밑 면의 평면에 내린 발이 추정 반경 안이면(맞은편 벽까지의 거리)

@@ -203,6 +203,9 @@ export interface AppSnapshot {
   measureLock: ReturnType<typeof lockName>;
   /** 안내 두기(누르기로 안내점·안내선)를 켰는지 */
   measureGuideMode: boolean;
+  /** 고른 안내(안내점·안내선, 없으면 null)와 그 지우기 단추가 보이는지 */
+  measureGuideSelected: 'point' | 'line' | null;
+  measureGuideDelete: boolean;
   /** 측정값 칸이 보이는지·지금 글·측정 띠 안에 있는지·받는 값(길이·각도) */
   vcb: { shown: boolean; value: string; inBand: boolean; kind: VcbKind };
   /** 고른 것의 종류(outline·node·material·item·face·edge, 없으면 null) */
@@ -642,6 +645,11 @@ export class SkpViewerApp implements PanelHost {
       onSubmit: (value, kind) => this.submitValue(value, kind),
       onClearGuides: () => {
         this.measureTool?.clearGuides();
+        this.refreshStatus();
+      },
+      // 고른 안내 하나 지우기(휴대폰 — 키보드는 Delete·Backspace)
+      onDeleteGuide: () => {
+        this.measureTool?.deleteSelectedGuide();
         this.refreshStatus();
       },
       returnFocus: () => {
@@ -3264,6 +3272,7 @@ export class SkpViewerApp implements PanelHost {
     const show = !!mode && (!band || tool!.result?.kind === mode || guides > 0);
     this.vcb.show(show);
     this.vcb.setGuides(tool?.guides.length ?? 0, tool?.guideLines.length ?? 0);
+    this.vcb.setSelected(mode ? (tool?.selectedGuide ?? null) : null);
     this.els.measureBar.classList.toggle('has-vcb', band && show);
   }
 
@@ -3378,6 +3387,8 @@ export class SkpViewerApp implements PanelHost {
       measureGuideLines: this.measureTool?.guideLines.length ?? 0,
       measureLock: lockName(this.measureTool?.inferenceLock),
       measureGuideMode: !!this.measureTool?.guideMode,
+      measureGuideSelected: this.measureTool?.selectedGuide ?? null,
+      measureGuideDelete: this.vcb.shown && this.vcb.selectedShown,
       vcb: { shown: this.vcb.shown, value: this.vcb.input.value, inBand: this.vcb.el.parentElement === this.els.measureBar, kind: this.vcb.kind },
       selectionKind: d?.selection?.kind ?? null,
       slideshow: this.sliding,

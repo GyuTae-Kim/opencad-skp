@@ -1022,5 +1022,10 @@
   "안내 두기: 누르기로 안내점·안내선 두기(다시 누르면 재기만)": "Hilfslinien setzen: Klicks setzen Hilfspunkte und Hilfslinien (erneut drücken = nur messen)",
   "안내 두기 켬: 누르면 안내점·안내선을 둡니다": "Hilfslinien setzen an: Drücken setzt Hilfspunkte und Hilfslinien",
   "안내 두기 끔: 재기만 합니다": "Hilfslinien setzen aus: nur messen",
-  "줄자·각도기: 안내 두기 켜고 끄기(그 키만 눌렀다 떼기, Mac은 Option) — 줄자 둘째·각도기 셋째 누르기로 안내점·안내선": "Maßband und Winkelmesser: Hilfslinien setzen ein/aus (nur diese Taste drücken und loslassen, am Mac Option) — der zweite Maßband- bzw. dritte Winkelmesser-Klick setzt einen Hilfspunkt oder eine Hilfslinie"
+  "줄자·각도기: 안내 두기 켜고 끄기(그 키만 눌렀다 떼기, Mac은 Option) — 줄자 둘째·각도기 셋째 누르기로 안내점·안내선": "Maßband und Winkelmesser: Hilfslinien setzen ein/aus (nur diese Taste drücken und loslassen, am Mac Option) — der zweite Maßband- bzw. dritte Winkelmesser-Klick setzt einen Hilfspunkt oder eine Hilfslinie",
+  "줄자·각도기: 눌러서 고른 안내점·안내선 하나 지우기": "Maßband und Winkelmesser: den per Klick ausgewählten Hilfspunkt bzw. die Hilfslinie löschen",
+  "고른 안내점 지우기": "Ausgewählten Hilfspunkt löschen",
+  "고른 안내선 지우기": "Ausgewählte Hilfslinie löschen",
+  "고른 안내점 지우기 (Delete)": "Ausgewählten Hilfspunkt löschen (Entf)",
+  "고른 안내선 지우기 (Delete)": "Ausgewählte Hilfslinie löschen (Entf)"
 }

@@ -28,6 +28,8 @@
  * 안내 두기(SketchUp 줄자·각도기의 "+" — 이 뷰어는 재기만이 기본): 켜면(setGuideMode, 키보드는 Ctrl — Mac은 Option — 만 눌렀다 떼기)
  *   줄자 둘째 누르기가 안내를 둔다 — 모서리 위에서 시작했으면 그 모서리와 나란히 둘째 점을 지나는 안내선(결과는 모서리에 수직인 거리),
  *   끝점·꼭짓점 같은 점에서 시작했으면 둘째 점에 안내점. 각도기는 셋째 누르기가 중심을 지나 잰 방향으로 안내선을 둔다. 결과는 재기만과 같이 남긴다.
+ * 안내 고르기·지우기: 안내점·안내선 위를 누르면(측정 점도 그대로 찍는다) 그 안내를 고르고(방금 둔 안내도 고른다), 다른 곳을 누르거나
+ *   Esc·다시 재기면 푼다. Delete·Backspace(앱은 측정값 칸의 지우기 단추도)로 고른 안내 하나를 지운다 — 고른 누르기가 시작점도 찍었으면 그 점도 거둔다.
  * 추론 잠금(SketchUp "Locking inference"): 방향을 잡는 동안(줄자 끝점·각도기 기준 방향·잴 방향) Shift를 누르고 있으면 지금 커서 밑 방향 추론
  *   (빨강·녹색·파랑 축, 모서리와 나란히, 시작점에서 내린 수직)을 잠그고 떼면 푼다. →·←·↑는 빨강·녹색·파랑 축, ↓는 모서리와 나란히·수직
  *   (지금 커서 밑 것, 없으면 앞서 지나간 모서리와 나란히)을 잠그고 같은 키를 다시 누르면 푼다. 손가락 기기는 앱의 잠금 단추(setInferenceLock).
@@ -176,6 +178,12 @@ const ARROW_AXES: Readonly<Record<string, Axis>> = Object.freeze({ ArrowRight: '
 
 /** 지나간 모서리로 기억하는 추정(나란함 기준) */
 const REF_KINDS: ReadonlySet<SnapKind> = new Set(['endpoint', 'midpoint', 'onEdge', 'perpendicular']);
+
+/** 고른 안내: 안내점(배열) 또는 안내선(객체) 그대로 */
+type GuideRef = V3 | GuideLine;
+
+/** 고른 안내 색(SketchUp에서 고른 것처럼 파랑) */
+export const GUIDE_SELECTED_COLOR = '#1f6feb';
 
 /** 잠근 방향 → 잠금 안내 이름 */
 export function lockName(l: Pick<InferenceLock, 'kind' | 'axis' | 'label'> | null | undefined): LockName | null {
@@ -558,6 +566,10 @@ export class MeasureTool {
   private guideOn = false;
   /** 안내 두기 키만 눌렀는지(누른 뒤 다른 키·누르기·휠이 없으면 뗄 때 바꾼다) */
   private modTap = false;
+  /** 고른 안내(안내점·안내선 객체 그대로 — 누르기로 고르고 Delete·지우기 단추로 지운다) */
+  private selGuide: GuideRef | null = null;
+  /** 고른 누르기가 진행 중 측정의 시작점(각도기 중심)도 찍었는지 — 지우면 그 점도 거둔다 */
+  private selPlacedStart = false;
   private readonly g: SVGGElement;
   private readonly layer: HTMLDivElement;
   private readonly tip: HTMLDivElement;
@@ -705,9 +717,64 @@ export class MeasureTool {
     if (!this.guidePts.length && !this.guideLns.length) return;
     this.guidePts = [];
     this.guideLns = [];
+    this.selGuide = null;
+    this.selPlacedStart = false;
     this.hoverDirty = true;
     this.overlay.invalidate();
     this.opts.onGuides?.();
+  }
+
+  /** 고른 안내의 종류(안내점·안내선, 없으면 null) — 안내를 누르면 고르고(방금 둔 안내도), 다른 곳을 누르거나 Esc·다시 재기면 푼다 */
+  get selectedGuide(): 'point' | 'line' | null {
+    const s = this.selGuide;
+    if (!s) return null;
+    if (Array.isArray(s)) return this.guidePts.includes(s) ? 'point' : null;
+    return this.guideLns.includes(s as GuideLine) ? 'line' : null;
+  }
+
+  /**
+   * 고른 안내 하나 지우기(Delete·Backspace, 측정값 칸의 지우기 단추). 고른 누르기가 진행 중 측정의 시작점(각도기 중심)도 찍었으면
+   * 그 점도 거둔다(지우려고 누른 것이므로). 지웠으면 true
+   */
+  deleteSelectedGuide(): boolean {
+    const kind = this.selectedGuide;
+    const s = this.selGuide;
+    const cancel = this.selPlacedStart && this.pts.length === 1;
+    this.selGuide = null;
+    this.selPlacedStart = false;
+    if (!kind || !s) return false;
+    if (kind === 'point') this.guidePts = this.guidePts.filter((g) => g !== s);
+    else this.guideLns = this.guideLns.filter((g) => g !== s);
+    if (cancel) {
+      this.pts = [];
+      this.startEdge = null;
+      this.normal = null;
+      this.dropLock();
+    }
+    this.hoverDirty = true;
+    this.refreshHint();
+    this.overlay.invalidate();
+    this.opts.onGuides?.();
+    return true;
+  }
+
+  /** 안내 고르기·풀기(null). placedStart: 이 누르기가 진행 중 측정의 시작점도 찍었다. changed면 고른 것이 같아도 알린다(안내가 늘었을 때) */
+  private select(ref: GuideRef | null, placedStart = false, changed = false): void {
+    if (ref !== this.selGuide) {
+      this.selGuide = ref;
+      changed = true;
+    }
+    this.selPlacedStart = !!ref && placedStart;
+    if (!changed) return;
+    this.overlay.invalidate();
+    this.opts.onGuides?.();
+  }
+
+  /** 추정이 붙은 안내(안내점·안내선 객체 — 없으면 null) */
+  private guideAt(snap: Snap): GuideRef | null {
+    const g = snap.guide;
+    if (!g) return null;
+    return (g.kind === 'point' ? this.guidePts[g.index] : this.guideLns[g.index]) ?? null;
   }
 
   /** 안내점 두기(같은 자리에 이미 있으면 그것) — 오래된 것부터 MAX_GUIDE_POINTS개까지 */
@@ -778,13 +845,12 @@ export class MeasureTool {
     this.pts = [];
     this.startEdge = null;
     this.dropLock();
-    if (edge) this.addGuideLine(end, sub(edge[1], edge[0]));
-    else this.addGuidePoint(end);
+    const made = edge ? this.addGuideLine(end, sub(edge[1], edge[0])) : this.addGuidePoint(end);
     this.setResult(tapeResult(a, end), edge);
     this.hoverDirty = true;
     this.refreshHint();
-    this.overlay.invalidate();
-    this.opts.onGuides?.();
+    // 방금 둔 안내를 골라 두어 잘못 두었으면 바로 지울 수 있게
+    this.select(made, false, true);
     return 'ok';
   }
 
@@ -813,12 +879,11 @@ export class MeasureTool {
     this.pts = [];
     this.normal = null;
     this.dropLock();
-    this.addGuideLine(c, dir);
+    const made = this.addGuideLine(c, dir);
     this.setResult(protractorResult(c, base, end, n));
     this.hoverDirty = true;
     this.refreshHint();
-    this.overlay.invalidate();
-    this.opts.onGuides?.();
+    this.select(made, false, true);
     return 'ok';
   }
 
@@ -844,7 +909,7 @@ export class MeasureTool {
     this.refreshHint();
   }
 
-  /** 진행 중 점과 결과 지우기(도구는 켜 둔다) */
+  /** 진행 중 점과 결과 지우기(도구는 켜 둔다 — 고른 안내도 푼다) */
   clear(): void {
     this.pts = [];
     this.startEdge = null;
@@ -857,6 +922,7 @@ export class MeasureTool {
     this.hoverDirty = true;
     this.refreshHint();
     this.overlay.invalidate();
+    this.select(null);
   }
 
   /**
@@ -882,6 +948,12 @@ export class MeasureTool {
       return true;
     }
     if (e.type === 'keydown') this.modTap = false;
+    // Delete·Backspace: 고른 안내 하나 지우기(SketchUp에서 안내를 고르고 Delete)
+    if ((e.key === 'Delete' || e.key === 'Backspace') && e.type === 'keydown' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (!this.deleteSelectedGuide()) return false;
+      e.preventDefault();
+      return true;
+    }
     if (e.key === 'Escape') {
       if (e.type === 'keyup' || e.ctrlKey || e.metaKey || e.altKey) return false;
       if (this.pts.length) {
@@ -899,6 +971,8 @@ export class MeasureTool {
       e.preventDefault();
       this.refreshHint();
       this.overlay.invalidate();
+      // 고른 안내도 함께 푼다(Esc 차례는 늘리지 않는다)
+      this.select(null);
       return true;
     }
     if (e.key === 'Shift') {
@@ -1251,41 +1325,44 @@ export class MeasureTool {
     if (!snap) return;
     this.learn(snap);
     const ray = screenRay(f, x, y);
+    // 고르기: 안내점·안내선 위를 누르면 그 안내(방금 둔 안내가 있으면 그것), 다른 곳이면 푼다 — Delete·지우기 단추로 지운다
+    let sel: GuideRef | null = this.guideAt(snap);
+    let selStart = false;
+    let added = false;
     if (this.modeValue === 'tape') {
       // 빈 곳(형상·축 추정이 없음)은 찍지 않는다
-      if (snap.kind === 'free') return;
+      if (snap.kind === 'free') return this.select(null);
       if (!this.pts.length) {
         this.dropResult();
         this.pts = [snap.point];
         // 모서리 위(끝점·중간점이 아닌 곳, 안내선 위 포함)에서 시작하면 친 길이는 그 모서리와 나란한 안내선이 된다(SketchUp 줄자)
         this.startEdge = snap.kind === 'onEdge' && snap.edge ? snap.edge : null;
+        selStart = true;
       } else {
         const a = this.pts[0]!;
         if (samePoint(a, snap.point)) return;
         const edge = this.startEdge;
         let end = snap.point;
-        let added = false;
         // 안내 두기: 모서리 위에서 시작했으면 둘째 점을 지나 그 모서리와 나란한 안내선(결과는 모서리에 수직인 거리 — 둘째 점이
         // 모서리 직선 위면 안내선 없이 재기만), 점에서 시작했으면 둘째 점에 안내점
         if (this.guideOn) {
           const foot = this.guideEnd(a, snap.point);
           if (edge && foot) {
             end = foot;
-            this.addGuideLine(foot, sub(edge[1], edge[0]));
+            sel = this.addGuideLine(foot, sub(edge[1], edge[0]));
             added = true;
           } else if (!edge) {
-            this.addGuidePoint(snap.point);
+            sel = this.addGuidePoint(snap.point);
             added = true;
           }
         }
         this.pts = [];
         this.startEdge = null;
         this.setResult(tapeResult(a, end), edge);
-        if (added) this.opts.onGuides?.();
       }
     } else if (this.modeValue === 'protractor') {
       if (!this.pts.length) {
-        if (snap.kind === 'free') return;
+        if (snap.kind === 'free') return this.select(null);
         const plane = this.centerPlane(snap, f);
         if (shift && !this.planeLock) this.planeLock = plane;
         this.dropResult();
@@ -1293,6 +1370,7 @@ export class MeasureTool {
         this.pts = [snap.point];
         // 화살표로 고정한 평면은 이 측정에 쓴다
         this.planeAxisValue = null;
+        selStart = true;
       } else {
         const c = this.pts[0]!;
         const n = this.normal ?? protractorPlane(null, forwardOf(f), this.axes).normal;
@@ -1304,12 +1382,15 @@ export class MeasureTool {
           this.pts = [];
           this.normal = null;
           // 안내 두기: 중심을 지나 잰 방향으로 안내선(SketchUp 각도기 셋째 누르기)
-          if (this.guideOn) this.addGuideLine(c, sub(p, c));
+          if (this.guideOn) {
+            sel = this.addGuideLine(c, sub(p, c));
+            added = true;
+          }
           this.setResult(protractorResult(c, a, p, n));
-          if (this.guideOn) this.opts.onGuides?.();
         }
       }
     }
+    this.select(sel, selStart, added);
     // 점을 찍으면 잠금을 푼다(다음 방향은 새 추론으로 — Shift는 다시 눌러 잠근다)
     this.dropLock();
     // 터치(정밀 조준 포함)는 커서가 없으니 찍은 자리의 추정을 표식으로 남긴다
@@ -1358,6 +1439,8 @@ export class MeasureTool {
     this.dropLock();
     this.parallelRef = null;
     this.planeAxisValue = null;
+    this.selGuide = null;
+    this.selPlacedStart = false;
     this.dropResult();
   }
 
@@ -1418,7 +1501,7 @@ export class MeasureTool {
     // 안내선은 맨 아래(결과 선·표식이 그 위에 보이게). 테두리는 선 색(글자 색)과 반대 밝기 — 어두운 테마의 흰 점선이 흰 테두리에 묻히지 않게
     if (this.guideLns.length) {
       const halo = haloFor(typeof getComputedStyle === 'function' ? getComputedStyle(this.g).color : '');
-      for (const gl of this.guideLns) this.guideLineMark(f, gl, halo);
+      for (const gl of this.guideLns) this.guideLineMark(f, gl, halo, gl === this.selGuide ? 'is-selected' : '');
     }
     const r = this.resultValue;
     if (r?.kind === 'tape') this.drawTape(f, r, len(r.distance));
@@ -1471,7 +1554,7 @@ export class MeasureTool {
         }
       }
     }
-    for (const g of this.guidePts) this.guideMark(f, g);
+    for (const g of this.guidePts) this.guideMark(f, g, g === this.selGuide);
     if (snap && snap.kind !== 'free') this.marker(f, snap);
     if (this.aimId !== null && this.cursor) this.reticle(this.cursor.x, this.cursor.y);
     // 안내 두기: 커서 오른쪽 위에 + (SketchUp 줄자·각도기 커서의 +)
@@ -1504,16 +1587,20 @@ export class MeasureTool {
     this.opts.onLive?.(live, kind);
   }
 
-  /** 안내선 표식: 화면 끝까지 뻗은 점선(흰 테두리 — SketchUp 안내선). 'is-preview'는 안내 두기로 둘 자리(옅게) */
-  private guideLineMark(f: ViewFrame, gl: GuideLine, halo: string, state: '' | 'is-preview' = ''): void {
+  /**
+   * 안내선 표식: 화면 끝까지 뻗은 점선(흰 테두리 — SketchUp 안내선). 'is-preview'는 안내 두기로 둘 자리(옅게),
+   * 'is-selected'는 고른 안내(파랑, 굵게)
+   */
+  private guideLineMark(f: ViewFrame, gl: GuideLine, halo: string, state: '' | 'is-preview' | 'is-selected' = ''): void {
     const s = guideLineScreen(f, gl);
     if (!s) return;
     const at = { x1: s[0].toFixed(1), y1: s[1].toFixed(1), x2: s[2].toFixed(1), y2: s[3].toFixed(1) };
     const g = svgEl('g', { class: state ? `measure-guide-line ${state}` : 'measure-guide-line' });
     if (state === 'is-preview') g.setAttribute('opacity', '0.6');
+    const sel = state === 'is-selected';
     g.append(
-      svgEl('line', { ...at, stroke: halo, 'stroke-width': 3, 'stroke-opacity': 0.55 }),
-      svgEl('line', { ...at, stroke: 'currentColor', 'stroke-width': 1.25, 'stroke-dasharray': '8 5' }),
+      svgEl('line', { ...at, stroke: sel ? '#ffffff' : halo, 'stroke-width': sel ? 4.5 : 3, 'stroke-opacity': sel ? 0.8 : 0.55 }),
+      svgEl('line', { ...at, stroke: sel ? GUIDE_SELECTED_COLOR : 'currentColor', 'stroke-width': sel ? 2 : 1.25, 'stroke-dasharray': '8 5' }),
     );
     this.g.append(g);
   }
@@ -1527,14 +1614,18 @@ export class MeasureTool {
     this.g.append(g);
   }
 
-  /** 안내점 표식: 흰 테두리를 두른 작은 ×(SketchUp 안내점) */
-  private guideMark(f: ViewFrame, p: readonly number[]): void {
+  /** 안내점 표식: 흰 테두리를 두른 작은 ×(SketchUp 안내점). 고른 안내점은 조금 크게 파랑 */
+  private guideMark(f: ViewFrame, p: readonly number[], selected = false): void {
     const s = screenPoint(f, p, 20);
     if (!s) return;
     const [x, y] = s;
-    const d = `M${x - 4},${y - 4}L${x + 4},${y + 4}M${x + 4},${y - 4}L${x - 4},${y + 4}`;
-    const g = svgEl('g', { class: 'measure-guide' });
-    g.append(svgEl('path', { d, stroke: '#ffffff', 'stroke-width': 3.5, 'stroke-linecap': 'round' }), svgEl('path', { d, stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linecap': 'round' }));
+    const r = selected ? 5.5 : 4;
+    const d = `M${x - r},${y - r}L${x + r},${y + r}M${x + r},${y - r}L${x - r},${y + r}`;
+    const g = svgEl('g', { class: selected ? 'measure-guide is-selected' : 'measure-guide' });
+    g.append(
+      svgEl('path', { d, stroke: '#ffffff', 'stroke-width': selected ? 4.5 : 3.5, 'stroke-linecap': 'round' }),
+      svgEl('path', { d, stroke: selected ? GUIDE_SELECTED_COLOR : 'currentColor', 'stroke-width': selected ? 2.25 : 1.5, 'stroke-linecap': 'round' }),
+    );
     this.g.append(g);
   }
 

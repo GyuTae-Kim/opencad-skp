@@ -37,6 +37,7 @@ import {
   type MeasureToolResult,
   type MeasureViewer,
   GUIDE_KEY_NAMES,
+  GUIDE_SELECTED_COLOR,
   edgeFoot,
   guideKeyFor,
   guideKeyHint,
@@ -1248,5 +1249,109 @@ describe('측정 도구: 안내 두기(누르기로 안내점·안내선 — Ske
     const res = r.results.at(-1);
     if (res?.kind !== 'protractor') throw new Error('protractor');
     expect(res.angle).toBeCloseTo((Math.atan2(40, 60) * 180) / Math.PI, 6);
+  });
+});
+
+describe('측정 도구: 안내 하나씩 고르고 지우기', () => {
+  const del = (r: Rig, key = 'Delete'): { handled: boolean; prevented: boolean } => {
+    const e = new KeyboardEvent('keydown', { key, cancelable: true });
+    const handled = r.tool.handleKey(e);
+    return { handled, prevented: e.defaultPrevented };
+  };
+
+  it('안내점을 누르면 고르고 Delete로 지운다 — 그 누르기로 찍은 시작점도 거둔다', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    r.click(102, 103);
+    r.move(160, 101);
+    expect(r.tool.applyLength(30)).toBe('ok');
+    // 방금 둔 안내는 골라 둔다(잘못 두었으면 바로 지우게)
+    expect(r.tool.selectedGuide).toBe('point');
+    r.overlay.paintNow();
+    expect(r.q('.measure-guide.is-selected path:last-child')?.getAttribute('stroke')).toBe(GUIDE_SELECTED_COLOR);
+    // Esc는 결과와 함께 고른 것도 푼다(Esc 차례는 늘지 않는다)
+    expect(r.key('Escape')).toBe(true);
+    expect(r.tool.selectedGuide).toBeNull();
+    expect(r.key('Escape')).toBe(false);
+    // 안내점을 눌러 고르기(시작점도 그 자리)
+    r.click(130, 101);
+    expect(r.tool.pointCount).toBe(1);
+    expect(r.tool.selectedGuide).toBe('point');
+    const calls = r.guideCalls();
+    expect(del(r)).toEqual({ handled: true, prevented: true });
+    expect(r.tool.guides).toHaveLength(0);
+    expect(r.tool.pointCount).toBe(0);
+    expect(r.tool.selectedGuide).toBeNull();
+    expect(r.guideCalls()).toBe(calls + 1);
+    expect(r.hints.at(-1)).toBe('줄자: 잴 시작점을 누르세요');
+    // 고른 것이 없으면 Delete를 받지 않는다(앱·브라우저 몫)
+    expect(del(r)).toEqual({ handled: false, prevented: false });
+  });
+
+  it('안내선을 둘째 점으로 눌러 고르고 Backspace로 지우면 결과는 남는다, 다른 곳·빈 곳을 누르거나 다시 재기면 푼다', () => {
+    const r = rig({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 100, 0, 0], [-60, -80, 0, -60, 80, 0]])] });
+    r.tool.setMode('tape');
+    r.click(130, 101);
+    r.move(130, 60);
+    expect(r.tool.applyLength(30)).toBe('ok');
+    expect(r.tool.selectedGuide).toBe('line');
+    r.overlay.paintNow();
+    const sel = r.q('.measure-guide-line.is-selected line:last-child');
+    expect(sel?.getAttribute('stroke')).toBe(GUIDE_SELECTED_COLOR);
+    // 안내가 아닌 끝점을 누르면 푼다
+    r.click(102, 101);
+    expect(r.tool.selectedGuide).toBeNull();
+    // 둘째 점으로 안내선 위를 누르면 고른다(결과는 그대로)
+    r.click(170, 71);
+    expect(r.tool.result?.kind).toBe('tape');
+    expect(r.tool.selectedGuide).toBe('line');
+    expect(del(r, 'Backspace').handled).toBe(true);
+    expect(r.tool.guideLines).toHaveLength(0);
+    expect(r.tool.result?.kind).toBe('tape');
+    // 빈 곳 누르기·다시 재기(clear)도 푼다
+    r.click(102, 101);
+    r.move(102, 40);
+    expect(r.tool.applyLength(10)).toBe('ok');
+    expect(r.tool.selectedGuide).toBe('point');
+    r.click(60, 170);
+    expect(r.tool.pointCount).toBe(0);
+    expect(r.tool.selectedGuide).toBeNull();
+    r.click(102, 101);
+    r.move(102, 50);
+    expect(r.tool.applyLength(20)).toBe('ok');
+    expect(r.tool.selectedGuide).toBe('point');
+    r.tool.clear();
+    expect(r.tool.selectedGuide).toBeNull();
+    // 모두 지우기도(안내점 (0, 20)을 눌러 고른 뒤)
+    r.click(100, 80);
+    expect(r.tool.selectedGuide).toBe('point');
+    r.tool.clearGuides();
+    expect(r.tool.selectedGuide).toBeNull();
+    expect(r.tool.deleteSelectedGuide()).toBe(false);
+  });
+
+  it('안내 두기로 둔 안내는 골라 두고, 지워도 다른 안내는 남는다(각도기 셋째 누르기의 안내선)', () => {
+    const r = rig({ ...EDGES(), meshes: [quad('f', -100, -100, 100, 100, 0)] });
+    r.tool.setMode('protractor');
+    r.tool.setGuideMode(true);
+    r.click(101, 101);
+    r.click(197, 102);
+    r.click(160, 60);
+    r.click(101, 101);
+    r.click(197, 102);
+    r.click(130, 40);
+    expect(r.tool.guideLines).toHaveLength(2);
+    expect(r.tool.selectedGuide).toBe('line');
+    const keep = r.tool.guideLines[0]!;
+    expect(r.tool.deleteSelectedGuide()).toBe(true);
+    expect(r.tool.guideLines).toEqual([keep]);
+    // 도구를 바꾸면 고른 것은 풀리고 안내는 남는다
+    r.click(101, 101);
+    r.click(197, 102);
+    r.click(130, 40);
+    expect(r.tool.selectedGuide).toBe('line');
+    r.tool.setMode('tape');
+    expect(r.tool.selectedGuide).toBeNull();
+    expect(r.tool.guideLines).toHaveLength(2);
   });
 });

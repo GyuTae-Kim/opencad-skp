@@ -527,3 +527,18 @@ describe('추정: 방향 잠금(SketchUp 추론 잠금)', () => {
     expect(lockOf(at0, from)).toBeNull();
   });
 });
+
+describe('추정: 안내점·안내선(누르면 고를 안내)', () => {
+  it('안내점은 끝점처럼, 안내선은 모서리 위처럼 붙고 그 안내의 차례를 함께 준다(모서리 끝점·교차점은 안내가 아니다)', () => {
+    const scene: SnapScene = { meshes: [], lines: [lines('e', [[0, 0, 0, 100, 0, 0]])] };
+    const base = { frame: topFrame, probes: [], scene, anchor: [0, 0, 0] as V3, guides: [[-50, 30, 0], [20, 40, 0]] as V3[], guideLines: [{ point: [0, -40, 0] as V3, dir: [1, 0, 0] as V3 }] };
+    const pick = picker(scene);
+    const p = chooseSnap({ ...base, x: 121, y: 61, pick: pick(121, 61) });
+    expect(p).toMatchObject({ kind: 'endpoint', label: '안내점', guide: { kind: 'point', index: 1 } });
+    const l = chooseSnap({ ...base, x: 30, y: 141, pick: pick(30, 141) });
+    expect(l).toMatchObject({ kind: 'onEdge', label: '안내선에', guide: { kind: 'line', index: 0 } });
+    const e = chooseSnap({ ...base, x: 101, y: 101, pick: pick(101, 101) });
+    expect(e.kind).toBe('endpoint');
+    expect(e.guide).toBeUndefined();
+  });
+});
