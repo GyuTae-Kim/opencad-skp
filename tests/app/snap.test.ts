@@ -19,6 +19,7 @@ import {
   footOnPlane,
   lockOf,
   parallelInferenceLock,
+  perpendicularDirs,
   probeOffsets,
   rayClosestOnSegment,
   segmentOfPick,
@@ -525,5 +526,77 @@ describe('추정: 방향 잠금(SketchUp 추론 잠금)', () => {
     const at0 = snapWith(scene, 100, 100, { from });
     expect(at0.kind).toBe('endpoint');
     expect(lockOf(at0, from)).toBeNull();
+  });
+});
+
+describe('추정: 모서리에 수직(SketchUp 자홍 추론)', () => {
+  const empty: SnapScene = { meshes: [], lines: [] };
+  const at = (deg: number, r: number): [number, number] => [100 + r * Math.cos((deg * Math.PI) / 180), 100 - r * Math.sin((deg * Math.PI) / 180)];
+  /** 앞서 지나간 45° 모서리(시작점과 떨어져 있다) */
+  const diag: [V3, V3] = [[-90, -60, 0], [-60, -30, 0]];
+  const s2 = Math.SQRT1_2;
+
+  it('수직 방향 후보: 시작점에서 모서리 직선으로 내린 수직과 축을 수직 평면에 비친 방향(축과 나란한 것·같은 직선은 뺀다)', () => {
+    // 평면도의 기운 벽: 수평으로 수직인 방향 하나(내린 수직과 같은 직선)
+    const d = perpendicularDirs([0, 0, 0], diag);
+    expect(d).toHaveLength(1);
+    expect(Math.abs(d[0]![0] * s2 - d[0]![1] * s2)).toBeCloseTo(1, 9);
+    // X축 모서리: 축을 비친 방향은 축이라 빼고, 높이가 다른 시작점에서 내린 수직만
+    const x = perpendicularDirs([0, 30, 20], [[0, 0, 0], [10, 0, 0]]);
+    expect(x).toHaveLength(1);
+    close(x[0]!.map(Math.abs), [0, 30 / Math.hypot(30, 20), 20 / Math.hypot(30, 20)], 1e-9);
+    expect(perpendicularDirs([5, 0, 0], [[0, 0, 0], [10, 0, 0]])).toEqual([]);
+    // 기운 서까래(XZ 평면) 끝에서: 그 세로 평면 안의 수직 하나
+    const r = perpendicularDirs([40, 0, 30], [[0, 0, 0], [40, 0, 30]]);
+    expect(r).toHaveLength(1);
+    close(r[0]!.map(Math.abs), [0.6, 0, 0.8], 1e-9);
+    expect(perpendicularDirs([0, 0, 0], [[1, 1, 1], [1, 1, 1]])).toEqual([]);
+  });
+
+  it('시작점에서 지나간 모서리에 수직인 방향(화면 각 6° 안)이면 그 선 위 점(자홍, 기준 모서리와 방향 — 잠글 수 있다)', () => {
+    const [x, y] = at(-43, 50);
+    const s = snapWith(empty, x, y, { from: [0, 0, 0], parallelRef: diag });
+    expect(s).toMatchObject({ kind: 'perpendicular', label: '모서리에 수직', inferred: true, edge: diag });
+    expect(Math.abs(s.dir![0] * s2 - s.dir![1] * s2)).toBeCloseTo(1, 9);
+    // 그 방향 선 위(커서 광선에 가장 가까운 점)
+    expect(Math.abs(s.point[0] + s.point[1])).toBeLessThan(1e-9);
+    expect(s.point[0]).toBeCloseTo(50 * Math.cos((2 * Math.PI) / 180) * s2, 6);
+    expect(lockOf(s)).toMatchObject({ kind: 'perpendicular', label: '모서리에 수직', edge: diag });
+    // 반대쪽(135°)도 같은 직선, 각이 크면 아니다
+    const [bx, by] = at(136, 50);
+    expect(snapWith(empty, bx, by, { from: [0, 0, 0], parallelRef: diag }).kind).toBe('perpendicular');
+    const [fx, fy] = at(-25, 50);
+    expect(snapWith(empty, fx, fy, { from: [0, 0, 0], parallelRef: diag }).kind).toBe('free');
+    // 기준 모서리가 없으면 아니다
+    expect(snapWith(empty, x, y, { from: [0, 0, 0] }).kind).toBe('free');
+  });
+
+  it('축·나란함과 함께 맞으면 화면에서 선에 가까운 쪽(같으면 축), 점 추정이 먼저', () => {
+    // X축에서 4° 기운 모서리: 수직은 94° — 녹색 축(90°)과 4° 차이
+    const r4 = (4 * Math.PI) / 180;
+    const tilted: [V3, V3] = [[-50, -50, 0], [-50 + 40 * Math.cos(r4), -50 + 40 * Math.sin(r4), 0]];
+    const [ax, ay] = at(91.5, 50);
+    expect(snapWith(empty, ax, ay, { from: [0, 0, 0], parallelRef: tilted })).toMatchObject({ kind: 'axis', axis: 'y' });
+    const [px, py] = at(93.5, 50);
+    expect(snapWith(empty, px, py, { from: [0, 0, 0], parallelRef: tilted })).toMatchObject({ kind: 'perpendicular', inferred: true });
+    // 끝점이 수직 선 근처에 있으면 끝점
+    const [ex, ey] = at(-44, 50);
+    const scene: SnapScene = { meshes: [], lines: [lines('p', [[ex - 100 + 2, 100 - ey, 0, 60, 90, 0]])] };
+    expect(snapWith(scene, ex, ey, { from: [0, 0, 0], parallelRef: diag }).kind).toBe('endpoint');
+  });
+});
+
+describe('추정: 안내점·안내선(누르면 고를 안내)', () => {
+  it('안내점은 끝점처럼, 안내선은 모서리 위처럼 붙고 그 안내의 차례를 함께 준다(모서리 끝점·교차점은 안내가 아니다)', () => {
+    const scene: SnapScene = { meshes: [], lines: [lines('e', [[0, 0, 0, 100, 0, 0]])] };
+    const base = { frame: topFrame, probes: [], scene, anchor: [0, 0, 0] as V3, guides: [[-50, 30, 0], [20, 40, 0]] as V3[], guideLines: [{ point: [0, -40, 0] as V3, dir: [1, 0, 0] as V3 }] };
+    const pick = picker(scene);
+    const p = chooseSnap({ ...base, x: 121, y: 61, pick: pick(121, 61) });
+    expect(p).toMatchObject({ kind: 'endpoint', label: '안내점', guide: { kind: 'point', index: 1 } });
+    const l = chooseSnap({ ...base, x: 30, y: 141, pick: pick(30, 141) });
+    expect(l).toMatchObject({ kind: 'onEdge', label: '안내선에', guide: { kind: 'line', index: 0 } });
+    const e = chooseSnap({ ...base, x: 101, y: 101, pick: pick(101, 101) });
+    expect(e.kind).toBe('endpoint');
+    expect(e.guide).toBeUndefined();
   });
 });

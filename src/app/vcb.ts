@@ -7,6 +7,7 @@
  *   - 각도기: 중심과 기준 방향을 찍고 커서를 돌릴 쪽에 둔 채 각도(도, 경사 1:6)를 치면 중심을 지나 기준 방향에서 그만큼 돈 안내선을 둔다.
  *   - 다 잰 뒤 값을 치면 그 결과의 방향으로 넣는다(커서가 없는 손가락 기기는 이쪽 — 칸을 누르면 숫자 자판).
  *   안내는 보기 전용 표시(모형에 넣지 않음)이고 안내점은 끝점처럼, 안내선은 모서리처럼 붙으므로, "이 벽 모서리에서 900 mm 떨어진 곳"에서 다시 잴 수 있다.
+ *   안내 수와 모두 지우기(✕), 고른 안내가 있으면 그 하나를 지우는 단추(휴지통 — 키보드는 Delete)도 이 칸에 둔다.
  * 길이는 모형 단위로 읽는다(units.ts parseLength — 단위를 붙여도 되고, 쉼표는 화면 언어를 따른다). 십진·공학 단위는 숫자 자판(inputmode decimal),
  * 건축·분수 인치는 ' " / 가 필요해 글 자판을 띄운다. 각도(parseAngle)는 숫자 자판. 휴대폰 자판이 화면을 확대하지 않게 손가락 기기의 글 크기는 16px(CSS).
  * 칸 안의 Esc는 입력만 그만두고(측정 점은 그대로), Enter·Esc 뒤에는 부른 쪽이 정한 곳으로 초점을 돌려준다.
@@ -28,6 +29,8 @@ export interface VcbOptions {
   onSubmit: (value: number, kind: VcbKind) => string | null;
   /** 안내점 지우기 단추 */
   onClearGuides: () => void;
+  /** 고른 안내 하나 지우기 단추(고른 안내가 있을 때만 보인다) */
+  onDeleteGuide?: () => void;
   /** 입력을 마친 뒤(Enter로 넣음·Esc) 초점을 둘 곳 — 없으면 칸에서 초점만 뺀다 */
   returnFocus?: () => void;
 }
@@ -45,6 +48,7 @@ export class Vcb {
   readonly input: HTMLInputElement;
   private readonly msg: HTMLElement;
   private readonly clearBtn: HTMLButtonElement;
+  private readonly delBtn: HTMLButtonElement;
   private readonly guideCount: HTMLElement;
   private readonly label: HTMLLabelElement;
   private readonly goBtn: HTMLButtonElement;
@@ -79,12 +83,19 @@ export class Vcb {
       this.opts.onClearGuides();
       this.setGuides(0);
     });
+    // 고른 안내 하나 지우기(휴대폰은 Delete가 없어 이 단추로 — 고른 안내가 있을 때만)
+    this.delBtn = h('button', { class: 'vcb-btn vcb-del', type: 'button', hidden: true, html: icon('trash', 16) });
+    this.delBtn.addEventListener('click', () => {
+      this.opts.onDeleteGuide?.();
+      this.setSelected(null);
+    });
     this.el = h(
       'form',
       { class: 'vcb', role: 'group', 'aria-label': '측정값', hidden: true, novalidate: true },
       this.label,
       this.input,
       go,
+      this.delBtn,
       this.clearBtn,
       this.msg,
     );
@@ -177,6 +188,20 @@ export class Vcb {
     const t = !l ? `안내점 ${p}개 지우기` : !p ? `안내선 ${l}개 지우기` : `안내점 ${p}개와 안내선 ${l}개 지우기`;
     this.clearBtn.title = t;
     this.clearBtn.setAttribute('aria-label', t);
+  }
+
+  /** 고른 안내(안내점·안내선, 없으면 null): 있으면 그 하나를 지우는 단추를 보인다 */
+  setSelected(kind: 'point' | 'line' | null): void {
+    this.delBtn.hidden = !kind;
+    if (!kind) return;
+    const t = kind === 'point' ? '고른 안내점 지우기' : '고른 안내선 지우기';
+    this.delBtn.title = `${t} (Delete)`;
+    this.delBtn.setAttribute('aria-label', t);
+  }
+
+  /** 고른 안내 지우기 단추가 보이는지 */
+  get selectedShown(): boolean {
+    return !this.delBtn.hidden;
   }
 
   /** 키보드로 친 첫 글자부터 입력을 시작한다(칸에 초점) */

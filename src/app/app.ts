@@ -21,7 +21,7 @@ import { edgeGeometry } from './faces';
 import { copyText } from './clipboard';
 import { HISTORY_LIMIT, HISTORY_SETTLE_MS, ViewHistory } from './history';
 import { beginOpen, showAnalyticsSettings, trackExport, type OpenAttempt } from 'opencad-site-kit/analytics';
-import { MeasureTool, lockHint, lockName, type MeasureMode, type MeasureToolResult } from './measure';
+import { MeasureTool, guideKeyFor, guideKeyHint, lockHint, lockName, type GuideKey, type MeasureMode, type MeasureToolResult } from './measure';
 import {
   baseFovOf,
   activeSections,
@@ -195,12 +195,17 @@ export interface AppSnapshot {
   labelsOccluded: number;
   /** 측정 도구(줄자·각도기, 꺼져 있으면 null) */
   measureMode: MeasureMode | null;
-  /** 측정값 칸으로 찍은 안내점 수 */
+  /** 측정값 칸·안내 두기로 찍은 안내점 수 */
   measureGuides: number;
-  /** 측정값 칸으로 둔 안내선 수 */
+  /** 측정값 칸·안내 두기로 둔 안내선 수 */
   measureGuideLines: number;
   /** 잠근 방향(축·나란히·수직, 없으면 null) */
   measureLock: ReturnType<typeof lockName>;
+  /** 안내 두기(누르기로 안내점·안내선)를 켰는지 */
+  measureGuideMode: boolean;
+  /** 고른 안내(안내점·안내선, 없으면 null)와 그 지우기 단추가 보이는지 */
+  measureGuideSelected: 'point' | 'line' | null;
+  measureGuideDelete: boolean;
   /** 측정값 칸이 보이는지·지금 글·측정 띠 안에 있는지·받는 값(길이·각도) */
   vcb: { shown: boolean; value: string; inBand: boolean; kind: VcbKind };
   /** 고른 것의 종류(outline·node·material·item·face·edge, 없으면 null) */
@@ -278,6 +283,7 @@ interface Els {
   measureClear: HTMLButtonElement;
   measureCopy: HTMLButtonElement;
   measureLock: HTMLButtonElement;
+  measureGuide: HTMLButtonElement;
   measureLogBtn: HTMLButtonElement;
   measureLog: HTMLElement;
   measureFlash: HTMLElement;
@@ -382,6 +388,10 @@ export class SkpViewerApp implements PanelHost {
   private lineColorWant: ReadonlyMap<string, Rgba> = new Map();
   /** 줄자·각도기(코어 두 점 측정 대신) */
   private measureTool: MeasureTool | null = null;
+  /** 안내 두기를 켜고 끄는 키(SketchUp처럼 Windows·Linux는 Ctrl, Mac은 Option) */
+  private readonly guideKey: GuideKey = guideKeyFor(
+    typeof navigator === 'undefined' ? '' : ((navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ?? navigator.platform),
+  );
   /** 측정 도구 안내 글(상태 막대·패널 아래 띠) */
   measureHint: string | null = null;
   /** 이전·다음 보기 기록(칸마다 그때의 장면 맞춤 — 되돌릴 때 지금 화면 방향에 다시 맞춘다) */
@@ -544,7 +554,8 @@ export class SkpViewerApp implements PanelHost {
     const sceneTabs = h('div', { class: 'scene-tabs', role: 'tablist', 'aria-label': '장면', hidden: true });
     // 측정 띠(휴대폰·터치): 안내·결과를 크게 보이고, Esc 대신 지우기·끝내기 단추를 둔다
     const measureText = h('div', { class: 'mb-text', 'aria-live': 'polite' });
-    const measureClear = h('button', { class: 'mb-btn', type: 'button', title: '찍은 점과 결과 지우기', html: `${icon('back', 16)}<span>다시 재기</span>` });
+    // 좁은 휴대폰(폭 430px 미만)에서는 글을 숨기고 아이콘만(안내 두기 단추 자리 — 이름은 aria-label)
+    const measureClear = h('button', { class: 'mb-btn mb-clear', type: 'button', title: '찍은 점과 결과 지우기', 'aria-label': '다시 재기', html: `${icon('back', 16)}<span class="mb-clear-text">다시 재기</span>` });
     measureClear.addEventListener('click', () => this.measureTool?.clear());
     const measureClose = h('button', { class: 'mb-btn icon', type: 'button', title: '측정 끝내기', 'aria-label': '측정 끝내기', html: icon('close', 16) });
     measureClose.addEventListener('click', () => this.setMeasureMode(null));
@@ -567,13 +578,21 @@ export class SkpViewerApp implements PanelHost {
       if (performance.now() - lockPressedAt < 1000) return;
       this.toggleMeasureLock();
     });
+    // 안내 두기(SketchUp 줄자·각도기의 + — 키보드는 Ctrl·Option): 켜면 줄자 둘째·각도기 셋째 누르기가 안내점·안내선을 둔다
+    const measureGuide = h('button', { class: 'mb-btn icon mb-guide', type: 'button', title: '안내 두기: 누르기로 안내점·안내선 두기(다시 누르면 재기만)', 'aria-label': '안내 두기', 'aria-pressed': 'false', html: icon('guide', 16) });
+    measureGuide.addEventListener('click', () => {
+      const t = this.measureTool;
+      if (!t?.active) return;
+      t.setGuideMode(!t.guideMode);
+      this.flashMeasure(t.guideMode ? '안내 두기 켬: 누르면 안내점·안내선을 둡니다' : '안내 두기 끔: 재기만 합니다');
+    });
     const measureLogEl = h('div', { class: 'measure-log', hidden: true });
     const measureFlash = h('div', { class: 'measure-flash', role: 'status', hidden: true });
     const measureBar = h(
       'div',
       { class: 'measure-bar', role: 'status', hidden: true },
       measureText,
-      h('div', { class: 'mb-acts' }, measureLock, measureCopy, measureLogBtn, measureClear, measureClose),
+      h('div', { class: 'mb-acts' }, measureGuide, measureLock, measureCopy, measureLogBtn, measureClear, measureClose),
       measureLogEl,
       measureFlash,
     );
@@ -626,6 +645,11 @@ export class SkpViewerApp implements PanelHost {
       onSubmit: (value, kind) => this.submitValue(value, kind),
       onClearGuides: () => {
         this.measureTool?.clearGuides();
+        this.refreshStatus();
+      },
+      // 고른 안내 하나 지우기(휴대폰 — 키보드는 Delete·Backspace)
+      onDeleteGuide: () => {
+        this.measureTool?.deleteSelectedGuide();
         this.refreshStatus();
       },
       returnFocus: () => {
@@ -714,6 +738,7 @@ export class SkpViewerApp implements PanelHost {
       measureClear,
       measureCopy,
       measureLock,
+      measureGuide,
       measureLogBtn,
       measureLog: measureLogEl,
       measureFlash,
@@ -865,11 +890,14 @@ export class SkpViewerApp implements PanelHost {
 
   private bindWindow(): void {
     window.addEventListener('keydown', (ev) => this.onKey(ev), true);
-    // 각도기 Shift(평면 고정)는 떼는 것까지 도구에 넘긴다
+    // 각도기 Shift(평면 고정)와 안내 두기 키(Ctrl·Option 눌렀다 떼기)는 떼는 것까지 도구에 넘긴다(입력 칸의 키는 빼고)
     window.addEventListener(
       'keyup',
       (ev) => {
-        if (ev.key === 'Shift' && this.measureTool?.active) this.measureTool.handleKey(ev);
+        const t = this.measureTool;
+        if (!t?.active) return;
+        if (ev.key === 'Shift') t.handleKey(ev);
+        else if (ev.key === this.guideKey && !isEditableTarget(ev.target) && !this.shortcutsClose && t.handleKey(ev)) ev.stopPropagation();
       },
       true,
     );
@@ -1243,6 +1271,9 @@ export class SkpViewerApp implements PanelHost {
           if (this.measureTool?.inferenceLock) this.measureNote?.drop(NO_LOCK_FLASH);
           this.refreshStatus();
         },
+        // 안내 두기 켜고 끄기·안내점·안내선 수: 측정 띠 단추·측정값 칸의 안내 수
+        onGuides: () => this.refreshStatus(),
+        guideKey: this.guideKey,
         touch: () => !!this.coarseQuery?.matches,
         curveCenter: (id, seg) => this.curveCenter(id, seg),
         // 모형의 그리기 축을 옮겼으면 줄자·각도기의 축 고정·기본 평면이 그 축을 따른다
@@ -1415,11 +1446,15 @@ export class SkpViewerApp implements PanelHost {
     this.refreshStatus();
   }
 
-  /** 측정 잠금 안내(상태 줄·측정 띠에서 안내 글 다음 따로): 잠근 방향, 키보드 기기는 Shift·화살표, 각도기 화살표 평면 */
+  /**
+   * 측정 잠금·안내 두기 안내(상태 줄·측정 띠에서 안내 글 다음 따로): 잠근 방향, 키보드 기기는 Shift·화살표, 각도기 화살표 평면,
+   * 점을 찍기 전 키보드 기기는 안내 두기 키(Ctrl·Option)
+   */
   private measureLockHint(): string | null {
     const t = this.measureTool;
     if (!t?.active || this.doc?.measure) return null;
-    return lockHint(t.mode, t.pointCount, lockName(t.inferenceLock), t.planeAxis, !!this.coarseQuery?.matches);
+    const touch = !!this.coarseQuery?.matches;
+    return lockHint(t.mode, t.pointCount, lockName(t.inferenceLock), t.planeAxis, touch) ?? guideKeyHint(t.mode, t.pointCount, t.guideMode, this.guideKey, touch);
   }
 
   /** 측정 기록 펼치기(측정 띠 위 목록) */
@@ -3237,6 +3272,7 @@ export class SkpViewerApp implements PanelHost {
     const show = !!mode && (!band || tool!.result?.kind === mode || guides > 0);
     this.vcb.show(show);
     this.vcb.setGuides(tool?.guides.length ?? 0, tool?.guideLines.length ?? 0);
+    this.vcb.setSelected(mode ? (tool?.selectedGuide ?? null) : null);
     this.els.measureBar.classList.toggle('has-vcb', band && show);
   }
 
@@ -3289,6 +3325,9 @@ export class SkpViewerApp implements PanelHost {
     e.measureLock.setAttribute('aria-pressed', String(locked));
     e.measureLock.classList.toggle('on', locked);
     e.measureLock.title = locked ? '방향 잠금 풀기' : '지금 방향 잠그기(다시 누르면 풀기)';
+    const guide = tool.guideMode;
+    e.measureGuide.setAttribute('aria-pressed', String(guide));
+    e.measureGuide.classList.toggle('on', guide);
     e.measureLogBtn.disabled = !this.measureLog.length;
     e.measureLogBtn.title = this.measureLog.length ? `최근 측정 기록 ${this.measureLog.length}개` : '최근 측정 기록';
     if (!this.measureLog.length) e.measureLog.hidden = true;
@@ -3347,6 +3386,9 @@ export class SkpViewerApp implements PanelHost {
       measureGuides: this.measureTool?.guides.length ?? 0,
       measureGuideLines: this.measureTool?.guideLines.length ?? 0,
       measureLock: lockName(this.measureTool?.inferenceLock),
+      measureGuideMode: !!this.measureTool?.guideMode,
+      measureGuideSelected: this.measureTool?.selectedGuide ?? null,
+      measureGuideDelete: this.vcb.shown && this.vcb.selectedShown,
       vcb: { shown: this.vcb.shown, value: this.vcb.input.value, inBand: this.vcb.el.parentElement === this.els.measureBar, kind: this.vcb.kind },
       selectionKind: d?.selection?.kind ?? null,
       slideshow: this.sliding,

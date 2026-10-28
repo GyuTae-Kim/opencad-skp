@@ -200,6 +200,27 @@ describe('측정값 칸(Vcb)', () => {
     expect(clear.hidden).toBe(true);
   });
 
+  it('고른 안내가 있으면 그 하나를 지우는 단추(없으면 숨김 — 휴대폰 검사는 보이는 단추만 잰다)', () => {
+    const onDeleteGuide = vi.fn();
+    const vcb = new Vcb({ onSubmit: () => null, onClearGuides: vi.fn(), onDeleteGuide });
+    document.body.append(vcb.el);
+    vcb.show(true);
+    const del = vcb.el.querySelector<HTMLButtonElement>('.vcb-del')!;
+    expect(del.hidden).toBe(true);
+    expect(vcb.selectedShown).toBe(false);
+    vcb.setSelected('line');
+    expect(del.hidden).toBe(false);
+    expect(del.getAttribute('aria-label')).toBe('고른 안내선 지우기');
+    expect(del.title).toBe('고른 안내선 지우기 (Delete)');
+    vcb.setSelected('point');
+    expect(del.getAttribute('aria-label')).toBe('고른 안내점 지우기');
+    del.click();
+    expect(onDeleteGuide).toHaveBeenCalledTimes(1);
+    expect(del.hidden).toBe(true);
+    vcb.setSelected(null);
+    expect(vcb.selectedShown).toBe(false);
+  });
+
   it('각도기: 라벨·안내가 각도로 바뀌고, 도·경사(1:6)를 읽어 넘긴다(숫자 자판은 그대로)', () => {
     const { vcb, onSubmit } = make();
     vcb.setUnits(ARCH);

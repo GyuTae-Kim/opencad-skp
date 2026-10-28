@@ -63,6 +63,8 @@ const ICONS: Record<string, string> = {
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
   system: '<rect x="3.5" y="4.5" width="17" height="12" rx="1.5"/><path d="M9 20h6M12 16.5V20"/>',
   lock: '<rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/>',
+  guide: '<path d="M3.5 20.5 15 9" stroke-dasharray="2.6 2.6"/><path d="M18 3.5v7M14.5 7h7"/>',
+  trash: '<path d="M4.5 7h15M9.5 7V4.5h5V7"/><path d="M6.5 7l1 13h9l1-13"/><path d="M10.5 11v5.5M13.5 11v5.5"/>',
   folder: '<path d="M3.5 7V18a1.5 1.5 0 0 0 1.5 1.5h14a1.5 1.5 0 0 0 1.5-1.5V9.5A1.5 1.5 0 0 0 19 8h-7l-2-2.5H5A1.5 1.5 0 0 0 3.5 7Z"/>',
   tape: '<rect x="3.5" y="8" width="17" height="8" rx="1.5"/><path d="M7 8v3M10.5 8v4.5M14 8v3M17.5 8v4.5"/>',
   protractor: '<path d="M3.5 18.5h17A8.5 8.5 0 0 0 3.5 18.5Z"/><path d="M12 18.5 17 11.5"/><circle cx="12" cy="18.5" r="1.2"/>',

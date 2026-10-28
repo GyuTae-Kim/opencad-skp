@@ -17,6 +17,9 @@
  *   (빨강 X · 초록 Y · 파랑 Z).
  * - 나란함(SketchUp "모서리와 나란히", 자홍): 축과 같은 자리에서, 커서가 앞서 지나간 모서리(parallelRef)와 나란한 방향(화면 각 6° 안)이면
  *   시작점을 지나 그 모서리와 나란한 선 위로. 축과 함께 맞으면 화면에서 선에 가까운 쪽(같으면 축), 모서리가 축과 나란하면 축에 맡긴다.
+ * - 모서리에 수직(SketchUp "모서리에 수직", 자홍): 같은 자리에서, 커서가 지나간 모서리에 수직인 방향(perpendicularDirs — 시작점에서
+ *   그 직선으로 내린 수직과 그리기 축을 수직 평면에 비친 방향, 화면 각 6° 안)이면 시작점을 지나 그 방향 선 위로. 여럿 맞으면 화면에서
+ *   선에 가까운 쪽(같으면 축 → 나란히 → 수직). 시작점에서 모서리에 내린 수직 발(점 추정)이 먼저다.
  * - 잠금(SketchUp 추론 잠금 — Shift·화살표, 손가락 기기는 측정 띠 단추): 방향 추론(축·나란함·수직)을 잠그면(lock) 시작점을 지나는
  *   그 선 위에만 찍는다. 시작점을 지나는 모서리에 붙은 점 추정(모서리 끝에서 그 모서리를 따라 가리킬 때)도 그 모서리 방향으로 잠근다. 커서가 끝점·중간점·중심·교차점·수직 같은 점 위면 그 점을 선에 수직으로 내린 자리(다른 점의 높이를 옮겨 잰다),
  *   아니면 커서 광선에 가장 가까운 선 위 점(코어 0.10.0 순수 함수 lockedSnap).
@@ -69,13 +72,23 @@ export interface Snap {
   id?: string;
   /** 단면 보기에서 잘린 면(채운 면) 위 */
   section?: boolean;
-  /** 방향 추론(축·나란함·시작점에서 내린 수직)이면 시작점에서 그 선의 단위 방향(세계) — 잠글 수 있다 */
+  /** 방향 추론(축·나란함·모서리에 수직·시작점에서 내린 수직)이면 시작점에서 그 선의 단위 방향(세계) — 잠글 수 있다 */
   dir?: V3;
   /** 잠근 방향 위 점 */
   locked?: boolean;
   /** 잠근 선으로 옮겨 온 점(커서 밑 끝점 등)과 그 종류 */
   from?: V3;
   fromKind?: SnapKind;
+  /** 안내점·안내선에 붙었으면 그 안내(SnapInput.guides·guideLines 안 차례 — 누르면 그 안내를 고른다) */
+  guide?: GuideHit;
+  /** 지나간 모서리(edge)에 수직인 방향 추론(커서를 따라가는 선 — 시작점에서 내린 수직 발과 다르다) */
+  inferred?: boolean;
+}
+
+/** 붙은 안내: 안내점(guides) 또는 안내선(guideLines)과 그 차례 */
+export interface GuideHit {
+  kind: 'point' | 'line';
+  index: number;
 }
 
 /** 방향 추론 잠금(시작점을 지나는 선): 종류·단위 방향과 축·기준 모서리, 그 선 위 점의 추정 글 */
@@ -340,6 +353,35 @@ export function axisInferenceLock(axis: Axis, axes: AxisDirs = AXIS_DIRS): Infer
   return { kind: 'axis', axis, dir: [d[0], d[1], d[2]], label: AXIS_LABELS[axis] };
 }
 
+/**
+ * 모서리에 수직인 방향 후보(SketchUp "모서리에 수직", 자홍): 시작점을 지나 기준 모서리에 수직인 방향은 평면 하나를 이루므로
+ * 그 가운데 뜻 있는 방향만 고른다 — 시작점에서 모서리 직선으로 내린 수직(시작점이 그 직선 밖일 때)과, 그리기 축을 그 평면에 비친 방향
+ * (예: 평면도에서 기운 벽에 수평으로 수직, 기운 서까래에 그 세로 평면 안에서 수직). 축과 나란한 방향(축 고정이 맡는다)과
+ * 서로 같은 직선은 뺀다. 모서리 길이가 0이면 빈 목록
+ */
+export function perpendicularDirs(from: readonly number[], edge: readonly [readonly number[], readonly number[]], axes: AxisDirs = AXIS_DIRS): V3[] {
+  const d = sub(edge[1], edge[0]);
+  const u = unitOf(d);
+  if (!u) return [];
+  const out: V3[] = [];
+  const add = (v0: readonly number[]): void => {
+    const v = unitOf(v0);
+    if (!v || alongAxis(v, axes) || out.some((w) => Math.abs(dot(w, v)) >= 1 - 1e-6)) return;
+    out.push(v);
+  };
+  // 시작점에서 모서리 직선으로 내린 수직(시작점이 그 직선 위면 — 모서리 끝에서 시작 — 방향이 없다)
+  const w = sub(from, edge[0]);
+  const t = dot(w, u);
+  const r = along(w, u, -t);
+  if (Math.hypot(r[0], r[1], r[2]) > 1e-6 * Math.max(Math.hypot(d[0], d[1], d[2]), Math.hypot(w[0], w[1], w[2]))) add(r);
+  // 축을 수직 평면에 비친 방향
+  for (const a of AXES) {
+    const k = dot(axes[a], u);
+    if (Math.abs(k) < 1 - 1e-6) add(along(axes[a], u, -k));
+  }
+  return out;
+}
+
 /** 나란함 잠금(↓): 기준 모서리와 나란한 방향. 모서리 길이가 0이면 null */
 export function parallelInferenceLock(edge: readonly [readonly number[], readonly number[]]): InferenceLock | null {
   const dir = unitOf(sub(edge[1], edge[0]));
@@ -347,7 +389,7 @@ export function parallelInferenceLock(edge: readonly [readonly number[], readonl
 }
 
 /**
- * 추정이 방향 추론(축·나란함·시작점에서 내린 수직)이면 잠글 선, 아니면 null(이미 잠근 추정도 그 선).
+ * 추정이 방향 추론(축·나란함·모서리에 수직·시작점에서 내린 수직)이면 잠글 선, 아니면 null(이미 잠근 추정도 그 선).
  * 시작점(from)을 주면 모서리에 붙은 점 추정도 그 모서리 직선이 시작점을 지날 때 잠근다(edgeLineLock)
  */
 export function lockOf(s: Snap | null | undefined, from?: readonly number[] | null, axes: AxisDirs = AXIS_DIRS): InferenceLock | null {
@@ -459,6 +501,8 @@ interface Cand {
   trusted: boolean;
   /** 종류 글 대신 쓸 글(안내점) */
   label?: string;
+  /** 안내점·안내선 후보면 그 안내 */
+  guide?: GuideHit;
 }
 
 /** 점 p에서 직선(a, b)에 내린 발과 그 매개변수(a = 0, b = 1). 선분 길이가 0이면 null */
@@ -523,14 +567,14 @@ export function chooseSnap(o: SnapInput): Snap {
   }
   // 측정값 칸으로 둔 안내선: 커서 광선에 가장 가까운 선 위 점(모서리 위처럼 — 덧그림이라 형상에 가리지 않는다).
   // 끝이 없는 선이라 교차점 계산에는 그 점 둘레(추정 반경의 네 배) 선분으로 넣는다
-  for (const gl of o.guideLines ?? []) {
+  for (const [index, gl] of (o.guideLines ?? []).entries()) {
     const q = closestOnLine(ray, gl.point, gl.dir);
     if (!q) continue;
     const wpp = worldPerPixel(f, Math.max(viewDepth(f, q), 0));
     const half = wpp * R * 4;
     if (!(half > 0)) continue;
     const seg: [V3, V3] = [along(q, gl.dir, -half), along(q, gl.dir, half)];
-    push({ kind: 'onEdge', point: q, rank: 2, edge: seg, id: '', trusted: true, label: GUIDE_LINE_LABEL });
+    push({ kind: 'onEdge', point: q, rank: 2, edge: seg, id: '', trusted: true, label: GUIDE_LINE_LABEL, guide: { kind: 'line', index } });
     if (near.length < MAX_INTERSECTION_SEGMENTS) near.push({ seg, id: '', tol: 0.5 * wpp, guide: true });
   }
   // 두 선분이 3D에서 만나는 점(둘 다 안쪽). 안내선끼리 만나는 점은 덧그림이라 가림을 보지 않는다
@@ -543,7 +587,7 @@ export function chooseSnap(o: SnapInput): Snap {
   // 앞서 지나간 곡선의 중심
   for (const c of o.centers ?? []) push({ kind: 'center', point: [c[0], c[1], c[2]], rank: 0, id: '', trusted: false });
   // 측정값 칸으로 찍은 안내점(덧그림이라 형상에 가리지 않는다)
-  for (const g of o.guides ?? []) push({ kind: 'endpoint', point: [g[0], g[1], g[2]], rank: 0, id: '', trusted: true, label: GUIDE_POINT_LABEL });
+  for (const [index, g] of (o.guides ?? []).entries()) push({ kind: 'endpoint', point: [g[0], g[1], g[2]], rank: 0, id: '', trusted: true, label: GUIDE_POINT_LABEL, guide: { kind: 'point', index } });
   // 점 묶음(있으면 끝점처럼)
   if (pick && pick.kind === 'point') push({ kind: 'endpoint', point: [...pick.point], rank: 0, id: pick.id, trusted: true });
   // 그물 윤곽선(코어 윤곽선 고르기 — 카메라를 보는 그물의 모서리): 고른 점을 모서리 위로
@@ -561,6 +605,7 @@ export function chooseSnap(o: SnapInput): Snap {
     snap = { kind: c.kind, point: c.point, label: c.label ?? SNAP_LABELS[c.kind], id: c.id };
     if (c.edge) snap.edge = c.edge;
     if (c.other) snap.other = c.other;
+    if (c.guide) snap.guide = { ...c.guide };
     break;
   }
   // 면에 수직: 시작점에서 커서 밑 면의 평면에 내린 발이 추정 반경 안이면(맞은편 벽까지의 거리)
@@ -591,16 +636,25 @@ export function chooseSnap(o: SnapInput): Snap {
     }
     snap = s;
   } else if (o.from && (!snap || snap.kind === 'onFace')) {
-    // 축 고정·나란함: 면 위·빈 곳보다 앞선다(점·선 추정·면에 수직보다는 뒤). 둘 다 맞으면 화면에서 선에 가까운 쪽(같으면 축)
+    // 축 고정·나란함·모서리에 수직: 면 위·빈 곳보다 앞선다(점·선 추정·면에 수직보다는 뒤).
+    // 여럿 맞으면 화면에서 선에 가까운 쪽(같으면 축 → 나란히 → 수직)
     const ax = o.axes !== false ? axisLock(f, o.from, o.x, o.y, { axes }) : null;
     const ref = o.parallelRef;
     const e = ref ? unitOf(sub(ref[1], ref[0])) : null;
     const par = ref && e && !alongAxis(e, axes) ? directionLock(f, o.from, o.x, o.y, e) : null;
-    if (ax && (!par || ax.perp <= par.perp)) snap = { kind: 'axis', point: ax.point, axis: ax.axis, label: AXIS_LABELS[ax.axis], dir: [...axes[ax.axis]] };
-    else if (par && ref && e) snap = { kind: 'parallel', point: par.point, label: SNAP_LABELS.parallel, dir: e, edge: [ref[0], ref[1]] };
+    let per: { point: V3; perp: number; dir: V3 } | null = null;
+    if (ref)
+      for (const d of perpendicularDirs(o.from, ref, axes)) {
+        const l = directionLock(f, o.from, o.x, o.y, d);
+        if (l && (!per || l.perp < per.perp)) per = { ...l, dir: d };
+      }
+    const best = Math.min(ax?.perp ?? Infinity, par?.perp ?? Infinity, per?.perp ?? Infinity);
+    if (ax && ax.perp <= best) snap = { kind: 'axis', point: ax.point, axis: ax.axis, label: AXIS_LABELS[ax.axis], dir: [...axes[ax.axis]] };
+    else if (par && ref && e && par.perp <= best) snap = { kind: 'parallel', point: par.point, label: SNAP_LABELS.parallel, dir: e, edge: [ref[0], ref[1]] };
+    else if (per && ref) snap = { kind: 'perpendicular', point: per.point, label: SNAP_LABELS.perpendicular, dir: per.dir, edge: [ref[0], ref[1]], inferred: true };
   }
   // 시작점에서 내린 수직(모서리·면)도 방향 추론이다(시작점 → 발 쪽으로 잠근다)
-  if (snap && snap.kind === 'perpendicular' && o.from && !snap.locked) {
+  if (snap && snap.kind === 'perpendicular' && o.from && !snap.locked && !snap.inferred) {
     const d = unitOf(sub(snap.point, o.from));
     if (d) snap.dir = d;
   }
