@@ -1322,7 +1322,7 @@ export class SkpViewerApp implements PanelHost {
       },
     });
     this.measureTool = tool;
-    // 측정 띠의 안내 되돌리기 단추(측정값 칸 줄)
+    // 측정 띠의 안내 되돌리기·다시 하기 단추(측정값 칸 줄)
     tool.mountUndo(this.vcb.el);
     return tool;
   }

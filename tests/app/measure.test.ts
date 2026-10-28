@@ -49,6 +49,7 @@ import {
   MAX_GUIDE_UNDO,
   applyMessage,
   guideUndoKey,
+  GUIDE_REDO_LABEL,
   labelSpot,
 } from '../../src/app/measure';
 import type { V3 } from 'opencad-viewer3d/math';
@@ -1878,7 +1879,8 @@ describe('측정 도구: 안내 되돌리기·다시 하기(Ctrl·⌘+Z)', () =>
     document.body.append(host);
     r.tool.mountUndo(host);
     const b = host.querySelector<HTMLButtonElement>('.vcb-undo')!;
-    expect(b.nextElementSibling).toBe(del);
+    // 바로 뒤는 다시 하기 단추(15차), 그 뒤가 지우기 단추
+    expect(b.nextElementSibling?.nextElementSibling).toBe(del);
     expect(b.type).toBe('button');
     expect(b.hidden).toBe(true);
     expect(b.getAttribute('aria-label')).toBe(GUIDE_UNDO_LABEL);
@@ -1999,6 +2001,78 @@ describe('측정 도구: 안내를 늘 보이기(보기 설정 "안내점·안�
     expect(b.tool.guidesShown).toBe(true);
     b.tool.setGuidesShown(false);
     expect(b.tool.guidesShown).toBe(false);
+  });
+});
+
+/** 안내 둘(15차 시험): 모서리 위 (70, 0)에서 시작해 칸으로 나란한 안내선(y = 20), 끝점 (0, 0)에서 칸으로 안내점 (30, 0). tick은 앞 누르기와 두 번 누르기가 되지 않게 시계를 옮긴다 */
+const placeTwo = (r: Rig, tick: () => void): void => {
+  r.tool.setMode('tape');
+  tick();
+  r.click(170, 101);
+  r.move(170, 60);
+  expect(r.tool.applyLength(20)).toBe('ok');
+  tick();
+  r.click(102, 103);
+  r.move(160, 101);
+  expect(r.tool.applyLength(30)).toBe('ok');
+};
+
+describe('측정 도구: 휴대폰 측정 띠의 다시 하기 단추', () => {
+  let clock = 0;
+  beforeEach(() => {
+    clock = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+  const later = (): void => void (clock += 1000);
+
+  it('측정 띠의 다시 하기 단추: 되돌리기 단추 바로 뒤(지우기 단추 앞), 다시 할 것이 있을 때만 보이고 누르면 하나 다시 한다', () => {
+    const r = rig(EDGES());
+    const host = document.createElement('form');
+    const del = document.createElement('button');
+    del.className = 'vcb-del';
+    host.append(document.createElement('input'), del);
+    document.body.append(host);
+    r.tool.mountUndo(host);
+    const undo = host.querySelector<HTMLButtonElement>('.vcb-undo')!;
+    const redo = host.querySelector<HTMLButtonElement>('.vcb-redo')!;
+    expect(undo.nextElementSibling).toBe(redo);
+    expect(redo.nextElementSibling).toBe(del);
+    expect(redo.type).toBe('button');
+    expect(redo.getAttribute('aria-label')).toBe(GUIDE_REDO_LABEL);
+    expect(redo.title).toBe(GUIDE_REDO_LABEL);
+    expect(redo.querySelectorAll('svg path')).toHaveLength(2);
+    expect(redo.hidden).toBe(true);
+    placeTwo(r, later);
+    expect(redo.hidden).toBe(true);
+    undo.click();
+    expect(r.tool.guides).toHaveLength(0);
+    expect(redo.hidden).toBe(false);
+    undo.click();
+    expect(r.tool.guideLines).toHaveLength(0);
+    expect(undo.hidden).toBe(true);
+    redo.click();
+    expect(r.tool.guideLines).toHaveLength(1);
+    expect(undo.hidden).toBe(false);
+    expect(redo.hidden).toBe(false);
+    redo.click();
+    expect(r.tool.guides).toHaveLength(1);
+    expect(redo.hidden).toBe(true);
+    // 새 안내를 두면 다시 할 것이 없어진다
+    undo.click();
+    expect(redo.hidden).toBe(false);
+    clock += 1000;
+    r.click(102, 103);
+    r.move(102, 60);
+    expect(r.tool.applyLength(10)).toBe('ok');
+    expect(redo.hidden).toBe(true);
+    // 다시 붙여도 하나씩, 버리면 뗀다
+    r.tool.mountUndo(host);
+    expect(host.querySelectorAll('.vcb-redo')).toHaveLength(1);
+    r.tool.dispose();
+    expect(host.querySelector('.vcb-redo')).toBeNull();
   });
 });
 

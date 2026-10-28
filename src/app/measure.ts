@@ -10,7 +10,7 @@
  *   3. `viewer.onPick`: `tool.active`이면 무시한다(이 도구가 그 누르기를 쓴다).
  *   4. 창 keydown·keyup(캡처 단계): `tool.handleKey(e)`가 true면 처리 끝. Esc keydown에서 false면(지울 것이 없음) 앱이 도구를 끈다.
  *      그보다 먼저(도구를 끈 동안에도) `tool.undoKey(e)`가 true면 안내 되돌리기·다시 하기로 처리 끝.
- *   5. 측정값 칸을 만들었으면 `tool.mountUndo(칸)`(측정 띠의 되돌리기 단추), 보기 설정 메뉴에 `tool.showGuidesItem()`, 새 문서면 `tool.clearGuides(true)`.
+ *   5. 측정값 칸을 만들었으면 `tool.mountUndo(칸)`(측정 띠의 되돌리기·다시 하기 단추), 보기 설정 메뉴에 `tool.showGuidesItem()`, 새 문서면 `tool.clearGuides(true)`.
  *   6. 앱을 닫을 때 `tool.dispose()`.
  *
  * 입력: 캔버스 포인터 이벤트를 엿본다(막지 않는다). 왼쪽 단추·탭을 코어의 끌기 시작 거리(tapSlopPx — 마우스·펜 4화소,
@@ -274,8 +274,13 @@ export const GUIDES_SHOWN_LABEL = '안내점·안내선 보이기';
 /** 측정 띠의 안내 되돌리기 단추 글 */
 export const GUIDE_UNDO_LABEL = '방금 바꾼 안내 되돌리기';
 
+/** 측정 띠의 안내 다시 하기 단추 글 */
+export const GUIDE_REDO_LABEL = '되돌린 안내 다시 하기';
+
 /** 되돌리기 아이콘(반시계로 도는 화살표 — 다시 재기의 ← 아이콘과 다르게) */
 const UNDO_PATHS = '<path d="M3.5 7.5v5.5H9"/><path d="M20.5 17a8.5 8.5 0 0 0-14.5-6L3.5 13"/>';
+/** 다시 하기 아이콘(되돌리기를 좌우로 뒤집은 것) */
+const REDO_PATHS = '<path d="M20.5 7.5v5.5H15"/><path d="M3.5 17a8.5 8.5 0 0 1 14.5-6l2.5 2"/>';
 
 /** 정밀 조준 십자선(반지름 16에 팔 6과 흰 테)이 차지하는 반지름 — 결과 글이 비켜 간다 */
 const RETICLE_AVOID_R = 24;
@@ -702,8 +707,9 @@ export class MeasureTool {
   /** 안내 보이기(보기 설정 — 끄면 안내를 그리지 않고, 붙지도 고르지도 않는다) */
   private shownValue: boolean;
   private readonly storage: Pick<Storage, 'getItem' | 'setItem'> | null;
-  /** 측정 띠(측정값 칸 줄)의 되돌리기 단추(mountUndo로 붙인다) */
+  /** 측정 띠(측정값 칸 줄)의 되돌리기·다시 하기 단추(mountUndo로 붙인다) */
   private undoBtn: HTMLButtonElement | null = null;
+  private redoBtn: HTMLButtonElement | null = null;
   /** 이번 그리기의 결과 글(툴팁을 둔 뒤 피할 자리와 겹치면 옮긴다): 요소, 기준점, 화면 선분, 비킬 점 표식 */
   private labelQueue: { el: HTMLDivElement; x: number; y: number; seg: [number[], number[]] | null; soft: LabelCircle[] }[] = [];
   private readonly painter = (f: ViewFrame): void => this.paint(f);
@@ -989,23 +995,27 @@ export class MeasureTool {
   }
 
   /**
-   * 측정값 칸(host)에 안내 되돌리기 단추를 붙인다(고른 안내 지우기 단추 앞). 측정 띠 안에서만 보이고(CSS — 키보드는 Ctrl·⌘+Z),
-   * 되돌릴 것이 있을 때만 나온다
+   * 측정값 칸(host)에 안내 되돌리기·다시 하기 단추를 붙인다(고른 안내 지우기 단추 앞). 측정 띠 안에서만 보이고(CSS — 키보드는 Ctrl·⌘+Z, Ctrl+Y),
+   * 되돌릴 것·다시 할 것이 있을 때만 나온다
    */
   mountUndo(host: HTMLElement): void {
-    let b = this.undoBtn;
-    if (!b) {
-      b = document.createElement('button');
+    const make = (cls: string, label: string, paths: string, run: () => boolean): HTMLButtonElement => {
+      const b = document.createElement('button');
       b.type = 'button';
-      b.className = 'vcb-btn vcb-undo';
-      b.title = GUIDE_UNDO_LABEL;
-      b.setAttribute('aria-label', GUIDE_UNDO_LABEL);
-      b.innerHTML = icon('', 16).replace('</svg>', `${UNDO_PATHS}</svg>`);
-      b.addEventListener('click', () => this.undo());
-      this.undoBtn = b;
-    }
-    host.insertBefore(b, host.querySelector('.vcb-del'));
-    b.hidden = !this.canUndo;
+      b.className = `vcb-btn ${cls}`;
+      b.title = label;
+      b.setAttribute('aria-label', label);
+      b.innerHTML = icon('', 16).replace('</svg>', `${paths}</svg>`);
+      b.addEventListener('click', () => run());
+      return b;
+    };
+    this.undoBtn ??= make('vcb-undo', GUIDE_UNDO_LABEL, UNDO_PATHS, () => this.undo());
+    this.redoBtn ??= make('vcb-redo', GUIDE_REDO_LABEL, REDO_PATHS, () => this.redo());
+    const at = host.querySelector('.vcb-del');
+    host.insertBefore(this.undoBtn, at);
+    host.insertBefore(this.redoBtn, at);
+    this.undoBtn.hidden = !this.canUndo;
+    this.redoBtn.hidden = !this.canRedo;
   }
 
   /** 숨긴 안내를 다시 보인다(안내를 두거나 되돌렸을 때) */
@@ -1014,11 +1024,12 @@ export class MeasureTool {
   }
 
   /**
-   * 안내가 바뀐 뒤: 덧그림을 붙이거나 떼고(도구를 끈 동안에도 안내가 보이면 그린다), 되돌리기 단추를 맞추고 앱에 알린다
+   * 안내가 바뀐 뒤: 덧그림을 붙이거나 떼고(도구를 끈 동안에도 안내가 보이면 그린다), 되돌리기·다시 하기 단추를 맞추고 앱에 알린다
    */
   private notifyGuides(): void {
     this.syncPainter();
     if (this.undoBtn) this.undoBtn.hidden = !this.canUndo;
+    if (this.redoBtn) this.redoBtn.hidden = !this.canRedo;
     this.opts.onGuides?.();
   }
 
@@ -1466,9 +1477,10 @@ export class MeasureTool {
     if (this.disposed) return;
     this.setMode(null);
     this.disposed = true;
-    // 도구를 끈 뒤에도 그리던 안내와 되돌리기 단추도 뗀다
+    // 도구를 끈 뒤에도 그리던 안내와 되돌리기·다시 하기 단추도 뗀다
     this.syncPainter();
     this.undoBtn?.remove();
+    this.redoBtn?.remove();
     for (const f of this.off.splice(0)) f();
     this.presses.clear();
   }
