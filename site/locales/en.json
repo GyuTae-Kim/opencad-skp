@@ -1037,5 +1037,6 @@
   "안내점·안내선 보이기": "Show guide points and guide lines",
   "방금 바꾼 안내 되돌리기": "Undo the last guide change",
   "안내점·안내선을 두거나 지운 것 되돌리기(100단계)": "Undo placing or deleting guide points and guide lines (up to 100 steps)",
-  "되돌린 안내 다시 하기": "Redo the undone guide change"
+  "되돌린 안내 다시 하기": "Redo the undone guide change",
+  "이 파일의 안내 모두 지우기": "Clear all guides for this file"
 }

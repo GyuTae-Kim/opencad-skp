@@ -1037,5 +1037,6 @@
   "안내점·안내선 보이기": "Hilfspunkte und Hilfslinien anzeigen",
   "방금 바꾼 안내 되돌리기": "Letzte Änderung an Hilfselementen rückgängig machen",
   "안내점·안내선을 두거나 지운 것 되돌리기(100단계)": "Setzen oder Löschen von Hilfspunkten und Hilfslinien rückgängig machen (bis zu 100 Schritte)",
-  "되돌린 안내 다시 하기": "Rückgängig gemachte Änderung an Hilfselementen wiederherstellen"
+  "되돌린 안내 다시 하기": "Rückgängig gemachte Änderung an Hilfselementen wiederherstellen",
+  "이 파일의 안내 모두 지우기": "Alle Hilfselemente dieser Datei löschen"
 }

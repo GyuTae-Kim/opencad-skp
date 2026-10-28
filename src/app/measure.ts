@@ -10,7 +10,8 @@
  *   3. `viewer.onPick`: `tool.active`이면 무시한다(이 도구가 그 누르기를 쓴다).
  *   4. 창 keydown·keyup(캡처 단계): `tool.handleKey(e)`가 true면 처리 끝. Esc keydown에서 false면(지울 것이 없음) 앱이 도구를 끈다.
  *      그보다 먼저(도구를 끈 동안에도) `tool.undoKey(e)`가 true면 안내 되돌리기·다시 하기로 처리 끝.
- *   5. 측정값 칸을 만들었으면 `tool.mountUndo(칸)`(측정 띠의 되돌리기·다시 하기 단추), 보기 설정 메뉴에 `tool.showGuidesItem()`, 새 문서면 `tool.clearGuides(true)`.
+ *   5. 측정값 칸을 만들었으면 `tool.mountUndo(칸)`(측정 띠의 되돌리기·다시 하기 단추), 보기 설정 메뉴에 `tool.guideMenuItems()`(안내 보이기·이 파일의 안내 모두 지우기),
+ *      새 문서면 `tool.openFile(파일 내용 SHA-256)`(안내를 비우고 이 브라우저에 기억한 그 파일의 안내를 되살린다 — guidestore.ts).
  *   6. 앱을 닫을 때 `tool.dispose()`.
  *
  * 입력: 캔버스 포인터 이벤트를 엿본다(막지 않는다). 왼쪽 단추·탭을 코어의 끌기 시작 거리(tapSlopPx — 마우스·펜 4화소,
@@ -33,6 +34,8 @@
  *   그리지도 붙지도 고르지도 않고, 숨긴 채 안내를 두거나 되돌리면 다시 켠다.
  * 안내 되돌리기·다시 하기: 안내 두기(칸·누르기·두 번 누르기)와 지우기(하나·모두)마다 그 전 안내 배열을 쌓아(MAX_GUIDE_UNDO단계) undo·redo로 오간다.
  *   측정 결과·진행 중 점은 건드리지 않는다. 안내 배열은 고치지 않고 늘 새로 만들므로 배열을 통째로 기억한다.
+ * 파일별 안내 기억: 안내가 바뀔 때마다(되돌리기 포함) 지금 안내를 파일 내용 지문 열쇠로 이 브라우저에 두고(guidestore.ts), 같은 파일을 다시 열면 되살린다.
+ *   되돌리기 목록은 기억하지 않는다(되살린 안내가 처음 상태). 모두 지우면 그 파일의 기억도 지운다(되돌리면 다시 기억한다).
  * 결과 글(길이·각도)은 정밀 조준 십자선·손가락·툴팁·앱이 알려 준 측정 띠와 겹치면 코어 placeMeasureLabel 차례로 비켜 둔다(labelSpot).
  * 안내 두기(SketchUp 줄자·각도기의 "+" — 이 뷰어는 재기만이 기본): 켜면(setGuideMode, 키보드는 Ctrl — Mac은 Option — 만 눌렀다 떼기)
  *   줄자 둘째 누르기가 안내를 둔다 — 모서리 위에서 시작했으면 그 모서리와 나란히 둘째 점을 지나는 안내선(결과는 모서리에 수직인 거리),
@@ -56,6 +59,7 @@ import type { V3 } from 'opencad-viewer3d/math';
 import { LABEL_POINT_R, hitsAvoid, placeMeasureLabel, type LabelAvoidAreas, type LabelCircle, type MeasureLabelRect } from 'opencad-viewer3d/measurelabel';
 import { safeStorage } from './backdrop';
 import { icon } from './dom';
+import { digestHex, loadGuides, saveGuides, type GuideStorage } from './guidestore';
 import { isEditableTarget } from './keys';
 import { screenPoint, screenSegment, svgEl, type Overlay } from './overlay';
 import { formatAngle, formatLength, mmPerSceneUnit, type UnitsDisplay } from './units';
@@ -193,8 +197,8 @@ export interface MeasureToolOptions {
   guideKey?: GuideKey;
   /** 안내 두기를 켜고 끄거나 안내점·안내선이 늘고 줄거나, 되돌리기 목록·안내 보이기가 바뀌면(측정 띠 단추·측정값 칸의 안내 수를 맞춘다) */
   onGuides?: () => void;
-  /** 안내 보이기를 기억하는 곳(없으면 이 브라우저 localStorage, null이면 기억하지 않음) */
-  storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
+  /** 안내 보이기와 파일별 안내(guidestore.ts)를 기억하는 곳(없으면 이 브라우저 localStorage, null이면 기억하지 않음) */
+  storage?: GuideStorage | null;
   /** 결과 글(길이·각도)이 비켜 갈 앱 요소(3D 보기 위에 뜬 측정 띠·측정값 칸 — 보이지 않는 요소는 넘어간다) */
   labelAvoid?: () => readonly (Element | null | undefined)[];
 }
@@ -277,6 +281,9 @@ export const GUIDE_UNDO_LABEL = '방금 바꾼 안내 되돌리기';
 /** 측정 띠의 안내 다시 하기 단추 글 */
 export const GUIDE_REDO_LABEL = '되돌린 안내 다시 하기';
 
+/** 보기 설정 메뉴의 이 파일 안내 모두 지우기 항목 글(측정값 칸의 ✕처럼 되돌릴 수 있다) */
+export const GUIDE_CLEAR_FILE_LABEL = '이 파일의 안내 모두 지우기';
+
 /** 되돌리기 아이콘(반시계로 도는 화살표 — 다시 재기의 ← 아이콘과 다르게) */
 const UNDO_PATHS = '<path d="M3.5 7.5v5.5H9"/><path d="M20.5 17a8.5 8.5 0 0 0-14.5-6L3.5 13"/>';
 /** 다시 하기 아이콘(되돌리기를 좌우로 뒤집은 것) */
@@ -306,8 +313,10 @@ export function guideUndoKey(e: Pick<KeyboardEvent, 'key' | 'code' | 'ctrlKey' |
 /** 보기 설정 메뉴 항목 꼴(앱 메뉴가 그대로 쓴다) */
 export interface GuideMenuItem {
   label: string;
-  checked: boolean;
-  toggle: true;
+  icon?: string;
+  checked?: boolean;
+  toggle?: true;
+  disabled?: boolean;
   run: () => void;
 }
 
@@ -706,10 +715,16 @@ export class MeasureTool {
   private redoList: GuideSnapshot[] = [];
   /** 안내 보이기(보기 설정 — 끄면 안내를 그리지 않고, 붙지도 고르지도 않는다) */
   private shownValue: boolean;
-  private readonly storage: Pick<Storage, 'getItem' | 'setItem'> | null;
+  private readonly storage: GuideStorage | null;
   /** 측정 띠(측정값 칸 줄)의 되돌리기·다시 하기 단추(mountUndo로 붙인다) */
   private undoBtn: HTMLButtonElement | null = null;
   private redoBtn: HTMLButtonElement | null = null;
+  /** 안내를 기억하는 파일 열쇠(내용 지문 16진 — 지문을 받기 전·기억하지 않으면 null)와 openFile 차례(늦게 온 지문은 버린다) */
+  private fileKey: string | null = null;
+  private fileTicket = 0;
+  /** 마지막으로 기억한 안내 배열(배열을 늘 새로 만들므로 바뀌었을 때만 쓴다) */
+  private savedPts: V3[] | null = null;
+  private savedLns: GuideLine[] | null = null;
   /** 이번 그리기의 결과 글(툴팁을 둔 뒤 피할 자리와 겹치면 옮긴다): 요소, 기준점, 화면 선분, 비킬 점 표식 */
   private labelQueue: { el: HTMLDivElement; x: number; y: number; seg: [number[], number[]] | null; soft: LabelCircle[] }[] = [];
   private readonly painter = (f: ViewFrame): void => this.paint(f);
@@ -900,6 +915,49 @@ export class MeasureTool {
     this.notifyGuides();
   }
 
+  /**
+   * 새 문서의 안내(앱이 문서를 열 때마다): 안내와 되돌리기 목록을 비우고(clearGuides(true)), 파일 내용 지문(SHA-256 바이트 — 약속이면 받는 대로)으로
+   * 이 브라우저에 기억한 그 파일의 안내를 되살린다(되돌리기 목록은 비운 채 — 되살린 안내가 처음 상태). 그 뒤로는 안내가 바뀔 때마다 그 열쇠로 기억한다
+   * (guidestore.ts — 파일 이름·경로는 두지 않는다). 지문이 null이면(지문을 구하지 못한 브라우저) 기억하지 않는다.
+   * 지문을 받기 전에 안내를 두었으면(드물다) 기억한 것 대신 그 안내를 기억한다. 늦게 온 앞 문서의 지문은 버린다
+   */
+  openFile(print: ArrayBuffer | null | PromiseLike<ArrayBuffer | null>): void {
+    const ticket = ++this.fileTicket;
+    this.fileKey = null;
+    this.clearGuides(true);
+    this.savedPts = this.guidePts;
+    this.savedLns = this.guideLns;
+    void Promise.resolve(print).then(
+      (b) => {
+        if (ticket === this.fileTicket && b && !this.disposed) this.adoptFile(digestHex(b));
+      },
+      () => undefined,
+    );
+  }
+
+  /** 지문을 받았을 때: 기억한 안내를 되살리고(그 파일을 쓴 때도 새로), 그 열쇠로 기억하기 시작한다 */
+  private adoptFile(key: string): void {
+    this.fileKey = key;
+    if (!this.guidePts.length && !this.guideLns.length && !this.undoList.length) {
+      const g = loadGuides(this.storage, key, MAX_GUIDE_POINTS, MAX_GUIDE_LINES);
+      if (!g) return;
+      this.guidePts = g.pts;
+      this.guideLns = g.lns;
+      this.hoverDirty = true;
+      this.overlay.invalidate();
+    }
+    this.persist(true);
+    this.notifyGuides();
+  }
+
+  /** 안내가 바뀌었으면(force면 늘) 이 파일 열쇠로 기억한다(막히면 이번 세션만) */
+  private persist(force = false): void {
+    if (!this.fileKey || (!force && this.savedPts === this.guidePts && this.savedLns === this.guideLns)) return;
+    this.savedPts = this.guidePts;
+    this.savedLns = this.guideLns;
+    saveGuides(this.storage, this.fileKey, this.guidePts, this.guideLns, Date.now());
+  }
+
   /** 되돌릴 안내 변경이 있는지 */
   get canUndo(): boolean {
     return this.undoList.length > 0;
@@ -995,6 +1053,14 @@ export class MeasureTool {
   }
 
   /**
+   * 보기 설정 메뉴의 안내 항목: "안내점·안내선 보이기"와 "이 파일의 안내 모두 지우기"(안내가 없으면 끔 — 측정값 칸의 ✕와 같이 되돌릴 수 있고,
+   * 비우면 이 파일의 기억도 지운다. 도구를 끈 동안에도 된다)
+   */
+  guideMenuItems(): GuideMenuItem[] {
+    return [this.showGuidesItem(), { label: GUIDE_CLEAR_FILE_LABEL, icon: 'trash', disabled: !this.guidePts.length && !this.guideLns.length, run: () => this.clearGuides() }];
+  }
+
+  /**
    * 측정값 칸(host)에 안내 되돌리기·다시 하기 단추를 붙인다(고른 안내 지우기 단추 앞). 측정 띠 안에서만 보이고(CSS — 키보드는 Ctrl·⌘+Z, Ctrl+Y),
    * 되돌릴 것·다시 할 것이 있을 때만 나온다
    */
@@ -1024,9 +1090,10 @@ export class MeasureTool {
   }
 
   /**
-   * 안내가 바뀐 뒤: 덧그림을 붙이거나 떼고(도구를 끈 동안에도 안내가 보이면 그린다), 되돌리기·다시 하기 단추를 맞추고 앱에 알린다
+   * 안내가 바뀐 뒤: 이 파일 열쇠로 기억하고, 덧그림을 붙이거나 떼고(도구를 끈 동안에도 안내가 보이면 그린다), 되돌리기·다시 하기 단추를 맞추고 앱에 알린다
    */
   private notifyGuides(): void {
+    this.persist();
     this.syncPainter();
     if (this.undoBtn) this.undoBtn.hidden = !this.canUndo;
     if (this.redoBtn) this.redoBtn.hidden = !this.canRedo;
