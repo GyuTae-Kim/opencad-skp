@@ -21,7 +21,7 @@ import { edgeGeometry } from './faces';
 import { copyText } from './clipboard';
 import { HISTORY_LIMIT, HISTORY_SETTLE_MS, ViewHistory } from './history';
 import { beginOpen, showAnalyticsSettings, trackExport, type OpenAttempt } from 'opencad-site-kit/analytics';
-import { MeasureTool, type MeasureMode, type MeasureToolResult } from './measure';
+import { MeasureTool, lockHint, lockName, type MeasureMode, type MeasureToolResult } from './measure';
 import {
   baseFovOf,
   activeSections,
@@ -113,6 +113,7 @@ import type { Rgb, SkpEdgeColorMode, SkpShadowMeta, SkpStyleMeta } from '../meta
 import { fogFor, lightingForShadow, shadowOrDefault, sunForShadow, usesSun } from './sun';
 import { WalkStick } from './joystick';
 import { Vcb, vcbStartKey, type VcbKind } from './vcb';
+import { FlashNote } from './flash';
 
 export const APP_TITLE = 'OpenCAD SketchUp 뷰어';
 const TOOLS_URL = 'https://gyutae-kim.github.io/opencad';
@@ -124,6 +125,8 @@ export const VIEW_CUBE_WIDE = 112;
 export const VIEW_CUBE_NARROW = 76;
 /** 정의의 인스턴스 모두에 맞춰 볼 때 범위를 셀 노드 수 한도 */
 const MAX_FIT_NODES = 5000;
+/** 측정 띠 알림 종류: 잠금 단추를 눌렀는데 잠글 방향이 없음(잠금이 걸리면 거둔다) */
+const NO_LOCK_FLASH = 'no-lock';
 
 const RENDER_MODES: [RenderMode, string, string][] = [
   ['shaded', '음영', 'shaded'],
@@ -196,6 +199,8 @@ export interface AppSnapshot {
   measureGuides: number;
   /** 측정값 칸으로 둔 안내선 수 */
   measureGuideLines: number;
+  /** 잠근 방향(축·나란히·수직, 없으면 null) */
+  measureLock: ReturnType<typeof lockName>;
   /** 측정값 칸이 보이는지·지금 글·측정 띠 안에 있는지·받는 값(길이·각도) */
   vcb: { shown: boolean; value: string; inBand: boolean; kind: VcbKind };
   /** 고른 것의 종류(outline·node·material·item·face·edge, 없으면 null) */
@@ -272,6 +277,7 @@ interface Els {
   measureText: HTMLElement;
   measureClear: HTMLButtonElement;
   measureCopy: HTMLButtonElement;
+  measureLock: HTMLButtonElement;
   measureLogBtn: HTMLButtonElement;
   measureLog: HTMLElement;
   measureFlash: HTMLElement;
@@ -340,9 +346,9 @@ export class SkpViewerApp implements PanelHost {
   private rangedIds = new Set<string>();
   /** 그림 저장 창 */
   private exportDialog: ExportDialog | null = null;
-  /** 최근 측정(새것이 앞)·측정 띠 알림 타이머 */
+  /** 최근 측정(새것이 앞)·측정 띠 알림 */
   private measureLog: MeasureToolResult[] = [];
-  private flashTimer = 0;
+  private measureNote: FlashNote | null = null;
   /** 곡선(묶음 차례#곡선 번호) → 중심(측정 "중심" 추정, 문서마다) */
   private curveCenters = new Map<string, [number, number, number] | null>();
   /** 파일·장면 스타일 배경 쓰기(사용자 설정)와 지금 스타일의 배경 색 */
@@ -464,8 +470,8 @@ export class SkpViewerApp implements PanelHost {
     const bgBtn = tbtn('배경', 'backdrop', '파일 스타일의 배경 색·하늘·지면으로 보기(끄면 앱 테마 배경)', () => this.setFileBackground(!this.fileBg));
     const cubeBtn = tbtn('뷰 큐브', 'cube', '뷰 큐브 보이기', () => this.toggleCube());
     const axesBtn = tbtn('좌표축', 'axes', '좌표축 보이기', () => this.toggleAxes());
-    const measureBtn = tbtn('줄자', 'tape', '줄자 (T): 두 점 거리 — 끝점·중간점·모서리·면에 붙고, 축 방향이면 축에 고정 · Esc 지우기', () => this.toggleMeasure());
-    const protractorBtn = tbtn('각도기', 'protractor', '각도기: 중심 → 기준 방향 → 잴 방향(Shift = 평면 고정) · Esc 지우기', () => this.toggleProtractor());
+    const measureBtn = tbtn('줄자', 'tape', '줄자 (T): 두 점 거리 — 끝점·중간점·모서리·면에 붙고, 축·모서리와 나란한 방향이면 그 선에 고정(Shift·화살표로 잠금) · Esc 지우기', () => this.toggleMeasure());
+    const protractorBtn = tbtn('각도기', 'protractor', '각도기: 중심 → 기준 방향 → 잴 방향(Shift = 평면 고정·방향 잠금) · Esc 지우기', () => this.toggleProtractor());
     const pngBtn = tbtn('그림 저장', 'image', '지금 화면을 그림으로 저장·공유·인쇄(크기·투명 배경·글과 측정 넣기)', () => this.savePng(), 'compact wide-only');
     const panelBtn = tbtn('패널', 'panel', '패널 열기·닫기', () => this.setPanelOpen(!this.panelOpen));
     // 단면 보기: 끔·X·Y·Z, 위치 슬라이더(장면 범위 안 0~1), 뒤집기, 잘린 면 채우기(해석기가 닫힌 입체로 가린 그물만 — capGroup)
@@ -547,13 +553,27 @@ export class SkpViewerApp implements PanelHost {
     measureCopy.addEventListener('click', () => this.copyMeasure('current'));
     const measureLogBtn = h('button', { class: 'mb-btn icon', type: 'button', title: '최근 측정 기록', 'aria-label': '최근 측정 기록', html: icon('list', 16) });
     measureLogBtn.addEventListener('click', () => this.toggleMeasureLog());
+    // 방향 잠금(Shift가 없는 손가락 기기 — SketchUp 추론 잠금): 방향을 잡는 동안만 보이고, 누르면 지금 방향을 잠그고 다시 누르면 푼다.
+    // 정밀 조준 중 다른 손가락으로 누르면 둘째 손가락이라 click이 오지 않으므로 손가락·펜은 누르는 순간에 받는다
+    const measureLock = h('button', { class: 'mb-btn icon mb-lock', type: 'button', title: '지금 방향 잠그기(다시 누르면 풀기)', 'aria-label': '방향 잠금', 'aria-pressed': 'false', hidden: true, html: icon('lock', 16) });
+    let lockPressedAt = -Infinity;
+    measureLock.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse') return;
+      e.preventDefault();
+      lockPressedAt = performance.now();
+      this.toggleMeasureLock();
+    });
+    measureLock.addEventListener('click', () => {
+      if (performance.now() - lockPressedAt < 1000) return;
+      this.toggleMeasureLock();
+    });
     const measureLogEl = h('div', { class: 'measure-log', hidden: true });
     const measureFlash = h('div', { class: 'measure-flash', role: 'status', hidden: true });
     const measureBar = h(
       'div',
       { class: 'measure-bar', role: 'status', hidden: true },
       measureText,
-      h('div', { class: 'mb-acts' }, measureCopy, measureLogBtn, measureClear, measureClose),
+      h('div', { class: 'mb-acts' }, measureLock, measureCopy, measureLogBtn, measureClear, measureClose),
       measureLogEl,
       measureFlash,
     );
@@ -693,6 +713,7 @@ export class SkpViewerApp implements PanelHost {
       measureText,
       measureClear,
       measureCopy,
+      measureLock,
       measureLogBtn,
       measureLog: measureLogEl,
       measureFlash,
@@ -1217,6 +1238,11 @@ export class SkpViewerApp implements PanelHost {
           this.refreshStatus();
           this.panel.refreshSelection();
         },
+        // 추론 잠금·화살표로 고정한 각도기 평면: 상태 줄·측정 띠의 잠금 안내와 잠금 단추(잠그면 잠글 방향이 없다는 알림은 거둔다)
+        onLock: () => {
+          if (this.measureTool?.inferenceLock) this.measureNote?.drop(NO_LOCK_FLASH);
+          this.refreshStatus();
+        },
         touch: () => !!this.coarseQuery?.matches,
         curveCenter: (id, seg) => this.curveCenter(id, seg),
         // 모형의 그리기 축을 옮겼으면 줄자·각도기의 축 고정·기본 평면이 그 축을 따른다
@@ -1374,13 +1400,26 @@ export class SkpViewerApp implements PanelHost {
     this.refreshStatus();
   }
 
-  /** 측정 띠에 잠깐 알림(복사 등) */
-  private flashMeasure(text: string): void {
-    const el = this.els.measureFlash;
-    el.textContent = text;
-    el.hidden = false;
-    clearTimeout(this.flashTimer);
-    this.flashTimer = window.setTimeout(() => (el.hidden = true), 1600);
+  /** 측정 띠에 잠깐 알림(복사 등). kind를 붙이면 그 종류로 거둘 수 있다 */
+  private flashMeasure(text: string, ms = 1600, kind: string | null = null): void {
+    (this.measureNote ??= new FlashNote(this.els.measureFlash)).show(text, ms, kind);
+  }
+
+  /** 측정 띠 잠금 단추: 잠겼으면 풀고, 아니면 지금 방향 추론을 잠근다(잠글 것이 없으면 맞추는 법을 알린다 — 잠그면 거둔다) */
+  private toggleMeasureLock(): void {
+    const t = this.measureTool;
+    if (!t?.directing) return;
+    if (t.inferenceLock) t.setInferenceLock(false);
+    else if (!t.setInferenceLock(true))
+      this.flashMeasure(this.coarseQuery?.matches ? '잠글 방향이 없습니다: 길게 눌러 조준하며 축·나란한 방향에 맞춘 뒤 누르세요' : '잠글 방향이 없습니다: 커서를 축·나란한 방향에 맞춘 뒤 누르세요', 3200, NO_LOCK_FLASH);
+    this.refreshStatus();
+  }
+
+  /** 측정 잠금 안내(상태 줄·측정 띠에서 안내 글 다음 따로): 잠근 방향, 키보드 기기는 Shift·화살표, 각도기 화살표 평면 */
+  private measureLockHint(): string | null {
+    const t = this.measureTool;
+    if (!t?.active || this.doc?.measure) return null;
+    return lockHint(t.mode, t.pointCount, lockName(t.inferenceLock), t.planeAxis, !!this.coarseQuery?.matches);
   }
 
   /** 측정 기록 펼치기(측정 띠 위 목록) */
@@ -2870,7 +2909,8 @@ export class SkpViewerApp implements PanelHost {
       return;
     }
     if (tool?.active && !isEditableTarget(ev.target)) {
-      if (tool.handleKey(ev)) {
+      // 화살표는 측정 잠금(SketchUp) — 패널 목록·메뉴·슬라이더에 초점이 있으면 그쪽 것
+      if (!(ev.key.startsWith('Arrow') && inList(ev.target)) && tool.handleKey(ev)) {
         ev.stopPropagation();
         return;
       }
@@ -3146,8 +3186,11 @@ export class SkpViewerApp implements PanelHost {
       sel = selectionText(d, d.selection, d.pick);
       picked = !!sel;
     }
+    // 측정 잠금 안내는 안내 글과 따로 둔다(번역이 안내 글 전체를 한 덩어리로 찾게)
+    const lock = this.measuring ? this.measureLockHint() : null;
     // "고른 것"과 설명은 따로 둔다: 한 글로 두면 다른 언어에서 "고른 것: {0}"이 설명 전체를 그대로 잡아 한국어로 남는다
     if (picked) e.stSel.replaceChildren(h('span', {}, '고른 것'), ': ', h('span', {}, sel));
+    else if (lock) e.stSel.replaceChildren(h('span', {}, sel), ' · ', h('span', { class: 'st-lock' }, lock));
     else e.stSel.textContent = sel;
     e.stSel.title = sel;
     this.refreshMeasureBar();
@@ -3231,9 +3274,21 @@ export class SkpViewerApp implements PanelHost {
       t.append(h('b', { class: 'mb-value' }, measureText(d.measure, d.units, mm)));
       // 축마다 한 덩어리로 줄을 바꾼다("dz ~" / "-171 mm"로 갈리지 않게)
       if (axes) t.append(h('span', { class: 'mb-sub' }, ...axes.split(' · ').map((x) => h('span', { class: 'mb-fact mb-axis' }, x))));
-    } else t.append(h('span', { class: 'mb-hint' }, this.measureHint ?? ''));
+    } else {
+      t.append(h('span', { class: 'mb-hint' }, this.measureHint ?? ''));
+      const lock = this.measureLockHint();
+      if (lock) t.append(h('span', { class: 'mb-sub mb-lock-hint' }, lock));
+    }
     e.measureClear.disabled = !d.measure && !tool.pointCount;
     e.measureCopy.disabled = !d.measure;
+    // 방향을 잡는 동안은 복사(결과가 없다) 자리에 잠금 단추
+    const directing = tool.directing;
+    const locked = !!tool.inferenceLock;
+    e.measureLock.hidden = !directing;
+    e.measureCopy.hidden = directing;
+    e.measureLock.setAttribute('aria-pressed', String(locked));
+    e.measureLock.classList.toggle('on', locked);
+    e.measureLock.title = locked ? '방향 잠금 풀기' : '지금 방향 잠그기(다시 누르면 풀기)';
     e.measureLogBtn.disabled = !this.measureLog.length;
     e.measureLogBtn.title = this.measureLog.length ? `최근 측정 기록 ${this.measureLog.length}개` : '최근 측정 기록';
     if (!this.measureLog.length) e.measureLog.hidden = true;
@@ -3291,6 +3346,7 @@ export class SkpViewerApp implements PanelHost {
       measureMode: this.measureTool?.mode ?? null,
       measureGuides: this.measureTool?.guides.length ?? 0,
       measureGuideLines: this.measureTool?.guideLines.length ?? 0,
+      measureLock: lockName(this.measureTool?.inferenceLock),
       vcb: { shown: this.vcb.shown, value: this.vcb.input.value, inBand: this.vcb.el.parentElement === this.els.measureBar, kind: this.vcb.kind },
       selectionKind: d?.selection?.kind ?? null,
       slideshow: this.sliding,

@@ -2436,10 +2436,14 @@ html:lang(zh-CN) { --font: -apple-system, "PingFang SC", "Microsoft YaHei", sans
   position: absolute;
   bottom: calc(100% + 6px);
   left: 50%;
+  width: max-content;
+  /* 긴 알림(잠글 방향이 없을 때 맞추는 법)은 휴대폰 폭 안에서 줄을 바꾼다 */
+  max-width: calc(100vw - 32px);
   padding: 4px 10px;
   color: var(--bg-elev);
   font-size: 12px;
-  white-space: nowrap;
+  text-align: center;
+  word-break: keep-all;
   background: var(--text);
   border-radius: 8px;
   transform: translateX(-50%);

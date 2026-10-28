@@ -9,17 +9,24 @@ import {
   CORE_PICK_TOLERANCE_PX,
   SNAP_RADIUS_PX,
   TOUCH_SNAP_RADIUS_PX,
+  alongAxis,
+  axisInferenceLock,
   axisLock,
   axisOf,
   chooseSnap,
+  directionLock,
   footOnLine,
   footOnPlane,
+  lockOf,
+  parallelInferenceLock,
   probeOffsets,
   rayClosestOnSegment,
   segmentOfPick,
   triangleOfPick,
+  type InferenceLock,
   type SnapScene,
 } from '../../src/app/snap';
+import type { V3 } from 'opencad-viewer3d/math';
 
 const W = 200;
 const FOV = (40 * Math.PI) / 180;
@@ -40,12 +47,17 @@ function picker(scene: SnapScene, f: ViewFrame = topFrame): (x: number, y: numbe
 }
 
 /** 앱 도구처럼 커서 + 둘레 고르기로 추정 */
-function snapWith(scene: SnapScene, x: number, y: number, o: { from?: number[]; probes?: boolean; radius?: number; f?: ViewFrame } = {}) {
+function snapWith(
+  scene: SnapScene,
+  x: number,
+  y: number,
+  o: { from?: number[]; probes?: boolean; radius?: number; f?: ViewFrame; parallelRef?: [V3, V3] | null; lock?: InferenceLock | null } = {},
+) {
   const f = o.f ?? topFrame;
   const pick = picker(scene, f);
   const radius = o.radius ?? SNAP_RADIUS_PX;
   const probes = o.probes === false ? [] : probeOffsets(radius).map(([dx, dy]) => pick(x + dx, y + dy));
-  return chooseSnap({ frame: f, x, y, pick: pick(x, y), probes, scene, radius, from: o.from ?? null, anchor: [0, 0, 0] });
+  return chooseSnap({ frame: f, x, y, pick: pick(x, y), probes, scene, radius, from: o.from ?? null, anchor: [0, 0, 0], parallelRef: o.parallelRef ?? null, lock: o.lock ?? null });
 }
 
 const close = (a: readonly number[], b: readonly number[], eps = 1e-6): void => {
@@ -367,5 +379,151 @@ describe('추정: 교차점(코어 0.9.0 segmentIntersection)', () => {
     const s = snapWith(scene, 106, 121);
     expect(s.kind).toBe('intersection');
     close(s.point, [5, -20, 0]);
+  });
+});
+
+describe('추정: 모서리와 나란히(SketchUp 자홍 추론)', () => {
+  const empty: SnapScene = { meshes: [], lines: [] };
+  // 위에서 본 평행 투영: 화면 (100 + X, 100 − Y)
+  const at = (deg: number, r: number): [number, number] => [100 + r * Math.cos((deg * Math.PI) / 180), 100 - r * Math.sin((deg * Math.PI) / 180)];
+  /** 앞서 지나간 45° 모서리(시작점과 떨어져 있다) */
+  const diag: [V3, V3] = [[-90, -60, 0], [-60, -30, 0]];
+
+  it('시작점에서 지나간 모서리와 나란한 방향(화면 각 6° 안)이면 그 방향 선 위 점, 기준 모서리와 방향도 함께', () => {
+    const [x, y] = at(47, 50);
+    const s = snapWith(empty, x, y, { from: [0, 0, 0], parallelRef: diag });
+    expect(s.kind).toBe('parallel');
+    expect(s.label).toBe('모서리와 나란히');
+    const t = (50 * Math.cos((2 * Math.PI) / 180)) / Math.SQRT2;
+    close(s.point, [t, t, 0], 1e-6);
+    close(s.dir!, [Math.SQRT1_2, Math.SQRT1_2, 0], 1e-9);
+    expect(s.edge).toEqual(diag);
+    // 기준 모서리가 없거나, 시작점이 없거나, 각이 크면 아니다
+    expect(snapWith(empty, x, y, { from: [0, 0, 0] }).kind).toBe('free');
+    expect(snapWith(empty, x, y, { parallelRef: diag }).kind).toBe('free');
+    const [fx, fy] = at(60, 50);
+    expect(snapWith(empty, fx, fy, { from: [0, 0, 0], parallelRef: diag }).kind).toBe('free');
+  });
+
+  it('축과 나란한 모서리는 축에 맡기고, 둘 다 맞으면 화면에서 선에 가까운 쪽(같으면 축)', () => {
+    const [x, y] = at(47, 50);
+    expect(snapWith(empty, x, y, { from: [0, 0, 0], parallelRef: [[-50, -50, 0], [50, -50, 0]] }).kind).toBe('free');
+    expect(alongAxis([0, 3, 0])).toBe(true);
+    expect(alongAxis([1, 1, 0])).toBe(false);
+    // X축에서 4° 기운 모서리: 1°는 축이 가깝고, 3.5°는 나란함이 가깝다
+    const r4 = (4 * Math.PI) / 180;
+    const tilted: [V3, V3] = [[-50, -50, 0], [-50 + 40 * Math.cos(r4), -50 + 40 * Math.sin(r4), 0]];
+    const [ax, ay] = at(1, 50);
+    expect(snapWith(empty, ax, ay, { from: [0, 0, 0], parallelRef: tilted })).toMatchObject({ kind: 'axis', axis: 'x' });
+    const [px, py] = at(3.5, 50);
+    expect(snapWith(empty, px, py, { from: [0, 0, 0], parallelRef: tilted }).kind).toBe('parallel');
+    // 화면 거리: 축은 50·sin 3.5°, 나란함은 50·sin 0.5°
+    expect(directionLock(topFrame, [0, 0, 0], px, py, [1, 0, 0])!.perp).toBeCloseTo(50 * Math.sin((3.5 * Math.PI) / 180), 6);
+    expect(directionLock(topFrame, [0, 0, 0], px, py, [Math.cos(r4), Math.sin(r4), 0])!.perp).toBeCloseTo(50 * Math.sin((0.5 * Math.PI) / 180), 6);
+  });
+
+  it('점 추정(끝점)이 나란함보다 앞선다', () => {
+    const [x, y] = at(47, 50);
+    const scene: SnapScene = { meshes: [], lines: [lines('p', [[34, 37, 0, 34, 90, 0]])] };
+    const s = snapWith(scene, x, y, { from: [0, 0, 0], parallelRef: diag });
+    expect(s.kind).toBe('endpoint');
+    close(s.point, [34, 37, 0]);
+  });
+});
+
+describe('추정: 방향 잠금(SketchUp 추론 잠금)', () => {
+  const empty: SnapScene = { meshes: [], lines: [] };
+
+  it('축을 잠그면 축 밖을 가리켜도(거리 제한 없이) 시작점을 지나는 그 축 위 점', () => {
+    const lock = axisInferenceLock('x');
+    expect(lock).toEqual({ kind: 'axis', axis: 'x', dir: [1, 0, 0], label: '빨강 축에' });
+    const s = snapWith(empty, 140, 70, { from: [0, 0, 0], lock });
+    expect(s).toMatchObject({ kind: 'axis', axis: 'x', locked: true, label: '빨강 축에' });
+    close(s.point, [40, 0, 0]);
+    expect(s.from).toBeUndefined();
+    close(snapWith(empty, 140, 5, { from: [0, 0, 0], lock }).point, [40, 0, 0]);
+    // 시작점이 없으면 잠금을 쓰지 않는다
+    expect(snapWith(empty, 140, 70, { lock }).locked).toBeUndefined();
+    // 모형의 그리기 축을 옮겼으면 그 축 방향
+    const turned = { x: [0, 1, 0] as V3, y: [-1, 0, 0] as V3, z: [0, 0, 1] as V3 };
+    expect(axisInferenceLock('x', turned).dir).toEqual([0, 1, 0]);
+  });
+
+  it('끝점을 가리키면 그 점을 잠근 선에 수직으로 내린 자리(파랑 축 잠금 = 그 점의 높이)', () => {
+    const scene: SnapScene = { meshes: [], lines: [lines('h', [[50, 50, 30, 60, 50, 30]])] };
+    const s = snapWith(scene, 150, 50, { from: [0, 0, 0], lock: axisInferenceLock('z') });
+    expect(s).toMatchObject({ kind: 'axis', axis: 'z', locked: true, fromKind: 'endpoint' });
+    close(s.point, [0, 0, 30]);
+    close(s.from!, [50, 50, 30]);
+    // 위에서 본 보기에서 빈 곳은 파랑 축이 시선과 나란해 찍을 점이 없다
+    expect(snapWith(empty, 150, 50, { from: [0, 0, 0], lock: axisInferenceLock('z') }).kind).toBe('free');
+  });
+
+  it('나란함 잠금은 기준 모서리 방향, 지금 추정에서 잠글 선 꺼내기(축·나란함·시작점에서 내린 수직)', () => {
+    const ref: [V3, V3] = [[-90, -60, 0], [-60, -30, 0]];
+    const lock = parallelInferenceLock(ref)!;
+    expect(lock.kind).toBe('parallel');
+    const s = snapWith(empty, 170, 60, { from: [0, 0, 0], lock });
+    expect(s).toMatchObject({ kind: 'parallel', locked: true, label: '모서리와 나란히' });
+    close(s.point, [55, 55, 0]);
+    expect(s.edge).toEqual(ref);
+    expect(parallelInferenceLock([[1, 1, 1], [1, 1, 1]])).toBeNull();
+
+    // 지금 추정 → 잠글 선
+    expect(lockOf(snapWith(empty, 160, 99, { from: [0, 0, 0] }))).toMatchObject({ kind: 'axis', axis: 'x', dir: [1, 0, 0], label: '빨강 축에' });
+    const scene: SnapScene = { meshes: [], lines: [lines('e', [[-50, 40, 0, 50, 40, 0]])] };
+    const perp = snapWith(scene, 112, 62, { from: [10, 0, 0] });
+    expect(perp.kind).toBe('perpendicular');
+    close(perp.dir!, [0, 1, 0]);
+    expect(lockOf(perp)).toMatchObject({ kind: 'perpendicular', label: '모서리에 수직' });
+    // 끝점·면 위·빈 곳은 잠글 방향이 아니다
+    expect(lockOf(snapWith(scene, 151, 61))).toBeNull();
+    expect(lockOf(null)).toBeNull();
+    // 잠근 수직: 커서가 어디든 시작점 → 발 방향 선 위
+    const locked = snapWith(empty, 130, 20, { from: [10, 0, 0], lock: lockOf(perp) });
+    expect(locked).toMatchObject({ kind: 'perpendicular', locked: true, label: '모서리에 수직' });
+    close(locked.point, [10, 80, 0]);
+  });
+
+  it('시작점을 주면 시작점을 지나는 모서리에 붙은 점 추정도 그 모서리 방향으로 잠근다(축과 나란하면 그 축)', () => {
+    // e1: 원점에서 +Y, e2: 같은 직선 위 떨어진 선분, k: e1을 가로지름(원점을 지나지 않음), d: 원점에서 기운 모서리, h: 원점을 지나지 않음
+    const scene: SnapScene = {
+      meshes: [],
+      lines: [lines('e', [[0, 0, 0, 0, 80, 0], [0, 90, 0, 0, 99, 0], [-20, 20, 0, 60, 20, 0], [0, 0, 0, -40, -30, 0], [50, -50, 0, 80, -50, 0]])],
+    };
+    const from = [0, 0, 0];
+    const on = snapWith(scene, 101, 50, { from });
+    expect(on.kind).toBe('onEdge');
+    close(on.point, [0, 50, 0]);
+    // 시작점을 주지 않으면 예전처럼 잠글 방향이 아니다
+    expect(lockOf(on)).toBeNull();
+    expect(lockOf(on, from)).toMatchObject({ kind: 'axis', axis: 'y', dir: [0, 1, 0], label: '녹색 축에' });
+    // 같은 직선 위 떨어진 선분의 끝점
+    const far = snapWith(scene, 100, 10, { from });
+    expect(far.kind).toBe('endpoint');
+    close(far.point, [0, 90, 0]);
+    expect(lockOf(far, from)?.axis).toBe('y');
+    // 교차점: 고른 선분이 원점을 지나지 않아도 만나는 다른 선분이 지나면
+    const x = snapWith(scene, 100, 80, { from });
+    expect(x.kind).toBe('intersection');
+    expect(lockOf(x, from)?.axis).toBe('y');
+    // 기운 모서리의 중간점 → 그 모서리와 나란히
+    const mid = snapWith(scene, 80, 115, { from });
+    expect(mid.kind).toBe('midpoint');
+    const par = lockOf(mid, from)!;
+    expect(par).toMatchObject({ kind: 'parallel', label: '모서리와 나란히' });
+    close(par.dir, [-0.8, -0.6, 0]);
+    expect(par.edge).toEqual([[0, 0, 0], [-40, -30, 0]]);
+    // 모형의 그리기 축이 그 모서리와 나란하면 그 축, 세계 Y 모서리는 나란함
+    const axes = { x: [0.8, 0.6, 0] as V3, y: [-0.6, 0.8, 0] as V3, z: [0, 0, 1] as V3 };
+    expect(lockOf(mid, from, axes)).toMatchObject({ kind: 'axis', axis: 'x', dir: [0.8, 0.6, 0] });
+    expect(lockOf(on, from, axes)?.kind).toBe('parallel');
+    // 원점을 지나지 않는 모서리, 시작점 자리(모서리가 만나는 꼭짓점)는 잠그지 않는다
+    const off = snapWith(scene, 165, 150, { from });
+    expect(off.kind).toBe('midpoint');
+    expect(lockOf(off, from)).toBeNull();
+    const at0 = snapWith(scene, 100, 100, { from });
+    expect(at0.kind).toBe('endpoint');
+    expect(lockOf(at0, from)).toBeNull();
   });
 });
