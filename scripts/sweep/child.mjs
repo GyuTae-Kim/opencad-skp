@@ -26,7 +26,9 @@ process.on('message', async (msg) => {
       /* 머리를 못 읽으면 해석기가 알린다 */
     }
     await send({ type: 'start', id: msg.id, header });
-    reply.result = await probeSkp(bytes, { name: basename(msg.path), mem: !!msg.mem, gc });
+    const opts = { name: basename(msg.path), mem: !!msg.mem, gc };
+    if (typeof msg.streamMin === 'number') opts.streamMin = msg.streamMin;
+    reply.result = await probeSkp(bytes, opts);
     // 파일마다 새 프로세스(--mem)일 때 이 값이 그 파일의 최대 rss다(KB → MB)
     if (reply.result.mem) reply.result.mem.maxRssMB = Math.round((process.resourceUsage().maxRSS * 1024) / 1e5) / 10;
   } catch (e) {

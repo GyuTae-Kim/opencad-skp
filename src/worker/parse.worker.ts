@@ -8,10 +8,9 @@
  */
 /// <reference lib="webworker" />
 import { TEXTURE_LIMIT } from 'opencad-viewer3d/texture';
-import { readSkpImages, skpToScene, type SkpImages } from '../index';
+import { readSkpImages, skpToSceneAsync, STREAM_MIN_BYTES, type SkpImages } from '../index';
 import { collectTransfers, errorText, type ParseRequest, type ParseResponse, type ParseResult } from '../app/protocol';
 import { prepareSceneTextures } from './textures';
-import { NATIVE_INFLATE_MIN_BYTES, preinflateSkp } from './unzip';
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 
@@ -34,13 +33,6 @@ async function open(req: ParseRequest): Promise<ParseResult> {
   const t0 = performance.now();
   const bytes = new Uint8Array(req.bytes);
   const name = req.name.replace(/^.*[\\/]/, '');
-  // 큰 2021+ 모형의 model.dat는 브라우저 내장 풀기로 먼저 푼다(직접 푸는 것보다 몇 배 빠르다 — 안 되면 해석기가 직접 푼다).
-  // 해석기가 모형 요소를 읽고 나면 이 Map에서 그 항목을 지우므로, 여기서 풀린 바이트를 따로 붙들지 않는다
-  let inflated: Map<string, Uint8Array> | undefined;
-  if (bytes.length >= NATIVE_INFLATE_MIN_BYTES) {
-    progress(0.01, 'model.dat 푸는 중');
-    inflated = await preinflateSkp(bytes);
-  }
   progress(0.01, '그림 꺼내는 중');
   let images: SkpImages | undefined;
   try {
@@ -49,9 +41,11 @@ async function open(req: ParseRequest): Promise<ParseResult> {
   } catch {
     /* 그림은 없어도 된다 */
   }
-  // 파일 바이트는 해석기가 모형 요소를 읽기 전에 떼어 놓는다(releaseBytes — 그림은 위에서 먼저 꺼냈다)
-  const scene = skpToScene(bytes, { name, outline: true, extras: true, smooth: true, onProgress: progress, textures: images?.materials, inflated, releaseBytes: true });
-  inflated = undefined;
+  // 큰 2021+ 모형의 model.dat(압축 1 MiB 이상)는 브라우저 내장 풀기로 조각조각 풀면서 읽는다(직접 푸는 것보다 몇 배 빠르고,
+  // 풀린 model.dat 전체를 들지 않는다 — 안 되면 해석기가 직접 푼다). 파일 바이트는 model.dat를 다 읽으면 떼어 놓는다
+  // (releaseBytes — 그림은 위에서 먼저 꺼냈다)
+  const streamMin = STREAM_MIN_BYTES;
+  const scene = await skpToSceneAsync(bytes, { name, outline: true, extras: true, smooth: true, onProgress: progress, textures: images?.materials, releaseBytes: true, streamMin });
   const result: ParseResult = { scene, ms: 0 };
   if (images && (images.model || images.materials.length || images.components.length || images.scenes.length)) result.images = images;
   if (scene.textures?.length) {

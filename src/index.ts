@@ -19,13 +19,15 @@ import { parseMaterialXml, type SkpMaterialInfo } from './materials';
 import type { SkpMetaExtras } from './meta';
 import { MfcRefused, readMfcModel, rememberMfcImages, takeMfcResult } from './mfcmodel';
 import { readModelDat, type SkpModel } from './model';
+import { inflateNative, STREAM_MIN_BYTES, streamModelDat } from './modelstream';
 import { buildSceneParts, type SceneTexture } from './scene';
 import { axesMeta, cameraMeta, edgeColoringFor, locationMeta, pagesMeta, shadowMeta, styleFor, unitsFor } from './scene-meta';
 import { parseStyleXml } from './styles';
-import { findSkpZipItems, readZipItem, readZipItemPartial } from './zip';
+import { findSkpZipItems, readZipItem, readZipItemPartial, zipItemData, type ZipItem } from './zip';
 
 export { readSkpHeader, type SkpHeader } from './header';
 export { readModelDat, type SkpModel } from './model';
+export { STREAM_MIN_BYTES } from './modelstream';
 export {
   EDGE_UNKNOWN,
   edgeAt,
@@ -86,14 +88,14 @@ export interface SkpOptions {
   /** 무늬 좌표를 다는 정점 수 한도(기본 scene.ts MAX_UV_VERTICES) */
   maxUvVertices?: number;
   /**
-   * 미리 푼 꾸러미 항목(이름 → 풀린 바이트, 지금은 'model.dat'만 본다). 워커가 브라우저 내장 풀기로 먼저 푼 것을 넘기면
-   * 해석기가 다시 풀지 않는다(길이가 목록의 원래 크기와 같을 때만 — 다르면 예전처럼 직접 푼다). 2021+ 파일만.
+   * 미리 푼 꾸러미 항목(이름 → 풀린 바이트, 지금은 'model.dat'만 본다). 따로 푼 것을 넘기면 해석기가 다시 풀지 않는다
+   * (길이가 목록의 원래 크기와 같을 때만 — 다르면 예전처럼 직접 푼다). 2021+ 파일만. 큰 파일은 skpToSceneAsync가 풀면서 읽어 더 적게 잡는다.
    * 해석기는 'model.dat' 항목을 꺼낸 뒤 이 Map에서 지운다: 모형 요소를 다 읽으면 풀린 바이트(큰 모형은 수백 MB)가
    * 장면을 만드는 동안 남지 않게 한다(부르는 쪽도 그 바이트를 따로 붙들지 않아야 놓인다)
    */
   inflated?: Map<string, Uint8Array>;
   /**
-   * 파일 바이트를 다 쓰면(2021+는 꾸러미의 재질·스타일을 읽고 model.dat를 꺼낸 뒤, 2020 이하는 모형을 읽은 뒤) 그 버퍼를 떼어 놓는다
+   * 파일 바이트를 다 쓰면(2021+는 꾸러미의 재질·스타일을 읽고 model.dat를 꺼낸 뒤 — 풀면서 읽으면 model.dat를 다 읽은 뒤, 2020 이하는 모형을 읽은 뒤) 그 버퍼를 떼어 놓는다
    * (ArrayBuffer.prototype.transfer(0) — 넘긴 bytes는 길이 0이 된다). 파일 바이트를 더 쓰지 않는 쪽(앱 워커)이 모형 요소를 읽고
    * 장면을 만드는 동안 파일 크기만큼 덜 잡게 켠다. bytes가 버퍼 전체를 보지 않거나 떼어 놓을 수 없으면 그대로 둔다. 켜면 그 뒤에
    * 같은 bytes로 readSkpImages를 부를 수 없다(그림은 먼저 꺼낸다). 기본 false
@@ -142,8 +144,16 @@ function emptyScene(name: string, warnings: string[], meta: Record<string, unkno
   return { name, units: 'unknown', meshes: [], lines: [], warnings, meta };
 }
 
-/** SKP 바이트 → 장면. 읽지 못하는 판·깨진 파일은 경고와 함께 빈(또는 일부) 장면 */
-export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
+/** 해석 시작: 머리를 읽고 장면 이름·meta·경고·진행 알림을 둔다. SketchUp 파일이 아니면 빈 장면 */
+interface Start {
+  name: string;
+  header: NonNullable<ReturnType<typeof readSkpHeader>>;
+  meta: Record<string, unknown>;
+  warnings: string[];
+  progress: (f: number, stage: string) => void;
+}
+
+function startScene(bytes: Uint8Array, opts: SkpOptions): Start | Scene3d {
   const name = opts.name ?? 'SketchUp 모형';
   const progress = (f: number, stage: string): void => {
     try {
@@ -157,32 +167,84 @@ export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
   if (!header) return emptyScene(name, ['SketchUp 파일이 아닙니다(머리 표지 "SketchUp Model"이 없습니다)'], { format: 'SketchUp' });
   const meta: Record<string, unknown> = { format: 'SketchUp', version: header.version, container: header.container };
   const warnings: string[] = [];
-  let read: Package | Scene3d;
-  if (header.container === 'mfc') {
-    // SketchUp 2020 이하: 객체 직렬화 하나(꾸러미·압축 없음). 무늬 그림을 먼저 꺼냈으면(readSkpImages) 그때 읽은 모형을 쓴다
-    try {
-      let res = takeMfcResult(bytes);
-      if (!res) {
-        progress(0.05, '옛 형식(2020 이하) 모형 읽는 중');
-        res = readMfcModel(bytes, header, (f) => progress(0.05 + 0.59 * f, '모형 요소 읽는 중'));
-        rememberMfcImages(bytes, res.images);
-      }
-      if (opts.releaseBytes) releaseFile(bytes);
-      read = { model: res.model, materials: res.materials, styles: res.styles, damaged: false, texImages: textureImages(res.materials, opts, warnings) };
-    } catch (e) {
-      if (e instanceof MfcRefused) {
-        // 화면이 "아직 못 읽는 판" 안내를 띄우는 표시
-        meta.unsupported = true;
-        return emptyScene(name, [e.message], meta);
-      }
-      return emptyScene(name, [`SketchUp 파일을 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`], meta);
-    }
-  } else {
+  if (header.container !== 'mfc') {
     if (header.major > SKP_MAX_CHECKED_MAJOR)
       warnings.push(`표본으로 확인하지 않은 SketchUp 버전 ${header.version}입니다. 2021~2026 형식으로 읽어 봅니다.`);
     else if (!(header.major >= SKP_ZIP_MIN_MAJOR)) warnings.push(`2021 이후 꼴(VFF + ZIP)인데 판이 ${header.version}입니다. 2021~2026 형식으로 읽어 봅니다.`);
-    read = readZipPackage(bytes, header.bodyOffset, name, meta, warnings, progress, opts);
   }
+  return { name, header, meta, warnings, progress };
+}
+
+/** SketchUp 2020 이하: 객체 직렬화 하나(꾸러미·압축 없음). 무늬 그림을 먼저 꺼냈으면(readSkpImages) 그때 읽은 모형을 쓴다 */
+function readMfcPackage(bytes: Uint8Array, st: Start, opts: SkpOptions): Package | Scene3d {
+  const { name, header, meta, warnings, progress } = st;
+  try {
+    let res = takeMfcResult(bytes);
+    if (!res) {
+      progress(0.05, '옛 형식(2020 이하) 모형 읽는 중');
+      res = readMfcModel(bytes, header, (f) => progress(0.05 + 0.59 * f, '모형 요소 읽는 중'));
+      rememberMfcImages(bytes, res.images);
+    }
+    if (opts.releaseBytes) releaseFile(bytes);
+    return { model: res.model, materials: res.materials, styles: res.styles, damaged: false, texImages: textureImages(res.materials, opts, warnings) };
+  } catch (e) {
+    if (e instanceof MfcRefused) {
+      // 화면이 "아직 못 읽는 판" 안내를 띄우는 표시
+      meta.unsupported = true;
+      return emptyScene(name, [e.message], meta);
+    }
+    return emptyScene(name, [`SketchUp 파일을 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`], meta);
+  }
+}
+
+/**
+ * 2021+ model.dat를 어떻게 읽었는지(skpToSceneAsync onModelRead): stream 풀면서 정의를 하나씩, held 풀면서 읽었지만 정의 절은 통째로
+ * 들고(재질·글꼴 절이 정의 절보다 뒤에 오거나 없음), whole 처음부터 통째로(작거나 압축이 아니거나 잘렸거나 내장 풀기가 없음),
+ * shape 조각으로 읽을 수 없는 꼴(깨진 뿌리 등)이라 통째로 다시, inflate 내장 풀기가 실패해 직접 풀기
+ */
+export type SkpModelRead = 'stream' | 'held' | 'whole' | 'shape' | 'inflate';
+
+/** skpToSceneAsync 선택 */
+export interface SkpAsyncOptions extends SkpOptions {
+  /** 압축된 model.dat가 이만큼(바이트) 이상이면 풀면서 읽는다(기본 STREAM_MIN_BYTES = 1 MiB, 0이면 압축된 모든 2021+ 파일) */
+  streamMin?: number;
+  /** model.dat를 어떻게 읽었는지 알린다(진단·훑기 도구용) */
+  onModelRead?: (how: SkpModelRead) => void;
+}
+
+/** SKP 바이트 → 장면. 읽지 못하는 판·깨진 파일은 경고와 함께 빈(또는 일부) 장면 */
+export function skpToScene(bytes: Uint8Array, opts: SkpOptions = {}): Scene3d {
+  const st = startScene(bytes, opts);
+  if (!('header' in st)) return st;
+  let read: Package | Scene3d;
+  if (st.header.container === 'mfc') read = readMfcPackage(bytes, st, opts);
+  else {
+    const pkg = openZipPackage(bytes, st, opts);
+    read = 'modelItem' in pkg ? readPackageModel(bytes, pkg, st, opts) : pkg;
+  }
+  return sceneFrom(read, st, opts);
+}
+
+/**
+ * skpToScene과 같은 장면을 내되, 압축된 model.dat가 opts.streamMin(기본 1 MiB) 이상인 2021+ 파일은 내장 풀기(DecompressionStream)로
+ * 조각조각 풀면서 읽는다(src/modelstream.ts) — 풀린 model.dat 전체(큰 모형은 수백 MB)를 들지 않는다. 내장 풀기가 없거나 실패하면
+ * skpToScene처럼 통째로 푼다. releaseBytes면 파일 바이트는 압축된 model.dat를 다 읽은 뒤 놓는다
+ */
+export async function skpToSceneAsync(bytes: Uint8Array, opts: SkpAsyncOptions = {}): Promise<Scene3d> {
+  const st = startScene(bytes, opts);
+  if (!('header' in st)) return st;
+  let read: Package | Scene3d;
+  if (st.header.container === 'mfc') read = readMfcPackage(bytes, st, opts);
+  else {
+    const pkg = openZipPackage(bytes, st, opts);
+    read = 'modelItem' in pkg ? await streamPackageModel(bytes, pkg, st, opts) : pkg;
+  }
+  return sceneFrom(read, st, opts);
+}
+
+/** 중간 모형 → 장면(두 판의 해석기가 같은 중간 모형을 내서 여기는 하나다) */
+function sceneFrom(read: Package | Scene3d, st: Start, opts: SkpOptions): Scene3d {
+  const { name, meta, warnings, progress } = st;
   if (!('model' in read)) return read;
   const { model, materials, styles, damaged, texImages } = read;
   warnings.push(...model.warnings);
@@ -311,17 +373,20 @@ interface Package {
   texImages: Map<string, TexImage>;
 }
 
-/** 2021+ 꾸러미(ZIP): material.xml·style.xml과 model.dat. 꾸러미를 찾지 못하면 경고와 빈 장면 */
-function readZipPackage(
-  bytes: Uint8Array,
-  bodyOffset: number,
-  name: string,
-  meta: Record<string, unknown>,
-  warnings: string[],
-  progress: (f: number, stage: string) => void,
-  opts: Pick<SkpOptions, 'textures' | 'maxTextures' | 'inflated' | 'releaseBytes'> = {},
-): Package | Scene3d {
-  let model: SkpModel;
+/** 2021+ 꾸러미를 열어 재질·스타일·무늬 그림까지 읽은 것(model.dat는 아직 꺼내지 않았다) */
+interface OpenPackage {
+  modelItem: ZipItem;
+  /** 끝 목록이 없거나 깨져 앞에서부터 항목을 찾았다 */
+  salvaged: boolean;
+  materials: Map<string, SkpMaterialInfo>;
+  styles: Map<string, Map<number, string>>;
+  damaged: boolean;
+  texImages: Map<string, TexImage>;
+}
+
+/** 2021+ 꾸러미(ZIP): 목록과 material.xml·style.xml·무늬 그림. 꾸러미나 model.dat를 찾지 못하면 경고와 빈 장면 */
+function openZipPackage(bytes: Uint8Array, st: Start, opts: Pick<SkpOptions, 'textures' | 'maxTextures'>): OpenPackage | Scene3d {
+  const { name, header, meta, warnings, progress } = st;
   const materials = new Map<string, SkpMaterialInfo>();
   /** 무늬를 입힐 재질 폴더 → 그림 */
   const texImages = new Map<string, TexImage>();
@@ -330,7 +395,7 @@ function readZipPackage(
   let damaged = false;
   try {
     progress(0.05, '꾸러미(ZIP) 목록 읽는 중');
-    const found = findSkpZipItems(bytes, bodyOffset);
+    const found = findSkpZipItems(bytes, header.bodyOffset);
     const dir = found.items;
     if (!dir) return emptyScene(name, [found.error ? `SketchUp 꾸러미(ZIP)가 깨졌습니다: ${found.error}` : 'SketchUp 꾸러미(ZIP)를 찾지 못했습니다 — 파일이 잘렸거나(끝까지 받지 못함) 깨졌을 수 있습니다'], meta);
     const modelItem = dir.find((d) => d.name === 'model.dat');
@@ -347,15 +412,15 @@ function readZipPackage(
     const text = new TextDecoder('utf-8');
     progress(0.1, '재질 읽는 중');
     for (const item of dir) {
-      const st = /^styles\/(.+)\/style\.xml$/.exec(item.name);
-      if (st) {
+      const sm = /^styles\/(.+)\/style\.xml$/.exec(item.name);
+      if (sm) {
         // 한 파일 16 MiB까지(참조 해석기와 같은 한도 — 스타일 글은 보통 수십 KB)
         if (item.size > MAX_STYLE_XML_BYTES) {
           warnings.push(`스타일 파일이 너무 커서 건너뛰었습니다: ${item.name}`);
           continue;
         }
         try {
-          styles.set(st[1]!, parseStyleXml(text.decode(readZipItem(bytes, item))));
+          styles.set(sm[1]!, parseStyleXml(text.decode(readZipItem(bytes, item))));
         } catch {
           warnings.push(`스타일 파일을 읽지 못했습니다: ${item.name}`);
         }
@@ -380,13 +445,26 @@ function readZipPackage(
       if (m) folders.push(m[1]!);
     }
     for (const [k, v] of textureImages(materials, opts, warnings, folders)) texImages.set(k, v);
+    return { modelItem, salvaged: found.salvaged, materials, styles, damaged, texImages };
+  } catch (e) {
+    return emptyScene(name, [...warnings, `SketchUp 파일을 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`], meta);
+  }
+}
+
+/** model.dat를 통째로 꺼내(미리 푼 것, 아니면 직접 풀기·깨졌으면 앞부분) 모형으로 */
+function readPackageModel(bytes: Uint8Array, pkg: OpenPackage, st: Start, opts: Pick<SkpOptions, 'inflated' | 'releaseBytes'>): Package | Scene3d {
+  const { name, meta, warnings, progress } = st;
+  const { modelItem, materials, styles, texImages } = pkg;
+  let damaged = pkg.damaged;
+  let model: SkpModel;
+  try {
     progress(0.2, 'model.dat 푸는 중');
     const unpacking = (f: number): void => progress(0.2 + 0.19 * f, 'model.dat 푸는 중');
     // 미리 푼 바이트는 꺼내고 Map에서 지운다(쓰지 않는 길이여도) — 이 함수가 끝나면 장면을 만드는 동안 붙드는 곳이 없다
     const pre = opts.inflated?.get('model.dat');
     opts.inflated?.delete('model.dat');
     let dat: Uint8Array;
-    if (found.salvaged || modelItem.truncated) {
+    if (pkg.salvaged || modelItem.truncated) {
       const part = readZipItemPartial(bytes, modelItem, unpacking);
       dat = part.data;
       if (!part.complete) {
@@ -413,6 +491,62 @@ function readZipPackage(
     return emptyScene(name, [...warnings, `SketchUp 파일을 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`], meta);
   }
   return { model, materials, styles, damaged, texImages };
+}
+
+/**
+ * model.dat를 내장 풀기로 풀면서 읽는다(skpToSceneAsync). 압축이 아니거나 작거나 잘렸거나 미리 푼 바이트를 받았거나 내장 풀기가 없으면
+ * readPackageModel. 풀기가 실패하면 예전에 미리 풀기가 실패했을 때처럼 직접 풀고, 조각으로 읽을 수 없는 꼴이면 통째로 풀어 읽는다(같은 결과)
+ */
+async function streamPackageModel(
+  bytes: Uint8Array,
+  pkg: OpenPackage,
+  st: Start,
+  opts: Pick<SkpAsyncOptions, 'inflated' | 'releaseBytes' | 'streamMin' | 'onModelRead'>,
+): Promise<Package | Scene3d> {
+  const told = (how: SkpModelRead): void => {
+    try {
+      opts.onModelRead?.(how);
+    } catch {
+      /* 알림 쪽 오류는 해석을 멈추지 않는다 */
+    }
+  };
+  const item = pkg.modelItem;
+  let data: Uint8Array | undefined;
+  if (
+    !pkg.salvaged &&
+    !item.truncated &&
+    item.method === 8 &&
+    item.compressedSize >= (opts.streamMin ?? STREAM_MIN_BYTES) &&
+    !opts.inflated?.has('model.dat') &&
+    typeof DecompressionStream !== 'undefined'
+  )
+    try {
+      data = zipItemData(bytes, item);
+    } catch {
+      /* 지역 머리가 깨졌으면 예전 길이 알린다 */
+    }
+  if (!data) {
+    told('whole');
+    return readPackageModel(bytes, pkg, st, opts);
+  }
+  const { name, meta, warnings, progress } = st;
+  progress(0.4, '모형 요소 읽는 중');
+  let res: Awaited<ReturnType<typeof streamModelDat>>;
+  try {
+    res = await streamModelDat(data, item.size, { textured: pkg.texImages.keys() }, (f) => progress(0.4 + 0.24 * f, '모형 요소 읽는 중'));
+  } catch (e) {
+    return emptyScene(name, [...warnings, `SketchUp 파일을 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`], meta);
+  }
+  told(typeof res === 'string' ? res : res.held ? 'held' : 'stream');
+  if (typeof res !== 'string') {
+    // 파일 바이트(압축된 model.dat)는 다 읽었다
+    data = undefined;
+    if (opts.releaseBytes) releaseFile(bytes);
+    return { model: res.model, materials: pkg.materials, styles: pkg.styles, damaged: pkg.damaged, texImages: pkg.texImages };
+  }
+  const pre = res === 'shape' ? await inflateNative(data, item.size) : null;
+  data = undefined;
+  return readPackageModel(bytes, pkg, st, { ...opts, inflated: pre ? new Map([['model.dat', pre]]) : undefined });
 }
 
 /**

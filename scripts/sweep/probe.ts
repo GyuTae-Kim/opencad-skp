@@ -1,24 +1,25 @@
 /**
  * 훑기 도구가 파일 하나를 해석하는 길(probe). 앱 워커(src/worker/parse.worker.ts)와 같은 차례·같은 선택으로 부른다:
- * 큰 2021+ 파일은 model.dat를 내장 풀기(DecompressionStream)로 먼저 풀고(inflated) → 그림을 꺼내고(readSkpImages) →
- * 같은 선택으로 skpToScene(해석기가 다 쓴 파일 버퍼를 떼어 놓는다 — releaseBytes, 넘긴 bytes는 길이 0이 된다). 무늬 그림 손질(createImageBitmap)과 화면으로 넘기기는 브라우저 일이라 하지 않는다.
+ * 그림을 꺼내고(readSkpImages) → 같은 선택으로 skpToSceneAsync(큰 2021+ 파일은 model.dat를 내장 풀기(DecompressionStream)로
+ * 풀면서 읽고, 해석기가 다 쓴 파일 버퍼를 떼어 놓는다 — releaseBytes, 넘긴 bytes는 길이 0이 된다). 무늬 그림 손질(createImageBitmap)과
+ * 화면으로 넘기기는 브라우저 일이라 하지 않는다.
  * 워커의 선택이 바뀌면 여기도 같이 바꾼다(tests/sweep.test.ts가 두 파일의 호출 글자를 견준다).
  *
- * 단계와 시간: inflate(워커의 내장 풀기) · images(그림 꺼내기 — 2020 이하는 여기서 모형을 다 읽는다) ·
- * unpack(꾸러미 목록·재질·내장 풀기를 못 했을 때 직접 풀기) · parse(모형 요소 읽기) · scene(삼각화·인스턴스 펼치기·장면 정보).
- * unpack·parse·scene은 skpToScene의 진행 알림 비율로 가른다(2021+ 0.4 앞 = unpack, 0.65 앞 = parse, 그 뒤 = scene).
+ * 단계와 시간: images(그림 꺼내기 — 2020 이하는 여기서 모형을 다 읽는다) · unpack(꾸러미 목록·재질, 작은 model.dat는 직접 풀기) ·
+ * parse(모형 요소 읽기 — 풀면서 읽으면 풀기도 여기) · scene(삼각화·인스턴스 펼치기·장면 정보). inflate(예전 워커의 미리 풀기)는 이제 없다.
+ * 단계는 해석기의 진행 알림 비율로 가른다(2021+ 0.4 앞 = unpack, 0.65 앞 = parse, 그 뒤 = scene).
  * mem을 켜면 진행 알림마다 heap·external·rss를 재 단계별 최대값을 남기고, 단계가 끝날 때 gc()로 그때 살아 있는 크기를 잰다
  * (gc 시간은 단계 시간에서 뺀다 — 그래도 mem을 켠 시간은 보통 시간과 견주지 않는다). 단계 끝 external에는 V8이 뒤에서 아직 치우지 못한
  * ArrayBuffer가 섞일 수 있어, 해석을 마친 뒤에는 잠깐 쉬었다가 다시 gc()해 워커가 화면으로 넘기기 직전에 붙든 크기(retained)를 따로 잰다.
  * 이 파일은 scripts/sweep/sweep.mjs가 Vite로 묶어 Node 자식 프로세스에서 부른다. 파일 경로는 받지 않는다.
  */
 import { createHash } from 'node:crypto';
-import { readSkpHeader, readSkpImages, skpToScene, type SkpImages } from '../../src/index';
-import { NATIVE_INFLATE_MIN_BYTES, preinflateSkp } from '../../src/worker/unzip';
+import type { Scene3d } from 'opencad-viewer3d/types';
+import { readSkpHeader, readSkpImages, skpToSceneAsync, STREAM_MIN_BYTES, type SkpImages, type SkpModelRead } from '../../src/index';
 import { findSkpZipItems } from '../../src/zip';
 
-export type ProbeStage = 'inflate' | 'images' | 'unpack' | 'parse' | 'scene';
-export const PROBE_STAGES: readonly ProbeStage[] = ['inflate', 'images', 'unpack', 'parse', 'scene'];
+export type ProbeStage = 'images' | 'unpack' | 'parse' | 'scene';
+export const PROBE_STAGES: readonly ProbeStage[] = ['images', 'unpack', 'parse', 'scene'];
 
 export interface ProbeOptions {
   /** 장면 이름(워커처럼 파일 이름만) */
@@ -27,8 +28,8 @@ export interface ProbeOptions {
   mem?: boolean;
   /** --expose-gc의 gc. 없으면 단계 끝 크기(end*)는 gc 없이 잰 값 */
   gc?: () => void;
-  /** 내장 풀기 문턱(기본은 워커와 같은 NATIVE_INFLATE_MIN_BYTES) — 시험에서 작은 파일로 그 길을 타려고 */
-  inflateMin?: number;
+  /** 풀면서 읽는 문턱(압축된 model.dat 바이트, 기본은 워커와 같은 STREAM_MIN_BYTES) — 시험·훑기(--stream-min)에서 작은 파일도 그 길을 타려고 */
+  streamMin?: number;
 }
 
 /** 단계 하나의 메모리(MB = 10^6 바이트) */
@@ -72,9 +73,8 @@ export interface ProbeMemory {
   sceneBuffersMB: Record<string, number>;
   /** 장면 형식 배열이 붙든 바탕 ArrayBuffer 합(MB) — 배열 크기보다 크면 큰 버퍼의 일부를 보는 배열이 있다 */
   sceneBackingMB: number;
-  /** 장면이 파일 바이트·미리 푼 model.dat 버퍼를 붙들고 있는지(그러면 그 버퍼가 장면과 함께 산다) */
+  /** 장면이 파일 바이트 버퍼를 붙들고 있는지(그러면 그 버퍼가 장면과 함께 산다) */
   sceneHoldsFile: boolean;
-  sceneHoldsModelDat?: boolean;
   /** 꺼낸 그림 바이트 합(MB) */
   imagesMB: number;
 }
@@ -103,8 +103,10 @@ export interface ProbeMetrics {
 
 export interface ProbeResult {
   header: { version: string; major: number; container: string; sub?: number } | null;
-  /** 워커처럼 내장 풀기로 먼저 푼 model.dat를 넘겼는지 */
+  /** 워커처럼 model.dat를 내장 풀기로 풀면서 읽었는지(modelRead가 'stream'·'held') */
   inflated: boolean;
+  /** 2021+ model.dat를 어떻게 읽었는지(skpToSceneAsync onModelRead — 조각으로 읽을 수 없어 통째로 읽은 파일을 가린다) */
+  modelRead?: SkpModelRead;
   ms: Partial<Record<ProbeStage, number>> & { total: number };
   images?: { model: boolean; materials: number; components: number; scenes: number; skipped: number };
   imageError?: string;
@@ -205,7 +207,7 @@ class Meter {
 }
 
 /** 장면의 형식 배열 바이트(같은 배열은 한 번) — 묶음 종류.열쇠별, 그리고 그 배열들의 바탕 버퍼 */
-export function sceneBuffers(scene: ReturnType<typeof skpToScene>): { byKey: Record<string, number>; backing: Set<ArrayBufferLike> } {
+export function sceneBuffers(scene: Scene3d): { byKey: Record<string, number>; backing: Set<ArrayBufferLike> } {
   const seen = new Set<ArrayBufferView>();
   const backing = new Set<ArrayBufferLike>();
   const out: Record<string, number> = {};
@@ -232,7 +234,7 @@ export function sceneBuffers(scene: ReturnType<typeof skpToScene>): { byKey: Rec
  * 장면 출력의 sha256(앞 16자): 형식 배열은 꼴·길이와 바이트 그대로, 객체는 열쇠를 정렬해(undefined 칸은 없는 것과 같게),
  * 수는 글로(-0과 NaN도 가른다). 장면 이름은 빼고 단위·그물·선분·점·무늬·범위·경고·meta를 넣는다
  */
-export function sceneDigest(scene: ReturnType<typeof skpToScene>): string {
+export function sceneDigest(scene: Scene3d): string {
   const h = createHash('sha256');
   const walk = (v: unknown): void => {
     if (ArrayBuffer.isView(v)) {
@@ -302,24 +304,6 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
   const fileBuffer = bytes.buffer;
   const t0 = performance.now();
 
-  // 워커: 큰 2021+ 모형의 model.dat는 브라우저 내장 풀기로 먼저 푼다
-  let inflated: Map<string, Uint8Array> | undefined;
-  const inflateMin = opts.inflateMin ?? NATIVE_INFLATE_MIN_BYTES;
-  if (bytes.length >= inflateMin) {
-    meter.enter('inflate');
-    const timer = mem ? setInterval(() => meter.sample(), 5) : undefined;
-    try {
-      inflated = await preinflateSkp(bytes, inflateMin);
-    } finally {
-      if (timer) clearInterval(timer);
-    }
-  }
-  const datBytes = inflated?.get('model.dat')?.length;
-  // 진단만 하려고 붙들면 그 버퍼가 끝까지 살아 메모리를 잘못 잰다 — 약한 참조로. 약한 참조를 만든 작업(job)이 끝날 때까지는
-  // 대상이 살아 있으므로(WeakRef KeepDuringJob) 해석 전에 한 번 쉰다 — 쉬지 않으면 model.dat가 장면 단계 끝까지 남아 보인다
-  const datBuffer = mem && inflated ? new WeakRef(inflated.get('model.dat')!.buffer) : undefined;
-  if (datBuffer) await new Promise((r) => setTimeout(r, 0));
-
   // 워커: 그림을 먼저 꺼낸다(2020 이하는 여기서 모형을 다 읽고 해석기가 이어 쓴다). 그림은 없어도 된다
   meter.enter('images');
   let images: SkpImages | undefined;
@@ -333,8 +317,19 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
   const progress = (fraction: number): void => {
     meter.enter(fraction >= 0.65 ? 'scene' : zipPath && fraction < 0.4 ? 'unpack' : 'parse');
   };
-  const scene = skpToScene(bytes, { name, outline: true, extras: true, smooth: true, onProgress: progress, textures: images?.materials, inflated, releaseBytes: true });
-  inflated = undefined;
+  let modelRead: SkpModelRead | undefined;
+  const onModelRead = (how: SkpModelRead): void => {
+    modelRead = how;
+  };
+  const streamMin = opts.streamMin ?? STREAM_MIN_BYTES;
+  // 풀면서 읽는 동안(비동기) 사이사이에도 잰다
+  const timer = mem ? setInterval(() => meter.sample(), 5) : undefined;
+  let scene: Scene3d;
+  try {
+    scene = await skpToSceneAsync(bytes, { name, outline: true, extras: true, smooth: true, onProgress: progress, textures: images?.materials, releaseBytes: true, streamMin, onModelRead });
+  } finally {
+    if (timer) clearInterval(timer);
+  }
   meter.close();
   const total = performance.now() - t0;
   const after = process.memoryUsage();
@@ -386,7 +381,7 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
   for (const [s, a] of meter.acc) ms[s] = Math.round(a.ms);
   const result: ProbeResult = {
     header,
-    inflated: datBytes !== undefined,
+    inflated: modelRead === 'stream' || modelRead === 'held',
     ms,
     metrics,
     warnings: scene.warnings ?? [],
@@ -396,6 +391,7 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
     heapMB: MB(after.heapUsed - heap0),
     rssMB: MB(after.rss),
   };
+  if (modelRead) result.modelRead = modelRead;
   if (images)
     result.images = {
       model: !!images.model,
@@ -451,12 +447,7 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
       sceneHoldsFile: backing.has(fileBuffer),
       imagesMB: MB(imageBytes),
     };
-    if (datBuffer) {
-      const b = datBuffer.deref();
-      result.mem.sceneHoldsModelDat = !!b && backing.has(b);
-    }
-    const dat = datBytes ?? zipDatBytes;
-    if (dat !== undefined) result.mem.modelDatMB = MB(dat);
+    if (zipDatBytes !== undefined) result.mem.modelDatMB = MB(zipDatBytes);
   }
   return result;
 }

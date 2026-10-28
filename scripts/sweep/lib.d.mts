@@ -14,6 +14,7 @@ export interface SweepOptions {
   minMb: number;
   timeoutSec: number;
   mem: boolean;
+  streamMin: number | null;
   help: boolean;
   errors: string[];
 }
