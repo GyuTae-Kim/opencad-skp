@@ -18,8 +18,9 @@
  * - 나란함(SketchUp "모서리와 나란히", 자홍): 축과 같은 자리에서, 커서가 앞서 지나간 모서리(parallelRef)와 나란한 방향(화면 각 6° 안)이면
  *   시작점을 지나 그 모서리와 나란한 선 위로. 축과 함께 맞으면 화면에서 선에 가까운 쪽(같으면 축), 모서리가 축과 나란하면 축에 맡긴다.
  * - 모서리에 수직(SketchUp "모서리에 수직", 자홍): 같은 자리에서, 커서가 지나간 모서리에 수직인 방향(perpendicularDirs — 시작점에서
- *   그 직선으로 내린 수직과 그리기 축을 수직 평면에 비친 방향, 화면 각 6° 안)이면 시작점을 지나 그 방향 선 위로. 여럿 맞으면 화면에서
- *   선에 가까운 쪽(같으면 축 → 나란히 → 수직). 시작점에서 모서리에 내린 수직 발(점 추정)이 먼저다.
+ *   그 직선으로 내린 수직과 그리기 축을 수직 평면에 비친 방향, 커서가 면 위이고 모서리가 그 면 위(또는 면과 나란함)면 그 면 안의 수직,
+ *   화면 각 6° 안)이면 시작점을 지나 그 방향 선 위로. 여럿 맞으면 화면에서 선에 가까운 쪽(같으면 축 → 나란히 → 수직).
+ *   시작점에서 모서리에 내린 수직 발(점 추정)이 먼저다.
  * - 잠금(SketchUp 추론 잠금 — Shift·화살표, 손가락 기기는 측정 띠 단추): 방향 추론(축·나란함·수직)을 잠그면(lock) 시작점을 지나는
  *   그 선 위에만 찍는다. 시작점을 지나는 모서리에 붙은 점 추정(모서리 끝에서 그 모서리를 따라 가리킬 때)도 그 모서리 방향으로 잠근다. 커서가 끝점·중간점·중심·교차점·수직 같은 점 위면 그 점을 선에 수직으로 내린 자리(다른 점의 높이를 옮겨 잰다),
  *   아니면 커서 광선에 가장 가까운 선 위 점(코어 0.10.0 순수 함수 lockedSnap).
@@ -240,6 +241,7 @@ export function triangleOfPick(scene: SnapScene, pick: Pick3d): [V3, V3, V3] | n
 const sub = (a: readonly number[], b: readonly number[]): V3 => [a[0]! - b[0]!, a[1]! - b[1]!, a[2]! - b[2]!];
 const dot = (a: readonly number[], b: readonly number[]): number => a[0]! * b[0]! + a[1]! * b[1]! + a[2]! * b[2]!;
 const along = (p: readonly number[], u: readonly number[], s: number): V3 => [p[0]! + u[0]! * s, p[1]! + u[1]! * s, p[2]! + u[2]! * s];
+const cross = (a: readonly number[], b: readonly number[]): V3 => [a[1]! * b[2]! - a[2]! * b[1]!, a[2]! * b[0]! - a[0]! * b[2]!, a[0]! * b[1]! - a[1]! * b[0]!];
 
 /** 직선 p + s·u 위에서 광선(직선으로 본다)에 가장 가까운 점의 s. 나란하면 null */
 function lineRayParam(ray: Ray, p: readonly number[], u: readonly number[]): number | null {
@@ -355,12 +357,20 @@ export function axisInferenceLock(axis: Axis, axes: AxisDirs = AXIS_DIRS): Infer
 }
 
 /**
+ * 모서리가 면 위(또는 면과 나란함)로 볼 한도: 모서리 방향과 면 법선이 이루는 코사인(= 모서리와 면 사이 각의 사인)이 이 안이면
+ * (약 0.08° — 축과 나란함(alongAxis)과 같은 각)
+ */
+export const FACE_EDGE_SIN = Math.SQRT2 * 1e-3;
+
+/**
  * 모서리에 수직인 방향 후보(SketchUp "모서리에 수직", 자홍): 시작점을 지나 기준 모서리에 수직인 방향은 평면 하나를 이루므로
  * 그 가운데 뜻 있는 방향만 고른다 — 시작점에서 모서리 직선으로 내린 수직(시작점이 그 직선 밖일 때)과, 그리기 축을 그 평면에 비친 방향
  * (예: 평면도에서 기운 벽에 수평으로 수직, 기운 서까래에 그 세로 평면 안에서 수직). 축과 나란한 방향(축 고정이 맡는다)과
- * 서로 같은 직선은 뺀다. 모서리 길이가 0이면 빈 목록
+ * 서로 같은 직선은 뺀다. 모서리 길이가 0이면 빈 목록.
+ * faceNormal(커서 밑 면의 법선)을 주고 모서리가 그 면 위(또는 면과 나란함, FACE_EDGE_SIN 안)면 그 면 안에서 모서리에 수직인 방향도 마지막에 더한다
+ * (예: 기운 지붕 면에서 처마 모서리를 지나간 뒤 지붕 비탈을 따라 오르는 방향 — 처마 끝에서 시작하면 내린 수직이 없고 축을 비친 방향은 수평·수직뿐이다)
  */
-export function perpendicularDirs(from: readonly number[], edge: readonly [readonly number[], readonly number[]], axes: AxisDirs = AXIS_DIRS): V3[] {
+export function perpendicularDirs(from: readonly number[], edge: readonly [readonly number[], readonly number[]], axes: AxisDirs = AXIS_DIRS, faceNormal?: readonly number[] | null): V3[] {
   const d = sub(edge[1], edge[0]);
   const u = unitOf(d);
   if (!u) return [];
@@ -380,6 +390,9 @@ export function perpendicularDirs(from: readonly number[], edge: readonly [reado
     const k = dot(axes[a], u);
     if (Math.abs(k) < 1 - 1e-6) add(along(axes[a], u, -k));
   }
+  // 면 위면 그 면 안의 수직(앞의 방향과 같은 직선이면 앞의 것이 맡는다 — 바뀌는 것은 새 방향뿐)
+  const n = faceNormal ? unitOf(faceNormal) : null;
+  if (n && Math.abs(dot(n, u)) <= FACE_EDGE_SIN) add(cross(n, u));
   return out;
 }
 
@@ -644,8 +657,10 @@ export function chooseSnap(o: SnapInput): Snap {
     const e = ref ? unitOf(sub(ref[1], ref[0])) : null;
     const par = ref && e && !alongAxis(e, axes) ? directionLock(f, o.from, o.x, o.y, e) : null;
     let per: { point: V3; perp: number; dir: V3 } | null = null;
+    // 커서가 면 위(단면에 잘린 면은 아님)면 그 면 안에서 모서리에 수직인 방향도 본다
+    const face = snap?.kind === 'onFace' && !snap.section && pick?.kind === 'mesh' ? (pick.normal ?? null) : null;
     if (ref)
-      for (const d of perpendicularDirs(o.from, ref, axes)) {
+      for (const d of perpendicularDirs(o.from, ref, axes, face)) {
         const l = directionLock(f, o.from, o.x, o.y, d);
         if (l && (!per || l.perp < per.perp)) per = { ...l, dir: d };
       }

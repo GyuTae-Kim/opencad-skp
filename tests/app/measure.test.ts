@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Viewer3d } from 'opencad-viewer3d';
 import { buildBvh } from 'opencad-viewer3d/bvh';
-import { projectToScreen, type CameraState } from 'opencad-viewer3d/camera';
+import { dirToAngles, projectToScreen, type CameraState } from 'opencad-viewer3d/camera';
 import { pickScene } from 'opencad-viewer3d/scenepick';
 import type { LineSet3d, Mesh3d, Scene3d } from 'opencad-viewer3d/types';
 import {
@@ -38,13 +38,19 @@ import {
   type MeasureViewer,
   GUIDE_KEY_NAMES,
   GUIDE_SELECTED_COLOR,
+  collinear,
   edgeFoot,
+  edgeOfTap,
   guideKeyFor,
   guideKeyHint,
 } from '../../src/app/measure';
+import type { V3 } from 'opencad-viewer3d/math';
 import { Overlay, frameFor } from '../../src/app/overlay';
 import { DRAG_START_PX, TOUCH_DRAG_START_PX } from 'opencad-viewer3d';
 import { DEFAULT_UNITS, type UnitsDisplay } from '../../src/app/units';
+
+/** 줄자를 켠 키보드 기기의 처음 안내 */
+const TAPE_START_HINT = '줄자: 잴 시작점을 누르세요 · 모서리를 두 번 누르면 그 위에 안내선';
 
 describe('줄자·각도기 계산', () => {
   it('줄자 결과는 장면 단위 거리와 dx·dy·dz', () => {
@@ -99,7 +105,8 @@ describe('줄자·각도기 계산', () => {
     expect(joinTip('끝점', '1200 mm')).toBe('끝점 · 1200 mm');
     expect(joinTip('', '5 mm')).toBe('5 mm');
     expect(joinTip('면에')).toBe('면에');
-    expect(measureHint('tape', 0, false)).toBe('줄자: 잴 시작점을 누르세요');
+    // 키보드 기기 처음 안내는 모서리 두 번 누르기(그 위 안내선)도 알린다
+    expect(measureHint('tape', 0, false)).toBe(TAPE_START_HINT);
     expect(measureHint('tape', 1, true)).toContain('끝점');
     expect(measureHint('protractor', 0, false)).toContain('Shift');
     expect(measureHint('protractor', 2, false)).toContain('잴 방향');
@@ -262,7 +269,7 @@ describe('측정 도구: 줄자', () => {
     r.tool.setMode('tape');
     expect(r.tool.active).toBe(true);
     expect(r.canvas.style.cursor).toBe('crosshair');
-    expect(r.hints.at(-1)).toBe('줄자: 잴 시작점을 누르세요');
+    expect(r.hints.at(-1)).toBe(TAPE_START_HINT);
 
     r.move(102, 103);
     expect(r.q('.measure-snap-endpoint')?.getAttribute('fill')).toBe('#00a000');
@@ -454,6 +461,9 @@ describe('측정 도구: 각도기', () => {
 });
 
 describe('측정 도구: 추론 잠금(Shift·화살표·단추)과 나란함', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
   const at = (deg: number, r: number): [number, number] => [100 + r * Math.cos((deg * Math.PI) / 180), 100 - r * Math.sin((deg * Math.PI) / 180)];
   const near = (a: readonly number[], b: readonly number[]): void => a.forEach((v, i) => expect(v).toBeCloseTo(b[i]!, 6));
 
@@ -597,6 +607,41 @@ describe('측정 도구: 추론 잠금(Shift·화살표·단추)과 나란함', 
     if (res?.kind !== 'tape') throw new Error('tape');
     near(res.b, [15, -15, 0]);
     expect(r.tool.inferenceLock).toBeNull();
+  });
+
+  it('지붕 면 위: 처마를 지나간 뒤 그 면 안에서 처마에 수직(비탈을 따라)이면 자홍 수직, ↓로 그 방향 잠금', () => {
+    // 처마(X 방향)에서 30°로 오르는 지붕 면을 등각(평행 투영)으로 본다 — 처마 위 시작점에서는 내린 수직이 없고 축을 비친 방향은 축뿐
+    const sn = Math.sin(Math.PI / 6), cs = Math.cos(Math.PI / 6), h = 60 * Math.tan(Math.PI / 6);
+    const roof: Mesh3d = { id: 'roof', positions: Float32Array.from([0, 0, 0, 100, 0, 0, 100, 60, h, 0, 60, h]), indices: Uint32Array.from([0, 1, 2, 0, 2, 3]), color: [0.8, 0.8, 0.8, 1] };
+    const a = dirToAngles([1, -1, 1]);
+    const iso: CameraState = { target: [40, 20, 10], distance: 300, yaw: a.yaw, pitch: a.pitch, projection: 'orthographic', fovY: FOV };
+    const f = frameFor(iso, W, W);
+    // 둘레 고르기 시간 예산이 느린 CI에서 먼저 끊기지 않게 시계를 멈춘다(이 describe의 afterEach가 되돌린다)
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+    const r = rig({ units: 'mm', meshes: [roof], lines: [lines('eave', [[0, 0, 0, 100, 0, 0]])] }, iso);
+    r.tool.setMode('tape');
+    const s0 = projectToScreen(f, [20, 0, 0])!;
+    r.move(s0[0], s0[1]);
+    expect(r.tip()).toBe('모서리에');
+    r.click(s0[0], s0[1]);
+    expect(r.tool.pointCount).toBe(1);
+    const s1 = projectToScreen(f, [20, cs * 40, sn * 40])!;
+    r.move(s1[0] + 0.5, s1[1] + 0.5);
+    expect(r.q('.measure-snap-perpendicular')).not.toBeNull();
+    expect(r.q('line.measure-rubber.measure-perpendicular')?.getAttribute('stroke')).toBe('#c800c8');
+    expect(r.q('.measure-parallel-ref')).not.toBeNull();
+    expect(r.tip()).toMatch(/^모서리에 수직 · /);
+    expect(r.key('ArrowDown')).toBe(true);
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'perpendicular', source: 'key' });
+    expect(r.locks.at(-1)).toBe('perpendicular');
+    // 잠근 채 지붕 다른 곳을 찍어도 그 선 위(시작점에서 비탈 방향)
+    const s2 = projectToScreen(f, [50, 30, h / 2])!;
+    r.click(s2[0], s2[1]);
+    const res = r.results.at(-1);
+    if (res?.kind !== 'tape') throw new Error('tape');
+    expect(Math.abs(res.dx)).toBeLessThan(1e-6);
+    expect(Math.abs(res.dy * sn - res.dz * cs)).toBeLessThan(1e-4);
+    expect(res.distance).toBeGreaterThan(1);
   });
 
   it('잠금 단추(손가락 기기): 방향을 잡는 동안만, 본 방향이 없으면 false, 축을 주면 그 축 — 탭한 점이 잠근 선 위로', () => {
@@ -1178,7 +1223,7 @@ describe('측정 도구: 안내 두기(누르기로 안내점·안내선 — Ske
     r.key('Control');
     r.key('Control', 'keyup');
     expect(r.tool.guideMode).toBe(false);
-    expect(r.hints.at(-1)).toBe('줄자: 잴 시작점을 누르세요');
+    expect(r.hints.at(-1)).toBe(TAPE_START_HINT);
     // Mac: Option
     const m = rig(EDGES(), TOP, DEFAULT_UNITS, { guideKey: 'Alt' });
     m.tool.setMode('tape');
@@ -1316,7 +1361,7 @@ describe('측정 도구: 안내 하나씩 고르고 지우기', () => {
     expect(r.tool.pointCount).toBe(0);
     expect(r.tool.selectedGuide).toBeNull();
     expect(r.guideCalls()).toBe(calls + 1);
-    expect(r.hints.at(-1)).toBe('줄자: 잴 시작점을 누르세요');
+    expect(r.hints.at(-1)).toBe(TAPE_START_HINT);
     // 고른 것이 없으면 Delete를 받지 않는다(앱·브라우저 몫)
     expect(del(r)).toEqual({ handled: false, prevented: false });
   });
@@ -1386,5 +1431,213 @@ describe('측정 도구: 안내 하나씩 고르고 지우기', () => {
     r.tool.setMode('tape');
     expect(r.tool.selectedGuide).toBeNull();
     expect(r.tool.guideLines).toHaveLength(2);
+  });
+});
+
+describe('측정 도구: 모서리 두 번 누르기(그 모서리 위 안내선 — SketchUp 줄자)', () => {
+  // 두 번 누르기는 시간(코어 DOUBLE_CLICK_MS 450 ms)에 기대므로 시계를 손으로 옮긴다(느린 CI에서도 흔들리지 않게 — 둘레 고르기 시간 예산도 멈춘다)
+  let clock = 0;
+  beforeEach(() => {
+    clock = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+  /** 앞 누르기와 두 번 누르기가 되지 않게 시계를 1초 옮긴다 */
+  const later = (): void => void (clock += 1000);
+  /** 같은 시각에 (x, y)와 (x + dx, y + dy)를 누른다 */
+  const dbl = (r: Rig, x: number, y: number, o: { pointerType?: string; dx?: number; dy?: number } = {}): void => {
+    later();
+    r.click(x, y, { pointerType: o.pointerType });
+    r.click(x + (o.dx ?? 1), y + (o.dy ?? 0), { pointerType: o.pointerType });
+  };
+  const near = (a: readonly number[], b: readonly number[], d = 6): void => a.forEach((v, i) => expect(v).toBeCloseTo(b[i]!, d));
+
+  it('두 번 누르기로 볼 모서리(모서리 위·중간점·내린 수직 발)와 같은 직선', () => {
+    const e: [V3, V3] = [[0, 0, 0], [10, 0, 0]];
+    expect(edgeOfTap({ kind: 'onEdge', edge: e })).toEqual(e);
+    expect(edgeOfTap({ kind: 'midpoint', edge: e })).toEqual(e);
+    expect(edgeOfTap({ kind: 'perpendicular', edge: e })).toEqual(e);
+    // 방향 추론·잠근 선·모서리가 여럿인 점(끝점·교차점)·면·축은 아니다
+    expect(edgeOfTap({ kind: 'perpendicular', edge: e, inferred: true })).toBeNull();
+    expect(edgeOfTap({ kind: 'onEdge', edge: e, locked: true })).toBeNull();
+    for (const kind of ['endpoint', 'intersection', 'center', 'onFace', 'axis', 'parallel', 'free'] as const) expect(edgeOfTap({ kind, edge: e })).toBeNull();
+    expect(edgeOfTap({ kind: 'onEdge' })).toBeNull();
+    expect(edgeOfTap({ kind: 'onEdge', edge: [[1, 2, 3], [1, 2, 3]] })).toBeNull();
+    expect(edgeOfTap(null)).toBeNull();
+    // 같은 직선: 거꾸로·같은 직선의 다른 선분(나눈 모서리, 안내선 위 선분). 나란한 다른 직선·다른 방향은 아니다
+    expect(collinear(e, [[10, 0, 0], [0, 0, 0]])).toBe(true);
+    expect(collinear(e, [[20, 0, 0], [35, 0, 0]])).toBe(true);
+    expect(collinear(e, [[0, 1e-3, 0], [10, 1e-3, 0]])).toBe(false);
+    expect(collinear(e, [[0, 0, 0], [10, 1, 0]])).toBe(false);
+    expect(collinear(e, [[3, 0, 0], [3, 0, 0]])).toBe(false);
+  });
+
+  it('마우스: 모서리 위를 두 번 누르면 그 모서리를 지나는 안내선을 골라 두고, 첫 누르기의 시작점은 거두고 지운 결과는 되돌린다', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    r.click(102, 103);
+    r.click(198, 101);
+    const kept = r.tool.result;
+    expect(kept).toMatchObject({ kind: 'tape', distance: 100 });
+    // X 모서리의 70 자리(끝점·중간점은 반경 밖): 첫 누르기는 여느 때처럼 시작점(결과는 지움)
+    later();
+    r.click(170, 101);
+    expect(r.tool.pointCount).toBe(1);
+    expect(r.tool.result).toBeNull();
+    const calls = r.guideCalls();
+    r.click(171, 102);
+    expect(r.tool.pointCount).toBe(0);
+    expect(r.tool.guides).toHaveLength(0);
+    expect(r.tool.guideLines).toHaveLength(1);
+    const gl = r.tool.guideLines[0]!;
+    expect(Math.abs(gl.dir[0])).toBeCloseTo(1, 12);
+    near(gl.point, [0, 0, 0]);
+    expect(r.tool.selectedGuide).toBe('line');
+    expect(r.guideCalls()).toBeGreaterThan(calls);
+    expect(r.tool.result).toBe(kept);
+    expect(r.results.at(-1)).toBe(kept);
+    expect(r.hints.at(-1)).toContain('다시 누르면 새로 잽니다');
+    r.overlay.paintNow();
+    const sel = r.q('.measure-guide-line.is-selected line:last-child');
+    expect(sel?.getAttribute('stroke')).toBe(GUIDE_SELECTED_COLOR);
+    expect(Number(sel?.getAttribute('y1'))).toBeCloseTo(100, 1);
+    // 같은 모서리를 다시 두 번 누르면 같은 직선이라 늘지 않고 그것을 고른다
+    dbl(r, 130, 101);
+    expect(r.tool.guideLines).toHaveLength(1);
+    expect(r.tool.selectedGuide).toBe('line');
+    expect(r.tool.pointCount).toBe(0);
+    // 곧이은 세 번째 누르기는 다시 한 번 누르기(시작점)
+    r.click(131, 101);
+    expect(r.tool.pointCount).toBe(1);
+    // 고른 안내선은 하나씩 지우기로 지운다
+    expect(r.key('Escape')).toBe(true);
+    r.click(150, 70);
+    dbl(r, 101, 70, { dy: 1 });
+    expect(r.tool.guideLines).toHaveLength(2);
+    expect(Math.abs(r.tool.guideLines[1]!.dir[1])).toBeCloseTo(1, 12);
+    expect(r.tool.deleteSelectedGuide()).toBe(true);
+    expect(r.tool.guideLines).toHaveLength(1);
+  });
+
+  it('시작점을 찍은 뒤 모서리를 두 번 누르면 첫 누르기로 마친 측정은 남기고 안내선만 더한다', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    r.click(102, 103);
+    dbl(r, 170, 101);
+    expect(r.tool.pointCount).toBe(0);
+    expect(r.tool.guideLines).toHaveLength(1);
+    expect(r.tool.selectedGuide).toBe('line');
+    expect(r.results).toHaveLength(1);
+    expect(r.tool.result).toBe(r.results[0]);
+    expect((r.results[0] as { distance: number }).distance).toBeCloseTo(70, 0);
+  });
+
+  it('안내 두기를 켜도 모서리 두 번 누르기는 그 모서리 위 안내선 하나(재기만 결과·안내점 없이)', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    r.tool.setGuideMode(true);
+    dbl(r, 170, 101);
+    expect(r.tool.guideLines).toHaveLength(1);
+    expect(Math.abs(r.tool.guideLines[0]!.dir[0])).toBeCloseTo(1, 12);
+    expect(r.tool.guides).toHaveLength(0);
+    expect(r.tool.pointCount).toBe(0);
+    expect(r.results).toHaveLength(0);
+    expect(r.hints.at(-1)).toContain('안내를 둘 시작점');
+  });
+
+  it('다른 직선의 모서리·느린 둘째 누르기·끝점·빈 곳은 두 번 누르기 안내선이 아니다(그대로 잰다)', () => {
+    // 화면 4화소 떨어진 나란한 두 모서리
+    const r = rig({ units: 'mm', meshes: [], lines: [lines('a', [[-50, 0, 0, 50, 0, 0]]), lines('b', [[-50, 4, 0, 50, 4, 0]])] });
+    r.tool.setMode('tape');
+    later();
+    r.click(130, 101);
+    expect(r.tool.pointCount).toBe(1);
+    r.click(130, 96);
+    expect(r.tool.guideLines).toHaveLength(0);
+    expect(r.tool.pointCount).toBe(0);
+    expect((r.results.at(-1) as { distance: number }).distance).toBeCloseTo(4, 6);
+    // 0.5초 뒤 둘째 누르기: 시작점과 같은 자리라 그대로
+    later();
+    r.click(130, 101);
+    clock += 500;
+    r.click(131, 101);
+    expect(r.tool.guideLines).toHaveLength(0);
+    expect(r.tool.pointCount).toBe(1);
+    expect(r.key('Escape')).toBe(true);
+    // 끝점(모서리가 여럿일 수 있다)은 아니다
+    dbl(r, 149, 101);
+    expect(r.tool.guideLines).toHaveLength(0);
+    expect(r.tool.pointCount).toBe(1);
+    expect(r.key('Escape')).toBe(true);
+    // 7화소 떨어지면(마우스 두 번 누르기 거리 6화소 밖) 두 번 누르기가 아니다(둘째 누르기는 시작점에 내린 수직 발 — 같은 자리라 그대로)
+    dbl(r, 120, 101, { dx: 7 });
+    expect(r.tool.guideLines).toHaveLength(0);
+    expect(r.tool.pointCount).toBe(1);
+    expect(r.key('Escape')).toBe(true);
+    // 둘째 누르기가 빈 곳(모서리에서 13화소, 축 방향도 아님)이면 찍지 않는다
+    dbl(r, 130, 109, { dx: 4, dy: 4 });
+    expect(r.tool.guideLines).toHaveLength(0);
+    expect(r.tool.pointCount).toBe(1);
+  });
+
+  it('손가락: 두 번 탭(24화소 안)도 같고, 둘째 탭이 그 모서리의 끝점에 붙어도 첫 탭의 모서리 위 안내선', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    later();
+    r.click(170, 101, { pointerType: 'touch' });
+    expect(r.tool.pointCount).toBe(1);
+    // 15화소 떨어진 둘째 탭: 손가락 반경에 끝점 (100, 0)이 든다
+    r.click(184, 106, { pointerType: 'touch' });
+    expect(r.q('.measure-snap-endpoint')).not.toBeNull();
+    expect(r.tool.pointCount).toBe(0);
+    expect(r.tool.guideLines).toHaveLength(1);
+    expect(Math.abs(r.tool.guideLines[0]!.dir[0])).toBeCloseTo(1, 12);
+    expect(r.tool.selectedGuide).toBe('line');
+    expect(r.results).toHaveLength(0);
+  });
+
+  it('곡선(호 조각)은 누른 조각 하나의 직선', () => {
+    const arc = [0, 30, 60, 90].map((d) => [80 * Math.cos((d * Math.PI) / 180), 80 * Math.sin((d * Math.PI) / 180), 0]);
+    const r = rig({ units: 'mm', meshes: [], lines: [lines('arc', [[...arc[0]!, ...arc[1]!], [...arc[1]!, ...arc[2]!], [...arc[2]!, ...arc[3]!]])] });
+    r.tool.setMode('tape');
+    // 첫 조각의 가운데(중간점)
+    const m = [(arc[0]![0]! + arc[1]![0]!) / 2, (arc[0]![1]! + arc[1]![1]!) / 2];
+    dbl(r, 100 + m[0]!, 100 - m[1]!);
+    expect(r.tool.guideLines).toHaveLength(1);
+    const gl = r.tool.guideLines[0]!;
+    const u = [arc[1]![0]! - arc[0]![0]!, arc[1]![1]! - arc[0]![1]!, 0];
+    const l = Math.hypot(...u);
+    expect(Math.abs((gl.dir[0] * u[0]! + gl.dir[1] * u[1]!) / l)).toBeCloseTo(1, 6);
+    // 지나는 점은 그 조각 직선 위(끝없는 안내선)
+    const w = [gl.point[0] - arc[0]![0]!, gl.point[1] - arc[0]![1]!];
+    expect(Math.abs(w[0]! * u[1]! - w[1]! * u[0]!) / l).toBeLessThan(1e-4);
+  });
+
+  it(`모서리 두 번 누르기도 안내선 ${MAX_GUIDE_LINES}개 한도를 지킨다(오래된 것부터 버리고 새것을 고른다)`, () => {
+    const r = rig(EDGES());
+    r.tool.setMode('protractor');
+    r.click(101, 101);
+    r.click(197, 102);
+    r.move(101, 52);
+    for (let i = 1; i <= MAX_GUIDE_LINES; i++) expect(r.tool.applyAngle(i)).toBe('ok');
+    expect(r.tool.guideLines).toHaveLength(MAX_GUIDE_LINES);
+    const oldest = r.tool.guideLines[0]!;
+    r.tool.setMode('tape');
+    // Y 모서리의 38 자리(끝점 50·중간점 25는 반경 밖)
+    dbl(r, 101, 62, { dx: 0, dy: 1 });
+    expect(r.tool.guideLines).toHaveLength(MAX_GUIDE_LINES);
+    expect(r.tool.guideLines).not.toContain(oldest);
+    expect(Math.abs(r.tool.guideLines.at(-1)!.dir[1])).toBeCloseTo(1, 12);
+    expect(r.tool.selectedGuide).toBe('line');
+  });
+
+  it('각도기는 두 번 누르기로 안내선을 두지 않는다', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('protractor');
+    dbl(r, 170, 101);
+    expect(r.tool.guideLines).toHaveLength(0);
+    expect(r.tool.pointCount).toBe(1);
   });
 });

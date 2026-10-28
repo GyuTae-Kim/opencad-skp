@@ -32,6 +32,8 @@
  *   끝점·꼭짓점 같은 점에서 시작했으면 둘째 점에 안내점. 각도기는 셋째 누르기가 중심을 지나 잰 방향으로 안내선을 둔다. 결과는 재기만과 같이 남긴다.
  * 안내 고르기·지우기: 안내점·안내선 위를 누르면(측정 점도 그대로 찍는다) 그 안내를 고르고(방금 둔 안내도 고른다), 다른 곳을 누르거나
  *   Esc·다시 재기면 푼다. Delete·Backspace(앱은 측정값 칸의 지우기 단추도)로 고른 안내 하나를 지운다 — 고른 누르기가 시작점도 찍었으면 그 점도 거둔다.
+ * 모서리 두 번 누르기(SketchUp 줄자): 줄자로 모서리 위를 두 번 누르면(코어와 같은 두 번 누르기 문턱 — 손가락은 넓게) 그 모서리를 지나는 끝없는 안내선을 둔다
+ *   (곡선이면 누른 조각 하나의 직선, 안내 두기를 켜지 않아도). 첫 누르기가 찍은 시작점은 거두고 그 전 결과를 되돌리며, 둔 안내선은 골라 둔다.
  * 추론 잠금(SketchUp "Locking inference"): 방향을 잡는 동안(줄자 끝점·각도기 기준 방향·잴 방향) Shift를 누르고 있으면 지금 커서 밑 방향 추론
  *   (빨강·녹색·파랑 축, 모서리와 나란히, 지나간 모서리에 수직, 시작점에서 내린 수직)을 잠그고 떼면 푼다. →·←·↑는 빨강·녹색·파랑 축, ↓는 모서리와 나란히·수직
  *   (지금 커서 밑 것, 없으면 앞서 지나간 모서리와 나란히)을 잠그고 같은 키를 다시 누르면 푼다. 손가락 기기는 앱의 잠금 단추(setInferenceLock).
@@ -40,7 +42,7 @@
  * 그리기는 덧그림 층의 SVG 묶음(g.measure)과 DOM 라벨(div.measure-layer)로 하고, 숫자 글은 모형 단위(units.ts)로 쓴다.
  */
 import type { Viewer3d } from 'opencad-viewer3d';
-import { dragStartPx } from 'opencad-viewer3d/pointer';
+import { clickCount, dragStartPx, type LastClick } from 'opencad-viewer3d/pointer';
 import type { Scene3d } from 'opencad-viewer3d/types';
 import { projectToScreen, screenRay, viewDepth, worldPerPixel, type ViewFrame } from 'opencad-viewer3d/camera';
 import type { V3 } from 'opencad-viewer3d/math';
@@ -158,6 +160,17 @@ const REF_KINDS: ReadonlySet<SnapKind> = new Set(['endpoint', 'midpoint', 'onEdg
 /** 고른 안내: 안내점(배열) 또는 안내선(객체) 그대로 */
 type GuideRef = V3 | GuideLine;
 
+/** 바로 앞 줄자 누르기(두 번 누르기 안내선): 붙은 모서리와, 그 누르기가 시작점을 찍었으면 그 점 배열과 그 전 결과(두 번 누르기면 되돌린다) */
+interface TapMemo {
+  edge: [V3, V3];
+  pts: V3[] | null;
+  result: MeasureToolResult | null;
+  resultEdge: [V3, V3] | null;
+}
+
+/** 모서리 두 번 누르기로 볼 추정: 모서리 위·중간점·시작점에서 그 모서리에 내린 발(한 모서리에만 붙은 점) */
+const TAP_EDGE_KINDS: ReadonlySet<SnapKind> = new Set(['onEdge', 'midpoint', 'perpendicular']);
+
 /** 고른 안내 색(SketchUp에서 고른 것처럼 파랑) */
 export const GUIDE_SELECTED_COLOR = '#1f6feb';
 
@@ -265,6 +278,31 @@ export function edgeFoot(a: readonly number[], edge: readonly [readonly number[]
   const scale = Math.max(1, Math.hypot(a[0]!, a[1]!, a[2]!), Math.hypot(d[0], d[1], d[2]));
   if (!(Math.hypot(w[0], w[1], w[2]) > 1e-9 * scale)) return null;
   return addScaled(a, w, 1);
+}
+
+/**
+ * 두 번 누르기로 안내선을 둘 모서리(SketchUp 줄자: 모서리를 두 번 누르면 그 모서리 위에 끝없는 안내선): 모서리 위·중간점·시작점에서 내린 수직 발처럼
+ * 한 모서리에 붙은 점 추정이면 그 선분(곡선이면 누른 조각 하나, 안내선이면 그 안내선 위 선분). 끝점·교차점(모서리가 여럿)·면·축·방향 추론·잠근 선,
+ * 길이 0인 선분이면 null
+ */
+export function edgeOfTap(s: Pick<Snap, 'kind' | 'edge' | 'inferred' | 'locked'> | null | undefined): [V3, V3] | null {
+  if (!s?.edge || !TAP_EDGE_KINDS.has(s.kind) || s.inferred || s.locked) return null;
+  const [a, b] = s.edge;
+  const d = sub(b, a);
+  if (!(Math.hypot(d[0], d[1], d[2]) > 1e-9 * Math.max(1, Math.hypot(a[0], a[1], a[2])))) return null;
+  return [[a[0], a[1], a[2]], [b[0], b[1], b[2]]];
+}
+
+/** 두 선분이 한 직선 위인지(방향이 거의 같고 둘째 선분의 두 끝이 첫째 직선 위 — 한 모서리를 나눈 선분·같은 안내선 위 선분도 된다) */
+export function collinear(e: readonly [readonly number[], readonly number[]], f: readonly [readonly number[], readonly number[]]): boolean {
+  const u = unit(sub(e[1], e[0]));
+  const v = unit(sub(f[1], f[0]));
+  if (!dot(u, u) || !dot(v, v) || Math.abs(dot(u, v)) < 1 - 1e-6) return false;
+  const scale = Math.max(1, ...[e[0], e[1], f[0], f[1]].map((p) => Math.hypot(p[0]!, p[1]!, p[2]!)), Math.hypot(...sub(e[1], e[0])));
+  return [f[0], f[1]].every((p) => {
+    const w = sub(p, e[0]);
+    return Math.hypot(...addScaled(w, u, -dot(w, u))) <= 1e-6 * scale;
+  });
 }
 
 /**
@@ -429,7 +467,8 @@ export function measureHint(mode: MeasureMode | null, points: number, hasResult:
     }
     if (hasResult) return touch ? '줄자: 다시 누르면 새로 잽니다' : '줄자: 다시 누르면 새로 잽니다 · Esc 지우기';
     if (guide) return touch ? '줄자: 안내를 둘 시작점을 누르세요 · 길게 누르면 정밀 조준' : '줄자: 안내를 둘 시작점을 누르세요 · 모서리 위면 나란한 안내선, 점이면 안내점';
-    return touch ? '줄자: 잴 시작점을 누르세요 · 길게 누르면 정밀 조준' : '줄자: 잴 시작점을 누르세요';
+    // 모서리 두 번 누르기(그 모서리 위 안내선)는 상태 줄에 자리가 있는 키보드 기기 처음 안내에만(측정 띠는 짧게 — 손가락 기기는 정밀 조준 안내)
+    return touch ? '줄자: 잴 시작점을 누르세요 · 길게 누르면 정밀 조준' : '줄자: 잴 시작점을 누르세요 · 모서리를 두 번 누르면 그 위에 안내선';
   }
   if (mode === 'protractor') {
     if (points === 1) return touch ? '각도기: 기준 방향의 점을 누르세요' : '각도기: 기준 방향의 점을 누르세요 · Esc 취소';
@@ -523,6 +562,10 @@ export class MeasureTool {
   private selGuide: GuideRef | null = null;
   /** 고른 누르기가 진행 중 측정의 시작점(각도기 중심)도 찍었는지 — 지우면 그 점도 거둔다 */
   private selPlacedStart = false;
+  /** 바로 앞 누르기(두 번 누르기 판정 — 코어 clickCount와 같은 시간·거리 문턱, 손가락은 넓게) */
+  private lastClick: LastClick = { t: -Infinity, x: 0, y: 0, n: 0 };
+  /** 바로 앞 줄자 누르기가 모서리에 붙었으면 그 모서리와 되돌릴 것(두 번 누르기 안내선) */
+  private lastTap: TapMemo | null = null;
   private readonly g: SVGGElement;
   private readonly layer: HTMLDivElement;
   private readonly tip: HTMLDivElement;
@@ -871,6 +914,7 @@ export class MeasureTool {
     this.dropLock();
     this.parallelRef = null;
     this.planeAxisValue = null;
+    this.lastTap = null;
     this.dropResult();
     this.hoverDirty = true;
     this.refreshHint();
@@ -1171,7 +1215,11 @@ export class MeasureTool {
     }
     if (tap) {
       const p = this.local(e);
-      this.place(p.x, p.y, pr.type, e.shiftKey);
+      // 두 번 누르기: 코어와 같은 문턱(시간 DOUBLE_CLICK_MS, 거리 마우스 6·손가락 24화소 — 세 번째는 다시 한 번)
+      const t = now();
+      const n = clickCount(this.lastClick, t, p.x, p.y, pr.type);
+      this.lastClick = { t, x: p.x, y: p.y, n };
+      this.place(p.x, p.y, pr.type, e.shiftKey, n);
     } else this.overlay.invalidate();
   }
 
@@ -1226,6 +1274,8 @@ export class MeasureTool {
     this.aimId = null;
     this.presses.delete(e.pointerId);
     if (!this.presses.size) this.cancelTap = false;
+    // 길게 눌러 찍은 점은 두 번 누르기의 한쪽이 아니다
+    this.lastClick = { t: now(), x: c?.x ?? 0, y: c?.y ?? 0, n: 0 };
     if (!cancel && c && this.modeValue) this.place(c.x, c.y, 'aim');
     // 찍지 못했으면(빈 곳·취소) 십자선 자리의 추정 표시를 지운다
     if (this.cursor?.type === 'aim') {
@@ -1271,13 +1321,22 @@ export class MeasureTool {
     return protractorPlane(snap, forwardOf(f), this.axes).normal;
   }
 
-  /** 점 찍기(누르기·탭) */
-  private place(x: number, y: number, type: string, shift = false): void {
+  /** 점 찍기(누르기·탭). clicks = 2면 두 번 누르기의 둘째(줄자로 모서리를 두 번 누르면 그 모서리 위 안내선) */
+  private place(x: number, y: number, type: string, shift = false, clicks = 1): void {
+    // 바로 앞 누르기의 모서리(두 번 누르기 안내선) — 이 누르기가 무엇을 하든 다음 누르기에는 이 누르기 것만 남긴다
+    const memo = this.lastTap;
+    this.lastTap = null;
     const f = this.overlay.frame();
     if (!f) return;
     const snap = this.snapAt(x, y, type, f);
     if (!snap) return;
     this.learn(snap);
+    if (this.modeValue === 'tape') {
+      const edge = edgeOfTap(snap);
+      // 모서리 두 번 누르기: 첫 누르기가 모서리에 붙었고 둘째가 빈 곳·다른 직선의 모서리가 아니면 그 모서리 위 안내선
+      if (clicks === 2 && memo && snap.kind !== 'free' && (!edge || collinear(memo.edge, edge))) return this.edgeGuide(memo, x, y, type, snap);
+      if (edge) this.lastTap = { edge, pts: null, result: null, resultEdge: null };
+    }
     const ray = screenRay(f, x, y);
     // 고르기: 안내점·안내선 위를 누르면 그 안내(방금 둔 안내가 있으면 그것), 다른 곳이면 푼다 — Delete·지우기 단추로 지운다
     let sel: GuideRef | null = this.guideAt(snap);
@@ -1287,11 +1346,15 @@ export class MeasureTool {
       // 빈 곳(형상·축 추정이 없음)은 찍지 않는다
       if (snap.kind === 'free') return this.select(null);
       if (!this.pts.length) {
+        const prev = this.resultValue;
+        const prevEdge = this.resultEdge;
         this.dropResult();
         this.pts = [snap.point];
         // 모서리 위(끝점·중간점이 아닌 곳, 안내선 위 포함)에서 시작하면 친 길이는 그 모서리와 나란한 안내선이 된다(SketchUp 줄자)
         this.startEdge = snap.kind === 'onEdge' && snap.edge ? snap.edge : null;
         selStart = true;
+        // 두 번 누르기의 첫 누르기면 이 시작점을 거두고 지운 결과를 되돌린다
+        if (this.lastTap) Object.assign(this.lastTap, { pts: this.pts, result: prev, resultEdge: prevEdge });
       } else {
         const a = this.pts[0]!;
         if (samePoint(a, snap.point)) return;
@@ -1347,7 +1410,28 @@ export class MeasureTool {
     this.select(sel, selStart, added);
     // 점을 찍으면 잠금을 푼다(다음 방향은 새 추론으로 — Shift는 다시 눌러 잠근다)
     this.dropLock();
-    // 터치(정밀 조준 포함)는 커서가 없으니 찍은 자리의 추정을 표식으로 남긴다
+    this.placed(x, y, type, snap);
+  }
+
+  /**
+   * 모서리 두 번 누르기(SketchUp 줄자): 첫 누르기가 붙은 모서리를 지나는 끝없는 안내선을 두고 골라 둔다(같은 직선의 안내선이 있으면 그것을 고른다,
+   * 안내선은 MAX_GUIDE_LINES개까지). 첫 누르기가 시작점을 찍었으면(그 뒤 바뀌지 않았으면) 그 점을 거두고 그 누르기가 지운 결과를 되돌린다.
+   * 첫 누르기가 진행 중 측정을 마쳤으면 그 결과는 그대로 둔다
+   */
+  private edgeGuide(memo: TapMemo, x: number, y: number, type: string, snap: Snap): void {
+    if (memo.pts && memo.pts === this.pts) {
+      this.pts = [];
+      this.startEdge = null;
+      if (memo.result) this.setResult(memo.result, memo.resultEdge);
+    }
+    this.dropLock();
+    const [a, b] = memo.edge;
+    this.select(this.addGuideLine(a, sub(b, a)), false, true);
+    this.placed(x, y, type, snap);
+  }
+
+  /** 누른 뒤 표식·안내: 터치(정밀 조준 포함)는 커서가 없으니 누른 자리의 추정을 표식으로 남긴다 */
+  private placed(x: number, y: number, type: string, snap: Snap): void {
     if (type === 'touch' || type === 'aim') {
       this.cursor = { x, y, type: 'touch' };
       this.hover = snap;
@@ -1395,6 +1479,8 @@ export class MeasureTool {
     this.planeAxisValue = null;
     this.selGuide = null;
     this.selPlacedStart = false;
+    this.lastClick = { t: -Infinity, x: 0, y: 0, n: 0 };
+    this.lastTap = null;
     this.dropResult();
   }
 

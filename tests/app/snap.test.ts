@@ -6,7 +6,9 @@ import type { LineSet3d, Mesh3d, Pick3d } from 'opencad-viewer3d/types';
 import { PICK_TOLERANCE_PX, SNAP_PX, TOUCH_PICK_TOLERANCE_PX, pickTolerance } from 'opencad-viewer3d/pointer';
 import {
   AIM_SNAP_RADIUS_PX,
+  AXIS_DIRS,
   CORE_PICK_TOLERANCE_PX,
+  FACE_EDGE_SIN,
   SNAP_RADIUS_PX,
   TOUCH_SNAP_RADIUS_PX,
   alongAxis,
@@ -583,6 +585,68 @@ describe('추정: 모서리에 수직(SketchUp 자홍 추론)', () => {
     const [ex, ey] = at(-44, 50);
     const scene: SnapScene = { meshes: [], lines: [lines('p', [[ex - 100 + 2, 100 - ey, 0, 60, 90, 0]])] };
     expect(snapWith(scene, ex, ey, { from: [0, 0, 0], parallelRef: diag }).kind).toBe('endpoint');
+  });
+});
+
+describe('추정: 면 위에서 그 면 안의 모서리에 수직', () => {
+  // 처마(X 방향 모서리)에서 30°로 오르는 지붕 면: 눈 쪽 법선 (0, −sin30°, cos30°), 비탈을 오르는 방향 (0, cos30°, sin30°)
+  const sn = Math.sin(Math.PI / 6), cs = Math.cos(Math.PI / 6);
+  const eave: [V3, V3] = [[0, 0, 0], [100, 0, 0]];
+  const roofN: V3 = [0, -sn, cs];
+  const h = 60 * Math.tan(Math.PI / 6);
+  const roof: Mesh3d = {
+    id: 'roof',
+    positions: Float32Array.from([0, 0, 0, 100, 0, 0, 100, 60, h, 0, 60, h]),
+    indices: Uint32Array.from([0, 1, 2, 0, 2, 3]),
+    color: [0.8, 0.8, 0.8, 1],
+  };
+  // 등각(평행 투영)으로 비스듬히 본다: 위에서 보면 비탈 방향이 녹색 축과 같은 화면 방향이라 가리지 못한다
+  const a = dirToAngles([1, -1, 1]);
+  const iso = computeFrame({ target: [40, 20, 10], distance: 300, yaw: a.yaw, pitch: a.pitch, projection: 'orthographic', fovY: FOV }, W, W, { center: [40, 20, 10], radius: 300 });
+  /** 시작점에서 비탈 방향으로 L만큼 간 점의 화면 자리(조금 비켜서) */
+  const upSlope = (from: V3, L: number): [number, number] => {
+    const s = projectToScreen(iso, [from[0], from[1] + cs * L, from[2] + sn * L])!;
+    return [s[0] + 0.5, s[1] + 0.5];
+  };
+
+  it('수직 방향 후보: 면 법선을 주고 모서리가 그 면 위(또는 면과 나란함)면 그 면 안의 수직을 마지막에 더한다', () => {
+    // 처마 위에서 시작: 내린 수직이 없고 축을 비친 방향은 축이라 빠져, 면이 없으면 후보가 없다
+    expect(perpendicularDirs([10, 0, 0], eave)).toEqual([]);
+    const d = perpendicularDirs([10, 0, 0], eave, AXIS_DIRS, roofN);
+    expect(d).toHaveLength(1);
+    close(d[0]!.map(Math.abs), [0, cs, sn], 1e-9);
+    // 면과 나란한(면 밖) 모서리도 그 면 안의 수직
+    expect(perpendicularDirs([10, 0, 9], [[0, 0, 9], [100, 0, 9]], AXIS_DIRS, roofN)).toHaveLength(1);
+    // 모서리가 면에서 0.1° 기울면(한도 FACE_EDGE_SIN 약 0.08°) 면을 주지 않은 것과 같다
+    const t = (0.1 * Math.PI) / 180;
+    const tilted: [V3, V3] = [[0, 0, 0], [100 * Math.cos(t), 0, 100 * Math.sin(t)]];
+    expect(Math.abs(Math.cos(Math.PI / 6) * Math.sin(t))).toBeGreaterThan(FACE_EDGE_SIN);
+    expect(perpendicularDirs([10, 0, 0], tilted, AXIS_DIRS, roofN)).toEqual(perpendicularDirs([10, 0, 0], tilted));
+    // 앞의 방향과 같은 직선이면 그대로(바닥 면 위의 기운 벽: 축을 비친 수평 수직과 같다)
+    const diag: [V3, V3] = [[-90, -60, 0], [-60, -30, 0]];
+    expect(perpendicularDirs([0, 0, 0], diag, AXIS_DIRS, [0, 0, 1])).toEqual(perpendicularDirs([0, 0, 0], diag));
+    // 법선이 0이면 없는 것과 같다
+    expect(perpendicularDirs([10, 0, 0], eave, AXIS_DIRS, [0, 0, 0])).toEqual([]);
+  });
+
+  it('처마 위에서 시작해 처마를 지나간 뒤 지붕 면 위에서 비탈을 따라가면 모서리에 수직(그 면 안) — 면이 아니면 그 방향은 없다', () => {
+    const scene: SnapScene = { meshes: [roof], lines: [lines('eave', [[0, 0, 0, 100, 0, 0]])] };
+    const from: V3 = [10, 0, 0];
+    const [x, y] = upSlope(from, 40);
+    const s = snapWith(scene, x, y, { f: iso, from, parallelRef: eave });
+    expect(s).toMatchObject({ kind: 'perpendicular', label: '모서리에 수직', inferred: true, edge: eave });
+    // 면 법선은 코어가 Float32 꼭짓점으로 잰다
+    close(s.dir!.map(Math.abs), [0, cs, sn], 1e-6);
+    // 그 선 위 점(시작점을 지나 비탈 방향)
+    const w = [s.point[0] - from[0], s.point[1] - from[1], s.point[2] - from[2]];
+    expect(Math.abs(w[0])).toBeLessThan(1e-6);
+    expect(Math.abs(w[1] * sn - w[2] * cs)).toBeLessThan(1e-6);
+    expect(Math.hypot(...w)).toBeCloseTo(40, 0);
+    // 잠그면 "모서리에 수직"(↓·Shift·단추가 그 방향을 잠근다)
+    expect(lockOf(s)).toMatchObject({ kind: 'perpendicular', label: '모서리에 수직', edge: eave });
+    // 지나간 모서리가 없거나, 커서 밑이 면이 아니면(같은 자리의 빈 곳) 전처럼 면 위·빈 곳
+    expect(snapWith(scene, x, y, { f: iso, from }).kind).toBe('onFace');
+    expect(snapWith({ meshes: [], lines: scene.lines }, x, y, { f: iso, from, parallelRef: eave }).kind).toBe('free');
   });
 });
 
