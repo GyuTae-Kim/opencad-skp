@@ -22,8 +22,8 @@ import { copyText } from './clipboard';
 import { HISTORY_LIMIT, HISTORY_SETTLE_MS, ViewHistory } from './history';
 import { beginOpen, showAnalyticsSettings, trackExport, type OpenAttempt } from 'opencad-site-kit/analytics';
 // 측정 도구 자체(measure.ts·snap.ts)는 문서를 열 때 나눠 받는다(core.ts loadMeasure) — 여기서는 형과 작은 글·키 규칙만
-import type { MeasureTool, MeasureToolResult } from './measure';
-import { guideKeyFor, guideKeyHint, lockHint, lockName, type GuideKey, type MeasureMode } from './measurehints';
+import type { LockName, MeasureTool, MeasureToolResult } from './measure';
+import { guideKeyFor, type GuideKey, type MeasureMode } from './measurehints';
 import {
   baseFovOf,
   activeSections,
@@ -204,7 +204,7 @@ export interface AppSnapshot {
   /** 측정값 칸·안내 두기로 둔 안내선 수 */
   measureGuideLines: number;
   /** 잠근 방향(축·나란히·수직, 없으면 null) */
-  measureLock: ReturnType<typeof lockName>;
+  measureLock: LockName | null;
   /** 안내 두기(누르기로 안내점·안내선)를 켰는지 */
   measureGuideMode: boolean;
   /** 고른 안내(안내점·안내선, 없으면 null)와 그 지우기 단추가 보이는지 */
@@ -1482,9 +1482,8 @@ export class SkpViewerApp implements PanelHost {
    */
   private measureLockHint(): string | null {
     const t = this.measureTool;
-    if (!t?.active || this.doc?.measure) return null;
-    const touch = !!this.coarseQuery?.matches;
-    return lockHint(t.mode, t.pointCount, lockName(t.inferenceLock), t.planeAxis, touch) ?? guideKeyHint(t.mode, t.pointCount, t.guideMode, this.guideKey, touch);
+    // 글은 측정 도구 조각에(첫 화면 JS를 늘리지 않게)
+    return t?.active && !this.doc?.measure ? t.lockHintText(!!this.coarseQuery?.matches) : null;
   }
 
   /** 측정 기록 펼치기(측정 띠 위 목록) */
@@ -3449,7 +3448,7 @@ export class SkpViewerApp implements PanelHost {
       measureLoading: this.measureFirstUse.wanted,
       measureGuides: this.measureTool?.guides.length ?? 0,
       measureGuideLines: this.measureTool?.guideLines.length ?? 0,
-      measureLock: lockName(this.measureTool?.inferenceLock),
+      measureLock: this.measureTool?.lockName ?? null,
       measureGuideMode: !!this.measureTool?.guideMode,
       measureGuideSelected: this.measureTool?.selectedGuide ?? null,
       measureGuideDelete: this.vcb.shown && this.vcb.selectedShown,

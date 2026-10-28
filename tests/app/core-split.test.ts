@@ -1,7 +1,7 @@
 /**
  * 3D 뷰어 코어와 측정 도구를 문서를 열 때 나눠 받기(app/core.ts): 앱 입구(src/app/main.ts)에서 정적 가져오기로 닿는 모듈은 코어 입구(opencad-viewer3d)와
  * 무거운 모듈(viewer·renderer 등)을 값으로 가져오지 않는다(`import type`만). 값은 작은 코어 모듈만, 입구는 core.ts의 import()로만.
- * 측정 도구(measure.ts·snap.ts와 코어 inference)도 첫 화면 그래프 밖에 두고 core.ts의 import()로만 받는다(앱은 measurehints.ts의 글·키 규칙만).
+ * 측정 도구(measure.ts·snap.ts와 코어 inference)도 첫 화면 그래프 밖에 두고 core.ts의 import()로만 받는다(앱은 measurehints.ts의 키 규칙만).
  * 이 규칙이 깨지면 번들러가 코어 전체나 측정 도구를 첫 화면 JS에 다시 넣는다.
  *
  * src/ 전체가 아니라 main.ts에서 닿는 그래프만 본다 — 해석기 입구(src/index.ts)와 워커는 다른 묶음이다(워커는 new URL로 만든다).
@@ -135,18 +135,18 @@ describe('코어 나눠 받기', () => {
 });
 
 describe('측정 도구 나눠 받기', () => {
-  it('측정 도구 조각을 한 번만 받고, 앱이 쓰는 글·키 규칙은 첫 화면 모듈(measurehints)과 같은 것', async () => {
+  it('측정 도구 조각을 한 번만 받고, 앱이 쓰는 키 규칙은 첫 화면 모듈(measurehints)과 같은 것', async () => {
     const { loadMeasure } = await import('../../src/app/core');
     const a = loadMeasure();
     expect(loadMeasure()).toBe(a);
     const m = await a;
     expect(typeof m.MeasureTool).toBe('function');
     const hints = await import('../../src/app/measurehints');
-    expect(m.lockName).toBe(hints.lockName);
-    expect(m.guideKeyHint).toBe(hints.guideKeyHint);
+    expect(m.guideKeyFor).toBe(hints.guideKeyFor);
+    // 잠금·안내 두기 키 안내 글과 잠근 방향 이름은 도구를 켠 뒤에만 쓰므로 조각에 있다(15차 — 첫 화면에는 키 고르기만)
+    expect(Object.keys(hints).sort()).toEqual(['guideKeyFor']);
     const snap = await import('../../src/app/snap');
-    expect(snap.FACE_PERPENDICULAR_LABEL).toBe(hints.FACE_PERPENDICULAR_LABEL);
-    expect(hints.lockName({ kind: 'perpendicular', label: hints.FACE_PERPENDICULAR_LABEL })).toBe('facePerpendicular');
+    expect(m.lockName({ kind: 'perpendicular', label: snap.FACE_PERPENDICULAR_LABEL })).toBe('facePerpendicular');
   });
 
   it('onceImport: 받는 동안·받은 뒤는 같은 약속, 받지 못하면 다음 부름에서 다시 받는다', async () => {

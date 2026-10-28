@@ -37,7 +37,6 @@ import { projectToScreen, screenRay, viewDepth, worldPerPixel, type ViewFrame } 
 import type { V3 } from 'opencad-viewer3d/math';
 import { PICK_TOLERANCE_PX } from 'opencad-viewer3d/pointer';
 import { edgeLineLock as lineLock, lockedSnap, segmentIntersection } from 'opencad-viewer3d/inference';
-import { FACE_PERPENDICULAR_LABEL } from './measurehints';
 
 /**
  * 그물 정점 → 세계 점: 묶음 원점(origin)을 더한 뒤 배치 행렬(matrix, 4×4 열 우선)을 곱한다(코어 math의 modelMatrix·transformPoint와 같은 계산).
@@ -121,8 +120,8 @@ export interface GuideLine {
   dir: V3;
 }
 
-/** 면에 수직 추정 글(모서리에 수직은 SNAP_LABELS.perpendicular — 글은 첫 화면의 measurehints.ts에 둔다: 잠금 안내 이름이 알아본다) */
-export { FACE_PERPENDICULAR_LABEL };
+/** 면에 수직 추정 글(모서리에 수직은 SNAP_LABELS.perpendicular — 잠금 안내 이름 lockName이 알아본다) */
+export const FACE_PERPENDICULAR_LABEL = '면에 수직';
 
 /** 추정 반경(화면 화소) — 코어가 측정 점을 끝점에 붙잡는 거리(SNAP_PX)와 같다 */
 export const SNAP_RADIUS_PX = 10;

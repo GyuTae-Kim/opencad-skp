@@ -62,6 +62,7 @@ import {
   AXIS_COLORS,
   AXIS_DIRS,
   CORE_PICK_TOLERANCE_PX,
+  FACE_PERPENDICULAR_LABEL,
   SNAP_COLORS,
   SNAP_RADIUS_PX,
   TOUCH_SNAP_RADIUS_PX,
@@ -81,24 +82,65 @@ import {
   type Snap,
   type SnapKind,
 } from './snap';
-import { directingPoints, type GuideKey, type MeasureMode } from './measurehints';
+import type { GuideKey, MeasureMode } from './measurehints';
 
 export type { GuideLine } from './snap';
-// 첫 화면에 남는 작은 글·키 규칙(measurehints.ts — 앱은 이 조각을 받기 전에도 쓴다)
-export {
-  GUIDE_KEY_NAMES,
-  LOCK_HINTS,
-  LOCK_KEYS_HINT,
-  PLANE_HINTS,
-  directingPoints,
-  guideKeyFor,
-  guideKeyHint,
-  lockHint,
-  lockName,
-  type GuideKey,
-  type LockName,
-  type MeasureMode,
-} from './measurehints';
+// 첫 화면에 남는 작은 키 규칙(measurehints.ts — 앱은 이 조각을 받기 전에도 쓴다)
+export { guideKeyFor, type GuideKey, type MeasureMode } from './measurehints';
+
+/** 안내에 보이는 키 이름 */
+export const GUIDE_KEY_NAMES: Readonly<Record<GuideKey, string>> = Object.freeze({ Control: 'Ctrl', Alt: 'Option' });
+
+/**
+ * 안내 두기 키 안내(키보드 기기, 점을 찍기 전): "Ctrl: 안내 두기"·"Ctrl: 안내 두기 끄기". 손가락 기기는 측정 띠 단추라 null.
+ * 상태 줄·측정 띠는 measureHint 다음에 따로 둔다(번역이 "{0}: 안내 두기" 틀로 키 이름을 그대로 끼운다)
+ */
+export function guideKeyHint(mode: MeasureMode | null, points: number, guide: boolean, key: GuideKey = 'Control', touch = false): string | null {
+  if (!mode || points || touch) return null;
+  return `${GUIDE_KEY_NAMES[key]}: ${guide ? '안내 두기 끄기' : '안내 두기'}`;
+}
+
+/** 잠근 방향 이름(잠금 안내): 축 · 모서리와 나란히 · 모서리에 수직 · 면에 수직 */
+export type LockName = Axis | 'parallel' | 'perpendicular' | 'facePerpendicular';
+
+/** 잠근 방향 안내(상태 줄·측정 띠에서 measureHint 다음에 따로 보인다) */
+export const LOCK_HINTS: Readonly<Record<LockName, string>> = Object.freeze({
+  x: '빨강 축으로 잠금',
+  y: '녹색 축으로 잠금',
+  z: '파랑 축으로 잠금',
+  parallel: '모서리와 나란히 잠금',
+  perpendicular: '모서리에 수직으로 잠금',
+  facePerpendicular: '면에 수직으로 잠금',
+});
+
+/** 화살표로 고정한 각도기 평면(그 축이 법선 — SketchUp의 빨강·녹색·파랑 각도기) */
+export const PLANE_HINTS: Readonly<Record<Axis, string>> = Object.freeze({ x: '빨강 각도기로 고정', y: '녹색 각도기로 고정', z: '파랑 각도기로 고정' });
+
+/** 키보드 기기에서 방향을 잡는 동안 잠그는 법 */
+export const LOCK_KEYS_HINT = 'Shift·화살표로 방향 잠금';
+
+/** 잠근 방향 → 잠금 안내 이름 */
+export function lockName(l: Pick<InferenceLock, 'kind' | 'axis' | 'label'> | null | undefined): LockName | null {
+  if (!l) return null;
+  if (l.kind === 'axis') return l.axis ?? null;
+  if (l.kind === 'parallel') return 'parallel';
+  return l.label === FACE_PERPENDICULAR_LABEL ? 'facePerpendicular' : 'perpendicular';
+}
+
+/** 방향을 잡는 중인지(줄자 끝점·각도기 기준 방향·잴 방향 — 시작점을 지나는 선을 잠글 수 있다) */
+export function directingPoints(mode: MeasureMode | null, points: number): boolean {
+  return (mode === 'tape' && points === 1) || (mode === 'protractor' && (points === 1 || points === 2));
+}
+
+/**
+ * 잠금 안내: 방향을 잡는 중이면 잠근 방향, 잠그지 않았으면 키보드 기기에만 Shift·화살표 안내(손가락 기기는 측정 띠 잠금 단추).
+ * 각도기 중심을 찍기 전에는 화살표로 고정한 평면. 상태 줄·측정 띠는 measureHint 다음에 따로 둔다(번역이 안내 글을 한 덩어리로 찾게)
+ */
+export function lockHint(mode: MeasureMode | null, points: number, lock: LockName | null, plane: Axis | null, touch = false): string | null {
+  if (directingPoints(mode, points)) return lock ? LOCK_HINTS[lock] : touch ? null : LOCK_KEYS_HINT;
+  if (mode === 'protractor' && points === 0 && plane) return PLANE_HINTS[plane];
+  return null;
+}
 
 export interface TapeResult {
   kind: 'tape';
@@ -742,6 +784,21 @@ export class MeasureTool {
   /** 지금 잠근 방향 추론(없으면 null) */
   get inferenceLock(): Readonly<MeasureLock> | null {
     return this.lockValue;
+  }
+
+  /** 지금 잠근 방향 이름(축·나란히·수직·면에 수직, 없으면 null) */
+  get lockName(): LockName | null {
+    return lockName(this.lockValue);
+  }
+
+  /**
+   * 잠금·안내 두기 키 안내(상태 줄·측정 띠에서 안내 글 다음 따로): 잠근 방향, 키보드 기기는 Shift·화살표, 각도기 화살표 평면,
+   * 점을 찍기 전 키보드 기기는 안내 두기 키(Ctrl·Option). 도구를 끈 동안은 null. touch = 손가락이 주인 기기
+   */
+  lockHintText(touch: boolean): string | null {
+    const m = this.modeValue;
+    const n = this.pts.length;
+    return lockHint(m, n, lockName(this.lockValue), this.planeAxisValue, touch) ?? guideKeyHint(m, n, this.guideOn, this.opts.guideKey ?? 'Control', touch);
   }
 
   /** 화살표로 고정한 각도기 평면의 축(중심을 찍기 전, 없으면 null) */
