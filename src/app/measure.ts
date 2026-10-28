@@ -33,6 +33,7 @@
  *   그리지도 붙지도 고르지도 않고, 숨긴 채 안내를 두거나 되돌리면 다시 켠다.
  * 안내 되돌리기·다시 하기: 안내 두기(칸·누르기·두 번 누르기)와 지우기(하나·모두)마다 그 전 안내 배열을 쌓아(MAX_GUIDE_UNDO단계) undo·redo로 오간다.
  *   측정 결과·진행 중 점은 건드리지 않는다. 안내 배열은 고치지 않고 늘 새로 만들므로 배열을 통째로 기억한다.
+ * 결과 글(길이·각도)은 정밀 조준 십자선·손가락·툴팁·앱이 알려 준 측정 띠와 겹치면 코어 placeMeasureLabel 차례로 비켜 둔다(labelSpot).
  * 안내 두기(SketchUp 줄자·각도기의 "+" — 이 뷰어는 재기만이 기본): 켜면(setGuideMode, 키보드는 Ctrl — Mac은 Option — 만 눌렀다 떼기)
  *   줄자 둘째 누르기가 안내를 둔다 — 모서리 위에서 시작했으면 그 모서리와 나란히 둘째 점을 지나는 안내선(결과는 모서리에 수직인 거리),
  *   끝점·꼭짓점 같은 점에서 시작했으면 둘째 점에 안내점. 각도기는 셋째 누르기가 중심을 지나 잰 방향으로 안내선을 둔다. 결과는 재기만과 같이 남긴다.
@@ -52,6 +53,7 @@ import { clickCount, dragStartPx, type LastClick } from 'opencad-viewer3d/pointe
 import type { Scene3d } from 'opencad-viewer3d/types';
 import { projectToScreen, screenRay, viewDepth, worldPerPixel, type ViewFrame } from 'opencad-viewer3d/camera';
 import type { V3 } from 'opencad-viewer3d/math';
+import { LABEL_POINT_R, hitsAvoid, placeMeasureLabel, type LabelAvoidAreas, type LabelCircle, type MeasureLabelRect } from 'opencad-viewer3d/measurelabel';
 import { safeStorage } from './backdrop';
 import { icon } from './dom';
 import { isEditableTarget } from './keys';
@@ -193,6 +195,8 @@ export interface MeasureToolOptions {
   onGuides?: () => void;
   /** 안내 보이기를 기억하는 곳(없으면 이 브라우저 localStorage, null이면 기억하지 않음) */
   storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
+  /** 결과 글(길이·각도)이 비켜 갈 앱 요소(3D 보기 위에 뜬 측정 띠·측정값 칸 — 보이지 않는 요소는 넘어간다) */
+  labelAvoid?: () => readonly (Element | null | undefined)[];
 }
 
 /** 잠근 곳: Shift(떼면 풀린다)·화살표 키·앱 단추 */
@@ -272,6 +276,9 @@ export const GUIDE_UNDO_LABEL = '방금 바꾼 안내 되돌리기';
 
 /** 되돌리기 아이콘(반시계로 도는 화살표 — 다시 재기의 ← 아이콘과 다르게) */
 const UNDO_PATHS = '<path d="M3.5 7.5v5.5H9"/><path d="M20.5 17a8.5 8.5 0 0 0-14.5-6L3.5 13"/>';
+
+/** 정밀 조준 십자선(반지름 16에 팔 6과 흰 테)이 차지하는 반지름 — 결과 글이 비켜 간다 */
+const RETICLE_AVOID_R = 24;
 
 /** 되돌리기 목록 한 칸: 그때의 안내점·안내선 배열(배열은 고치지 않고 늘 새로 만들므로 통째로 기억한다) */
 interface GuideSnapshot {
@@ -547,6 +554,27 @@ export function tooltipPosition(x: number, y: number, w: number, h: number, widt
   return { left: Math.round(left), top: Math.round(top) };
 }
 
+/**
+ * 결과 글(줄자 길이·각도기 각도) 자리: 기본은 기준점(x, y) 가운데. 그 자리가 피할 자리(정밀 조준 십자선·손가락, 툴팁, 측정 띠)와 겹치면
+ * 코어 0.13.0 순수 함수 placeMeasureLabel의 차례(기준점 오른쪽 위 → 왼쪽 위 → 오른쪽 아래 → 왼쪽 아래 → 화면 선분 seg를 따라 → 피할 자리 위·아래)로
+ * 겹치지 않는 첫 자리의 왼쪽 위 좌표(soft — 측정 점 표식 — 까지 비키는 자리를 먼저). 겹치지 않거나, 옮겨도 겹치거나, 크기를 모르면 null(기본 자리 그대로).
+ * 코어 거리 글상자를 비키는 setMeasureLabelAvoid와 같은 규칙이다(이 도구는 코어 측정을 쓰지 않아 그 글상자가 없다)
+ */
+export function labelSpot(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  view: { width: number; height: number },
+  avoid: LabelAvoidAreas,
+  seg?: readonly [readonly number[], readonly number[]] | null,
+  soft?: readonly LabelCircle[],
+): { x: number; y: number } | null {
+  if (!(width > 0 && height > 0) || !hitsAvoid({ x: x - width / 2, y: y - height / 2, width, height }, avoid)) return null;
+  const r = placeMeasureLabel([x, y], { width, height }, view, soft?.length ? { ...avoid, soft } : avoid, seg);
+  return hitsAvoid(r, avoid) ? null : { x: r.x, y: r.y };
+}
+
 /** 툴팁 글: "끝점 · 1200 mm" */
 export function joinTip(label: string, value?: string | null): string {
   return [label, value].filter((s) => !!s).join(' · ');
@@ -676,6 +704,8 @@ export class MeasureTool {
   private readonly storage: Pick<Storage, 'getItem' | 'setItem'> | null;
   /** 측정 띠(측정값 칸 줄)의 되돌리기 단추(mountUndo로 붙인다) */
   private undoBtn: HTMLButtonElement | null = null;
+  /** 이번 그리기의 결과 글(툴팁을 둔 뒤 피할 자리와 겹치면 옮긴다): 요소, 기준점, 화면 선분, 비킬 점 표식 */
+  private labelQueue: { el: HTMLDivElement; x: number; y: number; seg: [number[], number[]] | null; soft: LabelCircle[] }[] = [];
   private readonly painter = (f: ViewFrame): void => this.paint(f);
   private readonly g: SVGGElement;
   private readonly layer: HTMLDivElement;
@@ -1829,6 +1859,7 @@ export class MeasureTool {
     if (this.layer.parentNode !== this.overlay.labels) this.overlay.labels.append(this.layer);
     this.g.replaceChildren();
     this.layer.replaceChildren();
+    this.labelQueue = [];
     const shown = this.shownValue;
 
     // 안내선은 맨 아래(결과 선·표식이 그 위에 보이게). 테두리는 선 색(글자 색)과 반대 밝기 — 어두운 테마의 흰 점선이 흰 테두리에 묻히지 않게
@@ -1905,7 +1936,43 @@ export class MeasureTool {
     // 안내 두기: 커서 오른쪽 위에 + (SketchUp 줄자·각도기 커서의 +)
     if (this.guideOn && this.cursor && this.cursor.type !== 'touch' && !this.dragging) this.guidePlus(this.cursor.x, this.cursor.y);
     this.tooltip(f, tip);
+    this.settleLabels(f);
     this.notifyLive(snap);
+  }
+
+  /**
+   * 결과 글이 정밀 조준 십자선·손가락, 커서 옆 툴팁, 앱이 알려 준 요소(측정 띠·측정값 칸)와 겹치면 비켜 둔다(labelSpot — 코어 placeMeasureLabel 차례).
+   * 겹치지 않으면 가운데 자리 그대로라 그림이 예전과 같다
+   */
+  private settleLabels(f: ViewFrame): void {
+    if (!this.labelQueue.length) return;
+    const rects: MeasureLabelRect[] = [];
+    const circles: LabelCircle[] = [];
+    const c = this.cursor;
+    if (this.aimId !== null && c) {
+      circles.push({ x: c.x, y: c.y, r: RETICLE_AVOID_R });
+      rects.push({ x: c.x - 22, y: c.y + AIM_OFFSET_PX - 22, width: 44, height: 44 });
+    }
+    const t = this.tip;
+    if (t.style.display !== 'none' && t.parentNode === this.layer && t.offsetWidth > 0 && t.offsetHeight > 0)
+      rects.push({ x: parseFloat(t.style.left) || 0, y: parseFloat(t.style.top) || 0, width: t.offsetWidth, height: t.offsetHeight });
+    const els = this.opts.labelAvoid?.() ?? [];
+    if (els.length) {
+      const base = this.viewer.canvas.getBoundingClientRect();
+      for (const el of els) {
+        const r = el?.getBoundingClientRect();
+        if (r && r.width > 0 && r.height > 0) rects.push({ x: r.left - base.left, y: r.top - base.top, width: r.width, height: r.height });
+      }
+    }
+    if (!rects.length && !circles.length) return;
+    for (const q of this.labelQueue) {
+      const at = labelSpot(q.x, q.y, q.el.offsetWidth, q.el.offsetHeight, f, { rects, circles }, q.seg, q.soft);
+      if (!at) continue;
+      q.el.style.left = `${Math.round(at.x)}px`;
+      q.el.style.top = `${Math.round(at.y)}px`;
+      q.el.style.transform = 'none';
+      q.el.classList.add('is-moved');
+    }
   }
 
   /**
@@ -2004,12 +2071,14 @@ export class MeasureTool {
     el.style.top = `${pos.top}px`;
   }
 
-  private label(x: number, y: number, text: string, cls: string): void {
+  /** 결과 글(기준점 가운데). seg = 줄자 화면 선분, soft = 될 수 있으면 가리지 않을 점 표식(비켜 둘 때 — settleLabels) */
+  private label(x: number, y: number, text: string, cls: string, seg: [number[], number[]] | null = null, soft: LabelCircle[] = []): void {
     const el = document.createElement('div');
     el.className = `measure-label ${cls}`;
     el.textContent = text;
     el.style.cssText = `position:absolute;left:${Math.round(x)}px;top:${Math.round(y)}px;transform:translate(-50%,-50%);white-space:nowrap;pointer-events:none;`;
     this.layer.append(el);
+    this.labelQueue.push({ el, x, y, seg, soft });
   }
 
   private segment(f: ViewFrame, a: readonly number[], b: readonly number[], cls: string, attrs: Record<string, string | number> = {}): void {
@@ -2161,7 +2230,8 @@ export class MeasureTool {
     if (text) {
       const t = theta / 2;
       const s = screenPoint(f, addScaled(addScaled(c, ua, Math.cos(t) * R * 1.9), w, Math.sin(t) * R * 1.9));
-      if (s) this.label(s[0], s[1], text, 'measure-label-angle');
+      const sc = screenPoint(f, c);
+      if (s) this.label(s[0], s[1], text, 'measure-label-angle', null, sc ? [{ x: sc[0], y: sc[1], r: LABEL_POINT_R }] : []);
     }
   }
 
@@ -2170,7 +2240,11 @@ export class MeasureTool {
     this.dot(f, r.a);
     this.dot(f, r.b);
     const s = screenSegment(f, r.a, r.b);
-    if (s) this.label((s[0] + s[2]) / 2, (s[1] + s[3]) / 2, text, 'measure-label-length');
+    if (s)
+      this.label((s[0] + s[2]) / 2, (s[1] + s[3]) / 2, text, 'measure-label-length', [[s[0], s[1]], [s[2], s[3]]], [
+        { x: s[0], y: s[1], r: LABEL_POINT_R },
+        { x: s[2], y: s[3], r: LABEL_POINT_R },
+      ]);
   }
 }
 

@@ -49,6 +49,7 @@ import {
   MAX_GUIDE_UNDO,
   applyMessage,
   guideUndoKey,
+  labelSpot,
 } from '../../src/app/measure';
 import type { V3 } from 'opencad-viewer3d/math';
 import { Overlay, frameFor } from '../../src/app/overlay';
@@ -1998,5 +1999,61 @@ describe('측정 도구: 안내를 늘 보이기(보기 설정 "안내점·안�
     expect(b.tool.guidesShown).toBe(true);
     b.tool.setGuidesShown(false);
     expect(b.tool.guidesShown).toBe(false);
+  });
+});
+
+describe('측정 도구: 결과 글이 십자선·툴팁·측정 띠를 비켜 그리기(코어 placeMeasureLabel)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('labelSpot: 겹치지 않으면 null(가운데 그대로), 겹치면 코어 차례의 첫 빈자리, 옮길 곳이 없거나 크기를 모르면 null', () => {
+    const view = { width: 400, height: 300 };
+    expect(labelSpot(200, 100, 60, 18, view, { rects: [], circles: [] })).toBeNull();
+    const bar = { x: 0, y: 260, width: 400, height: 40 };
+    expect(labelSpot(200, 100, 60, 18, view, { rects: [bar] })).toBeNull();
+    // 측정 띠가 가운데 자리를 덮으면: 네 귀·선분을 따라도 걸려 띠 바로 위(기본 가로 자리)
+    const s = labelSpot(200, 270, 60, 18, view, { rects: [bar] }, [[100, 270], [300, 270]])!;
+    expect(s).toEqual({ x: 210, y: 260 - 18 - 8 });
+    // 정밀 조준 십자선(원): 기준점 오른쪽 위 귀가 비면 그 자리
+    const aim = labelSpot(200, 150, 60, 18, view, { circles: [{ x: 195, y: 160, r: 24 }] })!;
+    expect(aim.y + 18).toBeLessThanOrEqual(150);
+    // 점 표식(soft)도 될 수 있으면 비킨다
+    // 오른쪽 위가 걸리고 왼쪽 위가 점 표식(soft)을 가리면 오른쪽 아래
+    expect(labelSpot(200, 150, 60, 18, view, { circles: [{ x: 230, y: 133, r: 12 }] }, null, [{ x: 160, y: 133, r: 6 }])).toEqual({ x: 210, y: 158 });
+    expect(labelSpot(200, 150, 60, 18, view, { circles: [{ x: 230, y: 133, r: 12 }] })).toEqual({ x: 130, y: 124 });
+    // 화면 전체를 덮으면 옮기지 않는다, 크기 0도
+    expect(labelSpot(200, 150, 60, 18, view, { rects: [{ x: 0, y: 0, width: 400, height: 300 }] })).toBeNull();
+    expect(labelSpot(200, 270, 0, 18, view, { rects: [bar] })).toBeNull();
+  });
+
+  it('줄자 결과 글이 앱이 알려 준 측정 띠와 겹치면 비켜 두고, 겹치지 않으면 가운데 그대로(그림이 예전과 같다)', () => {
+    // jsdom은 배치를 하지 않아 결과 글 크기만 정해 준다
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('measure-label') ? 60 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('measure-label') ? 18 : 0;
+    });
+    const band = document.createElement('div');
+    let top = 160;
+    band.getBoundingClientRect = () => ({ left: 0, top, width: W, height: 40, right: W, bottom: top + 40, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
+    const hidden = document.createElement('div');
+    const r = rig(EDGES(), TOP, DEFAULT_UNITS, { labelAvoid: () => [band, hidden, null] });
+    r.tool.setMode('tape');
+    r.click(102, 103);
+    r.click(198, 101);
+    r.move(30, 20);
+    const label = r.q('.measure-label-length') as HTMLElement;
+    expect(label.style.transform).toBe('translate(-50%,-50%)');
+    expect(label.classList.contains('is-moved')).toBe(false);
+    expect([label.style.left, label.style.top]).toEqual(['150px', '100px']);
+    // 띠가 결과 글 자리를 덮으면(휴대폰 가로 등) 띠 위로
+    top = 95;
+    r.move(31, 20);
+    const moved = r.q('.measure-label-length') as HTMLElement;
+    expect(moved.classList.contains('is-moved')).toBe(true);
+    expect(moved.style.transform).toBe('none');
+    expect(parseFloat(moved.style.top) + 18).toBeLessThanOrEqual(95);
   });
 });
