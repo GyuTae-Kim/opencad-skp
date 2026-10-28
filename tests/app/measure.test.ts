@@ -378,7 +378,13 @@ describe('측정 도구: 줄자', () => {
 });
 
 describe('측정 도구: 터치', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('탭은 넓은 반경으로 추정하고, 두 손가락은 점을 찍지 않는다', () => {
+    // 둘레 고르기의 시간 예산(마우스 6 ms·터치 24 ms)이 느린 CI에서 먼저 끊기면 모서리 대신 빈 곳이 되므로 시계를 멈춘다
+    vi.spyOn(performance, 'now').mockReturnValue(0);
     const r = rig(EDGES());
     r.tool.setMode('tape');
     // 끝점에서 15화소: 마우스면 모서리 위, 터치면 끝점
