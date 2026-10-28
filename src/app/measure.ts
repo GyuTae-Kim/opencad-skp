@@ -10,7 +10,8 @@
  *   3. `viewer.onPick`: `tool.active`이면 무시한다(이 도구가 그 누르기를 쓴다).
  *   4. 창 keydown·keyup(캡처 단계): `tool.handleKey(e)`가 true면 처리 끝. Esc keydown에서 false면(지울 것이 없음) 앱이 도구를 끈다.
  *      그보다 먼저(도구를 끈 동안에도) `tool.undoKey(e)`가 true면 안내 되돌리기·다시 하기로 처리 끝.
- *   5. 측정값 칸을 만들었으면 `tool.mountUndo(칸)`(측정 띠의 되돌리기 단추), 보기 설정 메뉴에 `tool.showGuidesItem()`, 새 문서면 `tool.clearGuides(true)`.
+ *   5. 측정값 칸을 만들었으면 `tool.mountUndo(칸)`(측정 띠의 되돌리기·다시 하기 단추), 보기 설정 메뉴에 `tool.guideMenuItems()`(안내 보이기·이 파일의 안내 모두 지우기),
+ *      새 문서면 `tool.openFile(파일 내용 SHA-256)`(안내를 비우고 이 브라우저에 기억한 그 파일의 안내를 되살린다 — guidestore.ts).
  *   6. 앱을 닫을 때 `tool.dispose()`.
  *
  * 입력: 캔버스 포인터 이벤트를 엿본다(막지 않는다). 왼쪽 단추·탭을 코어의 끌기 시작 거리(tapSlopPx — 마우스·펜 4화소,
@@ -33,6 +34,9 @@
  *   그리지도 붙지도 고르지도 않고, 숨긴 채 안내를 두거나 되돌리면 다시 켠다.
  * 안내 되돌리기·다시 하기: 안내 두기(칸·누르기·두 번 누르기)와 지우기(하나·모두)마다 그 전 안내 배열을 쌓아(MAX_GUIDE_UNDO단계) undo·redo로 오간다.
  *   측정 결과·진행 중 점은 건드리지 않는다. 안내 배열은 고치지 않고 늘 새로 만들므로 배열을 통째로 기억한다.
+ * 파일별 안내 기억: 안내가 바뀔 때마다(되돌리기 포함) 지금 안내를 파일 내용 지문 열쇠로 이 브라우저에 두고(guidestore.ts), 같은 파일을 다시 열면 되살린다.
+ *   되돌리기 목록은 기억하지 않는다(되살린 안내가 처음 상태). 모두 지우면 그 파일의 기억도 지운다(되돌리면 다시 기억한다).
+ * 결과 글(길이·각도)은 정밀 조준 십자선·손가락·툴팁·앱이 알려 준 측정 띠와 겹치면 코어 placeMeasureLabel 차례로 비켜 둔다(labelSpot).
  * 안내 두기(SketchUp 줄자·각도기의 "+" — 이 뷰어는 재기만이 기본): 켜면(setGuideMode, 키보드는 Ctrl — Mac은 Option — 만 눌렀다 떼기)
  *   줄자 둘째 누르기가 안내를 둔다 — 모서리 위에서 시작했으면 그 모서리와 나란히 둘째 점을 지나는 안내선(결과는 모서리에 수직인 거리),
  *   끝점·꼭짓점 같은 점에서 시작했으면 둘째 점에 안내점. 각도기는 셋째 누르기가 중심을 지나 잰 방향으로 안내선을 둔다. 결과는 재기만과 같이 남긴다.
@@ -52,8 +56,10 @@ import { clickCount, dragStartPx, type LastClick } from 'opencad-viewer3d/pointe
 import type { Scene3d } from 'opencad-viewer3d/types';
 import { projectToScreen, screenRay, viewDepth, worldPerPixel, type ViewFrame } from 'opencad-viewer3d/camera';
 import type { V3 } from 'opencad-viewer3d/math';
+import { LABEL_POINT_R, hitsAvoid, placeMeasureLabel, type LabelAvoidAreas, type LabelCircle, type MeasureLabelRect } from 'opencad-viewer3d/measurelabel';
 import { safeStorage } from './backdrop';
 import { icon } from './dom';
+import { digestHex, loadGuides, saveGuides, type GuideStorage } from './guidestore';
 import { isEditableTarget } from './keys';
 import { screenPoint, screenSegment, svgEl, type Overlay } from './overlay';
 import { formatAngle, formatLength, mmPerSceneUnit, type UnitsDisplay } from './units';
@@ -62,6 +68,7 @@ import {
   AXIS_COLORS,
   AXIS_DIRS,
   CORE_PICK_TOLERANCE_PX,
+  FACE_PERPENDICULAR_LABEL,
   SNAP_COLORS,
   SNAP_RADIUS_PX,
   TOUCH_SNAP_RADIUS_PX,
@@ -81,24 +88,65 @@ import {
   type Snap,
   type SnapKind,
 } from './snap';
-import { directingPoints, type GuideKey, type MeasureMode } from './measurehints';
+import type { GuideKey, MeasureMode } from './measurehints';
 
 export type { GuideLine } from './snap';
-// 첫 화면에 남는 작은 글·키 규칙(measurehints.ts — 앱은 이 조각을 받기 전에도 쓴다)
-export {
-  GUIDE_KEY_NAMES,
-  LOCK_HINTS,
-  LOCK_KEYS_HINT,
-  PLANE_HINTS,
-  directingPoints,
-  guideKeyFor,
-  guideKeyHint,
-  lockHint,
-  lockName,
-  type GuideKey,
-  type LockName,
-  type MeasureMode,
-} from './measurehints';
+// 첫 화면에 남는 작은 키 규칙(measurehints.ts — 앱은 이 조각을 받기 전에도 쓴다)
+export { guideKeyFor, type GuideKey, type MeasureMode } from './measurehints';
+
+/** 안내에 보이는 키 이름 */
+export const GUIDE_KEY_NAMES: Readonly<Record<GuideKey, string>> = Object.freeze({ Control: 'Ctrl', Alt: 'Option' });
+
+/**
+ * 안내 두기 키 안내(키보드 기기, 점을 찍기 전): "Ctrl: 안내 두기"·"Ctrl: 안내 두기 끄기". 손가락 기기는 측정 띠 단추라 null.
+ * 상태 줄·측정 띠는 measureHint 다음에 따로 둔다(번역이 "{0}: 안내 두기" 틀로 키 이름을 그대로 끼운다)
+ */
+export function guideKeyHint(mode: MeasureMode | null, points: number, guide: boolean, key: GuideKey = 'Control', touch = false): string | null {
+  if (!mode || points || touch) return null;
+  return `${GUIDE_KEY_NAMES[key]}: ${guide ? '안내 두기 끄기' : '안내 두기'}`;
+}
+
+/** 잠근 방향 이름(잠금 안내): 축 · 모서리와 나란히 · 모서리에 수직 · 면에 수직 */
+export type LockName = Axis | 'parallel' | 'perpendicular' | 'facePerpendicular';
+
+/** 잠근 방향 안내(상태 줄·측정 띠에서 measureHint 다음에 따로 보인다) */
+export const LOCK_HINTS: Readonly<Record<LockName, string>> = Object.freeze({
+  x: '빨강 축으로 잠금',
+  y: '녹색 축으로 잠금',
+  z: '파랑 축으로 잠금',
+  parallel: '모서리와 나란히 잠금',
+  perpendicular: '모서리에 수직으로 잠금',
+  facePerpendicular: '면에 수직으로 잠금',
+});
+
+/** 화살표로 고정한 각도기 평면(그 축이 법선 — SketchUp의 빨강·녹색·파랑 각도기) */
+export const PLANE_HINTS: Readonly<Record<Axis, string>> = Object.freeze({ x: '빨강 각도기로 고정', y: '녹색 각도기로 고정', z: '파랑 각도기로 고정' });
+
+/** 키보드 기기에서 방향을 잡는 동안 잠그는 법 */
+export const LOCK_KEYS_HINT = 'Shift·화살표로 방향 잠금';
+
+/** 잠근 방향 → 잠금 안내 이름 */
+export function lockName(l: Pick<InferenceLock, 'kind' | 'axis' | 'label'> | null | undefined): LockName | null {
+  if (!l) return null;
+  if (l.kind === 'axis') return l.axis ?? null;
+  if (l.kind === 'parallel') return 'parallel';
+  return l.label === FACE_PERPENDICULAR_LABEL ? 'facePerpendicular' : 'perpendicular';
+}
+
+/** 방향을 잡는 중인지(줄자 끝점·각도기 기준 방향·잴 방향 — 시작점을 지나는 선을 잠글 수 있다) */
+export function directingPoints(mode: MeasureMode | null, points: number): boolean {
+  return (mode === 'tape' && points === 1) || (mode === 'protractor' && (points === 1 || points === 2));
+}
+
+/**
+ * 잠금 안내: 방향을 잡는 중이면 잠근 방향, 잠그지 않았으면 키보드 기기에만 Shift·화살표 안내(손가락 기기는 측정 띠 잠금 단추).
+ * 각도기 중심을 찍기 전에는 화살표로 고정한 평면. 상태 줄·측정 띠는 measureHint 다음에 따로 둔다(번역이 안내 글을 한 덩어리로 찾게)
+ */
+export function lockHint(mode: MeasureMode | null, points: number, lock: LockName | null, plane: Axis | null, touch = false): string | null {
+  if (directingPoints(mode, points)) return lock ? LOCK_HINTS[lock] : touch ? null : LOCK_KEYS_HINT;
+  if (mode === 'protractor' && points === 0 && plane) return PLANE_HINTS[plane];
+  return null;
+}
 
 export interface TapeResult {
   kind: 'tape';
@@ -149,8 +197,10 @@ export interface MeasureToolOptions {
   guideKey?: GuideKey;
   /** 안내 두기를 켜고 끄거나 안내점·안내선이 늘고 줄거나, 되돌리기 목록·안내 보이기가 바뀌면(측정 띠 단추·측정값 칸의 안내 수를 맞춘다) */
   onGuides?: () => void;
-  /** 안내 보이기를 기억하는 곳(없으면 이 브라우저 localStorage, null이면 기억하지 않음) */
-  storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
+  /** 안내 보이기와 파일별 안내(guidestore.ts)를 기억하는 곳(없으면 이 브라우저 localStorage, null이면 기억하지 않음) */
+  storage?: GuideStorage | null;
+  /** 결과 글(길이·각도)이 비켜 갈 앱 요소(3D 보기 위에 뜬 측정 띠·측정값 칸 — 보이지 않는 요소는 넘어간다) */
+  labelAvoid?: () => readonly (Element | null | undefined)[];
 }
 
 /** 잠근 곳: Shift(떼면 풀린다)·화살표 키·앱 단추 */
@@ -228,8 +278,19 @@ export const GUIDES_SHOWN_LABEL = '안내점·안내선 보이기';
 /** 측정 띠의 안내 되돌리기 단추 글 */
 export const GUIDE_UNDO_LABEL = '방금 바꾼 안내 되돌리기';
 
+/** 측정 띠의 안내 다시 하기 단추 글 */
+export const GUIDE_REDO_LABEL = '되돌린 안내 다시 하기';
+
+/** 보기 설정 메뉴의 이 파일 안내 모두 지우기 항목 글(측정값 칸의 ✕처럼 되돌릴 수 있다) */
+export const GUIDE_CLEAR_FILE_LABEL = '이 파일의 안내 모두 지우기';
+
 /** 되돌리기 아이콘(반시계로 도는 화살표 — 다시 재기의 ← 아이콘과 다르게) */
 const UNDO_PATHS = '<path d="M3.5 7.5v5.5H9"/><path d="M20.5 17a8.5 8.5 0 0 0-14.5-6L3.5 13"/>';
+/** 다시 하기 아이콘(되돌리기를 좌우로 뒤집은 것) */
+const REDO_PATHS = '<path d="M20.5 7.5v5.5H15"/><path d="M3.5 17a8.5 8.5 0 0 1 14.5-6l2.5 2"/>';
+
+/** 정밀 조준 십자선(반지름 16에 팔 6과 흰 테)이 차지하는 반지름 — 결과 글이 비켜 간다 */
+const RETICLE_AVOID_R = 24;
 
 /** 되돌리기 목록 한 칸: 그때의 안내점·안내선 배열(배열은 고치지 않고 늘 새로 만들므로 통째로 기억한다) */
 interface GuideSnapshot {
@@ -252,8 +313,10 @@ export function guideUndoKey(e: Pick<KeyboardEvent, 'key' | 'code' | 'ctrlKey' |
 /** 보기 설정 메뉴 항목 꼴(앱 메뉴가 그대로 쓴다) */
 export interface GuideMenuItem {
   label: string;
-  checked: boolean;
-  toggle: true;
+  icon?: string;
+  checked?: boolean;
+  toggle?: true;
+  disabled?: boolean;
   run: () => void;
 }
 
@@ -505,6 +568,27 @@ export function tooltipPosition(x: number, y: number, w: number, h: number, widt
   return { left: Math.round(left), top: Math.round(top) };
 }
 
+/**
+ * 결과 글(줄자 길이·각도기 각도) 자리: 기본은 기준점(x, y) 가운데. 그 자리가 피할 자리(정밀 조준 십자선·손가락, 툴팁, 측정 띠)와 겹치면
+ * 코어 0.13.0 순수 함수 placeMeasureLabel의 차례(기준점 오른쪽 위 → 왼쪽 위 → 오른쪽 아래 → 왼쪽 아래 → 화면 선분 seg를 따라 → 피할 자리 위·아래)로
+ * 겹치지 않는 첫 자리의 왼쪽 위 좌표(soft — 측정 점 표식 — 까지 비키는 자리를 먼저). 겹치지 않거나, 옮겨도 겹치거나, 크기를 모르면 null(기본 자리 그대로).
+ * 코어 거리 글상자를 비키는 setMeasureLabelAvoid와 같은 규칙이다(이 도구는 코어 측정을 쓰지 않아 그 글상자가 없다)
+ */
+export function labelSpot(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  view: { width: number; height: number },
+  avoid: LabelAvoidAreas,
+  seg?: readonly [readonly number[], readonly number[]] | null,
+  soft?: readonly LabelCircle[],
+): { x: number; y: number } | null {
+  if (!(width > 0 && height > 0) || !hitsAvoid({ x: x - width / 2, y: y - height / 2, width, height }, avoid)) return null;
+  const r = placeMeasureLabel([x, y], { width, height }, view, soft?.length ? { ...avoid, soft } : avoid, seg);
+  return hitsAvoid(r, avoid) ? null : { x: r.x, y: r.y };
+}
+
 /** 툴팁 글: "끝점 · 1200 mm" */
 export function joinTip(label: string, value?: string | null): string {
   return [label, value].filter((s) => !!s).join(' · ');
@@ -631,9 +715,18 @@ export class MeasureTool {
   private redoList: GuideSnapshot[] = [];
   /** 안내 보이기(보기 설정 — 끄면 안내를 그리지 않고, 붙지도 고르지도 않는다) */
   private shownValue: boolean;
-  private readonly storage: Pick<Storage, 'getItem' | 'setItem'> | null;
-  /** 측정 띠(측정값 칸 줄)의 되돌리기 단추(mountUndo로 붙인다) */
+  private readonly storage: GuideStorage | null;
+  /** 측정 띠(측정값 칸 줄)의 되돌리기·다시 하기 단추(mountUndo로 붙인다) */
   private undoBtn: HTMLButtonElement | null = null;
+  private redoBtn: HTMLButtonElement | null = null;
+  /** 안내를 기억하는 파일 열쇠(내용 지문 16진 — 지문을 받기 전·기억하지 않으면 null)와 openFile 차례(늦게 온 지문은 버린다) */
+  private fileKey: string | null = null;
+  private fileTicket = 0;
+  /** 마지막으로 기억한 안내 배열(배열을 늘 새로 만들므로 바뀌었을 때만 쓴다) */
+  private savedPts: V3[] | null = null;
+  private savedLns: GuideLine[] | null = null;
+  /** 이번 그리기의 결과 글(툴팁을 둔 뒤 피할 자리와 겹치면 옮긴다): 요소, 기준점, 화면 선분, 비킬 점 표식 */
+  private labelQueue: { el: HTMLDivElement; x: number; y: number; seg: [number[], number[]] | null; soft: LabelCircle[] }[] = [];
   private readonly painter = (f: ViewFrame): void => this.paint(f);
   private readonly g: SVGGElement;
   private readonly layer: HTMLDivElement;
@@ -744,6 +837,21 @@ export class MeasureTool {
     return this.lockValue;
   }
 
+  /** 지금 잠근 방향 이름(축·나란히·수직·면에 수직, 없으면 null) */
+  get lockName(): LockName | null {
+    return lockName(this.lockValue);
+  }
+
+  /**
+   * 잠금·안내 두기 키 안내(상태 줄·측정 띠에서 안내 글 다음 따로): 잠근 방향, 키보드 기기는 Shift·화살표, 각도기 화살표 평면,
+   * 점을 찍기 전 키보드 기기는 안내 두기 키(Ctrl·Option). 도구를 끈 동안은 null. touch = 손가락이 주인 기기
+   */
+  lockHintText(touch: boolean): string | null {
+    const m = this.modeValue;
+    const n = this.pts.length;
+    return lockHint(m, n, lockName(this.lockValue), this.planeAxisValue, touch) ?? guideKeyHint(m, n, this.guideOn, this.opts.guideKey ?? 'Control', touch);
+  }
+
   /** 화살표로 고정한 각도기 평면의 축(중심을 찍기 전, 없으면 null) */
   get planeAxis(): Axis | null {
     return this.planeAxisValue;
@@ -805,6 +913,49 @@ export class MeasureTool {
     this.hoverDirty = true;
     this.overlay.invalidate();
     this.notifyGuides();
+  }
+
+  /**
+   * 새 문서의 안내(앱이 문서를 열 때마다): 안내와 되돌리기 목록을 비우고(clearGuides(true)), 파일 내용 지문(SHA-256 바이트 — 약속이면 받는 대로)으로
+   * 이 브라우저에 기억한 그 파일의 안내를 되살린다(되돌리기 목록은 비운 채 — 되살린 안내가 처음 상태). 그 뒤로는 안내가 바뀔 때마다 그 열쇠로 기억한다
+   * (guidestore.ts — 파일 이름·경로는 두지 않는다). 지문이 null이면(지문을 구하지 못한 브라우저) 기억하지 않는다.
+   * 지문을 받기 전에 안내를 두었으면(드물다) 기억한 것 대신 그 안내를 기억한다. 늦게 온 앞 문서의 지문은 버린다
+   */
+  openFile(print: ArrayBuffer | null | PromiseLike<ArrayBuffer | null>): void {
+    const ticket = ++this.fileTicket;
+    this.fileKey = null;
+    this.clearGuides(true);
+    this.savedPts = this.guidePts;
+    this.savedLns = this.guideLns;
+    void Promise.resolve(print).then(
+      (b) => {
+        if (ticket === this.fileTicket && b && !this.disposed) this.adoptFile(digestHex(b));
+      },
+      () => undefined,
+    );
+  }
+
+  /** 지문을 받았을 때: 기억한 안내를 되살리고(그 파일을 쓴 때도 새로), 그 열쇠로 기억하기 시작한다 */
+  private adoptFile(key: string): void {
+    this.fileKey = key;
+    if (!this.guidePts.length && !this.guideLns.length && !this.undoList.length) {
+      const g = loadGuides(this.storage, key, MAX_GUIDE_POINTS, MAX_GUIDE_LINES);
+      if (!g) return;
+      this.guidePts = g.pts;
+      this.guideLns = g.lns;
+      this.hoverDirty = true;
+      this.overlay.invalidate();
+    }
+    this.persist(true);
+    this.notifyGuides();
+  }
+
+  /** 안내가 바뀌었으면(force면 늘) 이 파일 열쇠로 기억한다(막히면 이번 세션만) */
+  private persist(force = false): void {
+    if (!this.fileKey || (!force && this.savedPts === this.guidePts && this.savedLns === this.guideLns)) return;
+    this.savedPts = this.guidePts;
+    this.savedLns = this.guideLns;
+    saveGuides(this.storage, this.fileKey, this.guidePts, this.guideLns, Date.now());
   }
 
   /** 되돌릴 안내 변경이 있는지 */
@@ -902,23 +1053,35 @@ export class MeasureTool {
   }
 
   /**
-   * 측정값 칸(host)에 안내 되돌리기 단추를 붙인다(고른 안내 지우기 단추 앞). 측정 띠 안에서만 보이고(CSS — 키보드는 Ctrl·⌘+Z),
-   * 되돌릴 것이 있을 때만 나온다
+   * 보기 설정 메뉴의 안내 항목: "안내점·안내선 보이기"와 "이 파일의 안내 모두 지우기"(안내가 없으면 끔 — 측정값 칸의 ✕와 같이 되돌릴 수 있고,
+   * 비우면 이 파일의 기억도 지운다. 도구를 끈 동안에도 된다)
+   */
+  guideMenuItems(): GuideMenuItem[] {
+    return [this.showGuidesItem(), { label: GUIDE_CLEAR_FILE_LABEL, icon: 'trash', disabled: !this.guidePts.length && !this.guideLns.length, run: () => this.clearGuides() }];
+  }
+
+  /**
+   * 측정값 칸(host)에 안내 되돌리기·다시 하기 단추를 붙인다(고른 안내 지우기 단추 앞). 측정 띠 안에서만 보이고(CSS — 키보드는 Ctrl·⌘+Z, Ctrl+Y),
+   * 되돌릴 것·다시 할 것이 있을 때만 나온다
    */
   mountUndo(host: HTMLElement): void {
-    let b = this.undoBtn;
-    if (!b) {
-      b = document.createElement('button');
+    const make = (cls: string, label: string, paths: string, run: () => boolean): HTMLButtonElement => {
+      const b = document.createElement('button');
       b.type = 'button';
-      b.className = 'vcb-btn vcb-undo';
-      b.title = GUIDE_UNDO_LABEL;
-      b.setAttribute('aria-label', GUIDE_UNDO_LABEL);
-      b.innerHTML = icon('', 16).replace('</svg>', `${UNDO_PATHS}</svg>`);
-      b.addEventListener('click', () => this.undo());
-      this.undoBtn = b;
-    }
-    host.insertBefore(b, host.querySelector('.vcb-del'));
-    b.hidden = !this.canUndo;
+      b.className = `vcb-btn ${cls}`;
+      b.title = label;
+      b.setAttribute('aria-label', label);
+      b.innerHTML = icon('', 16).replace('</svg>', `${paths}</svg>`);
+      b.addEventListener('click', () => run());
+      return b;
+    };
+    this.undoBtn ??= make('vcb-undo', GUIDE_UNDO_LABEL, UNDO_PATHS, () => this.undo());
+    this.redoBtn ??= make('vcb-redo', GUIDE_REDO_LABEL, REDO_PATHS, () => this.redo());
+    const at = host.querySelector('.vcb-del');
+    host.insertBefore(this.undoBtn, at);
+    host.insertBefore(this.redoBtn, at);
+    this.undoBtn.hidden = !this.canUndo;
+    this.redoBtn.hidden = !this.canRedo;
   }
 
   /** 숨긴 안내를 다시 보인다(안내를 두거나 되돌렸을 때) */
@@ -927,11 +1090,13 @@ export class MeasureTool {
   }
 
   /**
-   * 안내가 바뀐 뒤: 덧그림을 붙이거나 떼고(도구를 끈 동안에도 안내가 보이면 그린다), 되돌리기 단추를 맞추고 앱에 알린다
+   * 안내가 바뀐 뒤: 이 파일 열쇠로 기억하고, 덧그림을 붙이거나 떼고(도구를 끈 동안에도 안내가 보이면 그린다), 되돌리기·다시 하기 단추를 맞추고 앱에 알린다
    */
   private notifyGuides(): void {
+    this.persist();
     this.syncPainter();
     if (this.undoBtn) this.undoBtn.hidden = !this.canUndo;
+    if (this.redoBtn) this.redoBtn.hidden = !this.canRedo;
     this.opts.onGuides?.();
   }
 
@@ -1379,9 +1544,10 @@ export class MeasureTool {
     if (this.disposed) return;
     this.setMode(null);
     this.disposed = true;
-    // 도구를 끈 뒤에도 그리던 안내와 되돌리기 단추도 뗀다
+    // 도구를 끈 뒤에도 그리던 안내와 되돌리기·다시 하기 단추도 뗀다
     this.syncPainter();
     this.undoBtn?.remove();
+    this.redoBtn?.remove();
     for (const f of this.off.splice(0)) f();
     this.presses.clear();
   }
@@ -1772,6 +1938,7 @@ export class MeasureTool {
     if (this.layer.parentNode !== this.overlay.labels) this.overlay.labels.append(this.layer);
     this.g.replaceChildren();
     this.layer.replaceChildren();
+    this.labelQueue = [];
     const shown = this.shownValue;
 
     // 안내선은 맨 아래(결과 선·표식이 그 위에 보이게). 테두리는 선 색(글자 색)과 반대 밝기 — 어두운 테마의 흰 점선이 흰 테두리에 묻히지 않게
@@ -1848,7 +2015,43 @@ export class MeasureTool {
     // 안내 두기: 커서 오른쪽 위에 + (SketchUp 줄자·각도기 커서의 +)
     if (this.guideOn && this.cursor && this.cursor.type !== 'touch' && !this.dragging) this.guidePlus(this.cursor.x, this.cursor.y);
     this.tooltip(f, tip);
+    this.settleLabels(f);
     this.notifyLive(snap);
+  }
+
+  /**
+   * 결과 글이 정밀 조준 십자선·손가락, 커서 옆 툴팁, 앱이 알려 준 요소(측정 띠·측정값 칸)와 겹치면 비켜 둔다(labelSpot — 코어 placeMeasureLabel 차례).
+   * 겹치지 않으면 가운데 자리 그대로라 그림이 예전과 같다
+   */
+  private settleLabels(f: ViewFrame): void {
+    if (!this.labelQueue.length) return;
+    const rects: MeasureLabelRect[] = [];
+    const circles: LabelCircle[] = [];
+    const c = this.cursor;
+    if (this.aimId !== null && c) {
+      circles.push({ x: c.x, y: c.y, r: RETICLE_AVOID_R });
+      rects.push({ x: c.x - 22, y: c.y + AIM_OFFSET_PX - 22, width: 44, height: 44 });
+    }
+    const t = this.tip;
+    if (t.style.display !== 'none' && t.parentNode === this.layer && t.offsetWidth > 0 && t.offsetHeight > 0)
+      rects.push({ x: parseFloat(t.style.left) || 0, y: parseFloat(t.style.top) || 0, width: t.offsetWidth, height: t.offsetHeight });
+    const els = this.opts.labelAvoid?.() ?? [];
+    if (els.length) {
+      const base = this.viewer.canvas.getBoundingClientRect();
+      for (const el of els) {
+        const r = el?.getBoundingClientRect();
+        if (r && r.width > 0 && r.height > 0) rects.push({ x: r.left - base.left, y: r.top - base.top, width: r.width, height: r.height });
+      }
+    }
+    if (!rects.length && !circles.length) return;
+    for (const q of this.labelQueue) {
+      const at = labelSpot(q.x, q.y, q.el.offsetWidth, q.el.offsetHeight, f, { rects, circles }, q.seg, q.soft);
+      if (!at) continue;
+      q.el.style.left = `${Math.round(at.x)}px`;
+      q.el.style.top = `${Math.round(at.y)}px`;
+      q.el.style.transform = 'none';
+      q.el.classList.add('is-moved');
+    }
   }
 
   /**
@@ -1947,12 +2150,14 @@ export class MeasureTool {
     el.style.top = `${pos.top}px`;
   }
 
-  private label(x: number, y: number, text: string, cls: string): void {
+  /** 결과 글(기준점 가운데). seg = 줄자 화면 선분, soft = 될 수 있으면 가리지 않을 점 표식(비켜 둘 때 — settleLabels) */
+  private label(x: number, y: number, text: string, cls: string, seg: [number[], number[]] | null = null, soft: LabelCircle[] = []): void {
     const el = document.createElement('div');
     el.className = `measure-label ${cls}`;
     el.textContent = text;
     el.style.cssText = `position:absolute;left:${Math.round(x)}px;top:${Math.round(y)}px;transform:translate(-50%,-50%);white-space:nowrap;pointer-events:none;`;
     this.layer.append(el);
+    this.labelQueue.push({ el, x, y, seg, soft });
   }
 
   private segment(f: ViewFrame, a: readonly number[], b: readonly number[], cls: string, attrs: Record<string, string | number> = {}): void {
@@ -2104,7 +2309,8 @@ export class MeasureTool {
     if (text) {
       const t = theta / 2;
       const s = screenPoint(f, addScaled(addScaled(c, ua, Math.cos(t) * R * 1.9), w, Math.sin(t) * R * 1.9));
-      if (s) this.label(s[0], s[1], text, 'measure-label-angle');
+      const sc = screenPoint(f, c);
+      if (s) this.label(s[0], s[1], text, 'measure-label-angle', null, sc ? [{ x: sc[0], y: sc[1], r: LABEL_POINT_R }] : []);
     }
   }
 
@@ -2113,7 +2319,11 @@ export class MeasureTool {
     this.dot(f, r.a);
     this.dot(f, r.b);
     const s = screenSegment(f, r.a, r.b);
-    if (s) this.label((s[0] + s[2]) / 2, (s[1] + s[3]) / 2, text, 'measure-label-length');
+    if (s)
+      this.label((s[0] + s[2]) / 2, (s[1] + s[3]) / 2, text, 'measure-label-length', [[s[0], s[1]], [s[2], s[3]]], [
+        { x: s[0], y: s[1], r: LABEL_POINT_R },
+        { x: s[2], y: s[3], r: LABEL_POINT_R },
+      ]);
   }
 }
 

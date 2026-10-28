@@ -22,7 +22,8 @@
  *   화면 각 6° 안)이면 시작점을 지나 그 방향 선 위로. 여럿 맞으면 화면에서 선에 가까운 쪽(같으면 축 → 나란히 → 수직).
  *   시작점에서 모서리에 내린 수직 발(점 추정)이 먼저다.
  * - 잠금(SketchUp 추론 잠금 — Shift·화살표, 손가락 기기는 측정 띠 단추): 방향 추론(축·나란함·수직)을 잠그면(lock) 시작점을 지나는
- *   그 선 위에만 찍는다. 시작점을 지나는 모서리에 붙은 점 추정(모서리 끝에서 그 모서리를 따라 가리킬 때)도 그 모서리 방향으로 잠근다. 커서가 끝점·중간점·중심·교차점·수직 같은 점 위면 그 점을 선에 수직으로 내린 자리(다른 점의 높이를 옮겨 잰다),
+ *   그 선 위에만 찍는다. 시작점을 지나는 모서리에 붙은 점 추정(모서리 끝에서 그 모서리를 따라 가리킬 때)도 그 모서리 방향으로 잠근다
+ *   (코어 0.12.0 순수 함수 edgeLineLock). 커서가 끝점·중간점·중심·교차점·수직 같은 점 위면 그 점을 선에 수직으로 내린 자리(다른 점의 높이를 옮겨 잰다),
  *   아니면 커서 광선에 가장 가까운 선 위 점(코어 0.10.0 순수 함수 lockedSnap).
  * - 아무것도 없으면 시작점(없으면 anchor)을 지나 화면과 나란한 평면 위의 빈 점(free).
  *
@@ -35,8 +36,7 @@ import type { LineSet3d, Mesh3d, Pick3d } from 'opencad-viewer3d/types';
 import { projectToScreen, screenRay, viewDepth, worldPerPixel, type ViewFrame } from 'opencad-viewer3d/camera';
 import type { V3 } from 'opencad-viewer3d/math';
 import { PICK_TOLERANCE_PX } from 'opencad-viewer3d/pointer';
-import { lockedSnap, segmentIntersection } from 'opencad-viewer3d/inference';
-import { FACE_PERPENDICULAR_LABEL } from './measurehints';
+import { edgeLineLock as lineLock, lockedSnap, segmentIntersection } from 'opencad-viewer3d/inference';
 
 /**
  * 그물 정점 → 세계 점: 묶음 원점(origin)을 더한 뒤 배치 행렬(matrix, 4×4 열 우선)을 곱한다(코어 math의 modelMatrix·transformPoint와 같은 계산).
@@ -120,8 +120,8 @@ export interface GuideLine {
   dir: V3;
 }
 
-/** 면에 수직 추정 글(모서리에 수직은 SNAP_LABELS.perpendicular — 글은 첫 화면의 measurehints.ts에 둔다: 잠금 안내 이름이 알아본다) */
-export { FACE_PERPENDICULAR_LABEL };
+/** 면에 수직 추정 글(모서리에 수직은 SNAP_LABELS.perpendicular — 잠금 안내 이름 lockName이 알아본다) */
+export const FACE_PERPENDICULAR_LABEL = '면에 수직';
 
 /** 추정 반경(화면 화소) — 코어가 측정 점을 끝점에 붙잡는 거리(SNAP_PX)와 같다 */
 export const SNAP_RADIUS_PX = 10;
@@ -423,22 +423,16 @@ const EDGE_POINT_KINDS: ReadonlySet<SnapKind> = new Set(['endpoint', 'midpoint',
  * 축과 나란한 모서리면 그 축(alongAxis와 같은 허용치), 아니면 그 모서리와 나란히.
  * 모서리 끝에서 시작해 그 모서리를 따라 가리키면 점 추정(모서리 위)이 축 추정보다 먼저라 잠글 방향 추론이 없었다 — SketchUp은
  * 모서리 추정을 잠그면 그 직선 위에 두므로, 시작점을 지나는 모서리면 이 방향 잠금과 같다. 커서 점이 시작점 자리면(모서리가 여럿
- * 만나는 꼭짓점) 어느 모서리인지 모르니 잠그지 않는다
+ * 만나는 꼭짓점) 어느 모서리인지 모르니 잠그지 않는다.
+ * 판정(직선이 시작점을 지나는지, 커서 점이 시작점 자리인지)은 이 앱에서 코어 0.12.0으로 옮긴 순수 함수 edgeLineLock에 모서리마다 맡긴다.
+ * 허용치는 모서리 길이·시작점 거리에 견준 상대 1e-6(같은 직선 위 다른 선분도 된다 — 코어 뷰어는 화면 반 화소)이고, 커서 점은 그 모서리 위
+ * 추정이라 직선까지 거리를 보지 않는다. 코어는 세계 축만 알아 축은 여기서 모형의 그리기 축으로 고른다
  */
 export function edgeLineLock(s: Snap, from: readonly number[], axes: AxisDirs = AXIS_DIRS): InferenceLock | null {
   if (s.locked || !EDGE_POINT_KINDS.has(s.kind)) return null;
   for (const e of [s.edge, s.other]) {
-    if (!e) continue;
-    const d = sub(e[1], e[0]);
-    const u = unitOf(d);
-    if (!u) continue;
-    const w = sub(from, e[0]);
-    const t = dot(w, u);
-    // 시작점에서 모서리 직선까지 거리(모서리 길이·시작점 거리에 견준 허용치 — 같은 직선 위 다른 선분도 된다)
-    const scale = Math.max(Math.hypot(d[0], d[1], d[2]), Math.hypot(w[0], w[1], w[2]));
-    if (Math.hypot(w[0] - u[0] * t, w[1] - u[1] * t, w[2] - u[2] * t) > 1e-6 * scale) continue;
-    const p = sub(s.point, from);
-    if (!(Math.hypot(p[0], p[1], p[2]) > 1e-9 * scale)) return null;
+    if (!e || !lineLock(from, s.point, [e], 1e-6 * Math.max(Math.hypot(...sub(e[1], e[0])), Math.hypot(...sub(from, e[0]))), Infinity)) continue;
+    const u = unitOf(sub(e[1], e[0]))!;
     const axis = AXES.find((a) => Math.abs(dot(u, axes[a])) >= 1 - 1e-6);
     return axis ? axisInferenceLock(axis, axes) : parallelInferenceLock(e);
   }

@@ -22,8 +22,8 @@ import { copyText } from './clipboard';
 import { HISTORY_LIMIT, HISTORY_SETTLE_MS, ViewHistory } from './history';
 import { beginOpen, showAnalyticsSettings, trackExport, type OpenAttempt } from 'opencad-site-kit/analytics';
 // 측정 도구 자체(measure.ts·snap.ts)는 문서를 열 때 나눠 받는다(core.ts loadMeasure) — 여기서는 형과 작은 글·키 규칙만
-import type { MeasureTool, MeasureToolResult } from './measure';
-import { guideKeyFor, guideKeyHint, lockHint, lockName, type GuideKey, type MeasureMode } from './measurehints';
+import type { LockName, MeasureTool, MeasureToolResult } from './measure';
+import { guideKeyFor, type GuideKey, type MeasureMode } from './measurehints';
 import {
   baseFovOf,
   activeSections,
@@ -204,7 +204,7 @@ export interface AppSnapshot {
   /** 측정값 칸·안내 두기로 둔 안내선 수 */
   measureGuideLines: number;
   /** 잠근 방향(축·나란히·수직, 없으면 null) */
-  measureLock: ReturnType<typeof lockName>;
+  measureLock: LockName | null;
   /** 안내 두기(누르기로 안내점·안내선)를 켰는지 */
   measureGuideMode: boolean;
   /** 고른 안내(안내점·안내선, 없으면 null)와 그 지우기 단추가 보이는지 */
@@ -392,6 +392,8 @@ export class SkpViewerApp implements PanelHost {
   private lineColorWant: ReadonlyMap<string, Rgba> = new Map();
   /** 줄자·각도기(코어 두 점 측정 대신). 조각을 받으면 만든다(ensureMeasureTool) */
   private measureTool: MeasureTool | null = null;
+  /** 지금 문서의 파일 내용 지문(SHA-256 — 측정 도구가 그 파일의 안내를 기억·되살리는 열쇠, openBuffer) */
+  private docPrint: Promise<ArrayBuffer | null> | null = null;
   /** 측정 도구를 받기 전에 켰을 때: 받는 동안 마지막으로 누른 도구를 받은 뒤에 켠다(다시 누르면 거둔다, 받지 못하면 알린다) */
   private readonly measureFirstUse = new FirstUse<MeasureMode>(
     () => this.ensureMeasureTool(),
@@ -1060,6 +1062,13 @@ export class SkpViewerApp implements PanelHost {
     if (!this.viewer) void loadViewerCore().catch(() => undefined);
     // 측정 도구 조각도 함께(처음 켤 때 기다리지 않게 — 실패는 처음 켤 때 알린다)
     if (!this.measureTool) void loadMeasure().catch(() => undefined);
+    // 파일 내용 지문(안내를 파일별로 기억하는 열쇠): 바이트는 부를 때 복사되므로 곧바로 워커로 넘겨도 된다. 못 구하면(보안 연결이 아님 등) null
+    let print: Promise<ArrayBuffer | null> = Promise.resolve(null);
+    try {
+      print = crypto.subtle.digest('SHA-256', buf).catch(() => null);
+    } catch {
+      /* 지문 없이 연다 */
+    }
     try {
       const res = await this.client.open(
         name,
@@ -1093,6 +1102,7 @@ export class SkpViewerApp implements PanelHost {
       // 코어를 아직 못 받았으면 기다린다(받지 못하면 '3D 보기를 열 수 없습니다' 알림, 열려 있던 문서는 그대로)
       if (!(await this.ensureViewer()) || seq !== this.openSeq) return false;
       const doc = createDoc(name, size, res, { makeUrl: (b, mime) => URL.createObjectURL(new Blob([b as BlobPart], { type: mime })) });
+      this.docPrint = print;
       const uploaded = this.setDoc(doc, (done, total) => {
         if (seq === this.openSeq) this.setBusy(name, total ? done / total : 1, `화면에 올리는 중 · 묶음 ${fmtCount(done)}/${fmtCount(total)}`);
       });
@@ -1172,8 +1182,8 @@ export class SkpViewerApp implements PanelHost {
     v.highlightRanges(null);
     v.setHighlightSegments(null);
     this.measureTool?.clear();
-    // 안내와 되돌리기 목록은 그 모형의 것이라 새 문서면 비운다
-    this.measureTool?.clearGuides(true);
+    // 안내와 되돌리기 목록은 그 모형의 것이라 새 문서면 비우고, 이 브라우저에 기억한 그 파일의 안내를 되살린다(파일 내용 지문으로)
+    this.measureTool?.openFile(this.docPrint);
     this.vcb.setUnits(d.units);
     // 부드러운 모서리·숨긴 형상은 처음에 숨긴다(장면 범위에는 들어 있지 않다)
     this.refreshItemVisibility();
@@ -1304,6 +1314,8 @@ export class SkpViewerApp implements PanelHost {
       },
       // 안내 두기 켜고 끄기·안내점·안내선 수: 측정 띠 단추·측정값 칸의 안내 수
       onGuides: () => this.refreshStatus(),
+      // 결과 글이 3D 보기 위에 뜬 측정 띠·측정값 칸 밑에 숨지 않게 비켜 둔다
+      labelAvoid: () => [this.els.measureBar, this.vcb.el],
       guideKey: this.guideKey,
       touch: () => !!this.coarseQuery?.matches,
       curveCenter: (id, seg) => this.curveCenter(id, seg),
@@ -1320,8 +1332,10 @@ export class SkpViewerApp implements PanelHost {
       },
     });
     this.measureTool = tool;
-    // 측정 띠의 안내 되돌리기 단추(측정값 칸 줄)
+    // 측정 띠의 안내 되돌리기·다시 하기 단추(측정값 칸 줄)
     tool.mountUndo(this.vcb.el);
+    // 문서를 연 뒤에 받았으면 그 파일의 안내를 되살린다
+    if (this.doc) tool.openFile(this.docPrint);
     return tool;
   }
 
@@ -1482,9 +1496,8 @@ export class SkpViewerApp implements PanelHost {
    */
   private measureLockHint(): string | null {
     const t = this.measureTool;
-    if (!t?.active || this.doc?.measure) return null;
-    const touch = !!this.coarseQuery?.matches;
-    return lockHint(t.mode, t.pointCount, lockName(t.inferenceLock), t.planeAxis, touch) ?? guideKeyHint(t.mode, t.pointCount, t.guideMode, this.guideKey, touch);
+    // 글은 측정 도구 조각에(첫 화면 JS를 늘리지 않게)
+    return t?.active && !this.doc?.measure ? t.lockHintText(!!this.coarseQuery?.matches) : null;
   }
 
   /** 측정 기록 펼치기(측정 띠 위 목록) */
@@ -2858,8 +2871,8 @@ export class SkpViewerApp implements PanelHost {
       { label: '외곽선(윤곽 굵게)', checked: this.profilesOn, toggle: true, sep: true, run: () => this.setProfiles(!this.profilesOn) },
       { label: '뒤 모서리(숨은 선에서 점선)', checked: this.backEdgesOn, toggle: true, run: () => this.setBackEdges(!this.backEdgesOn) },
       { label: '태그 색으로 칠하기', checked: this.colorByTag, toggle: true, run: () => this.setColorByTag(!this.colorByTag) },
-      // 줄자·각도기로 둔 안내점·안내선(측정 도구 조각이 항목을 준다 — 문서를 열 때 받는다)
-      ...(this.measureTool ? [this.measureTool.showGuidesItem()] : []),
+      // 줄자·각도기로 둔 안내점·안내선 보이기·이 파일의 안내 모두 지우기(측정 도구 조각이 항목을 준다 — 문서를 열 때 받는다)
+      ...(this.measureTool?.guideMenuItems() ?? []),
       { label: '그림자(파일의 날짜·시각·위치)', checked: this.shadowsOn, toggle: true, sep: true, run: () => this.setShadows(!this.shadowsOn) },
       { label: '안개', checked: this.fogOn, toggle: true, run: () => this.setFogOn(!this.fogOn) },
       { label: '걷기(1인칭)', icon: 'walk', checked: this.walking, toggle: true, sep: true, run: () => this.setWalk(!this.walking) },
@@ -3449,7 +3462,7 @@ export class SkpViewerApp implements PanelHost {
       measureLoading: this.measureFirstUse.wanted,
       measureGuides: this.measureTool?.guides.length ?? 0,
       measureGuideLines: this.measureTool?.guideLines.length ?? 0,
-      measureLock: lockName(this.measureTool?.inferenceLock),
+      measureLock: this.measureTool?.lockName ?? null,
       measureGuideMode: !!this.measureTool?.guideMode,
       measureGuideSelected: this.measureTool?.selectedGuide ?? null,
       measureGuideDelete: this.vcb.shown && this.vcb.selectedShown,

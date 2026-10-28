@@ -49,7 +49,11 @@ import {
   MAX_GUIDE_UNDO,
   applyMessage,
   guideUndoKey,
+  GUIDE_CLEAR_FILE_LABEL,
+  GUIDE_REDO_LABEL,
+  labelSpot,
 } from '../../src/app/measure';
+import { GUIDE_STORE_KEY, readGuideFiles } from '../../src/app/guidestore';
 import type { V3 } from 'opencad-viewer3d/math';
 import { Overlay, frameFor } from '../../src/app/overlay';
 import { DRAG_START_PX, TOUCH_DRAG_START_PX } from 'opencad-viewer3d';
@@ -1877,7 +1881,8 @@ describe('측정 도구: 안내 되돌리기·다시 하기(Ctrl·⌘+Z)', () =>
     document.body.append(host);
     r.tool.mountUndo(host);
     const b = host.querySelector<HTMLButtonElement>('.vcb-undo')!;
-    expect(b.nextElementSibling).toBe(del);
+    // 바로 뒤는 다시 하기 단추(15차), 그 뒤가 지우기 단추
+    expect(b.nextElementSibling?.nextElementSibling).toBe(del);
     expect(b.type).toBe('button');
     expect(b.hidden).toBe(true);
     expect(b.getAttribute('aria-label')).toBe(GUIDE_UNDO_LABEL);
@@ -1998,5 +2003,283 @@ describe('측정 도구: 안내를 늘 보이기(보기 설정 "안내점·안�
     expect(b.tool.guidesShown).toBe(true);
     b.tool.setGuidesShown(false);
     expect(b.tool.guidesShown).toBe(false);
+  });
+});
+
+/** 안내 둘(15차 시험): 모서리 위 (70, 0)에서 시작해 칸으로 나란한 안내선(y = 20), 끝점 (0, 0)에서 칸으로 안내점 (30, 0). tick은 앞 누르기와 두 번 누르기가 되지 않게 시계를 옮긴다 */
+const placeTwo = (r: Rig, tick: () => void): void => {
+  r.tool.setMode('tape');
+  tick();
+  r.click(170, 101);
+  r.move(170, 60);
+  expect(r.tool.applyLength(20)).toBe('ok');
+  tick();
+  r.click(102, 103);
+  r.move(160, 101);
+  expect(r.tool.applyLength(30)).toBe('ok');
+};
+
+describe('측정 도구: 휴대폰 측정 띠의 다시 하기 단추', () => {
+  let clock = 0;
+  beforeEach(() => {
+    clock = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+  const later = (): void => void (clock += 1000);
+
+  it('측정 띠의 다시 하기 단추: 되돌리기 단추 바로 뒤(지우기 단추 앞), 다시 할 것이 있을 때만 보이고 누르면 하나 다시 한다', () => {
+    const r = rig(EDGES());
+    const host = document.createElement('form');
+    const del = document.createElement('button');
+    del.className = 'vcb-del';
+    host.append(document.createElement('input'), del);
+    document.body.append(host);
+    r.tool.mountUndo(host);
+    const undo = host.querySelector<HTMLButtonElement>('.vcb-undo')!;
+    const redo = host.querySelector<HTMLButtonElement>('.vcb-redo')!;
+    expect(undo.nextElementSibling).toBe(redo);
+    expect(redo.nextElementSibling).toBe(del);
+    expect(redo.type).toBe('button');
+    expect(redo.getAttribute('aria-label')).toBe(GUIDE_REDO_LABEL);
+    expect(redo.title).toBe(GUIDE_REDO_LABEL);
+    expect(redo.querySelectorAll('svg path')).toHaveLength(2);
+    expect(redo.hidden).toBe(true);
+    placeTwo(r, later);
+    expect(redo.hidden).toBe(true);
+    undo.click();
+    expect(r.tool.guides).toHaveLength(0);
+    expect(redo.hidden).toBe(false);
+    undo.click();
+    expect(r.tool.guideLines).toHaveLength(0);
+    expect(undo.hidden).toBe(true);
+    redo.click();
+    expect(r.tool.guideLines).toHaveLength(1);
+    expect(undo.hidden).toBe(false);
+    expect(redo.hidden).toBe(false);
+    redo.click();
+    expect(r.tool.guides).toHaveLength(1);
+    expect(redo.hidden).toBe(true);
+    // 새 안내를 두면 다시 할 것이 없어진다
+    undo.click();
+    expect(redo.hidden).toBe(false);
+    clock += 1000;
+    r.click(102, 103);
+    r.move(102, 60);
+    expect(r.tool.applyLength(10)).toBe('ok');
+    expect(redo.hidden).toBe(true);
+    // 다시 붙여도 하나씩, 버리면 뗀다
+    r.tool.mountUndo(host);
+    expect(host.querySelectorAll('.vcb-redo')).toHaveLength(1);
+    r.tool.dispose();
+    expect(host.querySelector('.vcb-redo')).toBeNull();
+  });
+});
+
+describe('측정 도구: 둔 안내를 파일별로 기억(파일 내용 지문)', () => {
+  let clock = 0;
+  beforeEach(() => {
+    clock = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+  const later = (): void => void (clock += 1000);
+  const flush = (): Promise<void> => new Promise((res) => setTimeout(res, 0));
+  const print = (b: number): ArrayBuffer => new Uint8Array(32).fill(b).buffer;
+  const KEY_A = 'ab'.repeat(32);
+  const KEY_B = '01'.repeat(32);
+
+  it('안내가 바뀔 때마다 파일 지문으로 기억하고, 같은 파일을 다시 열면(새로 고침 포함) 되살린다 — 되돌리기 목록은 비운 채', async () => {
+    const store = memStore();
+    const r = rig(EDGES(), TOP, DEFAULT_UNITS, { storage: store });
+    r.tool.openFile(print(0xab));
+    await flush();
+    placeTwo(r, later);
+    const pts = r.tool.guides.map((p) => [...p]);
+    const lns = r.tool.guideLines.map((l) => ({ point: [...l.point], dir: [...l.dir] }));
+    const saved = readGuideFiles(store);
+    expect(Object.keys(saved)).toEqual([KEY_A]);
+    expect(saved[KEY_A]!.p).toEqual(pts);
+    expect(saved[KEY_A]!.l).toEqual([[...lns[0]!.point, ...lns[0]!.dir]]);
+    // 저장 글에는 지문과 수만 있다(파일 이름·경로 없음)
+    expect(store.m.get(GUIDE_STORE_KEY)).toMatch(/^\{"v":1,"files":\{"[0-9a-f]{64}":\{"t":[0-9]+,"p":\[[-0-9.,e[\]]*\],"l":\[[-0-9.,e[\]]*\]\}\}\}$/);
+    // 다른 파일: 비우고, 기억이 없으니 빈 채
+    r.tool.openFile(Promise.resolve(print(0x01)));
+    expect(r.tool.guides).toHaveLength(0);
+    await flush();
+    expect(r.tool.guides).toHaveLength(0);
+    expect(r.tool.canUndo).toBe(false);
+    expect(Object.keys(readGuideFiles(store))).toEqual([KEY_A]);
+    // 같은 파일로 돌아오면 되살린다(되돌리기 목록 없이)
+    r.tool.openFile(print(0xab));
+    await flush();
+    expect(r.tool.guides.map((p) => [...p])).toEqual(pts);
+    expect(r.tool.guideLines.map((l) => ({ point: [...l.point], dir: [...l.dir] }))).toEqual(lns);
+    expect(r.tool.canUndo).toBe(false);
+    expect(r.tool.canRedo).toBe(false);
+    // 새로 고친 것처럼 새 도구(같은 저장소): 도구를 끈 채로 그리고, 켜면 붙는다
+    const r2 = rig(EDGES(), TOP, DEFAULT_UNITS, { storage: store });
+    r2.tool.openFile(print(0xab));
+    await flush();
+    expect(r2.tool.guides.map((p) => [...p])).toEqual(pts);
+    r2.overlay.paintNow();
+    expect(r2.qa('.measure-guide')).toHaveLength(1);
+    expect(r2.qa('.measure-guide-line')).toHaveLength(1);
+    r2.tool.setMode('tape');
+    r2.move(131, 102);
+    expect(r2.tip()).toBe('안내점');
+    // 되돌리기도 기억에 들어간다
+    r.tool.setMode('tape');
+    clock += 1000;
+    r.click(102, 103);
+    r.move(102, 60);
+    expect(r.tool.applyLength(10)).toBe('ok');
+    expect(readGuideFiles(store)[KEY_A]!.p).toHaveLength(2);
+    r.tool.undo();
+    expect(readGuideFiles(store)[KEY_A]!.p).toHaveLength(1);
+    // 바뀌지 않으면 다시 쓰지 않는다(안내 두기 켜고 끄기 등)
+    const text = store.m.get(GUIDE_STORE_KEY);
+    r.tool.setGuideMode(true);
+    r.tool.setGuideMode(false);
+    expect(store.m.get(GUIDE_STORE_KEY)).toBe(text);
+  });
+
+  it('보기 설정 "이 파일의 안내 모두 지우기": 안내가 없으면 끔, 지우면 그 파일의 기억도 지우고 되돌리면 다시 기억한다(도구를 끈 동안에도)', async () => {
+    const store = memStore();
+    const r = rig(EDGES(), TOP, DEFAULT_UNITS, { storage: store });
+    r.tool.openFile(print(0xab));
+    await flush();
+    let items = r.tool.guideMenuItems();
+    expect(items.map((i) => i.label)).toEqual([GUIDES_SHOWN_LABEL, GUIDE_CLEAR_FILE_LABEL]);
+    expect(items[0]).toMatchObject({ checked: true, toggle: true });
+    expect(items[1]!.disabled).toBe(true);
+    placeTwo(r, later);
+    r.tool.setMode(null);
+    items = r.tool.guideMenuItems();
+    expect(items[1]!.disabled).toBe(false);
+    items[1]!.run();
+    expect(r.tool.guides).toHaveLength(0);
+    expect(r.tool.guideLines).toHaveLength(0);
+    expect(readGuideFiles(store)).toEqual({});
+    expect(r.tool.guideMenuItems()[1]!.disabled).toBe(true);
+    // 되돌리면 다시 기억한다
+    expect(r.tool.undo()).toBe(true);
+    expect(r.tool.guides).toHaveLength(1);
+    expect(readGuideFiles(store)[KEY_A]!.l).toHaveLength(1);
+  });
+
+  it('늦게 온 앞 문서의 지문은 버리고, 지문이 없으면 기억하지 않으며, 지문 전에 둔 안내는 그것을 기억한다', async () => {
+    const store = memStore();
+    const r = rig(EDGES(), TOP, DEFAULT_UNITS, { storage: store });
+    let lateA: (b: ArrayBuffer) => void = () => undefined;
+    r.tool.openFile(new Promise<ArrayBuffer>((res) => (lateA = res)));
+    r.tool.openFile(print(0x01));
+    await flush();
+    placeTwo(r, later);
+    lateA(print(0xab));
+    await flush();
+    expect(Object.keys(readGuideFiles(store))).toEqual([KEY_B]);
+    expect(r.tool.guides).toHaveLength(1);
+    // 지문을 못 구했으면(null·거부) 기억하지 않는다
+    r.tool.openFile(null);
+    placeTwo(r, later);
+    r.tool.openFile(Promise.reject(new Error('no subtle')));
+    await flush();
+    placeTwo(r, later);
+    expect(Object.keys(readGuideFiles(store))).toEqual([KEY_B]);
+    // 지문 전에 둔 안내: 기억한 것(B의 둘) 대신 그것을 기억한다
+    let lateB: (b: ArrayBuffer) => void = () => undefined;
+    r.tool.openFile(new Promise<ArrayBuffer>((res) => (lateB = res)));
+    r.tool.setMode('tape');
+    clock += 1000;
+    r.click(102, 103);
+    r.move(102, 60);
+    expect(r.tool.applyLength(10)).toBe('ok');
+    lateB(print(0x01));
+    await flush();
+    expect(r.tool.guides).toHaveLength(1);
+    expect(r.tool.guideLines).toHaveLength(0);
+    expect(readGuideFiles(store)[KEY_B]).toMatchObject({ p: [[0, 10, 0]], l: [] });
+  });
+
+  it('저장소가 막혀도(사생활 보호 창) 안내 두기·되돌리기·다시 하기는 그대로 된다', async () => {
+    const blocked = {
+      getItem: (): string | null => {
+        throw new Error('blocked');
+      },
+      setItem: (): void => {
+        throw new Error('blocked');
+      },
+    };
+    const r = rig(EDGES(), TOP, DEFAULT_UNITS, { storage: blocked });
+    r.tool.openFile(print(0xab));
+    await flush();
+    placeTwo(r, later);
+    expect(r.tool.guides).toHaveLength(1);
+    expect(r.tool.undo()).toBe(true);
+    expect(r.tool.redo()).toBe(true);
+    r.tool.openFile(print(0xab));
+    await flush();
+    expect(r.tool.guides).toHaveLength(0);
+  });
+});
+
+describe('측정 도구: 결과 글이 십자선·툴팁·측정 띠를 비켜 그리기(코어 placeMeasureLabel)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('labelSpot: 겹치지 않으면 null(가운데 그대로), 겹치면 코어 차례의 첫 빈자리, 옮길 곳이 없거나 크기를 모르면 null', () => {
+    const view = { width: 400, height: 300 };
+    expect(labelSpot(200, 100, 60, 18, view, { rects: [], circles: [] })).toBeNull();
+    const bar = { x: 0, y: 260, width: 400, height: 40 };
+    expect(labelSpot(200, 100, 60, 18, view, { rects: [bar] })).toBeNull();
+    // 측정 띠가 가운데 자리를 덮으면: 네 귀·선분을 따라도 걸려 띠 바로 위(기본 가로 자리)
+    const s = labelSpot(200, 270, 60, 18, view, { rects: [bar] }, [[100, 270], [300, 270]])!;
+    expect(s).toEqual({ x: 210, y: 260 - 18 - 8 });
+    // 정밀 조준 십자선(원): 기준점 오른쪽 위 귀가 비면 그 자리
+    const aim = labelSpot(200, 150, 60, 18, view, { circles: [{ x: 195, y: 160, r: 24 }] })!;
+    expect(aim.y + 18).toBeLessThanOrEqual(150);
+    // 점 표식(soft)도 될 수 있으면 비킨다
+    // 오른쪽 위가 걸리고 왼쪽 위가 점 표식(soft)을 가리면 오른쪽 아래
+    expect(labelSpot(200, 150, 60, 18, view, { circles: [{ x: 230, y: 133, r: 12 }] }, null, [{ x: 160, y: 133, r: 6 }])).toEqual({ x: 210, y: 158 });
+    expect(labelSpot(200, 150, 60, 18, view, { circles: [{ x: 230, y: 133, r: 12 }] })).toEqual({ x: 130, y: 124 });
+    // 화면 전체를 덮으면 옮기지 않는다, 크기 0도
+    expect(labelSpot(200, 150, 60, 18, view, { rects: [{ x: 0, y: 0, width: 400, height: 300 }] })).toBeNull();
+    expect(labelSpot(200, 270, 0, 18, view, { rects: [bar] })).toBeNull();
+  });
+
+  it('줄자 결과 글이 앱이 알려 준 측정 띠와 겹치면 비켜 두고, 겹치지 않으면 가운데 그대로(그림이 예전과 같다)', () => {
+    // jsdom은 배치를 하지 않아 결과 글 크기만 정해 준다
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('measure-label') ? 60 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('measure-label') ? 18 : 0;
+    });
+    const band = document.createElement('div');
+    let top = 160;
+    band.getBoundingClientRect = () => ({ left: 0, top, width: W, height: 40, right: W, bottom: top + 40, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
+    const hidden = document.createElement('div');
+    const r = rig(EDGES(), TOP, DEFAULT_UNITS, { labelAvoid: () => [band, hidden, null] });
+    r.tool.setMode('tape');
+    r.click(102, 103);
+    r.click(198, 101);
+    r.move(30, 20);
+    const label = r.q('.measure-label-length') as HTMLElement;
+    expect(label.style.transform).toBe('translate(-50%,-50%)');
+    expect(label.classList.contains('is-moved')).toBe(false);
+    expect([label.style.left, label.style.top]).toEqual(['150px', '100px']);
+    // 띠가 결과 글 자리를 덮으면(휴대폰 가로 등) 띠 위로
+    top = 95;
+    r.move(31, 20);
+    const moved = r.q('.measure-label-length') as HTMLElement;
+    expect(moved.classList.contains('is-moved')).toBe(true);
+    expect(moved.style.transform).toBe('none');
+    expect(parseFloat(moved.style.top) + 18).toBeLessThanOrEqual(95);
   });
 });

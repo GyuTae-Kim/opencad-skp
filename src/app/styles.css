@@ -1824,13 +1824,17 @@ button.scene-card.sel {
   width: auto;
 }
 
-/* 안내 되돌리기(measure.ts mountUndo): 측정 띠 안에서만 — 넓은 화면은 Ctrl·⌘+Z */
-.vcb .vcb-undo {
+/* 안내 되돌리기·다시 하기(measure.ts mountUndo): 측정 띠 안에서만(누르기 쉽게 38px) — 넓은 화면은 Ctrl·⌘+Z, Ctrl+Y */
+.vcb .vcb-undo,
+.vcb .vcb-redo {
   display: none;
 }
 
-.measure-bar .vcb-undo:not([hidden]) {
+.measure-bar .vcb-undo:not([hidden]),
+.measure-bar .vcb-redo:not([hidden]) {
   display: inline-flex;
+  width: 38px;
+  height: 38px;
 }
 
 @media (pointer: coarse) {
