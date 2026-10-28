@@ -228,6 +228,12 @@ input[type='checkbox'] {
   color: var(--accent);
 }
 
+/* 처음 켤 때 측정 도구 조각을 받는 중(누르면 거둔다) */
+.tbtn[aria-busy='true'] {
+  cursor: progress;
+  opacity: 0.75;
+}
+
 /* 보기 도구 막대 */
 .toolbar {
   display: flex;
