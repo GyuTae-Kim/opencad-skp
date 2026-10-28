@@ -1805,6 +1805,8 @@ button.scene-card.sel {
   right: auto;
   bottom: auto;
   flex: 1 1 100%;
+  /* 칸(입력)이 줄어 띠 폭에 맞게 — 기본 최소 폭(내용 폭)이면 휴지통·안내 수 단추가 띠 밖으로 밀린다 */
+  min-width: 0;
   padding: 0;
   border: 0;
   background: none;
