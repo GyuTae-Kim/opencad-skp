@@ -791,7 +791,7 @@
   "줄자: 끝점을 누르세요 · 길이를 치면 안내점 · Esc 취소": "Tape: click the end point · type a length for a guide point · Esc to cancel",
   "줄자: 다시 누르면 새로 잽니다": "Tape Measure: Tap again to start a new measurement",
   "줄자: 다시 누르면 새로 잽니다 · Esc 지우기": "Tape Measure: Click again to start a new measurement · Esc to clear",
-  "줄자: 잴 시작점을 누르세요": "Tape Measure: Click the starting point for measurement",
+  "줄자: 잴 시작점을 누르세요 · 모서리를 두 번 누르면 그 위에 안내선": "Tape Measure: Click the starting point for measurement · Double-click an edge to place a guide line on it",
   "줄자: 잴 시작점을 누르세요 · 길게 누르면 정밀 조준": "Tape Measure: Tap the starting point · Press and hold to aim precisely",
   "줄자·각도기의 축 고정과 기본 평면은 옮긴 그리기 축을 따릅니다.": "The tape measure and protractor lock to, and lay their default plane on, the moved drawing axes.",
   "중간점": "Midpoint",

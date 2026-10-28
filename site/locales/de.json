@@ -791,7 +791,7 @@
   "줄자: 끝점을 누르세요 · 길이를 치면 안내점 · Esc 취소": "Maßband: Endpunkt anklicken · Länge eintippen für einen Hilfspunkt · Esc bricht ab",
   "줄자: 다시 누르면 새로 잽니다": "Maßband: Erneut antippen, um neu zu messen",
   "줄자: 다시 누르면 새로 잽니다 · Esc 지우기": "Maßband: Erneut drücken, um erneut zu messen · Esc Löschen",
-  "줄자: 잴 시작점을 누르세요": "Maßband: Startpunkt drücken, um zu messen",
+  "줄자: 잴 시작점을 누르세요 · 모서리를 두 번 누르면 그 위에 안내선": "Maßband: Startpunkt drücken, um zu messen · Doppelklick auf eine Kante setzt eine Hilfslinie darauf",
   "줄자: 잴 시작점을 누르세요 · 길게 누르면 정밀 조준": "Maßband: Startpunkt antippen · Gedrückt halten für genaues Zielen",
   "줄자·각도기의 축 고정과 기본 평면은 옮긴 그리기 축을 따릅니다.": "Maßband und Winkelmesser rasten an den verschobenen Zeichenachsen ein und nutzen deren Standardebene.",
   "중간점": "Mittelpunkt",
