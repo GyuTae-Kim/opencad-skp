@@ -90,6 +90,12 @@ describe('language URLs and UI presentation', () => {
     for (const {code} of languages.filter(item => item.code !== 'ko'))
       for (const t of texts) expect(translate(t, code), `${code}: ${t}`).not.toMatch(hangul);
   });
+  it('translates parsing (해석 — reading the file) as parsing, not interpreting', () => {
+    for (const key of Object.keys(catalogs.en).filter(k => k.includes('해석'))) {
+      expect(catalogs.de[key], key).not.toMatch(/Dolmetsch|Interpretation/);
+      expect(catalogs['zh-CN'][key], key).not.toMatch(/译员|解释/);
+    }
+  });
   it('updates dynamic UI and switches languages without changing document data or listeners', async () => {
     const dom = new JSDOM('<!doctype html><html><head><title>OpenCAD</title></head><body><div id="app"><header class="titlebar"><button>열기</button><span class="docname">열기</span></header><canvas></canvas><div class="anno-layer">열기</div><input value="열기" placeholder="열기"><div contenteditable="true">열기</div><div translate="no">열기</div><p id="status">열기</p></div></body></html>', {url:'https://gyutae-kim.github.io/opencad-skp/en/?sample#view'});
     for (const name of ['window','document','Node','Element','HTMLAnchorElement','MutationObserver','location','history','localStorage','CustomEvent']) vi.stubGlobal(name,(dom.window as unknown as Record<string,unknown>)[name]);
