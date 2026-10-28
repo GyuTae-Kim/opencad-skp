@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Viewer3d } from 'opencad-viewer3d';
 import { buildBvh } from 'opencad-viewer3d/bvh';
-import { projectToScreen, type CameraState } from 'opencad-viewer3d/camera';
+import { dirToAngles, projectToScreen, type CameraState } from 'opencad-viewer3d/camera';
 import { pickScene } from 'opencad-viewer3d/scenepick';
 import type { LineSet3d, Mesh3d, Scene3d } from 'opencad-viewer3d/types';
 import {
@@ -461,6 +461,9 @@ describe('측정 도구: 각도기', () => {
 });
 
 describe('측정 도구: 추론 잠금(Shift·화살표·단추)과 나란함', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
   const at = (deg: number, r: number): [number, number] => [100 + r * Math.cos((deg * Math.PI) / 180), 100 - r * Math.sin((deg * Math.PI) / 180)];
   const near = (a: readonly number[], b: readonly number[]): void => a.forEach((v, i) => expect(v).toBeCloseTo(b[i]!, 6));
 
@@ -604,6 +607,41 @@ describe('측정 도구: 추론 잠금(Shift·화살표·단추)과 나란함', 
     if (res?.kind !== 'tape') throw new Error('tape');
     near(res.b, [15, -15, 0]);
     expect(r.tool.inferenceLock).toBeNull();
+  });
+
+  it('지붕 면 위: 처마를 지나간 뒤 그 면 안에서 처마에 수직(비탈을 따라)이면 자홍 수직, ↓로 그 방향 잠금', () => {
+    // 처마(X 방향)에서 30°로 오르는 지붕 면을 등각(평행 투영)으로 본다 — 처마 위 시작점에서는 내린 수직이 없고 축을 비친 방향은 축뿐
+    const sn = Math.sin(Math.PI / 6), cs = Math.cos(Math.PI / 6), h = 60 * Math.tan(Math.PI / 6);
+    const roof: Mesh3d = { id: 'roof', positions: Float32Array.from([0, 0, 0, 100, 0, 0, 100, 60, h, 0, 60, h]), indices: Uint32Array.from([0, 1, 2, 0, 2, 3]), color: [0.8, 0.8, 0.8, 1] };
+    const a = dirToAngles([1, -1, 1]);
+    const iso: CameraState = { target: [40, 20, 10], distance: 300, yaw: a.yaw, pitch: a.pitch, projection: 'orthographic', fovY: FOV };
+    const f = frameFor(iso, W, W);
+    // 둘레 고르기 시간 예산이 느린 CI에서 먼저 끊기지 않게 시계를 멈춘다(이 describe의 afterEach가 되돌린다)
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+    const r = rig({ units: 'mm', meshes: [roof], lines: [lines('eave', [[0, 0, 0, 100, 0, 0]])] }, iso);
+    r.tool.setMode('tape');
+    const s0 = projectToScreen(f, [20, 0, 0])!;
+    r.move(s0[0], s0[1]);
+    expect(r.tip()).toBe('모서리에');
+    r.click(s0[0], s0[1]);
+    expect(r.tool.pointCount).toBe(1);
+    const s1 = projectToScreen(f, [20, cs * 40, sn * 40])!;
+    r.move(s1[0] + 0.5, s1[1] + 0.5);
+    expect(r.q('.measure-snap-perpendicular')).not.toBeNull();
+    expect(r.q('line.measure-rubber.measure-perpendicular')?.getAttribute('stroke')).toBe('#c800c8');
+    expect(r.q('.measure-parallel-ref')).not.toBeNull();
+    expect(r.tip()).toMatch(/^모서리에 수직 · /);
+    expect(r.key('ArrowDown')).toBe(true);
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'perpendicular', source: 'key' });
+    expect(r.locks.at(-1)).toBe('perpendicular');
+    // 잠근 채 지붕 다른 곳을 찍어도 그 선 위(시작점에서 비탈 방향)
+    const s2 = projectToScreen(f, [50, 30, h / 2])!;
+    r.click(s2[0], s2[1]);
+    const res = r.results.at(-1);
+    if (res?.kind !== 'tape') throw new Error('tape');
+    expect(Math.abs(res.dx)).toBeLessThan(1e-6);
+    expect(Math.abs(res.dy * sn - res.dz * cs)).toBeLessThan(1e-4);
+    expect(res.distance).toBeGreaterThan(1);
   });
 
   it('잠금 단추(손가락 기기): 방향을 잡는 동안만, 본 방향이 없으면 false, 축을 주면 그 축 — 탭한 점이 잠근 선 위로', () => {
