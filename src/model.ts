@@ -23,6 +23,7 @@
  */
 
 import { EdgeTableBuilder, emptyEdges, emptyFaces, FaceTableBuilder, type SkpEdges, type SkpFaces } from './entities';
+import { F64, I32 } from './grow';
 import type { SkpUnitsMeta } from './meta';
 import { TlvReader, type TlvNode } from './tlv';
 import { readCurves, readGuideLine, readGuidePoint, readLinearDim, readRadialDim, readSection, readText, resolveLink, type AnnotEnv, type DimLink, type PointLookups } from './vffannot';
@@ -464,19 +465,111 @@ interface PendingArc {
   list: SkpDimension[];
 }
 
+/**
+ * 요소 묶음 하나의 정점 찾기 기록: 다른 묶음·인스턴스 안의 정점에 붙은 치수 점은 모형을 다 읽은 뒤 영구 번호로 찾는다.
+ * 예전에는 묶음 노드를 model.dat 버퍼 자리로 기억해 두었다가 정점 목록을 두 번째로 훑었다(그래서 풀린 model.dat 전체를 끝까지 들고 있어야 했다).
+ * 이제 첫 훑기에서 그 두 번째 훑기가 볼 것을 같은 차례로 적는다: 좌표가 꼭 24바이트인 정점(영구 번호, 정점 차례),
+ * 영구 번호는 있는데 속이 깨진 정점(차례 -1 — 그 번호를 찾던 중이면 두 번째 훑기는 그 묶음에서 멈췄다),
+ * 번호부터 깨진 정점을 만나면 그 뒤는 적지 않는다(두 번째 훑기가 거기서 멈췄다).
+ */
+class VertexRecord {
+  private readonly pid = new F64(16);
+  private readonly at = new I32(16);
+  private stopped = false;
+  /** 차례가 가리키는 좌표(xyz…) — 묶음의 points 또는 깨진 묶음에서 따로 모은 좌표 */
+  points: Float64Array = new Float64Array(0);
+
+  add(pid: number, i: number): void {
+    if (this.stopped) return;
+    this.pid.push(pid);
+    this.at.push(i);
+  }
+
+  broken(pid: number): void {
+    if (this.stopped) return;
+    this.pid.push(pid);
+    this.at.push(-1);
+  }
+
+  stop(): void {
+    this.stopped = true;
+  }
+
+  /**
+   * 목록 틀이 깨져 통째로 건너뛰는 묶음(BrokenList): 요소는 읽지 않지만 두 번째 훑기는 그 묶음의 정점도 보았다 — 같은 길로 적는다.
+   * 정점 목록은 길이가 넘친 것도 자른 채로 본다
+   */
+  scan(r: TlvReader, n: TlvNode): void {
+    const xyz: number[] = [];
+    try {
+      const vl = r.firstSafe(n, TAG.VERTICES, true);
+      if (vl)
+        r.eachSafe(vl.start, vl.end, (tag, start, end, clipped) => {
+          if (tag !== TAG.VERTEX || clipped) return;
+          const node = { tag, start, end };
+          let id: number | undefined;
+          try {
+            id = idOf(r, node);
+          } catch (e) {
+            this.stop();
+            throw e;
+          }
+          if (id === undefined) return;
+          let p: TlvNode | undefined;
+          try {
+            p = r.first(node, TAG.POINT);
+          } catch {
+            // 두 번째 훑기는 찾던 번호일 때만 이 정점의 좌표를 읽다 멈췄다 — 표시만 하고 이어 간다(lookup이 가린다)
+            this.broken(id);
+            return;
+          }
+          const v = r.vec3(p);
+          if (!v) return;
+          this.add(id, xyz.length / 3);
+          xyz.push(v[0], v[1], v[2]);
+        });
+    } catch {
+      /* 두 번째 훑기도 깨진 곳에서 그 묶음을 멈췄다 */
+    }
+    this.points = Float64Array.from(xyz);
+  }
+
+  /** 다 적었으면 쌓던 배열을 꼭 맞는 길이로(모형을 다 읽을 때까지 들고 있다) */
+  done(): void {
+    this.pid.done();
+    this.at.done();
+  }
+
+  /** 찾는 번호(want) 가운데 아직 못 찾은 것을 이 묶음에서 찾아 found에 넣는다(두 번째 훑기와 같은 차례·멈춤) */
+  lookup(want: ReadonlySet<number>, found: Map<number, Vec3>): void {
+    const pid = this.pid.done();
+    const at = this.at.done();
+    const P = this.points;
+    for (let k = 0; k < pid.length; k++) {
+      const id = pid[k]!;
+      if (!want.has(id) || found.has(id)) continue;
+      const i = at[k]!;
+      if (i < 0) return;
+      found.set(id, [P[3 * i]!, P[3 * i + 1]!, P[3 * i + 2]!]);
+    }
+  }
+}
+
 interface Ctx {
-  r: TlvReader;
+  /** 지금 경고를 적는 곳(뿌리 절마다 따로 — ModelParse가 끝에 예전 읽기 차례로 합친다) */
   warn: Map<string, number>;
   counts: SkpModel['counts'];
-  /** 진행 알림(읽은 바이트 위치 기준 0~1) */
+  /** 진행 알림(읽은 바이트 위치 기준 0~1). 위치는 base를 더한 model.dat 안 자리 */
   tick: (pos: number) => void;
+  /** 지금 읽는 버퍼의 0이 model.dat 안 어디인지(정의를 따로 받은 버퍼로 읽을 때) */
+  base: number;
   /** 깨지거나 잘린 곳을 만났는지 */
   damaged: boolean;
   /** 무늬 투영을 읽을 재질 번호(무늬 재질) */
   texturedIds: Set<number>;
   fonts: Map<number, SkpFont>;
-  /** 읽은 요소 묶음 노드(붙은 점의 정점을 다시 찾을 때) */
-  entityNodes: TlvNode[];
+  /** 읽은 요소 묶음마다 정점 찾기 기록(붙은 점의 정점을 모형을 다 읽은 뒤 찾을 때) */
+  vertexRecords: VertexRecord[];
   pendingPoints: PendingPoint[];
   pendingArcs: PendingArc[];
 }
@@ -569,10 +662,10 @@ const LIST_TAGS = new Set<number>([
  * tolerant: 목록 틀(길이)이 깨지면 그 앞까지만 읽고 경고한다(모형 요소, 파일 끝에서 잘린 정의).
  * 아니면 목록 틀이 깨진 정의는 BrokenList로 통째로 건너뛴다(쓰레기를 그리지 않게). 항목 하나의 속이 깨진 것은 그 항목만 건너뛴다.
  */
-function readEntities(ctx: Ctx, n: TlvNode, tolerant: boolean): SkpEntities {
-  const r = ctx.r;
+function readEntities(ctx: Ctx, r: TlvReader, n: TlvNode, tolerant: boolean): SkpEntities {
   const warn: Warn = (m) => note(ctx, m);
-  ctx.entityNodes.push(n);
+  const rec = new VertexRecord();
+  ctx.vertexRecords.push(rec);
   const parts: TlvNode[] = [];
   const whole = r.eachSafe(
     n.start,
@@ -588,7 +681,11 @@ function readEntities(ctx: Ctx, n: TlvNode, tolerant: boolean): SkpEntities {
     ctx.damaged = true;
     note(ctx, `${iga(what)} 깨져 뒷부분을 읽지 못했습니다`);
   };
-  if (!whole) broken('요소 묶음');
+  if (!whole) {
+    // 통째로 건너뛰는 묶음도 정점 찾기에는 들어간다(예전 두 번째 훑기처럼)
+    if (!tolerant) rec.scan(r, n);
+    broken('요소 묶음');
+  }
   const part = (tag: number): TlvNode | undefined => parts.find((c) => c.tag === tag);
   const partsOf = (...tags: number[]): TlvNode[] => parts.filter((c) => tags.includes(c.tag));
   /** 목록 돌기: 항목 속이 깨지면 그 항목만 건너뛰고, 목록 틀이 깨지면 broken */
@@ -611,18 +708,40 @@ function readEntities(ctx: Ctx, n: TlvNode, tolerant: boolean): SkpEntities {
   // 정점
   const vIndex = new Map<number, number>();
   const pts: number[] = [];
-  list(part(TAG.VERTICES), '정점 목록', '정점', (tag, start, end) => {
-    if (tag !== TAG.VERTEX) return;
-    const node = { tag, start, end };
-    const id = idOf(r, node);
-    const p = r.first(node, TAG.POINT);
-    if (id === undefined || !p || p.end - p.start < 24) {
-      note(ctx, '좌표가 없는 정점을 건너뛰었습니다');
-      return;
-    }
-    vIndex.set(id, pts.length / 3);
-    pts.push(r.f64(p, 0), r.f64(p, 1), r.f64(p, 2));
-  });
+  let points: Float64Array;
+  try {
+    list(part(TAG.VERTICES), '정점 목록', '정점', (tag, start, end) => {
+      if (tag !== TAG.VERTEX) return;
+      const node = { tag, start, end };
+      let id: number | undefined;
+      try {
+        id = idOf(r, node);
+      } catch (e) {
+        rec.stop();
+        throw e;
+      }
+      let p: TlvNode | undefined;
+      try {
+        p = r.first(node, TAG.POINT);
+      } catch (e) {
+        if (id !== undefined) rec.broken(id);
+        throw e;
+      }
+      if (id === undefined || !p || p.end - p.start < 24) {
+        note(ctx, '좌표가 없는 정점을 건너뛰었습니다');
+        return;
+      }
+      // 정점 찾기(붙은 치수 점)는 좌표가 꼭 24바이트인 정점만 본다
+      if (p.end - p.start === 24) rec.add(id, pts.length / 3);
+      vIndex.set(id, pts.length / 3);
+      pts.push(r.f64(p, 0), r.f64(p, 1), r.f64(p, 2));
+    });
+  } finally {
+    // 정점 목록 틀이 깨져 묶음을 건너뛰어도 정점 찾기 기록은 좌표를 지닌다
+    points = Float64Array.from(pts);
+    rec.points = points;
+    rec.done();
+  }
   ctx.counts.vertices += pts.length / 3;
 
   // 모서리(곡선 번호는 곡선을 읽은 뒤 곡선 차례로 바꾼다). 표로 쌓는다(큰 모형에서 객체 백만 개를 만들지 않게)
@@ -726,7 +845,7 @@ function readEntities(ctx: Ctx, n: TlvNode, tolerant: boolean): SkpEntities {
   const faces = faceTable.done();
   ctx.counts.faces += faces.length;
 
-  const out: SkpEntities = { points: Float64Array.from(pts), faces, edges, instances: [] };
+  const out: SkpEntities = { points, faces, edges, instances: [] };
 
   // 곡선·호
   const curveLists = partsOf(TAG.CURVES, TAG.ARC_CURVES);
@@ -896,9 +1015,9 @@ function readDefinitionFields(r: TlvReader, n: TlvNode, def: SkpDefinition): voi
 
 /**
  * 모형 전체를 읽은 뒤: 그림 정의를 가리키는 인스턴스를 그림으로, 다른 묶음·인스턴스 안에 붙은 치수 점과 반지름 치수의 호를 푼다.
- * 필요한 번호만 모아 한 번 더 돈다(정점마다 Map을 만들지 않는다).
+ * 필요한 번호만 모아 찾는다(정점은 읽을 때 적어 둔 정점 찾기 기록에서 — 정점마다 Map을 만들지 않고, model.dat를 다시 훑지 않는다).
  */
-function finish(ctx: Ctx, all: SkpEntities[], definitions: Map<number, SkpDefinition>): void {
+function resolvePending(ctx: Ctx, all: SkpEntities[], definitions: Map<number, SkpDefinition>): void {
   for (const ents of all)
     for (const inst of ents.instances)
       if (definitions.get(inst.definition)?.kind === 'image') {
@@ -929,26 +1048,11 @@ function finish(ctx: Ctx, all: SkpEntities[], definitions: Map<number, SkpDefini
     }
   }
   const verts = new Map<number, Vec3>();
-  if (wantV.size) {
-    const r = ctx.r;
-    for (const n of ctx.entityNodes) {
+  if (wantV.size)
+    for (const rec of ctx.vertexRecords) {
       if (verts.size === wantV.size) break;
-      try {
-        const vl = r.firstSafe(n, TAG.VERTICES, true);
-        if (!vl) continue;
-        r.eachSafe(vl.start, vl.end, (tag, start, end, clipped) => {
-          if (tag !== TAG.VERTEX || clipped) return;
-          const node = { tag, start, end };
-          const id = idOf(r, node);
-          if (id === undefined || !wantV.has(id) || verts.has(id)) return;
-          const p = r.vec3(r.first(node, TAG.POINT));
-          if (p) verts.set(id, p);
-        });
-      } catch {
-        /* 깨진 묶음은 건너뛴다 */
-      }
+      rec.lookup(wantV, verts);
     }
-  }
   const pt = (ents: SkpEntities, i: number): Vec3 => [ents.points[3 * i]!, ents.points[3 * i + 1]!, ents.points[3 * i + 2]!];
   const global: PointLookups = {
     vertex: (pid) => verts.get(pid),
@@ -984,226 +1088,335 @@ export interface ReadModelOptions {
   textured?: Iterable<string>;
 }
 
+/** 뿌리 절 하나: 그 절을 읽는 reader와 절 노드(조각으로 받은 절은 그 절만 복사한 버퍼 안 자리) */
+export interface RootSection {
+  r: TlvReader;
+  n: TlvNode;
+  /** 뿌리 끝에서 잘린 절(정의·모형 요소만 — 앞부분을 살린다) */
+  clipped: boolean;
+}
+
+/**
+ * 경고를 적는 묶음과 합치는 차례(= 한 버퍼로 읽을 때 읽는 차례). 조각으로 받으면 정의보다 먼저 재질·글꼴을 읽는 등 읽는 차례가
+ * 달라질 수 있어, 묶음마다 따로 적고 끝에 이 차례로 합친다(같은 글은 처음 나온 자리에 개수를 더한다 — 한 버퍼 읽기와 같은 경고 목록)
+ */
+const PHASES = ['root', 'materials', 'lineStyles', 'layers', 'fonts', 'options', 'geometry', 'camera', 'styles', 'rendering', 'pages', 'defaults', 'props', 'shadow', 'axes'] as const;
+type Phase = (typeof PHASES)[number];
+
+/**
+ * model.dat 읽기. 한 버퍼로 읽든(readModelDat) 조각으로 받든(src/modelstream.ts) 같은 차례·같은 결과를 낸다.
+ * 뿌리 절은 addSection으로 받고, 정의(0x157c)는 beginDefinitions 뒤 definition으로 하나씩 받을 수 있다(정의 읽기에 쓰는
+ * 재질·글꼴 절을 먼저 읽는다 — 다 읽은 정의의 바이트는 붙들지 않는다). finish가 나머지 절을 한 버퍼 읽기의 차례로 읽어 모형을 낸다.
+ */
+export class ModelParse {
+  private readonly sections = new Map<number, RootSection>();
+  private readonly phaseWarn = new Map<Phase, Map<string, number>>();
+  private readonly ctx: Ctx;
+  private readonly textured: Set<string>;
+  private materials: Map<number, string> | undefined;
+  private fonts: Map<number, SkpFont> | undefined;
+  private fontsRead = false;
+  private readonly definitions = new Map<number, SkpDefinition>();
+  /** 정의를 하나씩 받았다(그러면 finish는 정의 절을 다시 찾지 않는다) */
+  private streamedDefs = false;
+
+  /** total: model.dat 전체 길이(진행 알림용) */
+  constructor(total: number, onProgress?: (fraction: number) => void, opts: ReadModelOptions = {}) {
+    let last = 0;
+    const ctx: Ctx = {
+      warn: new Map(),
+      counts: { vertices: 0, edges: 0, faces: 0, instances: 0 },
+      tick: (pos) => {
+        const f = (ctx.base + pos) / Math.max(1, total);
+        if (!onProgress || f <= last) return;
+        last = f;
+        try {
+          onProgress(f);
+        } catch {
+          /* 알림 쪽 오류는 무시 */
+        }
+      },
+      base: 0,
+      damaged: false,
+      fonts: new Map(),
+      vertexRecords: [],
+      pendingPoints: [],
+      pendingArcs: [],
+      texturedIds: new Set(),
+    };
+    this.ctx = ctx;
+    this.textured = new Set(opts.textured ?? []);
+  }
+
+  /** 경고를 phase 묶음에 적게 한다 */
+  private phase(p: Phase): Ctx {
+    let m = this.phaseWarn.get(p);
+    if (!m) this.phaseWarn.set(p, (m = new Map()));
+    this.ctx.warn = m;
+    return this.ctx;
+  }
+
+  /** 뿌리가 잘렸거나 깨졌다(그 앞까지 읽는다) */
+  damage(msg: string): void {
+    this.ctx.damaged = true;
+    note(this.phase('root'), msg);
+  }
+
+  /** 뿌리 절 하나(같은 꼬리표는 처음 것만 쓴다) */
+  addSection(tag: number, sec: RootSection): void {
+    if (!this.sections.has(tag)) this.sections.set(tag, sec);
+  }
+
+  has(tag: number): boolean {
+    return this.sections.has(tag);
+  }
+
+  /** 절 안을 경로대로 내려가기(깨진 것은 undefined) */
+  private at(sec: RootSection | undefined, ...tags: number[]): RootSection | undefined {
+    if (!sec) return undefined;
+    let cur: TlvNode | undefined = sec.n;
+    for (const t of tags) {
+      if (!cur) return undefined;
+      cur = sec.r.firstSafe(cur, t, true);
+    }
+    return cur && { r: sec.r, n: cur, clipped: false };
+  }
+
+  /** 뿌리 절 하나 읽기: 실패해도 형상 읽기는 계속한다 */
+  private section<T>(p: Phase, tag: number, what: string, fn: (r: TlvReader, n: TlvNode) => T): T | undefined {
+    const ctx = this.phase(p);
+    const s = this.sections.get(tag);
+    if (!s || s.clipped) return undefined;
+    try {
+      return fn(s.r, s.n);
+    } catch {
+      note(ctx, `${eul(what)} 읽지 못했습니다`);
+      return undefined;
+    }
+  }
+
+  /** 재질 번호 → 이름, 무늬 재질 번호(한 번만 읽는다) */
+  private readMaterials(): Map<number, string> {
+    if (this.materials) return this.materials;
+    const ctx = this.phase('materials');
+    const materials = new Map<number, string>();
+    this.materials = materials;
+    const items = this.at(this.sections.get(TAG.MATERIALS), TAG.MAT_LIST, TAG.MAT_ITEMS);
+    if (items) {
+      const r = items.r;
+      r.eachSafe(items.n.start, items.n.end, (tag, start, end, clipped) => {
+        if (tag !== TAG.MAT || clipped) return;
+        const n = { tag, start, end };
+        try {
+          const id = r.uint(r.path(n, TAG.ID_BOX, TAG.ID));
+          if (id !== undefined) materials.set(id, r.str(r.first(n, TAG.MAT_NAME)) ?? `재질 ${id}`);
+        } catch {
+          note(ctx, '깨진 재질 항목을 건너뛰었습니다');
+        }
+      });
+    }
+    if (this.textured.size) for (const [id, n] of materials) if (this.textured.has(n)) ctx.texturedIds.add(id);
+    return materials;
+  }
+
+  /** 글꼴 목록(문자·치수가 글꼴 번호를 확인한다 — 한 번만 읽는다) */
+  private readFonts(): void {
+    if (this.fontsRead) return;
+    this.fontsRead = true;
+    const fonts = this.section('fonts', TAG.FONT_SECTION, '글꼴 목록', (r, n) => readFonts(r, n));
+    if (fonts) {
+      this.fonts = fonts;
+      this.ctx.fonts = fonts;
+    }
+  }
+
+  /** 정의를 하나씩 받기 시작한다: 정의 읽기에 쓰는 재질(무늬 재질)·글꼴 절을 먼저 읽는다(이 절들이 정의 절보다 앞에 와 있어야 한다) */
+  beginDefinitions(): void {
+    this.streamedDefs = true;
+    this.readMaterials();
+    this.readFonts();
+  }
+
+  /**
+   * 정의 하나(0x157c 노드). 정의 하나가 깨져도 나머지는 읽는다. clipped(파일 끝에서 잘린 정의)는 앞부분만 살린다.
+   * base: r의 0이 model.dat 안 어디인지(진행 알림용)
+   */
+  definition(r: TlvReader, n: TlvNode, clipped: boolean, base = 0): void {
+    const ctx = this.phase('geometry');
+    ctx.base = base;
+    ctx.tick(n.start);
+    try {
+      const ents = r.firstSafe(n, TAG.ENTITIES, clipped);
+      if (!ents) return;
+      const id = idOf(r, ents);
+      if (id === undefined) {
+        note(ctx, '번호가 없는 정의를 건너뛰었습니다');
+        return;
+      }
+      let name: string | undefined;
+      try {
+        name = r.str(r.firstSafe(n, TAG.DEF_NAME));
+      } catch {
+        /* 이름 없이 */
+      }
+      const def: SkpDefinition = { id, name: name ?? `정의 ${id}`, entities: readEntities(ctx, r, ents, clipped) };
+      readDefinitionFields(r, n, def);
+      this.definitions.set(id, def);
+      if (clipped) ctx.damaged = true;
+    } catch {
+      ctx.damaged = true;
+      note(ctx, '깨진 컴포넌트 정의를 건너뛰었습니다');
+    } finally {
+      ctx.base = 0;
+    }
+  }
+
+  /** 남은 뿌리 절을 한 버퍼 읽기의 차례로 읽고 모형을 낸다 */
+  finish(): SkpModel {
+    const ctx = this.ctx;
+    const warn: Warn = (m) => note(ctx, m);
+    const materials = this.readMaterials();
+    const lineStyles = this.section('lineStyles', TAG.LINESTYLE_SECTION, '선 종류', (r, n) => readLineStyles(r, n)) ?? new Map<number, string>();
+    const layerSet: LayerSet = this.section('layers', TAG.LAYERS, '태그 목록', (r, n) => readLayers(r, n, lineStyles, warn)) ?? {
+      layers: new Map(),
+      tags: [],
+      folders: [],
+      index: new Map(),
+      defaultHidden: new Set(),
+    };
+    this.readFonts();
+    const options = this.section('options', TAG.OPTIONS, '단위 설정', (r, n) => readOptions(r, n, warn));
+
+    // 정의: 하나씩 받지 않았으면(한 버퍼 읽기, 정의 절이 재질·글꼴 절보다 앞에 온 꼴) 정의 절에서
+    if (!this.streamedDefs) {
+      const items = this.at(this.sections.get(TAG.DEFINITIONS), TAG.DEF_LIST, TAG.DEF_ITEMS);
+      if (items) {
+        const r = items.r;
+        r.eachSafe(
+          items.n.start,
+          items.n.end,
+          (tag, start, end, clipped) => {
+            if (tag === TAG.DEFINITION) this.definition(r, { tag, start, end }, clipped);
+          },
+          true,
+        );
+      }
+    }
+    const definitions = this.definitions;
+
+    this.phase('geometry');
+    const empty = (): SkpEntities => ({ points: new Float64Array(0), faces: emptyFaces(), edges: emptyEdges(), instances: [] });
+    const modelEnts = this.at(this.sections.get(TAG.MODEL_ENTITIES), TAG.ENTITIES);
+    let rootEnts = empty();
+    if (!modelEnts) note(ctx, '모형 요소(01f6)를 찾지 못했습니다');
+    else
+      try {
+        rootEnts = readEntities(ctx, modelEnts.r, modelEnts.n, true);
+      } catch {
+        ctx.damaged = true;
+        note(ctx, '모형 요소(01f6)가 깨져 읽지 못했습니다');
+      }
+    try {
+      resolvePending(ctx, [rootEnts, ...[...definitions.values()].map((d) => d.entities)], definitions);
+    } catch {
+      note(ctx, '붙은 치수 점을 풀지 못했습니다');
+    }
+    ctx.vertexRecords = [];
+
+    // 뿌리 절(형상 뒤: 실패해도 형상은 그대로)
+    const camera = this.section('camera', TAG.CAMERA_SECTION, '카메라', (r, n) => {
+      const c = r.firstSafe(n, TAG.CAMERA);
+      return c ? readCamera(r, c, warn) : undefined;
+    });
+    const styles: StyleSet = this.section('styles', TAG.STYLE_SECTION, '스타일 목록', (r, n) => readStyles(r, n)) ?? { names: new Map() };
+    const rendering = this.section('rendering', TAG.RENDER_SECTION, '렌더링 설정', (r, n): SkpRenderingRaw | undefined => {
+      const rec = r.firstSafe(n, TAG.RENDERING);
+      if (!rec) return undefined;
+      const raw: SkpRenderingRaw = { values: readRenderingValues(r, rec) };
+      const look = styles.working ?? styles.active;
+      if (look !== undefined) raw.styleName = look;
+      if (styles.active !== undefined) raw.activeName = styles.active;
+      return raw;
+    });
+    const animation = options ? animationFromOptions(options) : undefined;
+    const pages = this.section('pages', TAG.PAGE_SECTION, '장면 목록', (r, n) => readPages(r, n, layerSet, styles, animation, warn));
+    let defaults: SkpAnnotationDefaults | undefined;
+    this.phase('defaults');
+    try {
+      const t = this.sections.get(TAG.TEXT_DEFAULTS_SECTION);
+      const d = this.sections.get(TAG.DIM_DEFAULTS_SECTION);
+      defaults = readAnnotationDefaults(t && !t.clipped ? t : undefined, d && !d.clipped ? d : undefined, ctx.fonts);
+    } catch {
+      note(ctx, '문자·치수 기본값을 읽지 못했습니다');
+    }
+    const props = this.section('props', TAG.PROPS_SECTION, '모형 속성', (r, n) => readModelProperties(r, n, warn));
+    const shadowInfo = this.section('shadow', TAG.SHADOW_SECTION, '위치·그림자', (r, n) => {
+      const rec = r.firstSafe(n, TAG.SHADOW_INFO);
+      return rec ? readShadowInfo(r, rec) : undefined;
+    });
+    const axes = this.section('axes', TAG.AXES_SECTION, '그리기 축', (r, n) => {
+      const rec = r.firstSafe(n, TAG.AXES);
+      return rec ? readAxes(r, rec) : undefined;
+    });
+
+    // 경고: 묶음을 한 버퍼 읽기의 차례로 합친다
+    const all = new Map<string, number>();
+    for (const p of PHASES) for (const [m, k] of this.phaseWarn.get(p) ?? []) all.set(m, (all.get(m) ?? 0) + k);
+    const warnings = [...all].map(([m, k]) => (k > 1 ? `${m} (${k}개)` : m));
+    const model: SkpModel = { materials, layers: layerSet.layers, definitions, root: rootEnts, counts: ctx.counts, warnings };
+    if (layerSet.defaultLayer !== undefined) model.defaultLayer = layerSet.defaultLayer;
+    if (layerSet.activeLayer !== undefined) model.activeLayer = layerSet.activeLayer;
+    if (layerSet.tags.length) model.tags = layerSet.tags;
+    if (layerSet.folders.length) model.tagFolders = layerSet.folders;
+    if (options) {
+      const lu = lengthUnitCode(options);
+      if (lu !== undefined) model.lengthUnit = lu;
+      const units = unitsFromOptions(options);
+      if (units) model.units = units;
+    }
+    if (animation) model.animation = animation;
+    if (camera) model.camera = camera;
+    if (rendering) model.rendering = rendering;
+    if (pages?.pages.length) {
+      model.pages = pages.pages;
+      if (pages.active !== undefined) model.activePage = pages.active;
+    }
+    const fonts = this.fonts;
+    if (fonts?.size) model.fonts = fonts;
+    if (defaults) model.annotationDefaults = defaults;
+    if (props?.properties) model.properties = props.properties;
+    if (props?.name !== undefined) model.name = props.name;
+    if (props?.description !== undefined) model.description = props.description;
+    if (shadowInfo) model.shadowInfo = shadowInfo;
+    if (axes) model.axes = axes;
+    if (ctx.damaged) model.damaged = true;
+    return model;
+  }
+}
+
 /**
  * model.dat 바이트 → 중간 모형. 뿌리가 맞지 않으면 Error.
  * 잘렸거나 꼬리표 길이가 깨진 곳이 있으면 그 앞까지 읽고 경고한다(모형이 damaged).
  * 뿌리 절(카메라·장면·태그·스타일 …)은 하나가 깨져도 그 절만 버리고 형상 읽기는 계속한다.
- * onProgress는 읽은 바이트 위치로 진행(0~1)을 알린다.
+ * onProgress는 읽은 바이트 위치로 진행(0~1)을 알린다. 풀면서 조각으로 읽으려면 src/modelstream.ts(같은 결과).
  */
 export function readModelDat(bytes: Uint8Array, onProgress?: (fraction: number) => void, opts: ReadModelOptions = {}): SkpModel {
   const r = new TlvReader(bytes);
   if (bytes.length < 6 || r.dv.getUint16(0, true) !== TAG.ROOT) throw new Error('model.dat 뿌리 꼬리표가 다릅니다');
   const rootLen = r.dv.getUint32(2, true);
   const root: TlvNode = { tag: TAG.ROOT, start: 6, end: Math.min(bytes.length, 6 + rootLen) };
-  let last = 0;
-  const tick = (pos: number): void => {
-    const f = pos / Math.max(1, bytes.length);
-    if (!onProgress || f <= last) return;
-    last = f;
-    try {
-      onProgress(f);
-    } catch {
-      /* 알림 쪽 오류는 무시 */
-    }
-  };
-  const ctx: Ctx = {
-    r,
-    warn: new Map(),
-    counts: { vertices: 0, edges: 0, faces: 0, instances: 0 },
-    tick,
-    damaged: false,
-    fonts: new Map(),
-    entityNodes: [],
-    pendingPoints: [],
-    pendingArcs: [],
-    texturedIds: new Set(),
-  };
-  const warn: Warn = (m) => note(ctx, m);
-  if (6 + rootLen > bytes.length) {
-    ctx.damaged = true;
-    note(ctx, 'model.dat가 잘렸습니다(파일 끝까지 받지 못했을 수 있습니다) — 읽을 수 있는 앞부분만 씁니다');
-  }
-
+  const parse = new ModelParse(bytes.length, onProgress, opts);
+  if (6 + rootLen > bytes.length) parse.damage('model.dat가 잘렸습니다(파일 끝까지 받지 못했을 수 있습니다) — 읽을 수 있는 앞부분만 씁니다');
   // 뿌리의 절(section)들: 깨진 곳 앞까지. 정의·모형 요소 묶음은 잘렸어도 앞부분을 살린다
-  const sections = new Map<number, TlvNode & { clipped: boolean }>();
   const rootOk = r.eachSafe(
     root.start,
     root.end,
     (tag, start, end, clipped) => {
       if (clipped && tag !== TAG.DEFINITIONS && tag !== TAG.MODEL_ENTITIES) return;
-      if (!sections.has(tag)) sections.set(tag, { tag, start, end, clipped });
+      parse.addSection(tag, { r, n: { tag, start, end }, clipped });
     },
     true,
   );
-  if (!rootOk && 6 + rootLen <= bytes.length) {
-    ctx.damaged = true;
-    note(ctx, 'model.dat 안의 꼬리표 길이가 깨져 뒷부분을 읽지 못했습니다');
-  }
-
-  /** 절 안을 경로대로 내려가기(깨진 것은 undefined) */
-  const at = (sec: TlvNode | undefined, ...tags: number[]): TlvNode | undefined => {
-    let cur = sec;
-    for (const t of tags) {
-      if (!cur) return undefined;
-      cur = r.firstSafe(cur, t, true);
-    }
-    return cur;
-  };
-  /** 뿌리 절 하나 읽기: 실패해도 형상 읽기는 계속한다 */
-  const section = <T>(tag: number, what: string, fn: (n: TlvNode) => T): T | undefined => {
-    const n = sections.get(tag);
-    if (!n || n.clipped) return undefined;
-    try {
-      return fn(n);
-    } catch {
-      note(ctx, `${eul(what)} 읽지 못했습니다`);
-      return undefined;
-    }
-  };
-
-  const materials = new Map<number, string>();
-  const matItems = at(sections.get(TAG.MATERIALS), TAG.MAT_LIST, TAG.MAT_ITEMS);
-  if (matItems)
-    r.eachSafe(matItems.start, matItems.end, (tag, start, end, clipped) => {
-      if (tag !== TAG.MAT || clipped) return;
-      const n = { tag, start, end };
-      try {
-        const id = r.uint(r.path(n, TAG.ID_BOX, TAG.ID));
-        if (id !== undefined) materials.set(id, r.str(r.first(n, TAG.MAT_NAME)) ?? `재질 ${id}`);
-      } catch {
-        note(ctx, '깨진 재질 항목을 건너뛰었습니다');
-      }
-    });
-  const texturedNames = new Set(opts.textured ?? []);
-  if (texturedNames.size) for (const [id, n] of materials) if (texturedNames.has(n)) ctx.texturedIds.add(id);
-
-  const lineStyles = section(TAG.LINESTYLE_SECTION, '선 종류', (n) => readLineStyles(r, n)) ?? new Map<number, string>();
-  const layerSet: LayerSet = section(TAG.LAYERS, '태그 목록', (n) => readLayers(r, n, lineStyles, warn)) ?? {
-    layers: new Map(),
-    tags: [],
-    folders: [],
-    index: new Map(),
-    defaultHidden: new Set(),
-  };
-  const fonts = section(TAG.FONT_SECTION, '글꼴 목록', (n) => readFonts(r, n));
-  if (fonts) ctx.fonts = fonts;
-  const options = section(TAG.OPTIONS, '단위 설정', (n) => readOptions(r, n, warn));
-
-  const definitions = new Map<number, SkpDefinition>();
-  const defItems = at(sections.get(TAG.DEFINITIONS), TAG.DEF_LIST, TAG.DEF_ITEMS);
-  if (defItems)
-    r.eachSafe(
-      defItems.start,
-      defItems.end,
-      (tag, start, end, clipped) => {
-        if (tag !== TAG.DEFINITION) return;
-        const n = { tag, start, end };
-        ctx.tick(start);
-        // 정의 하나가 깨져도 나머지는 읽는다. 파일 끝에서 잘린 정의는 앞부분만 살린다
-        try {
-          const ents = r.firstSafe(n, TAG.ENTITIES, clipped);
-          if (!ents) return;
-          const id = idOf(r, ents);
-          if (id === undefined) {
-            note(ctx, '번호가 없는 정의를 건너뛰었습니다');
-            return;
-          }
-          let name: string | undefined;
-          try {
-            name = r.str(r.firstSafe(n, TAG.DEF_NAME));
-          } catch {
-            /* 이름 없이 */
-          }
-          const def: SkpDefinition = { id, name: name ?? `정의 ${id}`, entities: readEntities(ctx, ents, clipped) };
-          readDefinitionFields(r, n, def);
-          definitions.set(id, def);
-          if (clipped) ctx.damaged = true;
-        } catch {
-          ctx.damaged = true;
-          note(ctx, '깨진 컴포넌트 정의를 건너뛰었습니다');
-        }
-      },
-      true,
-    );
-
-  const empty = (): SkpEntities => ({ points: new Float64Array(0), faces: emptyFaces(), edges: emptyEdges(), instances: [] });
-  const modelEnts = at(sections.get(TAG.MODEL_ENTITIES), TAG.ENTITIES);
-  let rootEnts = empty();
-  if (!modelEnts) note(ctx, '모형 요소(01f6)를 찾지 못했습니다');
-  else
-    try {
-      rootEnts = readEntities(ctx, modelEnts, true);
-    } catch {
-      ctx.damaged = true;
-      note(ctx, '모형 요소(01f6)가 깨져 읽지 못했습니다');
-    }
-  try {
-    finish(ctx, [rootEnts, ...[...definitions.values()].map((d) => d.entities)], definitions);
-  } catch {
-    note(ctx, '붙은 치수 점을 풀지 못했습니다');
-  }
-
-  // 뿌리 절(형상 뒤: 실패해도 형상은 그대로)
-  const camera = section(TAG.CAMERA_SECTION, '카메라', (n) => {
-    const c = r.firstSafe(n, TAG.CAMERA);
-    return c ? readCamera(r, c, warn) : undefined;
-  });
-  const styles: StyleSet = section(TAG.STYLE_SECTION, '스타일 목록', (n) => readStyles(r, n)) ?? { names: new Map() };
-  const rendering = section(TAG.RENDER_SECTION, '렌더링 설정', (n): SkpRenderingRaw | undefined => {
-    const rec = r.firstSafe(n, TAG.RENDERING);
-    if (!rec) return undefined;
-    const raw: SkpRenderingRaw = { values: readRenderingValues(r, rec) };
-    const look = styles.working ?? styles.active;
-    if (look !== undefined) raw.styleName = look;
-    if (styles.active !== undefined) raw.activeName = styles.active;
-    return raw;
-  });
-  const animation = options ? animationFromOptions(options) : undefined;
-  const pages = section(TAG.PAGE_SECTION, '장면 목록', (n) => readPages(r, n, layerSet, styles, animation, warn));
-  let defaults: SkpAnnotationDefaults | undefined;
-  try {
-    const t = sections.get(TAG.TEXT_DEFAULTS_SECTION);
-    const d = sections.get(TAG.DIM_DEFAULTS_SECTION);
-    defaults = readAnnotationDefaults(r, t && !t.clipped ? t : undefined, d && !d.clipped ? d : undefined, ctx.fonts);
-  } catch {
-    note(ctx, '문자·치수 기본값을 읽지 못했습니다');
-  }
-  const props = section(TAG.PROPS_SECTION, '모형 속성', (n) => readModelProperties(r, n, warn));
-  const shadowInfo = section(TAG.SHADOW_SECTION, '위치·그림자', (n) => {
-    const rec = r.firstSafe(n, TAG.SHADOW_INFO);
-    return rec ? readShadowInfo(r, rec) : undefined;
-  });
-  const axes = section(TAG.AXES_SECTION, '그리기 축', (n) => {
-    const rec = r.firstSafe(n, TAG.AXES);
-    return rec ? readAxes(r, rec) : undefined;
-  });
-
-  const warnings = [...ctx.warn].map(([m, k]) => (k > 1 ? `${m} (${k}개)` : m));
-  const model: SkpModel = { materials, layers: layerSet.layers, definitions, root: rootEnts, counts: ctx.counts, warnings };
-  if (layerSet.defaultLayer !== undefined) model.defaultLayer = layerSet.defaultLayer;
-  if (layerSet.activeLayer !== undefined) model.activeLayer = layerSet.activeLayer;
-  if (layerSet.tags.length) model.tags = layerSet.tags;
-  if (layerSet.folders.length) model.tagFolders = layerSet.folders;
-  if (options) {
-    const lu = lengthUnitCode(options);
-    if (lu !== undefined) model.lengthUnit = lu;
-    const units = unitsFromOptions(options);
-    if (units) model.units = units;
-  }
-  if (animation) model.animation = animation;
-  if (camera) model.camera = camera;
-  if (rendering) model.rendering = rendering;
-  if (pages?.pages.length) {
-    model.pages = pages.pages;
-    if (pages.active !== undefined) model.activePage = pages.active;
-  }
-  if (fonts?.size) model.fonts = fonts;
-  if (defaults) model.annotationDefaults = defaults;
-  if (props?.properties) model.properties = props.properties;
-  if (props?.name !== undefined) model.name = props.name;
-  if (props?.description !== undefined) model.description = props.description;
-  if (shadowInfo) model.shadowInfo = shadowInfo;
-  if (axes) model.axes = axes;
-  if (ctx.damaged) model.damaged = true;
-  return model;
+  if (!rootOk && 6 + rootLen <= bytes.length) parse.damage('model.dat 안의 꼬리표 길이가 깨져 뒷부분을 읽지 못했습니다');
+  return parse.finish();
 }

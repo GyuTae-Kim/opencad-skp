@@ -441,37 +441,39 @@ export function readFonts(r: TlvReader, sec: TlvNode): Map<number, SkpFont> {
 
 /** Model Info > 문자(0x01fe → 57e4)·치수(0x01ff → 5fb4) 기본값. 둘 다 없으면 undefined */
 export function readAnnotationDefaults(
-  r: TlvReader,
-  textSec: TlvNode | undefined,
-  dimSec: TlvNode | undefined,
+  textSec: { r: TlvReader; n: TlvNode } | undefined,
+  dimSec: { r: TlvReader; n: TlvNode } | undefined,
   fonts: Map<number, SkpFont>,
 ): SkpAnnotationDefaults | undefined {
-  const t = textSec && r.firstSafe(textSec, TAG.TEXT_DEFAULTS);
-  const d = dimSec && r.firstSafe(dimSec, TAG.DIM_DEFAULTS);
+  // 두 절은 따로 받은 버퍼일 수 있다(조각으로 읽을 때) — 절마다 그 reader로 읽는다
+  const t = textSec && textSec.r.firstSafe(textSec.n, TAG.TEXT_DEFAULTS);
+  const d = dimSec && dimSec.r.firstSafe(dimSec.n, TAG.DIM_DEFAULTS);
   if (!t && !d) return undefined;
   const out: SkpAnnotationDefaults = {};
-  const font = (n: TlvNode | undefined, tag: number): number | undefined => {
+  const font = (r: TlvReader, n: TlvNode | undefined, tag: number): number | undefined => {
     const id = n && r.uint(r.firstSafe(n, tag));
     return id !== undefined && fonts.has(id) ? id : undefined;
   };
-  const int = (n: TlvNode | undefined, tag: number): number | undefined => (n ? r.i32Exact(r.firstSafe(n, tag)) : undefined);
+  const int = (r: TlvReader, n: TlvNode | undefined, tag: number): number | undefined => (n ? r.i32Exact(r.firstSafe(n, tag)) : undefined);
   const set = <K extends keyof SkpAnnotationDefaults>(k: K, v: SkpAnnotationDefaults[K] | undefined): void => {
     if (v !== undefined) out[k] = v;
   };
   if (t) {
-    set('textFont', font(t, TAG.TEXT_DEFAULTS_FONT));
-    set('leaderFont', font(t, TAG.TEXT_DEFAULTS_LEADER_FONT));
-    set('leaderArrow', arrowName(int(t, TAG.TEXT_DEFAULTS_ARROW)));
-    set('leaderType', leaderName(int(t, TAG.TEXT_DEFAULTS_LEADER_TYPE)));
+    const r = textSec!.r;
+    set('textFont', font(r, t, TAG.TEXT_DEFAULTS_FONT));
+    set('leaderFont', font(r, t, TAG.TEXT_DEFAULTS_LEADER_FONT));
+    set('leaderArrow', arrowName(int(r, t, TAG.TEXT_DEFAULTS_ARROW)));
+    set('leaderType', leaderName(int(r, t, TAG.TEXT_DEFAULTS_LEADER_TYPE)));
     set('textColor', rgbOf(r, r.firstSafe(t, TAG.TEXT_DEFAULTS_COLOR)));
     set('leaderColor', rgbOf(r, r.firstSafe(t, TAG.TEXT_DEFAULTS_LEADER_COLOR)));
   }
   if (d) {
-    set('dimFont', font(d, TAG.DIM_DEFAULTS_FONT));
+    const r = dimSec!.r;
+    set('dimFont', font(r, d, TAG.DIM_DEFAULTS_FONT));
     set('dimAlignedText', r.flag(r.firstSafe(d, TAG.DIM_DEFAULTS_ALIGNED)));
-    set('dimArrow', arrowName(int(d, TAG.DIM_DEFAULTS_ARROW)));
+    set('dimArrow', arrowName(int(r, d, TAG.DIM_DEFAULTS_ARROW)));
     set('dimColor', rgbOf(r, r.firstSafe(d, TAG.DIM_DEFAULTS_COLOR)));
-    set('dimTextAlignment', textAlignmentName(int(d, TAG.DIM_DEFAULTS_TEXT_POS)));
+    set('dimTextAlignment', textAlignmentName(int(r, d, TAG.DIM_DEFAULTS_TEXT_POS)));
   }
   return out;
 }
