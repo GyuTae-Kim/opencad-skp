@@ -292,6 +292,8 @@ function sceneFrom(read: Package | Scene3d, st: Start, opts: SkpOptions): Scene3
       ...(edge && edge.every(Number.isFinite) ? { edgeColor: [edge[0], edge[1], edge[2], 1] as const } : {}),
       ...(edgeColoring ? { edgeColoring, ...(axes ? { axes: [axes.x, axes.y, axes.z] } : {}) } : {}),
       onProgress: (f) => progress(0.65 + 0.3 * f, '면 삼각화·인스턴스 펼치는 중'),
+      // 중간 모형은 여기서만 쓴다(장면 정보는 표를 읽지 않는다) — 다 놓은 정의의 표를 펼치는 동안 놓는다
+      releaseModel: true,
     };
     if (sceneTex.size) build.textures = sceneTex;
     if (opts.maxUvVertices !== undefined) build.maxUvVertices = opts.maxUvVertices;

@@ -61,7 +61,7 @@ import type {
 import * as A from './scene-annotations';
 import { AttrPool, PAGE_USE_HIDDEN_OBJECTS } from './scene-meta';
 import { cornerNormals, faceUnitNormal } from './scene-smooth';
-import { opt, textureMapAt, type SkpFaces } from './entities';
+import { emptyEdges, emptyFaces, opt, textureMapAt, type SkpFaces } from './entities';
 import { F32, F64, I32, U32 } from './grow';
 import { applyFaceUvq, faceUvq, planeAxes } from './projection';
 import { solidInfo } from './solid';
@@ -937,6 +937,11 @@ export interface BuildOptions {
   maxUvVertices?: number;
   /** 진행 알림(0~1) */
   onProgress?: (fraction: number) => void;
+  /**
+   * 펼치기에서 마지막 배치까지 놓은 정의의 정점·면·모서리 표(면 무늬 투영 포함)를 비운다 — 부르는 쪽이 모형을 다시 쓰지 않을 때
+   * (skpToScene). 큰 모형에서 장면 배열이 쌓이는 동안 중간 모형 몫(수백 MB)을 놓는다. 기본 false(모형을 그대로 둔다)
+   */
+  releaseModel?: boolean;
 }
 
 export interface SceneParts {
@@ -1071,12 +1076,32 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   let uvVerts = 0;
   let uvLimited = false;
 
+  // 정의마다 삼각화해 둔 것(Prepared). 펼치기에서 그 정의의 마지막 배치를 놓으면 놓는다(release — 큰 모형에서 장면 배열과
+  // 함께 수백 MB가 되던 몫). 놓은 뒤 다시 필요해지면(남은 배치 어림이 모자랄 때) 다시 준비하되, 같은 값이 나오므로
+  // 경고 수(삼각화 실패·무늬 투영)와 진행은 처음 준비할 때만 센다
   const cache = new Map<SkpEntities, Prepared>();
+  const preparedOnce = new Set<SkpEntities>();
+  const volumes = new Map<SkpEntities, number | undefined>();
+  const quietCounter = { failed: 0 };
+  const quietTex: PrepTex | null = prepTex && { tile: prepTex.tile, plane: prepTex.plane, flat: 0, singular: 0 };
+  /** releaseModel로 표를 비운 묶음(다시 준비할 수 없다 — 남은 배치 어림이 맞으면 일어나지 않는다) */
+  const emptied = new Set<SkpEntities>();
   const prep = (e: SkpEntities): Prepared => {
     let p = cache.get(e);
-    if (!p) cache.set(e, (p = prepare(e, model.defaultLayer, counter, extras, smooth, onFaces, prepTex, edgeColoring === 'material')));
+    if (!p) {
+      if (emptied.has(e)) throw new Error('표를 비운 정의를 다시 삼각화하려 했습니다');
+      const again = preparedOnce.has(e);
+      p = prepare(e, model.defaultLayer, again ? quietCounter : counter, extras, smooth, again ? undefined : onFaces, again ? quietTex : prepTex, edgeColoring === 'material');
+      cache.set(e, p);
+      if (!again) {
+        preparedOnce.add(e);
+        volumes.set(e, p.volume);
+      }
+    }
     return p;
   };
+  /** 정의 부피(준비한 적이 있으면 놓았어도 다시 준비하지 않는다) */
+  const volumeOf = (e: SkpEntities): number | undefined => (preparedOnce.has(e) ? volumes.get(e) : prep(e).volume);
 
   const colorOf = (id: number | undefined): Rgba => {
     if (id === undefined) return defaultColor;
@@ -2163,6 +2188,100 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     stack.delete(ents);
   };
 
+  // ── 묶음마다 남은 배치 수(Prepared를 놓을 때): emit이 묶음을 놓는 횟수의 위쪽 어림 — 모형에서 인스턴스를 따라 내려가며
+  //    (emit과 같은 거르기) 부모의 배치 수를 더한다. 멈춤·한도·깊이로 덜 놓으면 놓지 않을 뿐이다. 자기 자신을 품는 정의가 있으면
+  //    어림하지 않고(놓지 않는다), 장면이 다시 보이는 숨김 인스턴스 안쪽(reveal이 다시 쓴다)은 놓지 않는다
+  const usesLeft = new Map<SkpEntities, number>();
+  {
+    const kids = new Map<SkpEntities, SkpEntities[]>();
+    const kidsOf = (e: SkpEntities): SkpEntities[] => {
+      let k = kids.get(e);
+      if (!k) {
+        k = [];
+        for (const inst of e.instances) {
+          if (inst.flags & FLAG_HIDDEN && !extras) continue;
+          const def = model.definitions.get(inst.definition);
+          if (def) k.push(def.entities);
+        }
+        kids.set(e, k);
+      }
+      return k;
+    };
+    // 뒤 차례(post-order) 깊이 우선 — 되돌아오는 길이 있으면(순환) 어림하지 않는다
+    const state = new Map<SkpEntities, number>();
+    const post: SkpEntities[] = [];
+    const stack: [SkpEntities, number][] = [[model.root, 0]];
+    state.set(model.root, 1);
+    let cyclic = false;
+    while (stack.length && !cyclic) {
+      const top = stack[stack.length - 1]!;
+      const ch = kidsOf(top[0]);
+      if (top[1] < ch.length) {
+        const c = ch[top[1]++]!;
+        const st = state.get(c);
+        if (st === 1) cyclic = true;
+        else if (!st) {
+          state.set(c, 1);
+          stack.push([c, 0]);
+        }
+      } else {
+        state.set(top[0], 2);
+        post.push(top[0]);
+        stack.pop();
+      }
+    }
+    if (!cyclic) {
+      usesLeft.set(model.root, 1);
+      for (let i = post.length - 1; i >= 0; i--) {
+        const e = post[i]!;
+        const n = usesLeft.get(e) ?? 0;
+        for (const c of kidsOf(e)) usesLeft.set(c, (usesLeft.get(c) ?? 0) + n);
+      }
+      if (revealPids.size) {
+        const pinned = new Set<SkpEntities>();
+        const pin = (e: SkpEntities): void => {
+          if (pinned.has(e)) return;
+          pinned.add(e);
+          usesLeft.delete(e);
+          for (const inst of e.instances) {
+            const def = model.definitions.get(inst.definition);
+            if (def) pin(def.entities);
+          }
+        };
+        const scan = (e: SkpEntities): void => {
+          for (const inst of e.instances)
+            if (inst.flags & FLAG_HIDDEN && inst.pid !== undefined && revealPids.has(inst.pid)) {
+              const def = model.definitions.get(inst.definition);
+              if (def) pin(def.entities);
+            }
+        };
+        scan(model.root);
+        for (const d of model.definitions.values()) scan(d.entities);
+      }
+    }
+  }
+  /** 묶음 하나를 놓았다: 남은 배치가 없으면 그 Prepared를 놓는다 */
+  const release = (e: SkpEntities, p: Prepared): void => {
+    const left = usesLeft.get(e);
+    if (left === undefined) return;
+    if (left > 1) {
+      usesLeft.set(e, left - 1);
+      return;
+    }
+    usesLeft.delete(e);
+    cache.delete(e);
+    localBoxes.delete(p);
+    if (opts.releaseModel) {
+      // 이 묶음은 더 놓지 않는다 — 중간 모형의 표를 놓는다. 펼친 뒤 나무 정보(크기)가 쓰는 범위 상자는 먼저 구해 둔다
+      // (지금 안쪽 묶음은 이 배치 아래 놓을 것이 남아 아직 표가 있다)
+      localBounds(e);
+      emptied.add(e);
+      e.points = new Float64Array(0);
+      e.faces = emptyFaces();
+      e.edges = emptyEdges();
+    }
+  };
+
   /**
    * 요소 묶음 하나를 놓는다. node: 이 배치를 맡는 나무 노드(목록에 없는 깊은 배치는 목록에 든 조상, -1 = 모형).
    * hiddenSub: 숨긴 인스턴스 안쪽(extras일 때만 온다)
@@ -2271,6 +2390,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       extraSegs += ns;
       appendLines(lineBucket(slot, l.cls, l.layer >= 0 ? l.layer : layerHere, farCell(l.pos, m)), l, m, node, ents, placements);
     }
+    release(ents, p);
     if (depth >= MAX_DEPTH) {
       if (ents.instances.length) cycles++;
       return;
@@ -2307,7 +2427,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       const layer = inst.layer !== undefined && inst.layer !== model.defaultLayer ? inst.layer : inhLayer;
       const placed = mul4(m, inst.matrix);
       if (own) {
-        const vol = prep(def.entities).volume;
+        const vol = volumeOf(def.entities);
         if (vol !== undefined) nodeVolume![child] = vol * Math.abs(linearOf(placed).det);
       }
       // "항상 카메라 보기" 컴포넌트: 그 배치(안쪽 포함)를 따로 모아 코어가 Z축 둘레로 돌리게(안쪽의 같은 깃발은 바깥 배치를 따른다)
@@ -2337,6 +2457,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
 
   const rootM = new Float64Array([scale, 0, 0, 0, 0, scale, 0, 0, 0, 0, scale, 0, 0, 0, 0, 1]);
   emit(model.root, rootM, undefined, undefined, 0, new Set(), 0, -1, false);
+  cache.clear();
+  localBoxes.clear();
   if (billboardsSkipped)
     warnings.push(`"항상 카메라 보기" 컴포넌트가 너무 많아(${MAX_BILLBOARDS}개 한도) ${billboardsSkipped}개는 저장된 방향 그대로 둡니다`);
   report(placementsTotal);
