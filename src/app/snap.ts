@@ -18,7 +18,7 @@
  * - 나란함(SketchUp "모서리와 나란히", 자홍): 축과 같은 자리에서, 커서가 앞서 지나간 모서리(parallelRef)와 나란한 방향(화면 각 6° 안)이면
  *   시작점을 지나 그 모서리와 나란한 선 위로. 축과 함께 맞으면 화면에서 선에 가까운 쪽(같으면 축), 모서리가 축과 나란하면 축에 맡긴다.
  * - 잠금(SketchUp 추론 잠금 — Shift·화살표, 손가락 기기는 측정 띠 단추): 방향 추론(축·나란함·수직)을 잠그면(lock) 시작점을 지나는
- *   그 선 위에만 찍는다. 커서가 끝점·중간점·중심·교차점·수직 같은 점 위면 그 점을 선에 수직으로 내린 자리(다른 점의 높이를 옮겨 잰다),
+ *   그 선 위에만 찍는다. 시작점을 지나는 모서리에 붙은 점 추정(모서리 끝에서 그 모서리를 따라 가리킬 때)도 그 모서리 방향으로 잠근다. 커서가 끝점·중간점·중심·교차점·수직 같은 점 위면 그 점을 선에 수직으로 내린 자리(다른 점의 높이를 옮겨 잰다),
  *   아니면 커서 광선에 가장 가까운 선 위 점(코어 0.10.0 순수 함수 lockedSnap).
  * - 아무것도 없으면 시작점(없으면 anchor)을 지나 화면과 나란한 평면 위의 빈 점(free).
  *
@@ -346,13 +346,47 @@ export function parallelInferenceLock(edge: readonly [readonly number[], readonl
   return dir ? { kind: 'parallel', dir, edge: [[edge[0][0]!, edge[0][1]!, edge[0][2]!], [edge[1][0]!, edge[1][1]!, edge[1][2]!]], label: SNAP_LABELS.parallel } : null;
 }
 
-/** 추정이 방향 추론(축·나란함·시작점에서 내린 수직)이면 잠글 선, 아니면 null(이미 잠근 추정도 그 선) */
-export function lockOf(s: Snap | null | undefined): InferenceLock | null {
-  if (!s?.dir || (s.kind !== 'axis' && s.kind !== 'parallel' && s.kind !== 'perpendicular')) return null;
+/**
+ * 추정이 방향 추론(축·나란함·시작점에서 내린 수직)이면 잠글 선, 아니면 null(이미 잠근 추정도 그 선).
+ * 시작점(from)을 주면 모서리에 붙은 점 추정도 그 모서리 직선이 시작점을 지날 때 잠근다(edgeLineLock)
+ */
+export function lockOf(s: Snap | null | undefined, from?: readonly number[] | null, axes: AxisDirs = AXIS_DIRS): InferenceLock | null {
+  if (!s) return null;
+  if (!s.dir || (s.kind !== 'axis' && s.kind !== 'parallel' && s.kind !== 'perpendicular')) return from ? edgeLineLock(s, from, axes) : null;
   const l: InferenceLock = { kind: s.kind, dir: [s.dir[0], s.dir[1], s.dir[2]], label: s.kind === 'axis' && s.axis ? AXIS_LABELS[s.axis] : s.label };
   if (s.axis) l.axis = s.axis;
   if (s.edge) l.edge = [s.edge[0], s.edge[1]];
   return l;
+}
+
+/** 모서리에 붙은 점 추정(그 모서리 직선 위의 점) */
+const EDGE_POINT_KINDS: ReadonlySet<SnapKind> = new Set(['endpoint', 'midpoint', 'intersection', 'onEdge']);
+
+/**
+ * 모서리에 붙은 점 추정(끝점·중간점·교차점·모서리 위)의 모서리 직선이 시작점을 지나면 그 방향 잠금, 아니면 null.
+ * 축과 나란한 모서리면 그 축(alongAxis와 같은 허용치), 아니면 그 모서리와 나란히.
+ * 모서리 끝에서 시작해 그 모서리를 따라 가리키면 점 추정(모서리 위)이 축 추정보다 먼저라 잠글 방향 추론이 없었다 — SketchUp은
+ * 모서리 추정을 잠그면 그 직선 위에 두므로, 시작점을 지나는 모서리면 이 방향 잠금과 같다. 커서 점이 시작점 자리면(모서리가 여럿
+ * 만나는 꼭짓점) 어느 모서리인지 모르니 잠그지 않는다
+ */
+export function edgeLineLock(s: Snap, from: readonly number[], axes: AxisDirs = AXIS_DIRS): InferenceLock | null {
+  if (s.locked || !EDGE_POINT_KINDS.has(s.kind)) return null;
+  for (const e of [s.edge, s.other]) {
+    if (!e) continue;
+    const d = sub(e[1], e[0]);
+    const u = unitOf(d);
+    if (!u) continue;
+    const w = sub(from, e[0]);
+    const t = dot(w, u);
+    // 시작점에서 모서리 직선까지 거리(모서리 길이·시작점 거리에 견준 허용치 — 같은 직선 위 다른 선분도 된다)
+    const scale = Math.max(Math.hypot(d[0], d[1], d[2]), Math.hypot(w[0], w[1], w[2]));
+    if (Math.hypot(w[0] - u[0] * t, w[1] - u[1] * t, w[2] - u[2] * t) > 1e-6 * scale) continue;
+    const p = sub(s.point, from);
+    if (!(Math.hypot(p[0], p[1], p[2]) > 1e-9 * scale)) return null;
+    const axis = AXES.find((a) => Math.abs(dot(u, axes[a])) >= 1 - 1e-6);
+    return axis ? axisInferenceLock(axis, axes) : parallelInferenceLock(e);
+  }
+  return null;
 }
 
 // ───────────────────────── 둘레 고르기 ─────────────────────────

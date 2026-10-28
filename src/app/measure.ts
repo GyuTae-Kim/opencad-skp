@@ -615,7 +615,7 @@ export class MeasureTool {
       return false;
     }
     if (!this.directing) return false;
-    const l = on === true ? (lockOf(this.freshHover()) ?? this.lastLockable) : axisInferenceLock(on, this.axes);
+    const l = on === true ? (this.lockable(this.freshHover()) ?? this.lastLockable) : axisInferenceLock(on, this.axes);
     if (!l) return false;
     this.setLock({ ...l, source: 'button' });
     return true;
@@ -812,7 +812,7 @@ export class MeasureTool {
         this.setLock(null);
         return true;
       }
-      const h = lockOf(this.freshHover());
+      const h = this.lockable(this.freshHover());
       const l = h && h.kind !== 'axis' ? h : this.parallelRef ? parallelInferenceLock(this.parallelRef) : null;
       if (!l) return false;
       this.setLock({ ...l, source: 'key' });
@@ -853,7 +853,7 @@ export class MeasureTool {
     this.shiftDown = down;
     if (down) {
       if (this.lockValue || !this.directing) return;
-      const l = lockOf(this.freshHover());
+      const l = this.lockable(this.freshHover());
       if (l) this.setLock({ ...l, source: 'shift' });
     } else if (this.lockValue?.source === 'shift') this.setLock(null);
   }
@@ -929,7 +929,12 @@ export class MeasureTool {
   private learn(snap: Snap): void {
     if (snap.locked) return;
     if (snap.edge && REF_KINDS.has(snap.kind)) this.parallelRef = [snap.edge[0], snap.edge[1]];
-    if (this.directing) this.lastLockable = lockOf(snap) ?? this.lastLockable;
+    if (this.directing) this.lastLockable = this.lockable(snap) ?? this.lastLockable;
+  }
+
+  /** 추정에서 잠글 방향: 방향 추론, 또는 시작점을 지나는 모서리에 붙은 점 추정(그 모서리 방향) */
+  private lockable(snap: Snap | null): InferenceLock | null {
+    return lockOf(snap, this.pts[0] ?? null, this.axes);
   }
 
   /** 축 고정·각도기 평면의 축(모형의 그리기 축 또는 세계 축) */

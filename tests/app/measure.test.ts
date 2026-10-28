@@ -592,6 +592,59 @@ describe('측정 도구: 추론 잠금(Shift·화살표·단추)과 나란함', 
     expect(r.locks.at(-1)).toBeNull();
   });
 
+  it('모서리 끝에서 그 모서리를 따라 가리키면(점 추정) Shift·단추가 그 모서리 방향을 잠근다 — 축과 나란하면 그 축', () => {
+    // 원점에서 +Y로 60(녹색 축과 나란), 원점에서 기운 40·30, 원점을 지나지 않는 모서리
+    const r = rig({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 0, 60, 0]]), lines('d', [[0, 0, 0, 40, 30, 0]]), lines('h', [[50, -50, 0, 80, -50, 0]])] });
+    r.tool.setMode('tape');
+    r.click(100, 100);
+    // 모서리 위라 축 추론이 아니지만 Shift가 녹색 축을 잠근다
+    r.move(101, 55);
+    expect(r.tip()).toBe('모서리에 · 45 mm');
+    expect(r.key('Shift')).toBe(true);
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'y', source: 'shift' });
+    r.move(160, 20, { shift: true });
+    expect(r.tip()).toBe('녹색 축에 · 잠금 · 80 mm');
+    r.key('Shift', 'keyup');
+    expect(r.tool.inferenceLock).toBeNull();
+    // 기운 모서리의 중간점: 그 모서리와 나란히 잠그고, 선 밖을 찍어도 그 선 위
+    r.move(120, 85);
+    expect(r.tip()).toBe('중간점 · 25 mm');
+    r.key('Shift');
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'parallel', source: 'shift' });
+    expect(r.locks.at(-1)).toBe('parallel');
+    r.click(180, 20, { shift: true });
+    let res = r.results.at(-1);
+    if (res?.kind !== 'tape') throw new Error('tape');
+    // (80, 80)을 (0.8, 0.6) 선에 내린 자리: 112 → (89.6, 67.2)
+    near(res.b, [89.6, 67.2, 0]);
+    r.key('Shift', 'keyup');
+    // 시작점 자리(모서리가 만나는 꼭짓점)·시작점을 지나지 않는 모서리는 잠그지 않는다
+    r.click(100, 100);
+    r.move(100, 100);
+    r.key('Shift');
+    expect(r.tool.inferenceLock).toBeNull();
+    r.key('Shift', 'keyup');
+    r.move(165, 150);
+    expect(r.tip()).toMatch(/^중간점/);
+    r.key('Shift');
+    expect(r.tool.inferenceLock).toBeNull();
+    r.key('Shift', 'keyup');
+    // 손가락 기기 단추: 커서 밑 모서리 방향, 커서가 떠난 뒤에는 마지막으로 본 그 방향
+    r.move(101, 55);
+    expect(r.tool.setInferenceLock(true)).toBe(true);
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'y', source: 'button' });
+    r.tool.setInferenceLock(false);
+    r.move(120, 85);
+    r.ptr('pointerleave', 0, 0);
+    r.overlay.paintNow();
+    expect(r.tool.setInferenceLock(true)).toBe(true);
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'parallel', source: 'button' });
+    r.click(180, 20);
+    res = r.results.at(-1);
+    if (res?.kind !== 'tape') throw new Error('tape');
+    near(res.b, [89.6, 67.2, 0]);
+  });
+
   it('각도기: 중심 전 →·←·↑는 각도기 평면을 그 축에 고정(다시 누르면 풀기, Esc가 먼저 푼다), 중심을 찍으면 그 평면', () => {
     const r = rig(EDGES());
     r.tool.setMode('protractor');

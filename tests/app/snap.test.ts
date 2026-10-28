@@ -484,4 +484,46 @@ describe('추정: 방향 잠금(SketchUp 추론 잠금)', () => {
     expect(locked).toMatchObject({ kind: 'perpendicular', locked: true, label: '모서리에 수직' });
     close(locked.point, [10, 80, 0]);
   });
+
+  it('시작점을 주면 시작점을 지나는 모서리에 붙은 점 추정도 그 모서리 방향으로 잠근다(축과 나란하면 그 축)', () => {
+    // e1: 원점에서 +Y, e2: 같은 직선 위 떨어진 선분, k: e1을 가로지름(원점을 지나지 않음), d: 원점에서 기운 모서리, h: 원점을 지나지 않음
+    const scene: SnapScene = {
+      meshes: [],
+      lines: [lines('e', [[0, 0, 0, 0, 80, 0], [0, 90, 0, 0, 99, 0], [-20, 20, 0, 60, 20, 0], [0, 0, 0, -40, -30, 0], [50, -50, 0, 80, -50, 0]])],
+    };
+    const from = [0, 0, 0];
+    const on = snapWith(scene, 101, 50, { from });
+    expect(on.kind).toBe('onEdge');
+    close(on.point, [0, 50, 0]);
+    // 시작점을 주지 않으면 예전처럼 잠글 방향이 아니다
+    expect(lockOf(on)).toBeNull();
+    expect(lockOf(on, from)).toMatchObject({ kind: 'axis', axis: 'y', dir: [0, 1, 0], label: '녹색 축에' });
+    // 같은 직선 위 떨어진 선분의 끝점
+    const far = snapWith(scene, 100, 10, { from });
+    expect(far.kind).toBe('endpoint');
+    close(far.point, [0, 90, 0]);
+    expect(lockOf(far, from)?.axis).toBe('y');
+    // 교차점: 고른 선분이 원점을 지나지 않아도 만나는 다른 선분이 지나면
+    const x = snapWith(scene, 100, 80, { from });
+    expect(x.kind).toBe('intersection');
+    expect(lockOf(x, from)?.axis).toBe('y');
+    // 기운 모서리의 중간점 → 그 모서리와 나란히
+    const mid = snapWith(scene, 80, 115, { from });
+    expect(mid.kind).toBe('midpoint');
+    const par = lockOf(mid, from)!;
+    expect(par).toMatchObject({ kind: 'parallel', label: '모서리와 나란히' });
+    close(par.dir, [-0.8, -0.6, 0]);
+    expect(par.edge).toEqual([[0, 0, 0], [-40, -30, 0]]);
+    // 모형의 그리기 축이 그 모서리와 나란하면 그 축, 세계 Y 모서리는 나란함
+    const axes = { x: [0.8, 0.6, 0] as V3, y: [-0.6, 0.8, 0] as V3, z: [0, 0, 1] as V3 };
+    expect(lockOf(mid, from, axes)).toMatchObject({ kind: 'axis', axis: 'x', dir: [0.8, 0.6, 0] });
+    expect(lockOf(on, from, axes)?.kind).toBe('parallel');
+    // 원점을 지나지 않는 모서리, 시작점 자리(모서리가 만나는 꼭짓점)는 잠그지 않는다
+    const off = snapWith(scene, 165, 150, { from });
+    expect(off.kind).toBe('midpoint');
+    expect(lockOf(off, from)).toBeNull();
+    const at0 = snapWith(scene, 100, 100, { from });
+    expect(at0.kind).toBe('endpoint');
+    expect(lockOf(at0, from)).toBeNull();
+  });
 });
