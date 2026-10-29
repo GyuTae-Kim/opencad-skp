@@ -85,6 +85,17 @@ describe('장면을 만들며 다 놓은 정의를 놓기', () => {
     expect(freed.definitions.get(80)!.entities.faces.length).toBe(1);
   });
 
+  it('나눌 단계를 정하며 삼각화한 정의를 한도 넘게 들지 않고 펼칠 때 다시 삼각화해도(splitPrepBudget) 장면·경고·나무 정보가 같다', () => {
+    for (const reveal of [false, true])
+      for (const releaseModel of [false, true]) {
+        const base = buildSceneParts(readModelDat(shared({ reveal })), new Map(), 1, { outline: true, extras: true, smooth: true, releaseModel });
+        // 한도 0: 나눌 단계를 정한 삼각화를 모두 곧바로 놓는다(앞서 준비해 둔 것만 남는다)
+        const redo = buildSceneParts(readModelDat(shared({ reveal })), new Map(), 1, { outline: true, extras: true, smooth: true, releaseModel, splitPrepBudget: 0 });
+        expect(plain(redo), `${reveal} ${releaseModel}`).toBe(plain(base));
+        expect(base.outline?.length, `${reveal} ${releaseModel}`).toBeGreaterThan(0);
+      }
+  });
+
   it('장면이 다시 그리는 숨김 인스턴스(영구 번호 15) 안쪽은 놓지 않는다(같은 장면)', () => {
     const keep = readModelDat(shared({ reveal: true }));
     const freed = readModelDat(shared({ reveal: true }));

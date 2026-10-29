@@ -62,7 +62,7 @@ import * as A from './scene-annotations';
 import { AttrPool, PAGE_USE_HIDDEN_OBJECTS } from './scene-meta';
 import { cornerNormals, faceUnitNormal } from './scene-smooth';
 import { emptyEdges, emptyFaces, opt, textureMapAt, type SkpFaces } from './entities';
-import { F32, F64, I32, U32 } from './grow';
+import { F32, F64, I32, U32, freeTyped } from './grow';
 import { applyFaceUvq, faceUvq, planeAxes } from './projection';
 import { solidInfo } from './solid';
 
@@ -100,6 +100,11 @@ export const MAX_OUTLINE_ENTRIES = 1000;
 export const MAX_TREE_NODES = 50_000;
 /** 깊은 단계까지 나눌 때 그물·모서리 항목 수 어림 한도(= 그리기 호출 수 어림) */
 export const MAX_SPLIT_ITEMS = 3000;
+/**
+ * 나눌 단계를 정하려고 삼각화한 정의를 펼치기까지 들고 있을 바이트 한도(넘는 정의는 놓고 장면에 옮길 때 다시 삼각화한다).
+ * 165 MB 실제 파일에서 정의 삼각화가 모두 175 MB였고, 한꺼번에 들면 장면 만들기 최고치가 됐다
+ */
+export const SPLIT_PREP_BUDGET_BYTES = 64 * 1024 * 1024;
 /** 구간(runs) 수 한도 — 넘으면 구간을 버린다(나무와 나눈 항목은 남는다) */
 export const MAX_TREE_RUNS = 2_000_000;
 /** 무늬 좌표를 다는 정점 수 한도(넘으면 그 뒤 그물은 무늬 없이 평균색 — 정점마다 8~12바이트가 더 든다) */
@@ -310,6 +315,35 @@ interface Prepared {
   closed: boolean;
   /** SketchUp 입체면 부피(로컬 인치³, solid.ts) */
   volume?: number;
+}
+
+/** Prepared 배열 바이트 합 */
+function preparedBytes(p: Prepared): number {
+  let n = 0;
+  for (const b of [...p.batches, ...p.hiddenBatches])
+    n += b.pos.byteLength + b.idx.byteLength + b.fa.byteLength + b.fn.byteLength + b.ft.byteLength + (b.nrm?.byteLength ?? 0) + (b.uv?.byteLength ?? 0) + (b.buv?.byteLength ?? 0) + (b.plane?.byteLength ?? 0);
+  for (const l of [...p.lines, ...p.extraLines]) n += l.pos.byteLength + (l.curve?.byteLength ?? 0) + (l.mat?.byteLength ?? 0);
+  return n;
+}
+
+/** 다 쓴 Prepared의 배열 버퍼를 곧바로 놓는다(grow.ts freeTyped — 그 버퍼는 이 Prepared만 지닌다). 놓은 뒤에는 그 Prepared를 쓰지 않는다 */
+function freePrepared(p: Prepared): void {
+  for (const b of [...p.batches, ...p.hiddenBatches]) {
+    freeTyped(b.pos);
+    freeTyped(b.idx);
+    freeTyped(b.fa);
+    freeTyped(b.fn);
+    freeTyped(b.ft);
+    freeTyped(b.nrm);
+    freeTyped(b.uv);
+    freeTyped(b.buv);
+    freeTyped(b.plane);
+  }
+  for (const l of [...p.lines, ...p.extraLines]) {
+    freeTyped(l.pos);
+    freeTyped(l.curve);
+    freeTyped(l.mat);
+  }
 }
 
 /** 면 표의 면 k를 삼각화해 (위치, 삼각형)을 쌓기에 더한다. 실패하면 false(쌓기는 그대로) */
@@ -616,13 +650,18 @@ function prepare(
         b.nrm = g.nrm.done();
         b.smoothed = g.smoothed;
       }
+      // 무늬 좌표는 f32로 줄여 옮기고 쌓던 f64 배열은 곧바로 놓는다
       if (g.uv) {
-        const c = compactUv(g.uv.done());
+        const src = g.uv.done();
+        const c = compactUv(src);
+        freeTyped(src);
         b.uv = c.uv;
         b.uvStride = c.stride;
       }
       if (g.buv) {
-        const c = compactUv(g.buv.done());
+        const src = g.buv.done();
+        const c = compactUv(src);
+        freeTyped(src);
         b.buv = c.uv;
         b.buvStride = c.stride;
       }
@@ -899,6 +938,8 @@ export interface BuildOptions {
   maxOutline?: number;
   /** 깊은 단계 나누기의 항목 수 어림 한도 */
   maxSplitItems?: number;
+  /** 나눌 단계를 정하며 삼각화한 정의를 들고 있을 바이트 한도(SPLIT_PREP_BUDGET_BYTES — 시험용) */
+  splitPrepBudget?: number;
   /** 나무 노드 수 한도 */
   maxTreeNodes?: number;
   /** 구간 수 한도 */
@@ -1222,10 +1263,35 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       const t = tb;
       splitDepth = 1;
       const budget = opts.maxSplitItems ?? MAX_SPLIT_ITEMS;
-      const own = (e: SkpEntities): number => {
-        const p = prep(e);
-        return p.batches.length + p.lines.length + p.hiddenBatches.length + p.extraLines.length;
+      // 정의 자기 형상의 묶음 수와 묶음 열쇠: 나누기만 정하려고 정의마다 삼각화한다. 그 삼각화는 모두 합쳐 SPLIT_PREP_BUDGET_BYTES까지만 들고
+      // 넘는 것은 곧바로 놓는다(장면에 옮길 때 다시 삼각화한다 — 큰 모형에서 모든 정의의 삼각화를 함께 들고 펼치기를 시작하던 몫이 장면 만들기
+      // 최고치였다. 작은 모형은 예전처럼 한 번만 삼각화한다). 앞서 준비해 둔 것은 그대로 둔다
+      const prepBudget = opts.splitPrepBudget ?? SPLIT_PREP_BUDGET_BYTES;
+      let held = 0;
+      const ownMemo = new Map<SkpEntities, { n: number; keys: string[] }>();
+      const ownOf = (e: SkpEntities): { n: number; keys: string[] } => {
+        let r = ownMemo.get(e);
+        if (!r) {
+          const had = cache.has(e);
+          const p = prep(e);
+          const keys: string[] = [];
+          for (const b of p.batches) keys.push(`f${b.mat}|${b.layer}${p.closed ? 'c' : ''}`);
+          for (const b of p.hiddenBatches) keys.push(`h${b.mat}|${b.layer}`);
+          for (const l of p.lines) keys.push(`l${l.layer}`);
+          for (const l of p.extraLines) keys.push(`x${l.cls}|${l.layer}`);
+          r = { n: p.batches.length + p.lines.length + p.hiddenBatches.length + p.extraLines.length, keys };
+          ownMemo.set(e, r);
+          if (!had) {
+            const bytes = preparedBytes(p);
+            if (held + bytes > prepBudget) {
+              cache.delete(e);
+              freePrepared(p);
+            } else held += bytes;
+          }
+        }
+        return r;
       };
+      const own = (e: SkpEntities): number => ownOf(e).n;
       const subMemo = new Map<SkpEntities, Set<string>>();
       const visiting = new Set<SkpEntities>();
       const subKeys = (e: SkpEntities): Set<string> => {
@@ -1234,11 +1300,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
         const s = new Set<string>();
         if (visiting.has(e)) return s;
         visiting.add(e);
-        const p = prep(e);
-        for (const b of p.batches) s.add(`f${b.mat}|${b.layer}${p.closed ? 'c' : ''}`);
-        for (const b of p.hiddenBatches) s.add(`h${b.mat}|${b.layer}`);
-        for (const l of p.lines) s.add(`l${l.layer}`);
-        for (const l of p.extraLines) s.add(`x${l.cls}|${l.layer}`);
+        for (const k of ownOf(e).keys) s.add(k);
         for (const inst of e.instances) {
           if (s.size > 512) break;
           if (inst.flags & FLAG_HIDDEN && !extras) continue;
@@ -2271,6 +2333,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     usesLeft.delete(e);
     cache.delete(e);
     localBoxes.delete(p);
+    // 장면 배열에 다 옮긴 삼각화의 배열은 GC를 기다리지 않고 곧바로 놓는다(큰 모형에서 놓은 삼각화가 쓰레기로 쌓여 장면 만들기 최고치를 키웠다)
+    freePrepared(p);
     if (opts.releaseModel) {
       // 이 묶음은 더 놓지 않는다 — 중간 모형의 표를 놓는다. 펼친 뒤 나무 정보(크기)가 쓰는 범위 상자는 먼저 구해 둔다
       // (지금 안쪽 묶음은 이 배치 아래 놓을 것이 남아 아직 표가 있다)
@@ -2457,6 +2521,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
 
   const rootM = new Float64Array([scale, 0, 0, 0, 0, scale, 0, 0, 0, 0, scale, 0, 0, 0, 0, 1]);
   emit(model.root, rootM, undefined, undefined, 0, new Set(), 0, -1, false);
+  // 펼치기가 끝났다 — 남은 삼각화(다시 보이는 숨김 인스턴스 안쪽 등)도 곧바로 놓는다
+  for (const q of cache.values()) freePrepared(q);
   cache.clear();
   localBoxes.clear();
   if (billboardsSkipped)
