@@ -1,5 +1,6 @@
 /**
- * ZIP 읽기(동기, 의존성 없음) — SketchUp 2021 이후 파일 안의 꾸러미용.
+ * ZIP 읽기(의존성 없음) — SketchUp 2021 이후 파일 안의 꾸러미용. 파일 전체 바이트로 읽거나(동기), 끝 레코드·중앙 목록·항목 자리만
+ * 따로 읽어 줄 수도 있게 위치를 파일 전체 기준으로 둔다(src/range.ts — 큰 파일을 통째로 들지 않고 열기).
  * 공개된 ZIP 구조(끝 레코드 EOCD → 중앙 목록 → 지역 머리)만 쓴다. ZIP64·암호·분할 꾸러미는 다루지 않는다.
  * SKP는 ZIP 앞에 머리(UTF-16 표지·버전·VFF 블록)가 붙고 ZIP 안의 위치는 ZIP 시작 기준이라,
  * 끝 레코드 위치에서 중앙 목록 크기·위치를 빼서 앞붙이 길이(base)를 구한다.
@@ -29,10 +30,26 @@ function u32(b: Uint8Array, o: number): number {
   return (b[o]! | (b[o + 1]! << 8) | (b[o + 2]! << 16) | (b[o + 3]! << 24)) >>> 0;
 }
 
-/** 중앙 목록을 읽는다. ZIP이 아니면 null */
-export function readZipDirectory(b: Uint8Array): ZipItem[] | null {
+/** 끝 레코드에서 읽은 것(위치는 파일 전체 기준) */
+export interface ZipEnd {
+  /** 항목 수 */
+  count: number;
+  /** ZIP 앞붙이 길이(ZIP 안 위치 + base = 파일 위치) */
+  base: number;
+  /** 중앙 목록 시작 */
+  cdStart: number;
+}
+
+/** 끝 레코드 꼬리 길이(22바이트 + 설명 최대 65535) — 파일 끝에서 이만큼만 보면 끝 레코드를 찾는다 */
+export const ZIP_END_SEARCH = 22 + 0xffff;
+
+/**
+ * 끝 레코드(EOCD)를 찾는다. b는 파일 위치 at부터 파일 끝까지의 바이트(at = 0이면 파일 전체) — 끝에서 ZIP_END_SEARCH 안을 보므로
+ * 꼬리만 읽어도 파일 전체로 찾은 것과 같다. ZIP이 아니거나 앞붙이 길이가 음수면 null, ZIP64면 Error
+ */
+export function findZipEnd(b: Uint8Array, at = 0): ZipEnd | null {
   // EOCD: 'PK\5\6' + 18바이트 + 설명(최대 65535)
-  const min = Math.max(0, b.length - 22 - 0xffff);
+  const min = Math.max(0, b.length - ZIP_END_SEARCH);
   let eocd = -1;
   for (let p = b.length - 22; p >= min; p--) {
     if (b[p] === 0x50 && b[p + 1] === 0x4b && b[p + 2] === 0x05 && b[p + 3] === 0x06) {
@@ -45,10 +62,22 @@ export function readZipDirectory(b: Uint8Array): ZipItem[] | null {
   const cdSize = u32(b, eocd + 12);
   const cdOffset = u32(b, eocd + 16);
   if (cdOffset === 0xffffffff || count === 0xffff) throw new Error('ZIP64 꾸러미는 아직 읽지 못합니다');
-  const base = eocd - cdSize - cdOffset;
+  const base = at + eocd - cdSize - cdOffset;
   if (base < 0) return null;
+  return { count, base, cdStart: base + cdOffset };
+}
+
+/**
+ * 중앙 목록을 읽는다. ZIP이 아니면 null. b는 파일 위치 at부터 파일 끝까지의 바이트(기본은 파일 전체) —
+ * 중앙 목록 시작(findZipEnd의 cdStart)부터 읽은 꼬리만 줘도 파일 전체로 읽은 것과 같은 목록이 나온다(항목 위치는 파일 전체 기준)
+ */
+export function readZipDirectory(b: Uint8Array, at = 0): ZipItem[] | null {
+  const end = findZipEnd(b, at);
+  if (!end) return null;
+  const { count, base } = end;
+  if (end.cdStart < at) throw new Error('ZIP 중앙 목록이 주어진 바이트 밖에 있습니다');
   const items: ZipItem[] = [];
-  let p = base + cdOffset;
+  let p = end.cdStart - at;
   for (let i = 0; i < count; i++) {
     if (p + 46 > b.length || u32(b, p) !== 0x02014b50) throw new Error('ZIP 중앙 목록이 깨졌습니다');
     const method = u16(b, p + 10);
@@ -80,6 +109,13 @@ export function zipItemData(b: Uint8Array, item: ZipItem): Uint8Array {
   return b.subarray(start, end);
 }
 
+/**
+ * 지역 머리 바이트(b[0]이 항목의 지역 머리)에서 내용 시작까지 거리. 머리가 깨졌거나 30바이트가 안 되면 Error(zipItemData와 같은 글)
+ */
+export function zipLocalDataOffset(b: Uint8Array, item: ZipItem): number {
+  return dataStart(b, { ...item, localOffset: 0 });
+}
+
 /** 항목 내용을 꺼낸다(저장·DEFLATE만) */
 export function readZipItem(b: Uint8Array, item: ZipItem, onProgress?: (fraction: number) => void): Uint8Array {
   const data = zipItemData(b, item);
@@ -107,6 +143,44 @@ export function readZipItemPartial(b: Uint8Array, item: ZipItem, onProgress?: (f
     return { data: r.data, complete: r.complete && !cut };
   }
   throw new Error(`지원하지 않는 ZIP 압축 방식 ${item.method}: ${item.name}`);
+}
+
+/**
+ * 꾸러미 항목을 읽어 가며 일하는 생성기: 항목을 내면(yield) 부르는 쪽이 그 내용(readZipItem과 같은 값)을 돌려주고,
+ * 못 읽으면 그 예외를 생성기 안 yield 자리로 던진다. 같은 일을 파일 전체 바이트(runZipReads)로도, 필요한 자리만 읽는 곳(range.ts)으로도 한다.
+ */
+export type ZipReads<R> = Generator<ZipItem, R, Uint8Array>;
+
+/** 파일 전체 바이트로 항목 요청을 채운다(동기) */
+export function runZipReads<R>(gen: ZipReads<R>, bytes: Uint8Array): R {
+  let r = gen.next();
+  while (!r.done) {
+    let data: Uint8Array;
+    try {
+      data = readZipItem(bytes, r.value);
+    } catch (e) {
+      r = gen.throw(e);
+      continue;
+    }
+    r = gen.next(data);
+  }
+  return r.value;
+}
+
+/** 항목 요청을 비동기로 채운다(read가 readZipItem과 같은 값을 내거나 같은 예외를 던진다) */
+export async function runZipReadsAsync<R>(gen: ZipReads<R>, read: (item: ZipItem) => Promise<Uint8Array>): Promise<R> {
+  let r = gen.next();
+  while (!r.done) {
+    let data: Uint8Array;
+    try {
+      data = await read(r.value);
+    } catch (e) {
+      r = gen.throw(e);
+      continue;
+    }
+    r = gen.next(data);
+  }
+  return r.value;
 }
 
 /** 파일 끝에서 찾아볼 범위 밖의 앞부분에서 첫 지역 머리를 찾을 거리 */

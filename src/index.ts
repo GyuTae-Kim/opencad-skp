@@ -14,20 +14,22 @@
 import type { Scene3d, Texture3d } from 'opencad-viewer3d/types';
 import { imageInfo } from 'opencad-viewer3d/texture';
 import { readSkpHeader } from './header';
-import type { SkpImages } from './images';
+import { readSkpImages, zipImageReads, type SkpImageOptions, type SkpImages } from './images';
 import { parseMaterialXml, type SkpMaterialInfo } from './materials';
 import type { SkpMetaExtras } from './meta';
 import { MfcRefused, readMfcModel, rememberMfcImages, takeMfcResult } from './mfcmodel';
 import { readModelDat, type SkpModel } from './model';
-import { inflateNative, STREAM_MIN_BYTES, streamModelDat } from './modelstream';
+import { inflateNative, STREAM_MIN_BYTES, streamModelDat, type InflateInput } from './modelstream';
 import { buildSceneParts, type SceneTexture } from './scene';
 import { axesMeta, cameraMeta, edgeColoringFor, locationMeta, pagesMeta, shadowMeta, styleFor, unitsFor } from './scene-meta';
 import { parseStyleXml } from './styles';
-import { findSkpZipItems, readZipItem, readZipItemPartial, zipItemData, type ZipItem } from './zip';
+import { blobSource, HEAD_BYTES, readSourceDirectory, SourceItems, type SkpSource } from './range';
+import { findSkpZipItems, readZipItem, readZipItemPartial, runZipReads, runZipReadsAsync, zipItemData, type ZipItem, type ZipReads } from './zip';
 
 export { readSkpHeader, type SkpHeader } from './header';
 export { readModelDat, type SkpModel } from './model';
 export { STREAM_MIN_BYTES } from './modelstream';
+export { blobSource, bytesSource, sourceSha256, type SkpSource } from './range';
 export {
   EDGE_UNKNOWN,
   edgeAt,
@@ -237,9 +239,100 @@ export async function skpToSceneAsync(bytes: Uint8Array, opts: SkpAsyncOptions =
   if (st.header.container === 'mfc') read = readMfcPackage(bytes, st, opts);
   else {
     const pkg = openZipPackage(bytes, st, opts);
-    read = 'modelItem' in pkg ? await streamPackageModel(bytes, pkg, st, opts) : pkg;
+    read = 'modelItem' in pkg ? await streamPackageModel(wholeModelBytes(bytes, opts.releaseBytes), pkg, st, opts) : pkg;
   }
   return sceneFrom(read, st, opts);
+}
+
+/** skpFileToScene 선택(장면은 skpToSceneAsync와 같다 — 무늬 그림은 직접 꺼내 넘긴다) */
+export interface SkpFileOptions extends Omit<SkpAsyncOptions, 'textures' | 'inflated' | 'releaseBytes'> {
+  /** 그림 꺼내기 선택(readSkpImages와 같다) */
+  images?: SkpImageOptions;
+  /**
+   * 파일을 어떻게 읽었는지 알린다(진단·훑기 도구용): parts 2021+ 꾸러미에서 필요한 자리만, whole 파일 전체
+   * (2020 이하 객체 직렬화·끝 목록이 없거나 깨진 꾸러미·SketchUp 파일이 아님)
+   */
+  onFileRead?: (how: SkpFileRead) => void;
+}
+
+export type SkpFileRead = 'parts' | 'whole';
+
+/** skpFileToScene 결과 */
+export interface SkpFileResult {
+  scene: Scene3d;
+  /** 꾸러미 안 그림(readSkpImages와 같다 — 못 꺼냈으면 없음) */
+  images?: SkpImages;
+  /** 그림을 꺼내다 난 예외 글(장면은 그림 없이 만든다) */
+  imageError?: string;
+}
+
+/**
+ * 파일(Blob·File 또는 SkpSource)을 앱 워커 차례로 해석한다: 그림을 꺼내고(readSkpImages) 그 무늬 그림으로 장면(skpToSceneAsync)을 만든다.
+ * 2021+ 꾸러미는 파일 전체를 들지 않는다 — 머리·끝 레코드·중앙 목록과 필요한 항목만 읽고, 압축된 model.dat는 덩이씩 읽으며 푼다(src/range.ts).
+ * 결과는 파일 전체 바이트로 readSkpImages → skpToSceneAsync(같은 선택, textures = 꺼낸 무늬 그림, releaseBytes)를 부른 것과 같다.
+ * 2020 이하(꾸러미 없는 객체 직렬화 — 모형을 읽으며 그림 자리를 찾는다), 끝 목록이 없거나 깨진 꾸러미(앞에서부터 항목을 찾는다),
+ * SketchUp 파일이 아닌 것은 파일 전체를 읽어 그 길로 간다
+ */
+export async function skpFileToScene(file: Blob | SkpSource, opts: SkpFileOptions = {}): Promise<SkpFileResult> {
+  const { images: imageOpts, onFileRead, ...sceneOpts } = opts;
+  const src = typeof Blob !== 'undefined' && file instanceof Blob ? blobSource(file) : (file as SkpSource);
+  const told = (how: SkpFileRead): void => {
+    try {
+      onFileRead?.(how);
+    } catch {
+      /* 알림 쪽 오류는 해석을 멈추지 않는다 */
+    }
+  };
+  const head = await src.read(0, Math.min(src.size, HEAD_BYTES));
+  const header = readSkpHeader(head);
+  // 머리를 다 본 것이 확실할 때만(머리 문자열·VFF 블록이 읽은 바이트 안) — 아니면 파일 전체로 같은 판정을 한다
+  let dir: ZipItem[] | null = null;
+  if (header?.container === 'zip' && (head.length === src.size || header.bodyOffset + 16 <= head.length))
+    try {
+      dir = await readSourceDirectory(src);
+    } catch {
+      /* 깨진 끝 목록은 파일 전체로(앞에서부터 항목 찾기) */
+    }
+  const out = (scene: Scene3d, images: SkpImages | undefined, imageError: string | undefined): SkpFileResult => {
+    const r: SkpFileResult = { scene };
+    if (images) r.images = images;
+    if (imageError !== undefined) r.imageError = imageError;
+    return r;
+  };
+  const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e)).slice(0, 300);
+  let images: SkpImages | undefined;
+  let imageError: string | undefined;
+  if (!header || !dir || !dir.some((d) => d.name === 'model.dat')) {
+    told('whole');
+    const bytes = await src.read(0, src.size);
+    try {
+      images = readSkpImages(bytes, imageOpts);
+    } catch (e) {
+      imageError = errText(e);
+    }
+    const scene = await skpToSceneAsync(bytes, { ...sceneOpts, textures: images?.materials, releaseBytes: true });
+    return out(scene, images, imageError);
+  }
+  told('parts');
+  const items = new SourceItems(src);
+  const read = (item: ZipItem): Promise<Uint8Array> => items.content(item);
+  try {
+    images = await runZipReadsAsync(zipImageReads(dir, imageOpts), read);
+  } catch (e) {
+    imageError = errText(e);
+  }
+  const o: SkpAsyncOptions = { ...sceneOpts, textures: images?.materials };
+  const st = startScene(head, o);
+  if (!('header' in st)) return out(st, images, imageError);
+  st.progress(0.05, '꾸러미(ZIP) 목록 읽는 중');
+  const pkg = await runZipReadsAsync(packageReads({ items: dir, salvaged: false, truncated: false }, st, o), read);
+  const model: ModelBytes = {
+    region: async (item) => ({ ...(await items.region(item)), release: true }),
+    data: (item) => items.data(item),
+    done: () => undefined,
+  };
+  const got = 'modelItem' in pkg ? await streamPackageModel(model, pkg, st, o) : pkg;
+  return out(sceneFrom(got, st, o), images, imageError);
 }
 
 /** 중간 모형 → 장면(두 판의 해석기가 같은 중간 모형을 내서 여기는 하나다) */
@@ -388,7 +481,21 @@ interface OpenPackage {
 
 /** 2021+ 꾸러미(ZIP): 목록과 material.xml·style.xml·무늬 그림. 꾸러미나 model.dat를 찾지 못하면 경고와 빈 장면 */
 function openZipPackage(bytes: Uint8Array, st: Start, opts: Pick<SkpOptions, 'textures' | 'maxTextures'>): OpenPackage | Scene3d {
-  const { name, header, meta, warnings, progress } = st;
+  let found: FoundZip;
+  try {
+    st.progress(0.05, '꾸러미(ZIP) 목록 읽는 중');
+    found = findSkpZipItems(bytes, st.header.bodyOffset);
+  } catch (e) {
+    return emptyScene(st.name, [...st.warnings, `SketchUp 파일을 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`], st.meta);
+  }
+  return runZipReads(packageReads(found, st, opts), bytes);
+}
+
+type FoundZip = ReturnType<typeof findSkpZipItems>;
+
+/** 꾸러미 목록(found)에서 재질·스타일을 읽는다(openZipPackage의 목록 뒤 — 항목 내용은 내어 받는다: runZipReads·range.ts) */
+function* packageReads(found: FoundZip, st: Start, opts: Pick<SkpOptions, 'textures' | 'maxTextures'>): ZipReads<OpenPackage | Scene3d> {
+  const { name, meta, warnings, progress } = st;
   const materials = new Map<string, SkpMaterialInfo>();
   /** 무늬를 입힐 재질 폴더 → 그림 */
   const texImages = new Map<string, TexImage>();
@@ -396,8 +503,6 @@ function openZipPackage(bytes: Uint8Array, st: Start, opts: Pick<SkpOptions, 'te
   const styles = new Map<string, Map<number, string>>();
   let damaged = false;
   try {
-    progress(0.05, '꾸러미(ZIP) 목록 읽는 중');
-    const found = findSkpZipItems(bytes, header.bodyOffset);
     const dir = found.items;
     if (!dir) return emptyScene(name, [found.error ? `SketchUp 꾸러미(ZIP)가 깨졌습니다: ${found.error}` : 'SketchUp 꾸러미(ZIP)를 찾지 못했습니다 — 파일이 잘렸거나(끝까지 받지 못함) 깨졌을 수 있습니다'], meta);
     const modelItem = dir.find((d) => d.name === 'model.dat');
@@ -422,7 +527,7 @@ function openZipPackage(bytes: Uint8Array, st: Start, opts: Pick<SkpOptions, 'te
           continue;
         }
         try {
-          styles.set(sm[1]!, parseStyleXml(text.decode(readZipItem(bytes, item))));
+          styles.set(sm[1]!, parseStyleXml(text.decode(yield item)));
         } catch {
           warnings.push(`스타일 파일을 읽지 못했습니다: ${item.name}`);
         }
@@ -431,7 +536,7 @@ function openZipPackage(bytes: Uint8Array, st: Start, opts: Pick<SkpOptions, 'te
       const m = /^materials\/(.+)\/material\.xml$/.exec(item.name);
       if (!m) continue;
       try {
-        const info = parseMaterialXml(text.decode(readZipItem(bytes, item)));
+        const info = parseMaterialXml(text.decode(yield item));
         if (!info) continue;
         // model.dat의 재질 이름은 폴더 이름과 같고(예: '<Black>' → '_Black_'), XML의 name은 원래 이름이다 → 둘 다로 찾는다
         materials.set(m[1]!, info);
@@ -496,14 +601,38 @@ function readPackageModel(bytes: Uint8Array, pkg: OpenPackage, st: Start, opts: 
 }
 
 /**
- * model.dat를 내장 풀기로 풀면서 읽는다(skpToSceneAsync). 압축이 아니거나 작거나 잘렸거나 미리 푼 바이트를 받았거나 내장 풀기가 없으면
+ * 2021+ model.dat를 읽을 바이트를 주는 곳: 파일 전체 바이트(wholeModelBytes — skpToSceneAsync), 또는 필요한 자리만 파일에서 읽는 곳
+ * (src/range.ts — skpFileToScene)
+ */
+interface ModelBytes {
+  /** 항목의 지역 머리부터 내용 끝까지 바이트와 그 안 위치로 고친 항목(파일 전체 바이트면 파일과 항목 그대로), 다 쓰면 떼어 놓을지 */
+  region(item: ZipItem): Promise<{ bytes: Uint8Array; item: ZipItem; release: boolean }>;
+  /** 압축된 내용(풀면서 읽기). 지역 머리가 깨졌거나 내용이 파일 끝을 넘으면 Error(zipItemData와 같다) */
+  data(item: ZipItem): Promise<InflateInput>;
+  /** 풀면서 읽기로 압축된 model.dat를 다 읽었다(파일 바이트를 더 쓰지 않는다) */
+  done(): void;
+}
+
+/** 파일 전체 바이트로 ModelBytes(releaseBytes면 다 쓴 뒤 그 버퍼를 떼어 놓는다) */
+function wholeModelBytes(bytes: Uint8Array, releaseBytes: boolean | undefined): ModelBytes {
+  return {
+    region: async (item) => ({ bytes, item, release: !!releaseBytes }),
+    data: async (item) => zipItemData(bytes, item),
+    done: () => {
+      if (releaseBytes) releaseFile(bytes);
+    },
+  };
+}
+
+/**
+ * model.dat를 내장 풀기로 풀면서 읽는다(skpToSceneAsync·skpFileToScene). 압축이 아니거나 작거나 잘렸거나 미리 푼 바이트를 받았거나 내장 풀기가 없으면
  * readPackageModel. 풀기가 실패하면 예전에 미리 풀기가 실패했을 때처럼 직접 풀고, 조각으로 읽을 수 없는 꼴이면 통째로 풀어 읽는다(같은 결과)
  */
 async function streamPackageModel(
-  bytes: Uint8Array,
+  src: ModelBytes,
   pkg: OpenPackage,
   st: Start,
-  opts: Pick<SkpAsyncOptions, 'inflated' | 'releaseBytes' | 'streamMin' | 'onModelRead'>,
+  opts: Pick<SkpAsyncOptions, 'inflated' | 'streamMin' | 'onModelRead'>,
 ): Promise<Package | Scene3d> {
   const told = (how: SkpModelRead): void => {
     try {
@@ -513,7 +642,12 @@ async function streamPackageModel(
     }
   };
   const item = pkg.modelItem;
-  let data: Uint8Array | undefined;
+  /** 통째로 읽기(readPackageModel) — 항목 바이트를 받아 */
+  const whole = async (inflated: Map<string, Uint8Array> | undefined): Promise<Package | Scene3d> => {
+    const r = await src.region(item);
+    return readPackageModel(r.bytes, { ...pkg, modelItem: r.item }, st, { inflated, releaseBytes: r.release });
+  };
+  let data: InflateInput | undefined;
   if (
     !pkg.salvaged &&
     !item.truncated &&
@@ -523,13 +657,13 @@ async function streamPackageModel(
     typeof DecompressionStream !== 'undefined'
   )
     try {
-      data = zipItemData(bytes, item);
+      data = await src.data(item);
     } catch {
-      /* 지역 머리가 깨졌으면 예전 길이 알린다 */
+      /* 지역 머리가 깨졌으면 예전 길 */
     }
   if (!data) {
     told('whole');
-    return readPackageModel(bytes, pkg, st, opts);
+    return whole(opts.inflated);
   }
   const { name, meta, warnings, progress } = st;
   progress(0.4, '모형 요소 읽는 중');
@@ -540,15 +674,17 @@ async function streamPackageModel(
     return emptyScene(name, [...warnings, `SketchUp 파일을 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`], meta);
   }
   told(typeof res === 'string' ? res : res.held ? 'held' : 'stream');
+  data = undefined;
   if (typeof res !== 'string') {
     // 파일 바이트(압축된 model.dat)는 다 읽었다
-    data = undefined;
-    if (opts.releaseBytes) releaseFile(bytes);
+    src.done();
     return { model: res.model, materials: pkg.materials, styles: pkg.styles, damaged: pkg.damaged, texImages: pkg.texImages };
   }
-  const pre = res === 'shape' ? await inflateNative(data, item.size) : null;
-  data = undefined;
-  return readPackageModel(bytes, pkg, st, { ...opts, inflated: pre ? new Map([['model.dat', pre]]) : undefined });
+  if (res === 'inflate') return whole(undefined);
+  // 조각으로 읽을 수 없는 꼴: 내장 풀기로 통째로 풀어 한 버퍼로
+  const r = await src.region(item);
+  const pre = await inflateNative(zipItemData(r.bytes, r.item), item.size);
+  return readPackageModel(r.bytes, { ...pkg, modelItem: r.item }, st, { inflated: pre ? new Map([['model.dat', pre]]) : undefined, releaseBytes: r.release });
 }
 
 /**
