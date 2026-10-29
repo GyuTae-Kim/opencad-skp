@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Viewer3d } from 'opencad-viewer3d';
 import { buildBvh } from 'opencad-viewer3d/bvh';
-import { dirToAngles, projectToScreen, type CameraState } from 'opencad-viewer3d/camera';
+import { dirToAngles, projectToScreen, screenRay, type CameraState } from 'opencad-viewer3d/camera';
 import { pickScene } from 'opencad-viewer3d/scenepick';
 import type { LineSet3d, Mesh3d, Scene3d } from 'opencad-viewer3d/types';
 import {
@@ -167,6 +167,8 @@ interface Rig {
   locks: (string | null)[];
   /** onGuides를 부른 수(안내 두기 켜고 끄기·안내가 늘고 줄 때) */
   guideCalls: () => number;
+  /** 그물 면만 고르기(코어 0.20.0 pick의 meshesOnly)를 부른 수 */
+  meshPicks: () => number;
   setCamera(c: CameraState): void;
   ptr(type: string, x: number, y: number, o?: { id?: number; button?: number; buttons?: number; pointerType?: string; shift?: boolean }): void;
   click(x: number, y: number, o?: { pointerType?: string; id?: number; shift?: boolean }): void;
@@ -198,10 +200,15 @@ function rig(scene: Pick<Scene3d, 'meshes' | 'lines' | 'units'>, cam: CameraStat
   let camera = cam;
   const camCbs = new Set<(c: CameraState) => void>();
   const items = { meshes: scene.meshes, lines: scene.lines, points: [] };
+  let meshPicks = 0;
   const viewer: MeasureViewer = {
     canvas,
-    pick: (x, y) =>
-      pickScene(frameFor(camera, W, W), x, y, items, { tol: 6, occlude: true, bvh: (kind, pos, idx) => (kind === 'triangle' ? buildBvh(kind, pos, idx) : null) })?.pick ?? null,
+    // 코어 pick처럼: meshesOnly면 그물 면만(선분·점은 고르지도 않고 면을 가리지도 않는다)
+    pick: (x, y, o) => {
+      const only = typeof o === 'object' && !!o.meshesOnly;
+      if (only) meshPicks++;
+      return pickScene(frameFor(camera, W, W), x, y, only ? { ...items, lines: [] } : items, { tol: 6, occlude: true, bvh: (kind, pos, idx) => (kind === 'triangle' ? buildBvh(kind, pos, idx) : null) })?.pick ?? null;
+    },
     getCamera: () => camera,
     onCameraChange: (cb) => {
       camCbs.add(cb);
@@ -246,6 +253,7 @@ function rig(scene: Pick<Scene3d, 'meshes' | 'lines' | 'units'>, cam: CameraStat
     liveKinds,
     locks,
     guideCalls: () => guideCalls,
+    meshPicks: () => meshPicks,
     setCamera(c) {
       camera = c;
       for (const cb of camCbs) cb(c);
@@ -2718,6 +2726,32 @@ describe('측정 도구: 시작점 축·끌어온 축이 모서리·면과 만�
     expect(res.b.slice(0, 2)).toEqual([10, -10]);
     expect(res.b[2]).toBeCloseTo(35, 9);
     expect(res.distance).toBeCloseTo(55, 9);
+  });
+
+  it('면 앞에 떠 있는 선이 뚫는 점 둘레(코어 고르기 허용 거리 안)를 지나도 면 위 표식 — 그 자리는 그물 면만 다시 맞춘다(코어 0.20.0 meshesOnly)', () => {
+    // 화면에서 M을 지나는 빨강 축 방향(ux)과 그에 수직인 방향(nv): 커서는 M에서 nv 반대로 8화소, 선은 nv 쪽 3화소 자리를 비탈 면에서 눈 쪽으로 6 떠서 지난다
+    const s1 = projectToScreen(f, [M[0] + 10, M[1], M[2]])!;
+    const l = Math.hypot(s1[0] - sm[0], s1[1] - sm[1]);
+    const ux = [(s1[0] - sm[0]) / l, (s1[1] - sm[1]) / l] as const;
+    const nv = [-ux[1], ux[0]] as const;
+    const ray = screenRay(f, sm[0] + nv[0] * 3, sm[1] + nv[1] * 3);
+    const n = [0, -1 / Math.sqrt(5), 2 / Math.sqrt(5)];
+    const p0 = M.map((v, i) => v + n[i]! * 6);
+    const k = ((p0[0]! - ray.origin[0]) * n[0]! + (p0[1]! - ray.origin[1]) * n[1]! + (p0[2]! - ray.origin[2]) * n[2]!) / (ray.dir[0] * n[0]! + ray.dir[1] * n[1]! + ray.dir[2] * n[2]!);
+    const q = ray.origin.map((v, i) => v + ray.dir[i]! * k);
+    const scene = ROOF();
+    scene.lines = [...scene.lines, lines('float', [[q[0]! - 50, q[1]!, q[2]!, q[0]! + 50, q[1]!, q[2]!]])];
+    const r = rig(scene, CAM);
+    // 커서 고르기(선이 먼저)라면 M 자리는 그 떠 있는 선이다
+    const sq = projectToScreen(f, q)!;
+    expect(Math.hypot(sq[0] - sm[0], sq[1] - sm[1])).toBeCloseTo(3, 6);
+    r.tool.setMode('tape');
+    r.click(sa[0] + 0.4, sa[1] - 0.3);
+    const before = r.meshPicks();
+    r.move(sm[0] - nv[0] * 8 + ux[0] * 0.37, sm[1] - nv[1] * 8 + ux[1] * 0.37);
+    expect(r.tip()).toBe(`${AXIS_LABELS.z} · ${SNAP_LABELS.onFace} · 55 mm`);
+    expect(r.q('[data-meet="face"]')).not.toBeNull();
+    expect(r.meshPicks()).toBeGreaterThan(before);
   });
 
   it('끌어온 축이 면을 뚫는 점(시작점 전): 끌어온 점에서 축 색 점선과 면 위 표식', () => {

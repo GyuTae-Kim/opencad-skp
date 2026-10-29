@@ -60,6 +60,11 @@ function picker(scene: SnapScene, f: ViewFrame = topFrame): (x: number, y: numbe
   return (x, y) => pickScene(f, x, y, { meshes: scene.meshes, lines: scene.lines, points: [] }, { tol: CORE_PICK_TOLERANCE_PX, occlude: true, bvh: (kind, pos, idx) => (kind === 'triangle' ? buildBvh(kind, pos, idx) : null) })?.pick ?? null;
 }
 
+/** 그물 면만 고르기(코어 0.20.0 pick(x, y, { meshesOnly: true })와 같이 선분·점은 고르지도 않고 면을 가리지도 않는다 — 측정 도구가 축이 면을 뚫는 점을 다시 맞춰 볼 때) */
+function meshPicker(scene: SnapScene, f: ViewFrame = topFrame): (x: number, y: number) => Pick3d | null {
+  return picker({ meshes: scene.meshes, lines: [] }, f);
+}
+
 /** 앱 도구처럼 커서 + 둘레 고르기로 추정 */
 function snapWith(
   scene: SnapScene,
@@ -995,7 +1000,7 @@ describe('추정: 시작점 축이 모서리와 만나는 점(코어 0.18.0 axis
     return chooseSnap({
       frame: topFrame, x, y, pick: pick(x, y), probes, scene, radius: SNAP_RADIUS_PX, from: o.from === undefined ? A : o.from, anchor: [0, 0, 0],
       tracks: o.tracks ?? null, kept: o.kept ?? null, visible: o.visible ?? null, guideLines: o.guideLines ?? [], axisDirs: o.axisDirs ?? null,
-      axisMeets: o.meets ?? true, faceAt: pick,
+      axisMeets: o.meets ?? true, faceAt: meshPicker(scene),
     });
   };
 
@@ -1042,7 +1047,7 @@ describe('추정: 시작점 축이 모서리와 만나는 점(코어 0.18.0 axis
     const scene: SnapScene = { meshes: [face], lines: [S] };
     const pick = picker(scene);
     const lock = lockOf(at(scene, 101.2, 41.5), A)!;
-    const locked = chooseSnap({ frame: topFrame, x: 101.2, y: 41.5, pick: pick(101.2, 41.5), probes: [], scene, from: A, lock, axisMeets: true, faceAt: pick });
+    const locked = chooseSnap({ frame: topFrame, x: 101.2, y: 41.5, pick: pick(101.2, 41.5), probes: [], scene, from: A, lock, axisMeets: true, faceAt: meshPicker(scene) });
     expect(locked).toMatchObject({ kind: 'axis', axis: 'y', locked: true });
     expect(locked.edge).toBeUndefined();
     // 옮긴 녹색 축(30° 돌림)이 s와 만나는 점: A + t·(−sin, cos)이 y = x + 60 위
@@ -1101,7 +1106,7 @@ describe('추정: 시작점 축·끌어온 축이 면을 뚫는 점(코어 0.18.
     const probes = probeOffsets(SNAP_RADIUS_PX).map(([dx, dy]) => pick(x + dx, y + dy));
     return chooseSnap({
       frame: f, x, y, pick: pick(x, y), probes, scene, radius: SNAP_RADIUS_PX, from: o.from === undefined ? A : o.from, anchor: [0, 0, 20],
-      tracks: o.tracks ?? null, kept: o.kept ?? null, axisMeets: o.meets ?? true, faceAt: o.faceAt === undefined ? pick : o.faceAt,
+      tracks: o.tracks ?? null, kept: o.kept ?? null, axisMeets: o.meets ?? true, faceAt: o.faceAt === undefined ? meshPicker(scene, f) : o.faceAt,
     });
   };
   const cx = sm[0] + 1.2, cy = sm[1] + 0.9;
@@ -1138,7 +1143,7 @@ describe('추정: 시작점 축·끌어온 축이 면을 뚫는 점(코어 0.18.
     // 단면 채운 면 위면 후보가 없다
     const pick = picker(scene, f);
     const k = pick(cx, cy)!;
-    const sec = chooseSnap({ frame: f, x: cx, y: cy, pick: { ...k, section: true }, probes: [], scene, from: A, anchor: [0, 0, 20], axisMeets: true, faceAt: pick });
+    const sec = chooseSnap({ frame: f, x: cx, y: cy, pick: { ...k, section: true }, probes: [], scene, from: A, anchor: [0, 0, 20], axisMeets: true, faceAt: meshPicker(scene, f) });
     expect(sec.face).toBeUndefined();
   });
 
@@ -1156,7 +1161,7 @@ describe('추정: 시작점 축·끌어온 축이 면을 뚫는 점(코어 0.18.
     expect(hid.face).toBeUndefined();
   });
 
-  it('면 위에 그린 선은 면을 가리지 않는다(그 선이 면 평면 위일 때만 — 떠 있는 선 밑은 모른다)', () => {
+  it('면 위에 그린 선도, 면 앞에 떠 있는 선도 그 밑 면을 가리지 않는다(그 자리는 그물 면만 다시 맞춘다 — 코어 0.20.0 meshesOnly)', () => {
     // 커서는 M에서 8화소 비켜 두고, 반대쪽 3화소 자리를 지나는 빨강 축 방향 선(코어 고르기 허용 6화소 안이라 그 자리 고르기는 선)
     const x = sm[0] - nv[0]! * 8 + ux[0]! * 0.37, y = sm[1] - nv[1]! * 8 + ux[1]! * 0.37;
     const ray = screenRay(f, sm[0] + nv[0]! * 3, sm[1] + nv[1]! * 3);
@@ -1168,18 +1173,22 @@ describe('추정: 시작점 축·끌어온 축이 면을 뚫는 점(코어 0.18.
       const q = [ray.origin[0] + ray.dir[0] * k, ray.origin[1] + ray.dir[1] * k, ray.origin[2] + ray.dir[2] * k];
       return lines(`l${lift}`, [[q[0]! - 50, q[1]!, q[2]!, q[0]! + 50, q[1]!, q[2]!]]);
     };
-    const pick = picker({ meshes: [roof], lines: [lineOn(0)] }, f);
-    expect(pick(sm[0], sm[1])?.kind).toBe('line');
-    expect(pick(x, y)?.kind).toBe('mesh');
-    const s = at({ meshes: [roof], lines: [lineOn(0)] }, x, y);
-    expect(s).toMatchObject({ kind: 'axis', axis: 'z', label: `${AXIS_LABELS.z} · ${SNAP_LABELS.onFace}`, face: { id: 'roof' } });
-    expect(s.point[0]).toBe(10);
-    expect(s.point[2]).toBeCloseTo(35, 9);
-    // 면에서 6만큼 떠 있는 선(눈 쪽)이면 그 밑 면이 보이는지 모르니 붙지 않는다
-    expect(picker({ meshes: [roof], lines: [lineOn(6)] }, f)(sm[0], sm[1])?.kind).toBe('line');
-    expect(at({ meshes: [roof], lines: [lineOn(6)] }, x, y).face).toBeUndefined();
-    // 면 위 선이어도 그 자리가 단면에 잘린 쪽이면 붙지 않는다
-    expect(at({ meshes: [roof], lines: [lineOn(0)] }, x, y, { kept: (p) => p[2] < 30 }).face).toBeUndefined();
+    const plain = at({ meshes: [roof], lines: [] }, x, y);
+    expect(plain).toMatchObject({ kind: 'axis', axis: 'z', label: `${AXIS_LABELS.z} · ${SNAP_LABELS.onFace}`, face: { id: 'roof' } });
+    expect(plain.point[0]).toBe(10);
+    expect(plain.point[2]).toBeCloseTo(35, 9);
+    // 면 위 선(lift 0)과 면에서 눈 쪽으로 6 떠 있는 선: 커서 고르기라면 M 자리는 그 선이지만, 다시 맞춰 보는 자리는 그 밑 면이라 선이 없을 때와 같은 점·면
+    for (const lift of [0, 6]) {
+      const scene: SnapScene = { meshes: [roof], lines: [lineOn(lift)] };
+      const pick = picker(scene, f);
+      expect(pick(sm[0], sm[1])?.kind, `${lift}`).toBe('line');
+      expect(pick(x, y)?.kind, `${lift}`).toBe('mesh');
+      const s = at(scene, x, y);
+      expect(s, `${lift}`).toMatchObject({ kind: 'axis', axis: 'z', label: `${AXIS_LABELS.z} · ${SNAP_LABELS.onFace}`, face: plain.face });
+      expect(s.point, `${lift}`).toEqual(plain.point);
+      // 그물이 아닌 고르기(선분을 먼저 고르는 커서 고르기를 그대로 넘긴 것)가 오면 그 자리는 맞지 않은 것으로 본다
+      expect(at(scene, x, y, { faceAt: pick }).face, `${lift}`).toBeUndefined();
+    }
   });
 
   it('끌어온 축이 면을 뚫는 점(시작점 전에도 — 끌어온 점에서 점선, 방향이 없어 잠그지 않는다)', () => {
@@ -1238,7 +1247,7 @@ describe('추정: 잠근 선이 모서리와 만나는 점·면을 뚫는 점(�
     const probes = probeOffsets(SNAP_RADIUS_PX).map(([dx, dy]) => pick(x + dx, y + dy));
     return chooseSnap({
       frame: topFrame, x, y, pick: pick(x, y), probes, scene, radius: SNAP_RADIUS_PX, from: A, anchor: [0, 0, 0], lock: o.lock === undefined ? Y : o.lock,
-      kept: o.kept ?? null, visible: o.visible ?? null, guideLines: o.guideLines ?? [], axisMeets: o.meets ?? true, lockMeets: o.lockMeets ?? true, faceAt: pick,
+      kept: o.kept ?? null, visible: o.visible ?? null, guideLines: o.guideLines ?? [], axisMeets: o.meets ?? true, lockMeets: o.lockMeets ?? true, faceAt: meshPicker(scene),
     });
   };
 
@@ -1307,7 +1316,7 @@ describe('추정: 잠근 선이 모서리와 만나는 점·면을 뚫는 점(�
       for (let x = 11.3; x < 200; x += 13.7)
         for (let y = 8.9; y < 200; y += 11.9) {
           const probes = probeOffsets(SNAP_RADIUS_PX).map(([dx, dy]) => pick(x + dx, y + dy));
-          const base = chooseSnap({ frame: topFrame, x, y, pick: pick(x, y), probes, scene, radius: SNAP_RADIUS_PX, from: A, anchor: [0, 0, 0], lock, axisMeets: true, faceAt: pick });
+          const base = chooseSnap({ frame: topFrame, x, y, pick: pick(x, y), probes, scene, radius: SNAP_RADIUS_PX, from: A, anchor: [0, 0, 0], lock, axisMeets: true, faceAt: meshPicker(scene) });
           expect(at(scene, x, y, { lock, lockMeets: false }), `${x},${y}`).toEqual(base);
           const on = at(scene, x, y, { lock });
           if (!lock) expect(on, `${x},${y}`).toEqual(base);
@@ -1330,7 +1339,7 @@ describe('추정: 잠근 선이 모서리와 만나는 점·면을 뚫는 점(�
     const probes = probeOffsets(SNAP_RADIUS_PX).map(([dx, dy]) => pick(x + dx, y + dy));
     return chooseSnap({
       frame: f, x, y, pick: pick(x, y), probes, scene, radius: SNAP_RADIUS_PX, from: B, anchor: [0, 0, 20], lock: o.lock ?? axisInferenceLock('z'),
-      axisMeets: true, lockMeets: o.lockMeets ?? true, faceAt: o.faceAt === undefined ? pick : o.faceAt,
+      axisMeets: true, lockMeets: o.lockMeets ?? true, faceAt: o.faceAt === undefined ? meshPicker(scene, f) : o.faceAt,
     });
   };
 
