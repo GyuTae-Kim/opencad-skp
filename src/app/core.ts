@@ -8,11 +8,9 @@
  * - 파일을 열기 시작하면 워커 해석과 함께 둘 다 받기 시작한다(app.ts openBuffer). 측정 도구는 받는 대로 만들고, 그 전에 켜면 받은 뒤에 켠다.
  *   오프라인 앱은 서비스 워커가 이 조각들도 미리 담아 둔다.
  * - 받지 못하면(오프라인에서 새 판 등) 약속을 비워 다음 부름에서 다시 받는다.
- * - 큰 모형의 무늬 원본 놓기(texsources.ts): 장면을 다 올린 뒤에 받는다(못 받으면 원본을 그대로 둔다).
  */
 type Core = typeof import('opencad-viewer3d');
 type Measure = typeof import('./measure');
-type TexSources = typeof import('./texsources');
 
 /** import()를 한 번만 부르는 받기: 받는 동안·받은 뒤에는 같은 약속을 주고, 받지 못하면 비워 다음 부름에서 다시 받는다 */
 export function onceImport<T>(load: () => Promise<T>): () => Promise<T> {
@@ -34,9 +32,6 @@ export const loadViewerCore: () => Promise<Core> = onceImport(() => import('open
 
 /** 측정 도구 조각(한 번만 받는다) */
 export const loadMeasure: () => Promise<Measure> = onceImport(() => import('./measure'));
-
-/** 큰 모형의 무늬 원본 놓기 조각(장면을 다 올린 뒤 받는다, 한 번만) */
-export const loadTexSources: () => Promise<TexSources> = onceImport(() => import('./texsources'));
 
 /** 나눠 받는 조각을 받지 못한 오류인지(브라우저마다 글이 다르다: Chrome·Edge, Firefox, Safari) */
 export function isChunkLoadError(e: unknown): boolean {

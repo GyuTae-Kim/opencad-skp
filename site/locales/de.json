@@ -1048,7 +1048,5 @@
   "이 파일의 안내 모두 지우기": "Alle Hilfselemente dieser Datei löschen",
   "안내선": "Hilfslinie",
   "Delete·Backspace로 지우기": "Mit Entf oder Rücktaste löschen",
-  "지우기": "Löschen",
-  "무늬 그림을 평균색으로 그렸습니다": "Texturbilder in Durchschnittsfarben gezeichnet",
-  "그래픽 장치를 다시 잡는 동안 이 모형의 무늬 그림을 다시 올리지 못했습니다(큰 모형은 메모리를 아끼려고 무늬를 올린 뒤 원본을 놓습니다). 파일을 다시 열면 무늬가 돌아옵니다.": "Beim Wiederherstellen des Grafikgeräts konnten die Texturbilder dieses Modells nicht erneut hochgeladen werden (große Modelle geben die Originale nach dem Hochladen der Texturen frei, um Speicher zu sparen). Öffnen Sie die Datei erneut, um die Texturen zurückzubekommen."
+  "지우기": "Löschen"
 }
