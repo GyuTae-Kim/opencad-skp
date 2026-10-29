@@ -248,6 +248,8 @@ export function summarize(records, info = {}) {
   let inflated = 0;
   /** 2021+ model.dat를 어떻게 읽었는지(stream 풀면서 · held 풀면서 읽었지만 정의 절은 통째로 · whole 통째로 · shape·inflate 풀면서 읽다 통째로 다시) */
   const modelRead = {};
+  /** 파일을 어떻게 읽었는지(parts 2021+ 꾸러미에서 필요한 자리만 · whole 파일 전체) */
+  const fileRead = {};
   for (const r of records) {
     const cls = r.class ?? classify(r);
     const ed = r.edition ?? editionOf(r.header?.major);
@@ -273,6 +275,7 @@ export function summarize(records, info = {}) {
     for (const f of r.flags ?? []) bump(flags, f);
     if (r.inflated) inflated++;
     if (r.modelRead) bump(modelRead, r.modelRead);
+    if (r.fileRead) bump(fileRead, r.fileRead);
     const m = r.metrics ?? {};
     totals.faces += m.faces ?? 0;
     totals.edges += m.edges ?? 0;
@@ -320,6 +323,7 @@ export function summarize(records, info = {}) {
     flags: sortedCounts(flags),
     inflatedFiles: inflated,
     modelRead: sortedCounts(modelRead),
+    fileRead: sortedCounts(fileRead),
     totals,
     timingMs,
     memory,
@@ -354,6 +358,8 @@ export function formatSummary(s) {
   lines.push(`경고 파일 ${s.warningFiles ?? 0}개, 예외 ${s.exceptionFiles ?? 0}개, 풀면서 읽기 ${s.inflatedFiles ?? 0}개`);
   const again = Object.entries(s.modelRead ?? {}).filter(([k]) => k === 'held' || k === 'shape' || k === 'inflate');
   if (again.length) lines.push(`  정의를 하나씩 읽지 못한 파일: ${again.map(([k, n]) => `${k} ${n}`).join(' · ')}`);
+  const reads = Object.entries(s.fileRead ?? {});
+  if (reads.length) lines.push(`  파일 읽기: ${reads.map(([k, n]) => `${k === 'parts' ? '필요한 자리만' : k === 'whole' ? '통째로' : k} ${n}`).join(' · ')}`);
   for (const [code, n] of Object.entries(s.warningCodes ?? {}).slice(0, 12)) lines.push(`  경고 ${String(n).padStart(4)}  ${code}`);
   for (const [code, n] of Object.entries(s.exceptions ?? {}).slice(0, 12)) lines.push(`  예외 ${String(n).padStart(4)}  ${code}`);
   const t = s.timingMs?.total;

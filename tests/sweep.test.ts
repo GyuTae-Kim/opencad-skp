@@ -143,26 +143,25 @@ describe('훑기 순수 함수', () => {
 });
 
 describe('probe: 앱 워커와 같은 해석 길', () => {
-  it('워커와 같은 skpToSceneAsync 선택·풀면서 읽는 문턱을 쓴다', () => {
+  it('워커와 같은 skpFileToScene 선택·풀면서 읽는 문턱을 쓴다', () => {
     const worker = readFileSync(join(root, 'src/worker/parse.worker.ts'), 'utf8');
     const probe = readFileSync(join(root, 'scripts/sweep/probe.ts'), 'utf8');
-    // probe는 그 뒤에 진단 알림(onModelRead)만 더 단다
-    const call = 'skpToSceneAsync(bytes, { name, outline: true, extras: true, smooth: true, onProgress: progress, textures: images?.materials, releaseBytes: true, streamMin';
-    expect(worker).toContain(call + ' });');
+    // 그림 진행 알림은 워커가 진행 막대로, probe는 메모리 재기로 받고, probe는 그 뒤에 진단 알림(onModelRead·onFileRead)만 더 단다
+    const call = 'skpFileToScene(file, { name, outline: true, extras: true, smooth: true, onProgress: progress, streamMin, images: { onProgress: ';
+    expect(worker).toContain(call);
     expect(probe).toContain(call);
     expect(worker).toContain('const streamMin = STREAM_MIN_BYTES;');
     expect(probe).toContain('const streamMin = opts.streamMin ?? STREAM_MIN_BYTES;');
-    expect(worker).toContain('readSkpImages(bytes, {');
-    expect(probe).toContain('readSkpImages(bytes, {');
   });
 
   it('2021+ 꼴: 풀면서 읽는 길을 타도 직접 해석과 같은 지표', async () => {
     const bytes = gridSkp(20);
     const direct = skpToScene(bytes, { outline: true, extras: true, smooth: true });
-    // probe는 워커처럼 해석기가 파일 버퍼를 떼어 놓게 한다 — 사본을 넘긴다
+    // probe는 워커처럼 파일을 자리마다 읽는다(바이트를 주면 읽을 때마다 사본 — 준 바이트는 그대로)
     const copy = bytes.slice();
     const r = await probeSkp(copy, { name: 'grid.skp', streamMin: 1 });
-    expect(copy.length).toBe(0);
+    expect(copy).toEqual(bytes);
+    expect(r.fileRead).toBe('parts');
     expect(r.inflated).toBe(true);
     // 합성 격자에는 글꼴 절이 없어 정의 절을 통째로 들고 읽는다(풀면서 읽기는 같다)
     expect(r.modelRead).toBe('held');
@@ -188,6 +187,7 @@ describe('probe: 앱 워커와 같은 해석 길', () => {
   it('2020 이하·SketchUp 아님·옛 판', async () => {
     const old = await probeSkp(mfcFile({ schemas: 'v17', root: squareEntities() }));
     expect(old.header).toMatchObject({ major: 17, container: 'mfc' });
+    expect(old.fileRead).toBe('whole');
     expect(old.metrics.faces).toBe(1);
     expect(old.ms.unpack).toBeUndefined();
     const none = await probeSkp(new Uint8Array([1, 2, 3, 4]));

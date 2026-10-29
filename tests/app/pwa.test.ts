@@ -91,13 +91,16 @@ describe('공유 받은 파일', () => {
       entries: async () => [] as RecentEntry[],
       put: async () => {},
       touch: async () => {},
-      data: async (id) => data.get(id) ?? null,
+      data: async (id) => {
+        const v = data.get(id);
+        return v ? new Blob([v]) : null;
+      },
       dataKeys: async () => [...data.keys()],
       remove: async (ids) => ids.forEach((i) => data.delete(i)),
       clear: async () => data.clear(),
     };
     const store = new RecentStore(backend);
-    expect((await store.take('shared:1:x.skp'))!.byteLength).toBe(4);
+    expect((await store.take('shared:1:x.skp'))!.size).toBe(4);
     expect(await store.take('shared:1:x.skp')).toBeNull();
   });
 
@@ -107,7 +110,7 @@ describe('공유 받은 파일', () => {
     const fresh = `shared:${now - 1000}:fresh.skp`;
     const opening = `shared:${now - 3 * SHARED_MAX_AGE_MS}:opening.skp`;
     const future = `shared:${now + 2 * SHARED_MAX_AGE_MS}:clock.skp`;
-    const data = new Map<string, ArrayBuffer>([old, fresh, opening, future, 'shared:bad', '집.skp:120'].map((k) => [k, new ArrayBuffer(4)]));
+    const data = new Map<string, Blob>([old, fresh, opening, future, 'shared:bad', '집.skp:120'].map((k) => [k, new Blob([new ArrayBuffer(4)])]));
     const removed: string[] = [];
     const backend: RecentBackend = {
       entries: async () => [{ id: '집.skp:120', name: '집.skp', size: 120, time: now - 1e9 }],

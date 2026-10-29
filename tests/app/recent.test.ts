@@ -13,15 +13,15 @@ import {
 } from '../../src/app/recent';
 
 /** 메모리 바탕(IndexedDB 대신) — 바이트를 읽었는지 센다 */
-function memory(): RecentBackend & { rows: Map<string, RecentEntry>; bytes: Map<string, ArrayBuffer>; dataReads: number } {
+function memory(): RecentBackend & { rows: Map<string, RecentEntry>; bytes: Map<string, Blob | ArrayBuffer>; dataReads: number } {
   const rows = new Map<string, RecentEntry>();
-  const bytes = new Map<string, ArrayBuffer>();
+  const bytes = new Map<string, Blob | ArrayBuffer>();
   const m = {
     rows,
     bytes,
     dataReads: 0,
     entries: async () => [...rows.values()].map((e) => ({ ...e })),
-    put: async (e: RecentEntry, d: ArrayBuffer) => {
+    put: async (e: RecentEntry, d: Blob | ArrayBuffer) => {
       rows.set(e.id, { ...e });
       bytes.set(e.id, d);
     },
@@ -30,7 +30,9 @@ function memory(): RecentBackend & { rows: Map<string, RecentEntry>; bytes: Map<
     },
     data: async (id: string) => {
       m.dataReads++;
-      return bytes.get(id) ?? null;
+      // IndexedDB 바탕처럼 바이트로 저장한 것도 Blob으로 감싸 낸다
+      const v = bytes.get(id);
+      return v instanceof Blob ? v : v ? new Blob([v]) : null;
     },
     dataKeys: async () => [...bytes.keys()],
     remove: async (ids: readonly string[]) => {
@@ -107,9 +109,41 @@ describe('RecentStore', () => {
     expect((await s.list()).map((e) => e.name)).toEqual(['집.skp', '창고.skp']);
     const got = await s.open(recentId('창고.skp', 200), 10);
     expect(got?.entry.name).toBe('창고.skp');
-    expect(got?.data.byteLength).toBe(200);
+    expect(got?.data.size).toBe(200);
     expect((await s.list()).map((e) => e.name)).toEqual(['창고.skp', '집.skp']);
     expect(await s.open('없는:1')).toBeNull();
+  });
+
+  it('고른 파일(Blob)은 그대로 저장하고, Blob을 받지 않는 저장소면 바이트로 한 번 더 저장한다', async () => {
+    const file = new Blob([new Uint8Array([1, 2, 3])]);
+    const m = memory();
+    const s = new RecentStore(m);
+    expect(await s.add('a.skp', file, 1)).toBe(true);
+    expect(m.rows.get(recentId('a.skp', 3))).toMatchObject({ name: 'a.skp', size: 3 });
+    expect(m.bytes.get(recentId('a.skp', 3))).toBe(file);
+    const got = await s.open(recentId('a.skp', 3), 2);
+    expect(got!.data).toBe(file);
+
+    const n = memory();
+    const put = n.put;
+    const tried: string[] = [];
+    n.put = async (e, d) => {
+      tried.push(d instanceof Blob ? 'blob' : 'bytes');
+      if (d instanceof Blob) throw new Error('DataCloneError');
+      return put(e, d);
+    };
+    expect(await new RecentStore(n).add('b.skp', file)).toBe(true);
+    expect(tried).toEqual(['blob', 'bytes']);
+    expect([...new Uint8Array(n.bytes.get(recentId('b.skp', 3)) as ArrayBuffer)]).toEqual([1, 2, 3]);
+    expect([...new Uint8Array(await (await new RecentStore(n).open(recentId('b.skp', 3)))!.data.arrayBuffer())]).toEqual([1, 2, 3]);
+
+    // 바이트도 받지 않으면 저장하지 않았다고 알린다(앱은 그대로)
+    const z = memory();
+    z.put = async () => {
+      throw new Error('QuotaExceededError');
+    };
+    expect(await new RecentStore(z).add('c.skp', file)).toBe(false);
+    expect(await new RecentStore(z).add('c.skp', buf(3))).toBe(false);
   });
 
   it('크기 한도 밖은 저장하지 않는다', async () => {

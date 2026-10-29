@@ -21,6 +21,18 @@ export const STREAM_MIN_BYTES = 1 << 20;
 /** 내장 풀기에 한 번에 넣는 압축 바이트. 내장 풀기는 넣은 조각을 한 번에 다 풀어 내므로 작게 넣어야 풀린 조각이 쌓이지 않는다 */
 const INPUT_STEP = 1 << 16;
 
+/** 압축 바이트를 파일에서 읽어 올 때 한 번에 읽는 덩이(다음 덩이를 미리 하나 더 읽어 둔다 — 많아야 둘을 든다) */
+export const READ_BLOCK = 1 << 20;
+
+/** 정해진 길이의 바이트를 자리마다 읽어 주는 곳(파일 조각 — src/range.ts). read(a, b)는 [a, b)를 낸다(파일이 짧으면 덜) */
+export interface RangeReader {
+  readonly length: number;
+  read(start: number, end: number): Promise<Uint8Array>;
+}
+
+/** 풀 압축 바이트: 한 버퍼, 또는 덩이씩 읽어 줄 곳(파일 전체를 들지 않는다) */
+export type InflateInput = Uint8Array | RangeReader;
+
 /** 조각으로 읽을 수 없는 꼴(깨지거나 잘린 뿌리·정의 목록, 받은 길이가 다름) — 한 버퍼로 다시 읽는다 */
 export class StreamFallback extends Error {}
 
@@ -210,20 +222,16 @@ export async function inflateNative(data: Uint8Array, expected: number): Promise
  * 압축 바이트를 작은 조각으로 내장 풀기에 넣으며 풀린 조각을 onChunk로 넘긴다(받는 쪽이 읽으면 다음 조각을 넣는다).
  * 풀기가 끝까지 되면 true, 내장 풀기가 실패하거나(깨진 흐름) onChunk가 false를 내면 false. onChunk가 던진 예외는 그대로 던진다
  */
-async function pumpInflate(data: Uint8Array, onChunk: (chunk: Uint8Array) => boolean): Promise<boolean> {
-  let pos = 0;
+async function pumpInflate(data: InflateInput, onChunk: (chunk: Uint8Array) => boolean): Promise<boolean> {
   let reader: ReadableStreamDefaultReader<Uint8Array>;
   try {
+    const next = data instanceof Uint8Array ? bufferChunks(data) : rangeChunks(data);
     const src = new ReadableStream<Uint8Array>(
       {
-        pull(c) {
-          if (pos >= data.length) {
-            c.close();
-            return;
-          }
-          const end = Math.min(data.length, pos + INPUT_STEP);
-          c.enqueue(data.subarray(pos, end));
-          pos = end;
+        async pull(c) {
+          const chunk = await next();
+          if (chunk) c.enqueue(chunk);
+          else c.close();
         },
       },
       { highWaterMark: 0 },
@@ -252,6 +260,51 @@ async function pumpInflate(data: Uint8Array, onChunk: (chunk: Uint8Array) => boo
   }
 }
 
+/** 한 버퍼를 INPUT_STEP씩(끝나면 null) */
+function bufferChunks(data: Uint8Array): () => Promise<Uint8Array | null> {
+  let pos = 0;
+  return async () => {
+    if (pos >= data.length) return null;
+    const end = Math.min(data.length, pos + INPUT_STEP);
+    const out = data.subarray(pos, end);
+    pos = end;
+    return out;
+  };
+}
+
+/**
+ * 읽어 줄 곳을 READ_BLOCK씩 읽어(다음 덩이는 미리 읽어 둔다) INPUT_STEP씩 낸다. 끝나면 null.
+ * 다 읽기 전에 파일이 끝나면(읽은 길이 0) Error — 풀기가 실패해 부르는 쪽이 다른 길로 읽는다
+ */
+function rangeChunks(src: RangeReader): () => Promise<Uint8Array | null> {
+  const total = src.length;
+  let pos = 0;
+  let block: Uint8Array = EMPTY;
+  let off = 0;
+  let ahead: Promise<Uint8Array> | null = null;
+  const fetch = (p: number): Promise<Uint8Array> => src.read(p, Math.min(total, p + READ_BLOCK));
+  return async () => {
+    if (off >= block.length) {
+      if (pos >= total) return null;
+      const got = ahead ?? fetch(pos);
+      ahead = null;
+      block = await got;
+      off = 0;
+      if (!block.length) throw new Error('파일을 끝까지 읽지 못했습니다');
+      pos += block.length;
+      if (pos < total) {
+        ahead = fetch(pos);
+        // 쓰기 전에 실패해도 처리되지 않은 거부로 남지 않게(쓸 때 다시 던진다)
+        ahead.catch(() => undefined);
+      }
+    }
+    const end = Math.min(block.length, off + INPUT_STEP);
+    const out = block.subarray(off, end);
+    off = end;
+    return out;
+  };
+}
+
 /**
  * 꾸러미의 압축된 model.dat(원시 DEFLATE)를 내장 풀기로 풀면서 읽는다 → 모형.
  * 'inflate': 내장 풀기가 없거나 실패했거나 풀린 길이가 expected와 다르다(예전에 미리 풀기가 실패했을 때처럼 해석기가 직접 푼다).
@@ -259,7 +312,7 @@ async function pumpInflate(data: Uint8Array, onChunk: (chunk: Uint8Array) => boo
  * 모형과 함께 held(정의 절을 하나씩 읽지 못하고 통째로 들고 읽었는지)를 낸다. onProgress는 풀린 바이트 비율(0~1)
  */
 export async function streamModelDat(
-  data: Uint8Array,
+  data: InflateInput,
   expected: number,
   opts: ReadModelOptions = {},
   onProgress?: (fraction: number) => void,

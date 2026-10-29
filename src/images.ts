@@ -18,7 +18,7 @@ import { readSkpHeader } from './header';
 import { parseMaterialXml } from './materials';
 import type { MfcImageRef } from './mfcstate';
 import { mfcImageRefs } from './mfcmodel';
-import { findSkpZipItems, readZipItem, type ZipItem } from './zip';
+import { findSkpZipItems, runZipReads, type ZipItem, type ZipReads } from './zip';
 
 export interface SkpImage {
   /** 꾸러미 안 경로 */
@@ -159,6 +159,14 @@ export function readSkpImages(bytes: Uint8Array, opts: SkpImageOptions = {}): Sk
   const found = findSkpZipItems(bytes, header.bodyOffset);
   const dir = found.items;
   if (!dir) return out;
+  return runZipReads(zipImageReads(dir, opts, out), bytes);
+}
+
+/**
+ * 2021+ 꾸러미 목록에서 그림을 꺼낸다(readSkpImages의 꾸러미 쪽). 항목 내용은 내어(yield) 받는다 — 파일 전체 바이트로도(runZipReads),
+ * 필요한 자리만 읽는 곳으로도(src/range.ts) 같은 차례·같은 결과로 돈다
+ */
+export function* zipImageReads(dir: readonly ZipItem[], opts: SkpImageOptions = {}, out: SkpImages = { materials: [], components: [], scenes: [], skipped: 0, warnings: [] }): ZipReads<SkpImages> {
   const maxCount = opts.maxCount ?? MAX_IMAGE_COUNT;
   const maxEach = opts.maxBytesEach ?? MAX_IMAGE_BYTES;
   const maxTotal = opts.maxTotalBytes ?? MAX_IMAGE_TOTAL;
@@ -198,7 +206,7 @@ export function readSkpImages(bytes: Uint8Array, opts: SkpImageOptions = {}): Sk
     let pick = f.images[0]!;
     if (f.images.length > 1 && f.xml && f.xml.size < 1 << 20)
       try {
-        const file = parseMaterialXml(text.decode(readZipItem(bytes, f.xml)))?.texture?.file;
+        const file = parseMaterialXml(text.decode(yield f.xml))?.texture?.file;
         const hit = file ? f.images.find((it) => it.name.slice(it.name.lastIndexOf('/') + 1) === file) : undefined;
         if (hit) pick = hit;
       } catch {
@@ -219,7 +227,7 @@ export function readSkpImages(bytes: Uint8Array, opts: SkpImageOptions = {}): Sk
     }
     let data: Uint8Array;
     try {
-      data = readZipItem(bytes, w.item);
+      data = yield w.item;
     } catch {
       out.skipped++;
       continue;

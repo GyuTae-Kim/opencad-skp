@@ -1,8 +1,8 @@
 /**
  * 훑기 도구가 파일 하나를 해석하는 길(probe). 앱 워커(src/worker/parse.worker.ts)와 같은 차례·같은 선택으로 부른다:
- * 그림을 꺼내고(readSkpImages) → 같은 선택으로 skpToSceneAsync(큰 2021+ 파일은 model.dat를 내장 풀기(DecompressionStream)로
- * 풀면서 읽고, 해석기가 다 쓴 파일 버퍼를 떼어 놓는다 — releaseBytes, 넘긴 bytes는 길이 0이 된다). 무늬 그림 손질(createImageBitmap)과
- * 화면으로 넘기기는 브라우저 일이라 하지 않는다.
+ * skpFileToScene에 파일(자리마다 읽어 주는 곳 — 훑기는 Node 파일 손잡이)을 주면 그림을 꺼내고(readSkpImages와 같다) 같은 선택으로 장면을 만든다
+ * (2021+ 꾸러미는 파일을 통째로 들지 않고 필요한 항목만 읽고, 큰 model.dat는 덩이씩 읽어 내장 풀기(DecompressionStream)로 풀면서 읽는다.
+ * 2020 이하는 파일 전체를 읽는다). 무늬 그림 손질(createImageBitmap)과 화면으로 넘기기는 브라우저 일이라 하지 않는다.
  * 워커의 선택이 바뀌면 여기도 같이 바꾼다(tests/sweep.test.ts가 두 파일의 호출 글자를 견준다).
  *
  * 단계와 시간: images(그림 꺼내기 — 2020 이하는 여기서 모형을 다 읽는다) · unpack(꾸러미 목록·재질, 작은 model.dat는 직접 풀기) ·
@@ -15,8 +15,8 @@
  */
 import { createHash } from 'node:crypto';
 import type { Scene3d } from 'opencad-viewer3d/types';
-import { readSkpHeader, readSkpImages, skpToSceneAsync, STREAM_MIN_BYTES, type SkpImages, type SkpModelRead } from '../../src/index';
-import { findSkpZipItems } from '../../src/zip';
+import { readSkpHeader, skpFileToScene, STREAM_MIN_BYTES, type SkpFileRead, type SkpImages, type SkpModelRead } from '../../src/index';
+import { bytesSource, HEAD_BYTES, readSourceDirectory, type SkpSource } from '../../src/range';
 
 export type ProbeStage = 'images' | 'unpack' | 'parse' | 'scene';
 export const PROBE_STAGES: readonly ProbeStage[] = ['images', 'unpack', 'parse', 'scene'];
@@ -73,8 +73,6 @@ export interface ProbeMemory {
   sceneBuffersMB: Record<string, number>;
   /** 장면 형식 배열이 붙든 바탕 ArrayBuffer 합(MB) — 배열 크기보다 크면 큰 버퍼의 일부를 보는 배열이 있다 */
   sceneBackingMB: number;
-  /** 장면이 파일 바이트 버퍼를 붙들고 있는지(그러면 그 버퍼가 장면과 함께 산다) */
-  sceneHoldsFile: boolean;
   /** 꺼낸 그림 바이트 합(MB) */
   imagesMB: number;
 }
@@ -107,6 +105,8 @@ export interface ProbeResult {
   inflated: boolean;
   /** 2021+ model.dat를 어떻게 읽었는지(skpToSceneAsync onModelRead — 조각으로 읽을 수 없어 통째로 읽은 파일을 가린다) */
   modelRead?: SkpModelRead;
+  /** 파일을 어떻게 읽었는지(skpFileToScene onFileRead — parts 필요한 자리만, whole 파일 전체) */
+  fileRead?: SkpFileRead;
   ms: Partial<Record<ProbeStage, number>> & { total: number };
   images?: { model: boolean; materials: number; components: number; scenes: number; skipped: number };
   imageError?: string;
@@ -279,8 +279,12 @@ export function sceneDigest(scene: Scene3d): string {
   return h.digest('hex').slice(0, 16);
 }
 
-/** SKP 바이트 하나를 워커와 같은 길로 해석해 지표·시간(·메모리)을 낸다. 예외는 부르는 쪽이 잡는다 */
-export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Promise<ProbeResult> {
+/**
+ * SKP 파일 하나를 워커와 같은 길로 해석해 지표·시간(·메모리)을 낸다. 파일은 자리마다 읽어 주는 곳(훑기는 Node 파일 손잡이)이나
+ * 바이트(시험 — 읽을 때마다 사본을 준다)로 받는다. 예외는 부르는 쪽이 잡는다
+ */
+export async function probeSkp(input: SkpSource | Uint8Array, opts: ProbeOptions = {}): Promise<ProbeResult> {
+  const file = input instanceof Uint8Array ? bytesSource(input) : input;
   const mem = !!opts.mem;
   const meter = new Meter(mem, opts.gc);
   let base: NodeJS.MemoryUsage | undefined;
@@ -289,31 +293,22 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
     base = process.memoryUsage();
   }
   const heap0 = process.memoryUsage().heapUsed;
-  const h = readSkpHeader(bytes);
+  const head = await file.read(0, Math.min(file.size, HEAD_BYTES));
+  const h = readSkpHeader(head);
   const name = opts.name ?? 'model.skp';
   const zipPath = h?.container === 'zip';
-  // 워커처럼 해석기가 파일 버퍼를 떼어 놓으므로(releaseBytes) 파일 바이트로 알 것은 먼저 잰다
-  const header = headerInfo(bytes);
+  const header = headerInfo(head);
   let zipDatBytes: number | undefined;
   if (mem && h && zipPath)
     try {
-      zipDatBytes = findSkpZipItems(bytes, h.bodyOffset).items?.find((d) => d.name === 'model.dat')?.size;
+      zipDatBytes = (await readSourceDirectory(file))?.find((d) => d.name === 'model.dat')?.size;
     } catch {
       /* 꾸러미가 깨졌으면 모른다 */
     }
-  const fileBuffer = bytes.buffer;
   const t0 = performance.now();
 
-  // 워커: 그림을 먼저 꺼낸다(2020 이하는 여기서 모형을 다 읽고 해석기가 이어 쓴다). 그림은 없어도 된다
+  // 워커: 그림을 먼저 꺼낸다(2020 이하는 파일 전체를 읽고 여기서 모형을 다 읽어 해석기가 이어 쓴다). 그림은 없어도 된다
   meter.enter('images');
-  let images: SkpImages | undefined;
-  let imageError: string | undefined;
-  try {
-    images = readSkpImages(bytes, { onProgress: () => meter.sample() });
-  } catch (e) {
-    imageError = (e instanceof Error ? e.message : String(e)).slice(0, 300);
-  }
-
   const progress = (fraction: number): void => {
     meter.enter(fraction >= 0.65 ? 'scene' : zipPath && fraction < 0.4 ? 'unpack' : 'parse');
   };
@@ -321,12 +316,21 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
   const onModelRead = (how: SkpModelRead): void => {
     modelRead = how;
   };
+  let fileRead: SkpFileRead | undefined;
+  const onFileRead = (how: SkpFileRead): void => {
+    fileRead = how;
+  };
   const streamMin = opts.streamMin ?? STREAM_MIN_BYTES;
   // 풀면서 읽는 동안(비동기) 사이사이에도 잰다
   const timer = mem ? setInterval(() => meter.sample(), 5) : undefined;
   let scene: Scene3d;
+  let images: SkpImages | undefined;
+  let imageError: string | undefined;
   try {
-    scene = await skpToSceneAsync(bytes, { name, outline: true, extras: true, smooth: true, onProgress: progress, textures: images?.materials, releaseBytes: true, streamMin, onModelRead });
+    const read = await skpFileToScene(file, { name, outline: true, extras: true, smooth: true, onProgress: progress, streamMin, images: { onProgress: () => meter.sample() }, onModelRead, onFileRead });
+    scene = read.scene;
+    images = read.images;
+    imageError = read.imageError;
   } finally {
     if (timer) clearInterval(timer);
   }
@@ -392,6 +396,7 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
     rssMB: MB(after.rss),
   };
   if (modelRead) result.modelRead = modelRead;
+  if (fileRead) result.fileRead = fileRead;
   if (images)
     result.images = {
       model: !!images.model,
@@ -444,7 +449,6 @@ export async function probeSkp(bytes: Uint8Array, opts: ProbeOptions = {}): Prom
       peakHeapExternalMB: MB(peakSum),
       sceneBuffersMB,
       sceneBackingMB: MB(backingBytes),
-      sceneHoldsFile: backing.has(fileBuffer),
       imagesMB: MB(imageBytes),
     };
     if (zipDatBytes !== undefined) result.mem.modelDatMB = MB(zipDatBytes);

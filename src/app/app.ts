@@ -392,7 +392,7 @@ export class SkpViewerApp implements PanelHost {
   private lineColorWant: ReadonlyMap<string, Rgba> = new Map();
   /** 줄자·각도기(코어 두 점 측정 대신). 조각을 받으면 만든다(ensureMeasureTool) */
   private measureTool: MeasureTool | null = null;
-  /** 지금 문서의 파일 내용 지문(SHA-256 — 측정 도구가 그 파일의 안내를 기억·되살리는 열쇠, openBuffer) */
+  /** 지금 문서의 파일 내용 지문(SHA-256 — 측정 도구가 그 파일의 안내를 기억·되살리는 열쇠, openBlob) */
   private docPrint: Promise<ArrayBuffer | null> | null = null;
   /** 측정 도구를 받기 전에 켰을 때: 받는 동안 마지막으로 누른 도구를 받은 뒤에 켠다(다시 누르면 거둔다, 받지 못하면 알린다) */
   private readonly measureFirstUse = new FirstUse<MeasureMode>(
@@ -885,15 +885,15 @@ export class SkpViewerApp implements PanelHost {
       void this.refreshRecent();
       return;
     }
-    await this.openBuffer(got.entry.name, got.data, seq, attempt);
+    await this.openBlob(got.entry.name, got.data, seq, attempt);
     void this.refreshRecent();
   }
 
-  /** 고르거나 끌어다 놓아 연 파일을 최근 문서에 저장(바이트는 워커로 넘어갔으므로 파일에서 다시 읽는다) */
+  /** 고르거나 끌어다 놓아 연 파일을 최근 문서에 저장(파일 그대로 — 브라우저가 IndexedDB로 옮겨 적는다) */
   private async keepRecent(file: File, name: string): Promise<void> {
     if (!canKeepRecent(file.size)) return;
     try {
-      if (await this.recent.add(name, await file.arrayBuffer())) await this.refreshRecent();
+      if (await this.recent.add(name, file)) await this.refreshRecent();
     } catch {
       /* 다시 못 읽으면 저장하지 않는다 */
     }
@@ -978,21 +978,9 @@ export class SkpViewerApp implements PanelHost {
       return;
     }
     const seq = ++this.openSeq;
-    this.setBusy(file.name, 0.005, '파일 읽는 중');
-    let buf: ArrayBuffer;
-    try {
-      buf = await file.arrayBuffer();
-    } catch (e) {
-      if (seq === this.openSeq) {
-        this.setBusy(null);
-        this.showNotice('error', `"${file.name}" 파일을 읽지 못했습니다`, errorText(e));
-        attempt.error('read_error');
-      }
-      return;
-    }
-    if (seq !== this.openSeq) return;
+    // 파일은 읽지 않고 그대로 워커로 넘긴다(워커가 필요한 자리만 읽는다 — 큰 파일을 화면 쪽에 통째로 들지 않게)
     const name = baseName(file.name);
-    if (await this.openBuffer(name, buf, seq, attempt)) void this.keepRecent(file, name);
+    if (await this.openBlob(name, file, seq, attempt)) void this.keepRecent(file, name);
   }
 
   /** 같은 출처 주소의 파일 열기(?open=) */
@@ -1000,11 +988,11 @@ export class SkpViewerApp implements PanelHost {
     const attempt = beginOpen('url', 'skp');
     const seq = ++this.openSeq;
     this.setBusy(name, 0.005, '파일 받는 중');
-    let buf: ArrayBuffer;
+    let file: Blob;
     try {
       const res = await fetch(url, { credentials: 'same-origin' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      buf = await res.arrayBuffer();
+      file = await res.blob();
     } catch (e) {
       if (seq === this.openSeq) {
         this.setBusy(null);
@@ -1014,7 +1002,7 @@ export class SkpViewerApp implements PanelHost {
       return;
     }
     if (seq !== this.openSeq) return;
-    await this.openBuffer(name, buf, seq, attempt);
+    await this.openBlob(name, file, seq, attempt);
   }
 
   async openSample(): Promise<void> {
@@ -1037,8 +1025,7 @@ export class SkpViewerApp implements PanelHost {
       return;
     }
     if (seq !== this.openSeq) return;
-    const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-    await this.openBuffer(name, buf, seq, attempt);
+    await this.openBlob(name, new Blob([bytes as BlobPart]), seq, attempt);
   }
 
   /** 여는 중인 파일을 그만 연다(해석 중이면 워커를 끝낸다). 열려 있던 문서는 그대로 둔다 */
@@ -1051,9 +1038,9 @@ export class SkpViewerApp implements PanelHost {
 
   private parsingSeq = 0;
 
-  /** 바이트 해석(buf는 워커로 이전된다). seq가 더 새 요청에 밀리면 결과를 버린다. 열어 보였으면 true */
-  private async openBuffer(name: string, buf: ArrayBuffer, seq: number, attempt: OpenAttempt): Promise<boolean> {
-    const size = buf.byteLength;
+  /** 파일 해석(Blob·File은 복사 없이 워커로 넘어간다). seq가 더 새 요청에 밀리면 결과를 버린다. 열어 보였으면 true */
+  private async openBlob(name: string, file: Blob, seq: number, attempt: OpenAttempt): Promise<boolean> {
+    const size = file.size;
     this.setBusy(name, 0.01, '해석 준비 중');
     // 앞 파일을 아직 해석 중이면 멈추고(동기 해석이라 기다리면 늦어진다) 새 파일을 읽는다
     if (this.parsingSeq) this.client.cancel();
@@ -1062,17 +1049,10 @@ export class SkpViewerApp implements PanelHost {
     if (!this.viewer) void loadViewerCore().catch(() => undefined);
     // 측정 도구 조각도 함께(처음 켤 때 기다리지 않게 — 실패는 처음 켤 때 알린다)
     if (!this.measureTool) void loadMeasure().catch(() => undefined);
-    // 파일 내용 지문(안내를 파일별로 기억하는 열쇠): 바이트는 부를 때 복사되므로 곧바로 워커로 넘겨도 된다. 못 구하면(보안 연결이 아님 등) null
-    let print: Promise<ArrayBuffer | null> = Promise.resolve(null);
-    try {
-      print = crypto.subtle.digest('SHA-256', buf).catch(() => null);
-    } catch {
-      /* 지문 없이 연다 */
-    }
     try {
       const res = await this.client.open(
         name,
-        buf,
+        file,
         (f, stage) => {
           if (seq === this.openSeq) this.setBusy(name, f, stage);
         },
@@ -1102,7 +1082,8 @@ export class SkpViewerApp implements PanelHost {
       // 코어를 아직 못 받았으면 기다린다(받지 못하면 '3D 보기를 열 수 없습니다' 알림, 열려 있던 문서는 그대로)
       if (!(await this.ensureViewer()) || seq !== this.openSeq) return false;
       const doc = createDoc(name, size, res, { makeUrl: (b, mime) => URL.createObjectURL(new Blob([b as BlobPart], { type: mime })) });
-      this.docPrint = print;
+      // 파일 내용 지문(SHA-256 — 안내를 파일별로 기억하는 열쇠): 워커가 결과를 보낸 뒤 파일을 덩이씩 읽으며 구해 보낸다(못 구하면 null)
+      this.docPrint = res.print ?? null;
       const uploaded = this.setDoc(doc, (done, total) => {
         if (seq === this.openSeq) this.setBusy(name, total ? done / total : 1, `화면에 올리는 중 · 묶음 ${fmtCount(done)}/${fmtCount(total)}`);
       });
@@ -1127,7 +1108,7 @@ export class SkpViewerApp implements PanelHost {
    * 코어의 나눠 올리기(프레임마다 8 ms)로 올리고 progress(올린 묶음, 전체)를 알린다. 올리기가 끝나면 풀리는 약속을 돌려준다
    */
   private setDoc(d: SkpDoc, progress?: (done: number, total: number) => void): Promise<void> {
-    // 뷰어는 openBuffer가 먼저 만든다(ensureViewer — 코어를 나눠 받는다)
+    // 뷰어는 openBlob이 먼저 만든다(ensureViewer — 코어를 나눠 받는다)
     const v = this.viewer;
     if (!v) {
       revokeImages(d);
@@ -3541,7 +3522,7 @@ export class SkpViewerApp implements PanelHost {
       this.showNotice('error', `"${name}" 파일을 찾지 못했습니다`, '공유 받은 사본이 지워졌습니다. 다시 공유하거나 "열기"로 골라 주세요.');
       return;
     }
-    await this.openBuffer(name, data, seq, attempt);
+    await this.openBlob(name, data, seq, attempt);
   }
 
   /** 새 판 알림(서비스 워커): 새로 고치면 새 판으로 다시 읽는다(열어 둔 파일은 최근 문서에서 다시 연다) */
