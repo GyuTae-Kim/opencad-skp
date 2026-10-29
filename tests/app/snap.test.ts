@@ -13,7 +13,11 @@ import {
   TOUCH_SNAP_RADIUS_PX,
   TRACK_ALIGN_LABEL,
   TRACK_AXIS_LABELS,
+  TRACK_PAIR_LABELS,
   AXIS_LABELS,
+  GUIDE_LINE_LABEL,
+  SNAP_LABELS,
+  trackPairLabel,
   alongAxis,
   axisInferenceLock,
   axisLock,
@@ -840,6 +844,137 @@ describe('추정: 다른 점에서 끌어온 축(코어 0.16.0 trackCrossSnap·t
         for (let y = 9.7; y < 200; y += 19.3) {
           const base = at(x, y, { from });
           expect(at(x, y, { from, tracks: [] }), `${x},${y}`).toEqual(base);
+          expect(base.trackFrom).toBeUndefined();
+        }
+  });
+});
+
+describe('추정: 끌어온 축끼리의 교차·끌어온 축과 모서리의 교차(코어 0.17.0 trackPairSnap·trackEdgeSnap·chooseTrackPoint)', () => {
+  // 넓은 면(z = 0) 위: 가로 모서리 h(y = 50, x −60~60 — 화면 y = 50), 비낀 모서리 d((−60, 20) → (60, 80))
+  const face = quad('f', -95, -95, 95, 95, 0);
+  const H = lines('h', [[-60, 50, 0, 60, 50, 0]]);
+  const D = lines('d', [[-60, 20, 0, 60, 80, 0]]);
+  type Opt = { from?: V3 | null; tracks?: V3[] | null; kept?: ((p: V3) => boolean) | null; visible?: ((p: V3) => boolean) | null; guideLines?: { point: V3; dir: V3 }[]; axisDirs?: AxisDirs | null };
+  const at = (scene: SnapScene, x: number, y: number, o: Opt = {}): Snap => {
+    const pick = picker(scene);
+    const probes = probeOffsets(SNAP_RADIUS_PX).map(([dx, dy]) => pick(x + dx, y + dy));
+    return chooseSnap({
+      frame: topFrame, x, y, pick: pick(x, y), probes, scene, radius: SNAP_RADIUS_PX, from: o.from ?? null, anchor: [0, 0, 0],
+      tracks: o.tracks ?? null, kept: o.kept ?? null, visible: o.visible ?? null, guideLines: o.guideLines ?? [], axisDirs: o.axisDirs ?? null,
+    });
+  };
+
+  it('글: 두 축 이름은 차례 없이 빨강 → 녹색 → 파랑', () => {
+    expect(trackPairLabel('x', 'y')).toBe(TRACK_PAIR_LABELS.xy);
+    expect(trackPairLabel('y', 'x')).toBe(TRACK_PAIR_LABELS.xy);
+    expect(trackPairLabel('z', 'x')).toBe(TRACK_PAIR_LABELS.xz);
+    expect(trackPairLabel('y', 'z')).toBe(TRACK_PAIR_LABELS.yz);
+    expect(TRACK_PAIR_LABELS.xy).toBe('끌어온 빨강 축과 녹색 축의 교차점');
+  });
+
+  it('끌어온 두 점의 서로 다른 축이 만나는 점(시작점 전에도 — 방향이 없어 잠그지 않는다)', () => {
+    const scene: SnapScene = { meshes: [face], lines: [] };
+    const P: V3 = [40, 30, 0];
+    const Q: V3 = [-30, -20, 0];
+    // P의 빨강 축(y = 30)과 Q의 녹색 축(x = −30)이 (−30, 30) — 화면 (70, 70)에서 만난다
+    expect(at(scene, 71.3, 68.9).kind).toBe('onFace');
+    const s = at(scene, 71.3, 68.9, { tracks: [P, Q] });
+    expect(s).toMatchObject({ kind: 'axis', axis: 'x', trackFrom: P, trackOther: { from: Q, axis: 'y' }, label: TRACK_PAIR_LABELS.xy });
+    // 한 축에서 변하지 않는 좌표는 그 축의 값 그대로(셈 오차 없이)
+    expect(s.point).toEqual([-30, 30, 0]);
+    expect(s.dir).toBeUndefined();
+    expect(s.edge).toBeUndefined();
+    expect(lockOf(s, null)).toBeNull();
+    // 끌어온 점이 하나면 그 점의 축(예전과 같다)
+    const one = at(scene, 71.3, 68.9, { tracks: [P] });
+    expect(one).toMatchObject({ kind: 'axis', axis: 'x', label: TRACK_AXIS_LABELS.x, trackFrom: P });
+    expect(one.trackOther).toBeUndefined();
+    // 높이가 다른 점의 축은 화면에서만 엇갈린다: 교차가 없고 가까운 한 축에 붙는다
+    const high = at(scene, 71.3, 68.9, { tracks: [P, [-30, -20, 10]] });
+    expect(high).toMatchObject({ kind: 'axis', axis: 'x', label: TRACK_AXIS_LABELS.x, trackFrom: P });
+    expect(high.trackOther).toBeUndefined();
+  });
+
+  it('끌어온 축이 모서리와 만나는 점이 모서리 위보다 먼저(그 모서리를 싣는다)', () => {
+    const scene: SnapScene = { meshes: [face], lines: [H] };
+    const P: V3 = [20, -40, 0];
+    const plain = at(scene, 121.4, 51.2);
+    expect(plain.kind).toBe('onEdge');
+    expect(plain.point[0]).toBeCloseTo(21.4, 4);
+    const s = at(scene, 121.4, 51.2, { tracks: [P] });
+    expect(s).toMatchObject({ kind: 'axis', axis: 'y', trackFrom: P, label: `${TRACK_AXIS_LABELS.y} · ${SNAP_LABELS.onEdge}`, id: 'h' });
+    expect(s.point).toEqual([20, 50, 0]);
+    expect(s.edge).toEqual([[-60, 50, 0], [60, 50, 0]]);
+    expect(s.dir).toBeUndefined();
+    expect(s.trackOther).toBeUndefined();
+    // 만나는 점에서 추정 반경 밖이면 그대로 모서리 위
+    expect(at(scene, 140.6, 50.8, { tracks: [P] }).kind).toBe('onEdge');
+    // 단면에 잘린 쪽·가린 점이면 만나는 점을 보지 않는다(모서리 위로 남는다)
+    expect(at(scene, 121.4, 51.2, { tracks: [P], kept: (p) => p[0] < 10 }).kind).toBe('onEdge');
+    expect(at(scene, 121.4, 51.2, { tracks: [P], visible: () => false }).kind).toBe('onEdge');
+    // 안내선과도 만난다(덧그림이라 단면·가림을 보지 않는다)
+    const g = at({ meshes: [face], lines: [] }, 121.4, 51.2, { tracks: [P], guideLines: [{ point: [0, 50, 0], dir: [1, 0, 0] }], kept: () => false, visible: () => false });
+    expect(g).toMatchObject({ kind: 'axis', axis: 'y', trackFrom: P, label: `${TRACK_AXIS_LABELS.y} · ${GUIDE_LINE_LABEL}` });
+    expect(g.point[0]).toBe(20);
+    expect(g.point[1]).toBeCloseTo(50, 9);
+  });
+
+  it('끌어온 축이 시작점도 지나면 그 축으로, 모서리 직선이 시작점을 지나면 그 모서리 방향으로 잠근다', () => {
+    const P: V3 = [20, -40, 0];
+    // P가 시작점 A의 녹색 축 위: P의 녹색 축이 d와 만나는 (20, 60)은 시작점 녹색 축 위 점이기도 하다
+    // (가로 모서리 h였다면 시작점에서 h에 내린 수직 발과 같은 점이라 점 추정이 먼저다)
+    const A: V3 = [20, -80, 0];
+    expect(at({ meshes: [face], lines: [H] }, 121.4, 51.2, { from: A, tracks: [P] }).kind).toBe('perpendicular');
+    const s = at({ meshes: [face], lines: [D] }, 121.3, 41.1, { from: A, tracks: [P] });
+    expect(s).toMatchObject({ kind: 'axis', axis: 'y', trackFrom: P, dir: [0, 1, 0], label: `${TRACK_AXIS_LABELS.y} · ${SNAP_LABELS.onEdge}` });
+    const l = lockOf(s, A)!;
+    expect(l).toMatchObject({ kind: 'axis', axis: 'y', label: AXIS_LABELS.y });
+    expect(l.edge).toBeUndefined();
+    // 비낀 모서리 d의 직선이 시작점 B(−100, 0)를 지난다: P의 녹색 축과 d가 만나는 (20, 60)에서 d 방향으로 잠근다
+    const B: V3 = [-100, 0, 0];
+    const e = at({ meshes: [face], lines: [D] }, 121.3, 41.1, { from: B, tracks: [P] });
+    expect(e).toMatchObject({ kind: 'axis', axis: 'y', trackFrom: P });
+    expect(e.dir).toBeUndefined();
+    close(e.point, [20, 60, 0], 1e-9);
+    const k = lockOf(e, B)!;
+    expect(k.kind).toBe('parallel');
+    close(k.dir, [2 / Math.sqrt(5), 1 / Math.sqrt(5), 0], 1e-6);
+    expect(edgeLineLock(e, B)).toEqual(k);
+    // 시작점이 그 직선 밖이면 잠글 방향이 없다
+    expect(lockOf(e, [-100, 10, 0])).toBeNull();
+  });
+
+  it('같은 점을 두 길로 구하면 시작점 축 위 줄 맞춘 자리(앞 차례 — 1화소 양보)', () => {
+    const P: V3 = [20, -40, 0];
+    // 시작점 A(−80, 50)의 빨강 축이 모서리 h 직선이다: P와 줄 맞춘 자리 (20, 50)가 곧 P의 녹색 축이 h와 만나는 점
+    const A: V3 = [-80, 50, 0];
+    const s = at({ meshes: [face], lines: [H] }, 121.4, 51.2, { from: A, tracks: [P] });
+    expect(s).toMatchObject({ kind: 'axis', axis: 'x', label: `${AXIS_LABELS.x} · ${TRACK_ALIGN_LABEL}`, trackFrom: P, dir: [1, 0, 0] });
+    expect(s.edge).toBeUndefined();
+    close(s.point, [20, 50, 0], 1e-9);
+  });
+
+  it('모형의 그리기 축을 옮겼으면 그 축으로 만나는 점을 찾는다', () => {
+    const c = Math.cos(Math.PI / 6), sn = Math.sin(Math.PI / 6);
+    const axes: AxisDirs = { x: [c, sn, 0], y: [-sn, c, 0], z: [0, 0, 1] };
+    const P: V3 = [20, -40, 0];
+    // P의 옮긴 녹색 축이 h(y = 50)와 만나는 점
+    const t = 90 / c;
+    const m: V3 = [P[0] - sn * t, 50, 0];
+    const s = at({ meshes: [face], lines: [H] }, 100 + m[0] + 1.2, 100 - m[1] + 1.1, { tracks: [P], axisDirs: axes });
+    expect(s).toMatchObject({ kind: 'axis', axis: 'y', trackFrom: P });
+    close(s.point, m, 1e-6);
+    // 세계 축이면 같은 자리는 모서리 위
+    expect(at({ meshes: [face], lines: [H] }, 100 + m[0] + 1.2, 100 - m[1] + 1.1, { tracks: [P] }).kind).toBe('onEdge');
+  });
+
+  it('끌어온 점이 없거나 비었으면 모서리 위·면 위 추정이 예전과 같다', () => {
+    const scene: SnapScene = { meshes: [face], lines: [H, D] };
+    for (const from of [null, [-80, 50, 0] as V3])
+      for (let x = 11.3; x < 200; x += 13.7)
+        for (let y = 8.9; y < 200; y += 11.9) {
+          const base = at(scene, x, y, { from });
+          expect(at(scene, x, y, { from, tracks: [] }), `${x},${y}`).toEqual(base);
           expect(base.trackFrom).toBeUndefined();
         }
   });

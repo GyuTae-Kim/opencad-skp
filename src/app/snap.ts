@@ -25,11 +25,17 @@
  *   그 선 위에만 찍는다. 시작점을 지나는 모서리에 붙은 점 추정(모서리 끝에서 그 모서리를 따라 가리킬 때)도 그 모서리 방향으로 잠근다
  *   (코어 0.12.0 순수 함수 edgeLineLock). 커서가 끝점·중간점·중심·교차점·수직 같은 점 위면 그 점을 선에 수직으로 내린 자리(다른 점의 높이를 옮겨 잰다),
  *   아니면 커서 광선에 가장 가까운 선 위 점(코어 0.10.0 순수 함수 lockedSnap).
- * - 다른 점에서 끌어온 축(SketchUp "점에서" 추론 — 점 위에 잠시 머물면 그 점에서 축 방향 점선): 부른 쪽이 기억한 점(tracks)이 있고 결과가 면 위·빈 곳이면
- *   1. 시작점 축 위에서 끌어온 점과 줄 맞춘 자리(끌어온 점을 그 축에 수직으로 내린 자리 — 축 고정보다 먼저, 그 축 방향이라 잠글 수 있다)
- *   2. 축 고정·나란함·수직(위와 같다)
+ * - 다른 점에서 끌어온 축(SketchUp "점에서" 추론 — 점 위에 잠시 머물면 그 점에서 축 방향 점선): 부른 쪽이 기억한 점(tracks)이 있으면
+ *   1. 끌어온 점 후보 가운데 점인 것(결과가 모서리 위·면 위·빈 곳일 때 — 두 선이 만나는 한 점이라 모서리 위보다 구체적이다).
+ *      셋 사이는 화면에서 가까운 것이고 뒤 차례는 1화소 넘게 가까워야 이긴다(코어 0.17.0 chooseTrackPoint — 같은 점을 셈 오차로 바꿔 고르지 않게):
+ *      a. 시작점 축 위에서 끌어온 점과 줄 맞춘 자리(끌어온 점을 그 축에 수직으로 내린 자리 — 그 축 방향이라 잠글 수 있다)
+ *      b. 끌어온 두 점의 서로 다른 축이 3D로 만나는 점(trackOther — 높이가 달라 화면에서만 엇갈리는 축은 만나지 않는다)
+ *      c. 끌어온 축이 커서 둘레 모서리·안내선과 3D로 만나는 점(그 선분 안쪽 — 끝점은 끝점 추정이 맡는다)
+ *      b·c는 그 끌어온 축이 시작점도 지나면 시작점 축 위 점이라 그 축 방향(dir)을 싣고, c는 그 모서리 직선이 시작점을 지나면 그 모서리 방향으로 잠근다
+ *   2. 축 고정·나란함·수직(결과가 면 위·빈 곳일 때 — 위와 같다)
  *   3. 끌어온 점을 지나는 축 위에서 커서 광선에 가장 가까운 점(시작점 전에도 — 시작점을 지나는 선이 아니라 잠그지 않는다)
- *   계산은 코어 0.16.0 순수 함수 trackCrossSnap·trackAxisSnap(opencad-viewer3d/track)이 하고, 축은 모형의 그리기 축이다. 잠근 동안에는 보지 않는다.
+ *   계산은 코어 순수 함수(opencad-viewer3d/track — 0.16.0 trackCrossSnap·trackAxisSnap, 0.17.0 trackPairSnap·trackEdgeSnap·chooseTrackPoint·trackAlongFirst)가 하고,
+ *   축은 모형의 그리기 축이다. 잠근 동안에는 보지 않는다.
  * - 아무것도 없으면 시작점(없으면 anchor)을 지나 화면과 나란한 평면 위의 빈 점(free).
  *
  * 고르기 결과(Pick3d)는 코어 viewer.pick이 준다. 숨긴 항목·묶음(isVisible false)·숨긴 구간·단면에서 잘린 쪽은
@@ -42,7 +48,7 @@ import { projectToScreen, screenRay, viewDepth, worldPerPixel, type ViewFrame } 
 import type { V3 } from 'opencad-viewer3d/math';
 import { PICK_TOLERANCE_PX } from 'opencad-viewer3d/pointer';
 import { edgeLineLock as lineLock, lockedSnap, segmentIntersection } from 'opencad-viewer3d/inference';
-import { trackAxisSnap, trackCrossSnap } from 'opencad-viewer3d/track';
+import { chooseTrackPoint, trackAlongFirst, trackAxisSnap, trackCrossSnap, trackEdgeSnap, trackPairSnap, type TrackSegment, type TrackSnap } from 'opencad-viewer3d/track';
 
 /**
  * 그물 정점 → 세계 점: 묶음 원점(origin)을 더한 뒤 배치 행렬(matrix, 4×4 열 우선)을 곱한다(코어 math의 modelMatrix·transformPoint와 같은 계산).
@@ -93,9 +99,18 @@ export interface Snap {
   inferred?: boolean;
   /**
    * 다른 점에서 끌어온 축(kind 'axis'): 그 축을 끌어온 점(세계). dir이 있으면 시작점 축 위에서 이 점과 줄 맞춘 자리,
-   * 없으면 이 점을 지나는 축 위 점(시작점에서 그 축 방향이 아니다)
+   * 없으면 이 점을 지나는 축 위 점(시작점에서 그 축 방향이 아니다). trackOther가 있으면 끌어온 축끼리의 교차,
+   * edge가 있으면 끌어온 축과 그 모서리·안내선의 교차다(둘 다 그 끌어온 축이 시작점도 지나면 dir이 있다)
    */
   trackFrom?: V3;
+  /** 끌어온 축끼리의 교차(kind 'axis'): 이 점에서 만나는 둘째 끌어온 축(끌어온 점과 그 축 — 첫째는 trackFrom·axis) */
+  trackOther?: TrackGuide;
+}
+
+/** 끌어온 축 하나: 끌어온 점(세계)과 그 점을 지나는 축 */
+export interface TrackGuide {
+  from: V3;
+  axis: Axis;
 }
 
 /** 붙은 안내: 안내점(guides) 또는 안내선(guideLines)과 그 차례 */
@@ -173,6 +188,18 @@ export const AXIS_LABELS: Readonly<Record<Axis, string>> = Object.freeze({ x: '�
 export const TRACK_AXIS_LABELS: Readonly<Record<Axis, string>> = Object.freeze({ x: '끌어온 점의 빨강 축에', y: '끌어온 점의 녹색 축에', z: '끌어온 점의 파랑 축에' });
 /** 시작점 축 위에서 끌어온 점과 줄 맞춘 자리: 축 글(AXIS_LABELS) 뒤에 " · "로 붙는 글 */
 export const TRACK_ALIGN_LABEL = '끌어온 점과 줄 맞춤';
+/**
+ * 끌어온 축끼리의 교차 추정 글(SketchUp 교차점 — 두 선이 만나는 점): 두 축 이름을 빨강 → 녹색 → 파랑 차례로(어느 점의 축인지는 점선 색이 보인다)
+ */
+export const TRACK_PAIR_LABELS: Readonly<Record<'xy' | 'xz' | 'yz', string>> = Object.freeze({
+  xy: '끌어온 빨강 축과 녹색 축의 교차점',
+  xz: '끌어온 빨강 축과 파랑 축의 교차점',
+  yz: '끌어온 녹색 축과 파랑 축의 교차점',
+});
+/** 끌어온 축끼리의 교차 글(두 축은 차례 없이) */
+export function trackPairLabel(a: Axis, b: Axis): string {
+  return TRACK_PAIR_LABELS[(a < b ? `${a}${b}` : `${b}${a}`) as keyof typeof TRACK_PAIR_LABELS] ?? '';
+}
 /** 추정 표식 색(SketchUp: 끝점 초록, 중간점 청록, 교차점·모서리 빨강, 면 파랑, 수직·나란함 자홍) */
 export const SNAP_COLORS: Readonly<Record<SnapKind, string>> = Object.freeze({
   endpoint: '#00a000',
@@ -426,7 +453,8 @@ export function lockOf(s: Snap | null | undefined, from?: readonly number[] | nu
   if (!s.dir || (s.kind !== 'axis' && s.kind !== 'parallel' && s.kind !== 'perpendicular')) return from ? edgeLineLock(s, from, axes) : null;
   const l: InferenceLock = { kind: s.kind, dir: [s.dir[0], s.dir[1], s.dir[2]], label: s.kind === 'axis' && s.axis ? AXIS_LABELS[s.axis] : s.label };
   if (s.axis) l.axis = s.axis;
-  if (s.edge) l.edge = [s.edge[0], s.edge[1]];
+  // 기준 모서리는 나란함·수직만(끌어온 축이 모서리와 만나는 점의 그 모서리는 기준이 아니다)
+  if (s.edge && s.kind !== 'axis') l.edge = [s.edge[0], s.edge[1]];
   return l;
 }
 
@@ -444,7 +472,8 @@ const EDGE_POINT_KINDS: ReadonlySet<SnapKind> = new Set(['endpoint', 'midpoint',
  * 추정이라 직선까지 거리를 보지 않는다. 코어는 세계 축만 알아 축은 여기서 모형의 그리기 축으로 고른다
  */
 export function edgeLineLock(s: Snap, from: readonly number[], axes: AxisDirs = AXIS_DIRS): InferenceLock | null {
-  if (s.locked || !EDGE_POINT_KINDS.has(s.kind)) return null;
+  // 끌어온 축이 모서리와 만나는 점(그 모서리 위 점 — 시작점 축 위가 아니어서 방향이 없을 때)도 모서리에 붙은 점 추정이다
+  if (s.locked || !(EDGE_POINT_KINDS.has(s.kind) || (s.kind === 'axis' && s.trackFrom && !s.dir))) return null;
   for (const e of [s.edge, s.other]) {
     if (!e || !lineLock(from, s.point, [e], 1e-6 * Math.max(Math.hypot(...sub(e[1], e[0])), Math.hypot(...sub(from, e[0]))), Infinity)) continue;
     const u = unitOf(sub(e[1], e[0]))!;
@@ -530,6 +559,14 @@ interface Cand {
   guide?: GuideHit;
 }
 
+/** 커서 둘레 선분(교차점·끌어온 축과의 교차를 본다): 세계 선분, 묶음 id, 그 자리 반 화소의 세계 길이, 안내선이면 guide */
+interface NearSeg {
+  seg: [V3, V3];
+  id: string;
+  tol: number;
+  guide?: boolean;
+}
+
 /** 점 p에서 직선(a, b)에 내린 발과 그 매개변수(a = 0, b = 1). 선분 길이가 0이면 null */
 export function footOnLine(p: readonly number[], a: readonly number[], b: readonly number[]): { point: V3; t: number } | null {
   const u = sub(b, a);
@@ -565,7 +602,7 @@ export function chooseSnap(o: SnapInput): Snap {
   const seen = new Set<string>();
   const scene = o.scene;
   /** 교차점을 볼 선분(그 자리 반 화소의 세계 길이 tol과 함께) */
-  const near: { seg: [V3, V3]; id: string; tol: number; guide?: boolean }[] = [];
+  const near: NearSeg[] = [];
   for (const p of [pick, ...(o.probes ?? [])]) {
     if (!p || p.kind !== 'line' || !scene) continue;
     const key = `${p.id}#${p.raw ?? p.index}`;
@@ -662,14 +699,14 @@ export function chooseSnap(o: SnapInput): Snap {
     }
     snap = s;
   } else {
-    // 끌어온 점과 줄 맞춘 시작점 축 위 자리: 축 위의 한 점이라 축 고정보다 먼저(이 둘레에서는 축을 따라 움직여도 이 자리에 붙는다).
-    // 시작점에서 그 축 방향이라 축 고정처럼 잠글 수 있다
-    const cross = o.from && tracks && (!snap || snap.kind === 'onFace') ? trackCrossSnap(f, o.from, tracks, o.x, o.y, R, axes) : null;
-    if (cross) snap = { kind: 'axis', point: cross.p, axis: cross.axis, label: `${AXIS_LABELS[cross.axis]} · ${TRACK_ALIGN_LABEL}`, dir: cross.direction ?? [...axes[cross.axis]], trackFrom: cross.from };
-    else if (o.from && (!snap || snap.kind === 'onFace')) snap = directionSnap(o, f, o.from, snap, pick, axes);
+    const open = !snap || snap.kind === 'onFace';
+    // 끌어온 점 후보 가운데 점인 것: 두 선이 만나는 한 점이라 모서리 위·축 고정보다 먼저(이 둘레에서는 선을 따라 움직여도 이 자리에 붙는다)
+    const t = tracks && (open || snap!.kind === 'onEdge') ? trackPointSnap(o, f, tracks, near, axes, R) : null;
+    if (t) snap = t;
+    else if (o.from && open) snap = directionSnap(o, f, o.from, snap, pick, axes);
     // 끌어온 점을 지나는 축(시작점 전에도): 시작점을 지나는 선이 아니라 방향(dir)이 없고 잠그지 않는다
-    const t = tracks && (!snap || snap.kind === 'onFace') ? trackAxisSnap(f, tracks, o.x, o.y, R, o.from ?? null, axes) : null;
-    if (t) snap = { kind: 'axis', point: t.p, axis: t.axis, label: TRACK_AXIS_LABELS[t.axis], trackFrom: t.from };
+    const ta = tracks && (!snap || snap.kind === 'onFace') ? trackAxisSnap(f, tracks, o.x, o.y, R, o.from ?? null, axes) : null;
+    if (ta) snap = { kind: 'axis', point: ta.p, axis: ta.axis, label: TRACK_AXIS_LABELS[ta.axis], trackFrom: ta.from };
   }
   // 시작점에서 내린 수직(모서리·면)도 방향 추론이다(시작점 → 발 쪽으로 잠근다)
   if (snap && snap.kind === 'perpendicular' && o.from && !snap.locked && !snap.inferred) {
@@ -703,6 +740,43 @@ function directionSnap(o: SnapInput, f: ViewFrame, from: readonly number[], snap
   if (par && ref && e && par.perp <= best) return { kind: 'parallel', point: par.point, label: SNAP_LABELS.parallel, dir: e, edge: [ref[0], ref[1]] };
   if (per && ref) return { kind: 'perpendicular', point: per.point, label: SNAP_LABELS.perpendicular, dir: per.dir, edge: [ref[0], ref[1]], inferred: true };
   return snap;
+}
+
+/**
+ * 끌어온 점 후보 가운데 점인 것(코어 0.17.0 차례): 시작점 축 위 줄 맞춘 자리(0.16.0 trackCrossSnap), 끌어온 축끼리의 교차(trackPairSnap),
+ * 끌어온 축과 커서 둘레 모서리·안내선의 교차(trackEdgeSnap). 셋 사이는 화면에서 가까운 것이고 뒤 차례는 1화소 넘게 가까워야 이긴다(chooseTrackPoint).
+ * 모서리는 단면에 잘린 쪽과 가린 점을 빼고, 안내선은 덧그림이라 가림을 보지 않는다(교차점과 같다). 없으면 null
+ */
+function trackPointSnap(o: SnapInput, f: ViewFrame, tracks: readonly (readonly number[])[], near: readonly NearSeg[], axes: AxisDirs, R: number): Snap | null {
+  const first = o.from ?? null;
+  const cross = first ? trackCrossSnap(f, first, tracks, o.x, o.y, R, axes) : null;
+  const pair = trackPairSnap(f, tracks, o.x, o.y, R, first, axes);
+  const kept = o.kept;
+  const visible = o.visible;
+  const segs = near.map((n): TrackSegment & { near: NearSeg } => {
+    const s: TrackSegment & { near: NearSeg } = { a: n.seg[0], b: n.seg[1], wpp: 2 * n.tol, near: n };
+    if (kept && !n.guide) s.keep = (p) => kept([p[0]!, p[1]!, p[2]!]);
+    return s;
+  });
+  const edge = segs.length ? trackEdgeSnap(f, tracks, segs, o.x, o.y, R, first, axes, visible ? (p, s) => !!s.near.guide || visible(p) : null) : null;
+  const t = chooseTrackPoint<TrackSnap>([cross, pair, edge]);
+  if (!t) return null;
+  if (t === cross) return { kind: 'axis', point: cross.p, axis: cross.axis, label: `${AXIS_LABELS[cross.axis]} · ${TRACK_ALIGN_LABEL}`, dir: cross.direction ?? [...axes[cross.axis]], trackFrom: cross.from };
+  const s: Snap = { kind: 'axis', point: t.p, axis: t.axis, label: TRACK_AXIS_LABELS[t.axis], trackFrom: t.from };
+  // 그 끌어온 축이 시작점도 지나면(끌어온 점이 시작점 축 위) 시작점 축 위 점이기도 하다 — 그 축 방향이라 잠글 수 있다
+  const dir = first ? trackAlongFirst(f, first, t.from, t.axis, axes) : null;
+  if (dir) s.dir = dir;
+  if (t === pair && pair.other) {
+    s.label = trackPairLabel(pair.axis, pair.other.axis);
+    s.trackOther = { from: pair.other.from, axis: pair.other.axis };
+  } else if (t === edge) {
+    // 모서리 위 점(그 모서리 직선이 시작점을 지나면 lockOf가 그 모서리 방향으로 잠근다)
+    const n = edge.seg.near;
+    s.label = `${TRACK_AXIS_LABELS[t.axis]} · ${n.guide ? GUIDE_LINE_LABEL : SNAP_LABELS.onEdge}`;
+    s.edge = [n.seg[0], n.seg[1]];
+    s.id = n.id;
+  }
+  return s;
 }
 
 /** 축이 맞으면 그 축(단위 벡터가 축과 거의 같을 때). axes를 주면 그 축(모형의 그리기 축)과 견준다 */
