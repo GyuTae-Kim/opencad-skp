@@ -2594,4 +2594,34 @@ describe('측정 도구: 끌어온 축끼리의 교차·끌어온 축과 모서�
     r.click(141.2, 70.6);
     expect(r.results.at(-1)).toMatchObject({ kind: 'tape', a: [0, 60, 0], b: P, distance: 50 });
   });
+
+  it('다시 재기로 지울 것(clearable): 진행 중 점·결과·끌어온 점 — 끌어온 점만 남아도 켜진다', () => {
+    const r = rig(SCENE());
+    r.tool.setMode('tape');
+    expect(r.tool.clearable).toBe(false);
+    const locks = r.locks.length;
+    dwellOn(r, 141.2, 70.6);
+    expect(r.tool.pointCount).toBe(0);
+    expect(r.tool.result).toBeNull();
+    expect(r.tool.clearable).toBe(true);
+    // 끌어온 점 수가 바뀌면 알린다(앱이 측정 띠 단추를 다시 맞춘다)
+    expect(r.locks.length).toBeGreaterThan(locks);
+    const n = r.locks.length;
+    r.tool.clear();
+    expect(r.tool.trackPoints).toEqual([]);
+    expect(r.tool.clearable).toBe(false);
+    expect(r.locks.length).toBeGreaterThan(n);
+    // 진행 중 점·결과
+    r.click(141.2, 70.6);
+    expect(r.tool.clearable).toBe(true);
+    r.click(100.6, 140.4);
+    expect(r.tool.pointCount).toBe(0);
+    expect(r.tool.clearable).toBe(true);
+    r.tool.clear();
+    expect(r.tool.clearable).toBe(false);
+    // 끄면 끌어온 점이 없어 머물러도 켜지지 않는다
+    r.tool.setTrack(false);
+    dwellOn(r, 141.2, 70.6);
+    expect(r.tool.clearable).toBe(false);
+  });
 });

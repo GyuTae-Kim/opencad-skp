@@ -850,6 +850,14 @@ export class MeasureTool {
     return this.pts.length;
   }
 
+  /**
+   * 다시 재기(clear)로 지울 것이 있는지: 진행 중 점·결과·끌어온 점. 앱의 측정 띠 다시 재기 단추가 이것으로 켜고 끈다
+   * (휴대폰은 Esc가 없어 끌어온 점만 남았을 때도 이 단추로 지운다 — 단추 상태를 이 조각이 정해 첫 화면 JS를 늘리지 않는다)
+   */
+  get clearable(): boolean {
+    return this.pts.length > 0 || !!this.resultValue || this.tracker.size > 0;
+  }
+
   /** 마지막 측정 결과 */
   get result(): MeasureToolResult | null {
     return this.resultValue;
