@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 const { JSDOM } = createRequire(import.meta.url)('jsdom');
 import { installLocalization } from '../src/app/i18n';
 import { GUIDE_CLEAR_FILE_LABEL, GUIDE_DELETE_KEY_HINT, GUIDE_DELETE_TEXT, GUIDE_KIND_NAMES, GUIDE_REDO_LABEL, GUIDE_UNDO_LABEL, GUIDES_SHOWN_LABEL, LOCK_HINTS, LOCK_MENU_LABEL, guideKeyHint, lockHint, measureHint, trackHint } from '../src/app/measure';
+import { TEXTURE_LOST_TEXT, TEXTURE_LOST_TITLE } from '../src/app/texsources';
 import { AXIS_LABELS, FACE_PERPENDICULAR_LABEL, GUIDE_LINE_LABEL, SNAP_LABELS, TRACK_ALIGN_LABEL, TRACK_AXIS_LABELS, TRACK_PAIR_LABELS } from '../src/app/snap';
 import { SHORTCUTS } from '../src/app/shortcuts';
 import { chunkFailText } from '../src/app/core';
@@ -166,6 +167,11 @@ describe('language URLs and UI presentation', () => {
       for (const t of texts) expect(translate(t, code), `${code}: ${t}`).not.toMatch(hangul);
     expect(translate(`${GUIDE_KIND_NAMES.line} · ${GUIDE_DELETE_KEY_HINT}`, 'en')).toBe('Guide line · Delete or Backspace to delete');
     expect(translate(GUIDE_KIND_NAMES.point, 'de')).toBe('Hilfspunkt');
+  });
+  it('translates the notice after releasing texture originals of a large model (graphics context restored)', () => {
+    for (const {code} of languages.filter(item => item.code !== 'ko'))
+      for (const t of [TEXTURE_LOST_TITLE, TEXTURE_LOST_TEXT]) expect(translate(t, code), `${code}: ${t}`).not.toMatch(/[가-힣]/);
+    expect(translate(TEXTURE_LOST_TITLE, 'en')).toBe('Texture images drawn in average colors');
   });
   it('translates the split-chunk loading and failure notices (measuring tools, 3D view)', () => {
     const hangul = /[가-힣]/;

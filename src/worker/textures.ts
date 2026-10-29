@@ -111,8 +111,8 @@ async function prepOne(t: Texture3d, info: SkpTextureInfo, limit: number): Promi
 }
 
 /**
- * 장면의 무늬 손질(위 설명). 손질한 무늬는 bitmap·크기·alpha를 채운다(바이트 data는 견본용 그림과 같은 배열이라 그대로 둔다).
- * onEach는 무늬 하나를 마칠 때마다(진행 표시용).
+ * 장면의 무늬 손질(위 설명). 손질한 무늬는 bitmap·크기·alpha를 채우고 그림 파일 바이트(data)는 뺀다 — 뷰어 코어는 bitmap이 있으면 그것만 풀고,
+ * 재질 목록 견본은 같은 바이트를 images에서 따로 받는다(23차 — 화면이 이 바이트를 끝까지 쥐지 않게). onEach는 무늬 하나를 마칠 때마다(진행 표시용).
  */
 export async function prepareSceneTextures(scene: Scene3d, limit: number, onEach?: (done: number, total: number) => void): Promise<TexturePrepResult> {
   const res: TexturePrepResult = { decoded: 0, colorized: 0, alpha: 0, dropped: 0, swatches: new Map() };
@@ -135,6 +135,7 @@ export async function prepareSceneTextures(scene: Scene3d, limit: number, onEach
           t.bitmap = r.bitmap;
           t.width = r.bitmap.width;
           t.height = r.bitmap.height;
+          delete t.data;
         }
         if (r.alpha) {
           t.alpha = true;

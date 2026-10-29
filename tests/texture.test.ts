@@ -3,7 +3,7 @@
  * 장면의 무늬 좌표·무늬 그림, 한도, 색 바꾼 무늬 규칙, 워커 손질의 순수 부분.
  * 시험 파일은 쓰기 도구(skpwrite)로 무늬 재질·면 투영 바이트를 직접 만든다.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Mesh3d, Scene3d } from 'opencad-viewer3d/types';
 import { readSkpImages, skpToScene, type SkpImages, type SkpTextureInfo } from '../src/index';
 import { abgrColor, parseMaterialXml } from '../src/materials';
@@ -476,6 +476,43 @@ describe('워커 무늬 손질(순수 부분)', () => {
     expect(r.dropped).toBe(1);
     expect(s.textures!.map((t) => t.id)).toEqual(['skp-tex-1']);
     expect(s.warnings!.some((w) => w.includes('평균색'))).toBe(true);
+  });
+
+  it('워커가 푼 무늬(색 바꾸기)는 bitmap만 넘기고 그림 파일 바이트는 뺀다 — 풀지 않은 무늬는 바이트 그대로', async () => {
+    // 브라우저 그림 API를 흉내 낸다(2×2 불투명 화소)
+    class FakeCanvas {
+      constructor(
+        public width: number,
+        public height: number,
+      ) {}
+      getContext(): unknown {
+        const n = this.width * this.height * 4;
+        return { drawImage: () => undefined, getImageData: () => ({ data: new Uint8ClampedArray(n).fill(255) }), putImageData: () => undefined };
+      }
+      async convertToBlob(): Promise<Blob> {
+        return new Blob([new Uint8Array([1, 2, 3])]);
+      }
+      transferToImageBitmap(): unknown {
+        return { width: this.width, height: this.height, close: () => undefined };
+      }
+    }
+    vi.stubGlobal('OffscreenCanvas', FakeCanvas);
+    vi.stubGlobal('createImageBitmap', async () => ({ width: 2, height: 2, close: () => undefined }));
+    try {
+      const s = sceneWith();
+      const r = await prepareSceneTextures(s, 1024);
+      expect(r).toMatchObject({ decoded: 1, colorized: 1, dropped: 0 });
+      const done = s.textures!.find((t) => t.bitmap)!;
+      expect(done).toMatchObject({ width: 2, height: 2 });
+      expect('data' in done).toBe(false);
+      const plain = s.textures!.find((t) => t.id === 'skp-tex-1')!;
+      expect(plain.bitmap).toBeUndefined();
+      expect(plain.data).toBeInstanceOf(Uint8Array);
+      // 견본 그림(색을 바꾼 PNG)은 따로
+      expect(r.swatches.size).toBe(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

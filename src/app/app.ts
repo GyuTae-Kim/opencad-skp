@@ -12,7 +12,7 @@
 // 코어 입구(Viewer3d — 그리기·고르기)는 문서를 열 때 나눠 받는다(core.ts). 여기서는 타입과 작은 모듈만 가져온다
 import type { Pick3d, IndexRange, PickEvent, Projection, RenderMode, SectionAxis, ViewName, Viewer3d } from 'opencad-viewer3d';
 import { VIEW_LABELS, lerpCamera, type CameraState, type ViewFrame } from 'opencad-viewer3d/camera';
-import { FirstUse, chunkFailText, isChunkLoadError, loadMeasure, loadViewerCore } from './core';
+import { FirstUse, chunkFailText, isChunkLoadError, loadMeasure, loadTexSources, loadViewerCore } from './core';
 import { dragStartPx } from 'opencad-viewer3d/pointer';
 import { ParseClient } from './client';
 import { AnnotationLabels, occludedBy } from './annotations';
@@ -1093,6 +1093,13 @@ export class SkpViewerApp implements PanelHost {
       this.noticeDamage(doc);
       await uploaded;
       if (seq !== this.openSeq || this.doc !== doc) return false;
+      // 큰 모형은 무늬를 다 올린 뒤 원본(그림·바이트)을 놓는다(texsources.ts — 못 받으면 그대로)
+      const v = this.viewer;
+      if (v)
+        void loadTexSources().then(
+          (m) => m.releaseWhenSettled(v, doc.scene, () => this.doc === doc, (title, text) => this.showNotice('info', title, text)),
+          () => 0,
+        );
       attempt.success();
       return true;
     } catch (e) {
