@@ -56,7 +56,7 @@ import {
   dwellPoint,
   trackHint,
 } from '../../src/app/measure';
-import { AXIS_COLORS, SNAP_COLORS, SNAP_LABELS, TRACK_ALIGN_LABEL, TRACK_AXIS_LABELS, TRACK_PAIR_LABELS } from '../../src/app/snap';
+import { AXIS_COLORS, AXIS_LABELS, SNAP_COLORS, SNAP_LABELS, TRACK_ALIGN_LABEL, TRACK_AXIS_LABELS, TRACK_PAIR_LABELS } from '../../src/app/snap';
 import { TRACK_DWELL_MS } from 'opencad-viewer3d/track';
 import { GUIDE_STORE_KEY, readGuideFiles } from '../../src/app/guidestore';
 import type { V3 } from 'opencad-viewer3d/math';
@@ -2623,5 +2623,118 @@ describe('측정 도구: 끌어온 축끼리의 교차·끌어온 축과 모서�
     r.tool.setTrack(false);
     dwellOn(r, 141.2, 70.6);
     expect(r.tool.clearable).toBe(false);
+  });
+});
+
+describe('측정 도구: 시작점 축·끌어온 축이 모서리·면과 만나는 점(코어 0.18.0)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+  });
+
+  it('줄자: 시작점 녹색 축이 비낀 모서리와 만나는 점 — 모서리 위 표식, 축 색 고무줄, Shift로 그 축에 잠그고 그 점에서 잰다(끄면 예전처럼 모서리 위)', () => {
+    // 넓은 면 위: 끝점 A(0, −40 — 화면 100, 140)에서 −X로 30인 모서리, 비낀 모서리 s(y = x + 60, x −80~60 — A의 녹색 축과 (0, 60) — 화면 (100, 40)에서 만난다)
+    const scene = (): Pick<Scene3d, 'meshes' | 'lines' | 'units'> => ({
+      units: 'mm',
+      meshes: [quad('f', -95, -95, 95, 95, 0)],
+      lines: [lines('e', [[0, -40, 0, -30, -40, 0], [-80, -20, 0, 60, 120, 0]])],
+    });
+    const r = rig(scene());
+    expect(r.tool.axisMeets).toBe(true);
+    r.tool.setMode('tape');
+    r.click(100.6, 140.4);
+    r.move(101.2, 41.5);
+    expect(r.tip()).toBe(`${AXIS_LABELS.y} · ${SNAP_LABELS.onEdge} · 100 mm`);
+    const mark = r.q('[data-meet="edge"]')!;
+    expect(mark.tagName.toLowerCase()).toBe('rect');
+    expect(mark.getAttribute('fill')).toBe(SNAP_COLORS.onEdge);
+    expect(mark.getAttribute('data-kind')).toBe('axis');
+    expect(mark.getAttribute('data-track')).toBeNull();
+    const rubber = r.q('line.measure-rubber')!;
+    expect(rubber.getAttribute('stroke')).toBe(AXIS_COLORS.y);
+    expect(rubber.getAttribute('data-axis')).toBe('y');
+    expect(r.qa('line.measure-track-line')).toHaveLength(0);
+    // Shift: 그 축(모서리 방향이 아니라)으로 잠근다
+    r.key('Shift');
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'y', source: 'shift' });
+    r.move(140.3, 41.5, { shift: true });
+    expect(r.tip()?.startsWith(`${AXIS_LABELS.y} · 잠금`)).toBe(true);
+    r.key('Shift', 'keyup');
+    r.click(101.2, 41.5);
+    const res = r.results.at(-1);
+    expect(res).toMatchObject({ kind: 'tape', a: [0, -40, 0] });
+    if (res?.kind !== 'tape') return;
+    expect(res.b[0]).toBe(0);
+    expect(res.b[1]).toBeCloseTo(60, 9);
+    expect(res.distance).toBeCloseTo(100, 9);
+    // 끄면 같은 자리는 예전처럼 모서리 위
+    r.tool.setAxisMeets(false);
+    expect(r.tool.axisMeets).toBe(false);
+    r.click(100.6, 140.4);
+    r.move(101.2, 41.5);
+    expect(r.tip()?.startsWith(`${SNAP_LABELS.onEdge} · `)).toBe(true);
+    expect(r.q('[data-meet]')).toBeNull();
+    // 선택으로 처음부터 끌 수도 있다
+    const off = rig(scene(), TOP, DEFAULT_UNITS, { axisMeets: false });
+    expect(off.tool.axisMeets).toBe(false);
+  });
+
+  // 앞 위에서 비스듬히 본 원근: 비탈 면 roof(z = 40 + y/2), 끝점 A(10, −10, −20)에서 +X로 20인 선 — A의 파랑 축이 roof를 M(10, −10, 35)에서 뚫는다
+  const ang = dirToAngles([0.3, -1, 0.8]);
+  const CAM: CameraState = { target: [0, 0, 20], distance: 320, yaw: ang.yaw, pitch: ang.pitch, projection: 'perspective', fovY: FOV };
+  const A: V3 = [10, -10, -20];
+  const M: V3 = [10, -10, 35];
+  const ROOF = (): Pick<Scene3d, 'meshes' | 'lines' | 'units'> => ({
+    units: 'mm',
+    meshes: [{ id: 'roof', positions: Float32Array.from([-60, -40, 20, 60, -40, 20, 60, 40, 60, -60, 40, 60]), indices: Uint32Array.from([0, 1, 2, 0, 2, 3]), color: [0.8, 0.8, 0.8, 1] }],
+    lines: [lines('a', [[10, -10, -20, 30, -10, -20]])],
+  });
+  const f = frameFor(CAM, W, W);
+  const sa = projectToScreen(f, A)!;
+  const sm = projectToScreen(f, M)!;
+
+  it('줄자: 시작점 파랑 축이 비탈 면을 뚫는 점 — 면 위 표식, 축 색 고무줄, 그 점에서 잰다', () => {
+    const r = rig(ROOF(), CAM);
+    r.tool.setMode('tape');
+    r.click(sa[0] + 0.4, sa[1] - 0.3);
+    expect(r.tool.pointCount).toBe(1);
+    r.move(sm[0] + 1.2, sm[1] + 0.9);
+    expect(r.tip()).toBe(`${AXIS_LABELS.z} · ${SNAP_LABELS.onFace} · 55 mm`);
+    const mark = r.q('[data-meet="face"]')!;
+    expect(mark.tagName.toLowerCase()).toBe('polygon');
+    expect(mark.getAttribute('fill')).toBe(SNAP_COLORS.onFace);
+    expect(r.q('line.measure-rubber')?.getAttribute('stroke')).toBe(AXIS_COLORS.z);
+    r.key('Shift');
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'z', source: 'shift' });
+    r.key('Shift', 'keyup');
+    r.click(sm[0] + 1.2, sm[1] + 0.9);
+    const res = r.results.at(-1);
+    expect(res).toMatchObject({ kind: 'tape', a: A });
+    if (res?.kind !== 'tape') return;
+    expect(res.b.slice(0, 2)).toEqual([10, -10]);
+    expect(res.b[2]).toBeCloseTo(35, 9);
+    expect(res.distance).toBeCloseTo(55, 9);
+  });
+
+  it('끌어온 축이 면을 뚫는 점(시작점 전): 끌어온 점에서 축 색 점선과 면 위 표식', () => {
+    const r = rig(ROOF(), CAM);
+    r.tool.setMode('tape');
+    r.move(sa[0] + 0.4, sa[1] - 0.3);
+    vi.advanceTimersByTime(TRACK_DWELL_MS);
+    expect(r.tool.trackPoints).toEqual([A]);
+    r.move(sm[0] + 1.2, sm[1] + 0.9);
+    expect(r.tip()).toBe(`${TRACK_AXIS_LABELS.z} · ${SNAP_LABELS.onFace}`);
+    expect(r.q('line.measure-track-line')?.getAttribute('stroke')).toBe(AXIS_COLORS.z);
+    const mark = r.q('[data-meet="face"]')!;
+    expect(mark.getAttribute('data-track')).toBe('face');
+    expect(mark.getAttribute('fill')).toBe(SNAP_COLORS.onFace);
+    // 끄면 예전처럼 끌어온 축 위 점
+    r.tool.setAxisMeets(false);
+    r.move(sm[0] + 1.3, sm[1] + 0.9);
+    expect(r.tip()).toBe(TRACK_AXIS_LABELS.z);
   });
 });
