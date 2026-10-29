@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
 const { JSDOM } = createRequire(import.meta.url)('jsdom');
 import { installLocalization } from '../src/app/i18n';
-import { GUIDE_CLEAR_FILE_LABEL, GUIDE_REDO_LABEL, GUIDE_UNDO_LABEL, GUIDES_SHOWN_LABEL, guideKeyHint, lockHint, measureHint } from '../src/app/measure';
+import { GUIDE_CLEAR_FILE_LABEL, GUIDE_REDO_LABEL, GUIDE_UNDO_LABEL, GUIDES_SHOWN_LABEL, guideKeyHint, lockHint, measureHint, trackHint } from '../src/app/measure';
+import { AXIS_LABELS, TRACK_ALIGN_LABEL, TRACK_AXIS_LABELS } from '../src/app/snap';
 import { SHORTCUTS } from '../src/app/shortcuts';
 import { chunkFailText } from '../src/app/core';
 import { catalogs, currentLanguage, languageUrl, languages, translate } from '../site/i18n.mjs';
@@ -102,10 +103,26 @@ describe('language URLs and UI presentation', () => {
       '잠글 방향이 없습니다: 길게 눌러 조준하며 축·나란한 방향에 맞춘 뒤 누르세요', '잠글 방향이 없습니다: 커서를 축·나란한 방향에 맞춘 뒤 누르세요',
       '줄자 (T): 두 점 거리 — 끝점·중간점·모서리·면에 붙고, 축·모서리와 나란한 방향이면 그 선에 고정(Shift·화살표로 잠금) · Esc 지우기',
       '각도기: 중심 → 기준 방향 → 잴 방향(Shift = 평면 고정·방향 잠금) · Esc 지우기']) texts.add(t);
+    // 다른 점에서 끌어온 축: 툴팁(끌어온 점의 축 · 시작점 축 위 줄 맞춘 자리 · 길이)과 상태 줄·측정 띠의 끌어온 점 수(잠금 안내 뒤에 " · "로)
+    for (const axis of ['x', 'y', 'z'] as const) {
+      texts.add(TRACK_AXIS_LABELS[axis]);
+      texts.add(`${TRACK_AXIS_LABELS[axis]} · 62 mm`);
+      texts.add(`${AXIS_LABELS[axis]} · ${TRACK_ALIGN_LABEL} · 40 mm`);
+    }
+    for (const n of [1, 2, 3]) {
+      texts.add(trackHint(n)!);
+      texts.add(`Ctrl: 안내 두기 · ${trackHint(n)}`);
+      texts.add(`${lockHint('tape', 1, null, null, false)} · ${trackHint(n)}`);
+      texts.add(`${lockHint('tape', 1, 'x', null, false)} · ${trackHint(n)}`);
+    }
     texts.delete('');
     for (const {code} of languages.filter(item => item.code !== 'ko'))
       for (const t of texts) expect(translate(t, code), `${code}: ${t}`).not.toMatch(hangul);
     expect(translate('빨강 축에 · 잠금 · 60 mm', 'en')).toBe('On red axis · Locked · 60 mm');
+    expect(translate(`${AXIS_LABELS.x} · ${TRACK_ALIGN_LABEL} · 40 mm`, 'en')).toBe('On red axis · Aligned with tracked point · 40 mm');
+    expect(translate(`${TRACK_AXIS_LABELS.z} · 62 mm`, 'de')).toBe('Auf blauer Achse vom verfolgten Punkt · 62 mm');
+    expect(translate(`Ctrl: 안내 두기 · ${trackHint(2)}`, 'en')).toBe('Ctrl: place guides · Tracked points: 2');
+    expect(translate(trackHint(3)!, 'ja')).toBe('追跡点 3個');
     expect(translate('안내 5', 'en')).toBe('Guides 5');
     expect(translate('안내점 2', 'en')).toBe('Guide points 2');
     expect(translate('Option: 안내 두기', 'en')).toBe('Option: place guides');

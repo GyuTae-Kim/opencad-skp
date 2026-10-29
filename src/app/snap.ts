@@ -25,6 +25,11 @@
  *   그 선 위에만 찍는다. 시작점을 지나는 모서리에 붙은 점 추정(모서리 끝에서 그 모서리를 따라 가리킬 때)도 그 모서리 방향으로 잠근다
  *   (코어 0.12.0 순수 함수 edgeLineLock). 커서가 끝점·중간점·중심·교차점·수직 같은 점 위면 그 점을 선에 수직으로 내린 자리(다른 점의 높이를 옮겨 잰다),
  *   아니면 커서 광선에 가장 가까운 선 위 점(코어 0.10.0 순수 함수 lockedSnap).
+ * - 다른 점에서 끌어온 축(SketchUp "점에서" 추론 — 점 위에 잠시 머물면 그 점에서 축 방향 점선): 부른 쪽이 기억한 점(tracks)이 있고 결과가 면 위·빈 곳이면
+ *   1. 시작점 축 위에서 끌어온 점과 줄 맞춘 자리(끌어온 점을 그 축에 수직으로 내린 자리 — 축 고정보다 먼저, 그 축 방향이라 잠글 수 있다)
+ *   2. 축 고정·나란함·수직(위와 같다)
+ *   3. 끌어온 점을 지나는 축 위에서 커서 광선에 가장 가까운 점(시작점 전에도 — 시작점을 지나는 선이 아니라 잠그지 않는다)
+ *   계산은 코어 0.16.0 순수 함수 trackCrossSnap·trackAxisSnap(opencad-viewer3d/track)이 하고, 축은 모형의 그리기 축이다. 잠근 동안에는 보지 않는다.
  * - 아무것도 없으면 시작점(없으면 anchor)을 지나 화면과 나란한 평면 위의 빈 점(free).
  *
  * 고르기 결과(Pick3d)는 코어 viewer.pick이 준다. 숨긴 항목·묶음(isVisible false)·숨긴 구간·단면에서 잘린 쪽은
@@ -37,6 +42,7 @@ import { projectToScreen, screenRay, viewDepth, worldPerPixel, type ViewFrame } 
 import type { V3 } from 'opencad-viewer3d/math';
 import { PICK_TOLERANCE_PX } from 'opencad-viewer3d/pointer';
 import { edgeLineLock as lineLock, lockedSnap, segmentIntersection } from 'opencad-viewer3d/inference';
+import { trackAxisSnap, trackCrossSnap } from 'opencad-viewer3d/track';
 
 /**
  * 그물 정점 → 세계 점: 묶음 원점(origin)을 더한 뒤 배치 행렬(matrix, 4×4 열 우선)을 곱한다(코어 math의 modelMatrix·transformPoint와 같은 계산).
@@ -85,6 +91,11 @@ export interface Snap {
   guide?: GuideHit;
   /** 지나간 모서리(edge)에 수직인 방향 추론(커서를 따라가는 선 — 시작점에서 내린 수직 발과 다르다) */
   inferred?: boolean;
+  /**
+   * 다른 점에서 끌어온 축(kind 'axis'): 그 축을 끌어온 점(세계). dir이 있으면 시작점 축 위에서 이 점과 줄 맞춘 자리,
+   * 없으면 이 점을 지나는 축 위 점(시작점에서 그 축 방향이 아니다)
+   */
+  trackFrom?: V3;
 }
 
 /** 붙은 안내: 안내점(guides) 또는 안내선(guideLines)과 그 차례 */
@@ -158,6 +169,10 @@ export const SNAP_LABELS: Readonly<Record<SnapKind, string>> = Object.freeze({
   free: '',
 });
 export const AXIS_LABELS: Readonly<Record<Axis, string>> = Object.freeze({ x: '빨강 축에', y: '녹색 축에', z: '파랑 축에' });
+/** 끌어온 점을 지나는 축 위 점의 추정 글(SketchUp "점에서") */
+export const TRACK_AXIS_LABELS: Readonly<Record<Axis, string>> = Object.freeze({ x: '끌어온 점의 빨강 축에', y: '끌어온 점의 녹색 축에', z: '끌어온 점의 파랑 축에' });
+/** 시작점 축 위에서 끌어온 점과 줄 맞춘 자리: 축 글(AXIS_LABELS) 뒤에 " · "로 붙는 글 */
+export const TRACK_ALIGN_LABEL = '끌어온 점과 줄 맞춤';
 /** 추정 표식 색(SketchUp: 끝점 초록, 중간점 청록, 교차점·모서리 빨강, 면 파랑, 수직·나란함 자홍) */
 export const SNAP_COLORS: Readonly<Record<SnapKind, string>> = Object.freeze({
   endpoint: '#00a000',
@@ -495,6 +510,8 @@ export interface SnapInput {
   parallelRef?: readonly [V3, V3] | null;
   /** 잠근 방향 추론(시작점이 있을 때만 쓴다) */
   lock?: InferenceLock | null;
+  /** 다른 점에서 끌어온 점(세계, 새것이 앞 — 없거나 비었으면 끌어온 축을 보지 않아 예전과 같다) */
+  tracks?: readonly (readonly number[])[] | null;
 }
 
 interface Cand {
@@ -628,6 +645,7 @@ export function chooseSnap(o: SnapInput): Snap {
     if (pick.section) snap.section = true;
   }
   const axes = o.axisDirs ?? AXIS_DIRS;
+  const tracks = o.tracks?.length ? o.tracks : null;
   if (o.from && o.lock) {
     // 잠금: 시작점을 지나는 잠근 선 위에만. 점 추정이면 그 점을 선에 수직으로 내린 자리, 아니면 커서 광선에 가장 가까운 자리
     const q = snap && POINT_KINDS.has(snap.kind) ? snap : null;
@@ -643,25 +661,15 @@ export function chooseSnap(o: SnapInput): Snap {
       }
     }
     snap = s;
-  } else if (o.from && (!snap || snap.kind === 'onFace')) {
-    // 축 고정·나란함·모서리에 수직: 면 위·빈 곳보다 앞선다(점·선 추정·면에 수직보다는 뒤).
-    // 여럿 맞으면 화면에서 선에 가까운 쪽(같으면 축 → 나란히 → 수직)
-    const ax = o.axes !== false ? axisLock(f, o.from, o.x, o.y, { axes }) : null;
-    const ref = o.parallelRef;
-    const e = ref ? unitOf(sub(ref[1], ref[0])) : null;
-    const par = ref && e && !alongAxis(e, axes) ? directionLock(f, o.from, o.x, o.y, e) : null;
-    let per: { point: V3; perp: number; dir: V3 } | null = null;
-    // 커서가 면 위(단면에 잘린 면은 아님)면 그 면 안에서 모서리에 수직인 방향도 본다
-    const face = snap?.kind === 'onFace' && !snap.section && pick?.kind === 'mesh' ? (pick.normal ?? null) : null;
-    if (ref)
-      for (const d of perpendicularDirs(o.from, ref, axes, face)) {
-        const l = directionLock(f, o.from, o.x, o.y, d);
-        if (l && (!per || l.perp < per.perp)) per = { ...l, dir: d };
-      }
-    const best = Math.min(ax?.perp ?? Infinity, par?.perp ?? Infinity, per?.perp ?? Infinity);
-    if (ax && ax.perp <= best) snap = { kind: 'axis', point: ax.point, axis: ax.axis, label: AXIS_LABELS[ax.axis], dir: [...axes[ax.axis]] };
-    else if (par && ref && e && par.perp <= best) snap = { kind: 'parallel', point: par.point, label: SNAP_LABELS.parallel, dir: e, edge: [ref[0], ref[1]] };
-    else if (per && ref) snap = { kind: 'perpendicular', point: per.point, label: SNAP_LABELS.perpendicular, dir: per.dir, edge: [ref[0], ref[1]], inferred: true };
+  } else {
+    // 끌어온 점과 줄 맞춘 시작점 축 위 자리: 축 위의 한 점이라 축 고정보다 먼저(이 둘레에서는 축을 따라 움직여도 이 자리에 붙는다).
+    // 시작점에서 그 축 방향이라 축 고정처럼 잠글 수 있다
+    const cross = o.from && tracks && (!snap || snap.kind === 'onFace') ? trackCrossSnap(f, o.from, tracks, o.x, o.y, R, axes) : null;
+    if (cross) snap = { kind: 'axis', point: cross.p, axis: cross.axis, label: `${AXIS_LABELS[cross.axis]} · ${TRACK_ALIGN_LABEL}`, dir: cross.direction ?? [...axes[cross.axis]], trackFrom: cross.from };
+    else if (o.from && (!snap || snap.kind === 'onFace')) snap = directionSnap(o, f, o.from, snap, pick, axes);
+    // 끌어온 점을 지나는 축(시작점 전에도): 시작점을 지나는 선이 아니라 방향(dir)이 없고 잠그지 않는다
+    const t = tracks && (!snap || snap.kind === 'onFace') ? trackAxisSnap(f, tracks, o.x, o.y, R, o.from ?? null, axes) : null;
+    if (t) snap = { kind: 'axis', point: t.p, axis: t.axis, label: TRACK_AXIS_LABELS[t.axis], trackFrom: t.from };
   }
   // 시작점에서 내린 수직(모서리·면)도 방향 추론이다(시작점 → 발 쪽으로 잠근다)
   if (snap && snap.kind === 'perpendicular' && o.from && !snap.locked && !snap.inferred) {
@@ -670,6 +678,30 @@ export function chooseSnap(o: SnapInput): Snap {
   }
   if (!snap) snap = { kind: 'free', point: freePoint(f, ray, o.from ?? o.anchor), label: SNAP_LABELS.free };
   if (pick && pick.kind === 'mesh' && pick.normal && !snap.normal) snap.normal = [...pick.normal];
+  return snap;
+}
+
+/**
+ * 축 고정·나란함·모서리에 수직: 면 위·빈 곳보다 앞선다(점·선 추정·면에 수직보다는 뒤). 맞는 것이 없으면 snap 그대로.
+ * 여럿 맞으면 화면에서 선에 가까운 쪽(같으면 축 → 나란히 → 수직)
+ */
+function directionSnap(o: SnapInput, f: ViewFrame, from: readonly number[], snap: Snap | null, pick: Pick3d | null, axes: AxisDirs): Snap | null {
+  const ax = o.axes !== false ? axisLock(f, from, o.x, o.y, { axes }) : null;
+  const ref = o.parallelRef;
+  const e = ref ? unitOf(sub(ref[1], ref[0])) : null;
+  const par = ref && e && !alongAxis(e, axes) ? directionLock(f, from, o.x, o.y, e) : null;
+  let per: { point: V3; perp: number; dir: V3 } | null = null;
+  // 커서가 면 위(단면에 잘린 면은 아님)면 그 면 안에서 모서리에 수직인 방향도 본다
+  const face = snap?.kind === 'onFace' && !snap.section && pick?.kind === 'mesh' ? (pick.normal ?? null) : null;
+  if (ref)
+    for (const d of perpendicularDirs(from, ref, axes, face)) {
+      const l = directionLock(f, from, o.x, o.y, d);
+      if (l && (!per || l.perp < per.perp)) per = { ...l, dir: d };
+    }
+  const best = Math.min(ax?.perp ?? Infinity, par?.perp ?? Infinity, per?.perp ?? Infinity);
+  if (ax && ax.perp <= best) return { kind: 'axis', point: ax.point, axis: ax.axis, label: AXIS_LABELS[ax.axis], dir: [...axes[ax.axis]] };
+  if (par && ref && e && par.perp <= best) return { kind: 'parallel', point: par.point, label: SNAP_LABELS.parallel, dir: e, edge: [ref[0], ref[1]] };
+  if (per && ref) return { kind: 'perpendicular', point: per.point, label: SNAP_LABELS.perpendicular, dir: per.dir, edge: [ref[0], ref[1]], inferred: true };
   return snap;
 }
 
