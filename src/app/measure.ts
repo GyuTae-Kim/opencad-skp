@@ -49,6 +49,12 @@
  *   (지금 커서 밑 것, 없으면 앞서 지나간 모서리와 나란히)을 잠그고 같은 키를 다시 누르면 푼다. 손가락 기기는 앱의 잠금 단추(setInferenceLock).
  *   잠그면 그 선 위에만 찍고(다른 점을 가리키면 그 점을 선에 내린 자리 — 높이 옮겨 재기), 점을 찍거나 취소·지우기를 하면 풀린다.
  *   각도기 중심을 찍기 전 →·←·↑는 각도기 평면을 그 축에 고정한다(빨강·녹색·파랑 각도기, 다시 누르면 풀기).
+ * 다른 점에서 끌어온 축(SketchUp "점에서" 추론 — 기본 켬, setTrack): 마우스·펜 커서나 정밀 조준 십자선이 점 추정(끝점·중간점·중심·교차점·수직 발·안내점) 위에
+ *   TRACK_DWELL_MS(0.5초) 동안 머물면(마우스·펜은 2화소, 조준은 손가락 떨림을 받아 AIM_DWELL_PX 안) 그 점을 최근 셋까지 기억한다(코어 0.16.0 MeasureTracker).
+ *   그 뒤 면 위·빈 곳이면 시작점 축 위에서 그 점과 줄 맞춘 자리, 그 점을 지나는 축 위에도 붙는다(snap.ts — 축은 모형의 그리기 축).
+ *   끌어온 점은 작은 +로, 붙은 축은 그 점에서 커서 자리까지 축 색 점선으로 그린다. 손가락 탭은 커서가 없어 머무르지 않는다(정밀 조준으로 머문다).
+ *   방금 누른 점과 진행 중 측정의 시작점은 머물러도 기억하지 않는다. 측정을 마치거나(두 점째·셋째 점·칸 넣기) 지우기·Esc·도구 바꾸기·끄기면 잊는다.
+ *   안내가 아니라서 되돌리기·파일별 안내 기억에 들지 않고 고르거나 지우지도 않는다. 끄면 상태가 없어 추정·그림이 예전과 같다.
  * 그리기는 덧그림 층의 SVG 묶음(g.measure)과 DOM 라벨(div.measure-layer)로 하고, 숫자 글은 모형 단위(units.ts)로 쓴다.
  */
 import type { Viewer3d } from 'opencad-viewer3d';
@@ -57,6 +63,7 @@ import type { Scene3d } from 'opencad-viewer3d/types';
 import { projectToScreen, screenRay, viewDepth, worldPerPixel, type ViewFrame } from 'opencad-viewer3d/camera';
 import type { V3 } from 'opencad-viewer3d/math';
 import { LABEL_POINT_R, hitsAvoid, placeMeasureLabel, type LabelAvoidAreas, type LabelCircle, type MeasureLabelRect } from 'opencad-viewer3d/measurelabel';
+import { MeasureTracker, TRACK_DWELL_MS } from 'opencad-viewer3d/track';
 import { safeStorage } from './backdrop';
 import { icon } from './dom';
 import { digestHex, loadGuides, saveGuides, type GuideStorage } from './guidestore';
@@ -191,7 +198,7 @@ export interface MeasureToolOptions {
    * 아니면 각도기 결과 각도(도). 없으면 null. 값이나 종류가 바뀔 때만 부른다
    */
   onLive?: (value: number | null, kind: LiveKind) => void;
-  /** 추론 잠금이나 화살표로 고정한 각도기 평면이 바뀌면(측정 띠 잠금 단추·잠금 안내를 맞춘다) */
+  /** 추론 잠금이나 화살표로 고정한 각도기 평면, 끌어온 점 수가 바뀌면(측정 띠 잠금 단추·잠금 안내를 맞춘다) */
   onLock?: () => void;
   /** 안내 두기를 켜고 끄는 키(눌렀다 떼기 — 기본 Control, Mac은 'Alt' = Option) */
   guideKey?: GuideKey;
@@ -201,6 +208,27 @@ export interface MeasureToolOptions {
   storage?: GuideStorage | null;
   /** 결과 글(길이·각도)이 비켜 갈 앱 요소(3D 보기 위에 뜬 측정 띠·측정값 칸 — 보이지 않는 요소는 넘어간다) */
   labelAvoid?: () => readonly (Element | null | undefined)[];
+  /** 다른 점에서 끌어온 축(점 위에 머물러 기억한 점의 축 — 기본 켬, setTrack으로 바꾼다) */
+  track?: boolean;
+}
+
+/**
+ * 정밀 조준 십자선이 머무는 것으로 볼 거리(화소): 손가락은 가만히 대고 있어도 몇 화소 떨리므로 마우스·펜(코어 TRACK_DWELL_PX 2)보다 넓게
+ * (휴대폰에서 1 mm쯤 — 조준 추정 반경 14화소의 반이 안 되어 다른 점으로 넘어가지는 않는다)
+ */
+export const AIM_DWELL_PX = 6;
+
+/** 머물러 기억할 점 추정(시작점을 지나는 방향 추론인 모서리에 수직 추론은 빼고, 잠근 선 위 점도 뺀다) */
+const DWELL_KINDS: ReadonlySet<SnapKind> = new Set(['endpoint', 'midpoint', 'center', 'intersection', 'perpendicular']);
+
+/** 머물러 기억할 점인지(점 추정이고 방향 추론·잠근 선 위 점이 아니다) */
+export function dwellPoint(s: Pick<Snap, 'kind' | 'inferred' | 'locked'> | null | undefined): boolean {
+  return !!s && DWELL_KINDS.has(s.kind) && !s.inferred && !s.locked;
+}
+
+/** 끌어온 점 수 안내(상태 줄·측정 띠에서 잠금 안내 다음 — 없으면 null) */
+export function trackHint(n: number): string | null {
+  return n > 0 ? `끌어온 점 ${n}개` : null;
 }
 
 /** 잠근 곳: Shift(떼면 풀린다)·화살표 키·앱 단추 */
@@ -696,8 +724,16 @@ export class MeasureTool {
   private lastLockable: InferenceLock | null = null;
   /** 화살표로 고정한 각도기 평면의 축(중심을 찍기 전) */
   private planeAxisValue: Axis | null = null;
-  /** 마지막으로 알린 잠금·평면(onLock) */
-  private lockNote: [MeasureLock | null, Axis | null] = [null, null];
+  /** 마지막으로 알린 잠금·평면·끌어온 점 수(onLock) */
+  private lockNote: [MeasureLock | null, Axis | null, number] = [null, null, 0];
+  /** 다른 점에서 끌어온 축을 쓰는지와 끌어온 점·머무르기 상태(코어 MeasureTracker — 시간은 dwellTimer가 잰다) */
+  private trackOn: boolean;
+  private readonly tracker = new MeasureTracker();
+  private dwellTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 정밀 조준이 머물기 시작한 자리(떨림을 받는 기준) */
+  private aimDwellAt: { x: number; y: number } | null = null;
+  /** 방금 누른 점(커서가 그 점을 떠날 때까지 머물러도 기억하지 않는다) */
+  private pressedPoint: V3 | null = null;
   /** 안내 두기(누르기로 안내점·안내선) — 도구를 바꾸거나 새 문서를 열어도 남는다 */
   private guideOn = false;
   /** 안내 두기 키만 눌렀는지(누른 뒤 다른 키·누르기·휠이 없으면 뗄 때 바꾼다) */
@@ -740,6 +776,7 @@ export class MeasureTool {
     private readonly opts: MeasureToolOptions,
   ) {
     this.storage = opts.storage === undefined ? safeStorage() : opts.storage;
+    this.trackOn = opts.track !== false;
     let shown = true;
     try {
       shown = this.storage?.getItem(GUIDES_SHOWN_KEY) !== '0';
@@ -849,7 +886,27 @@ export class MeasureTool {
   lockHintText(touch: boolean): string | null {
     const m = this.modeValue;
     const n = this.pts.length;
-    return lockHint(m, n, lockName(this.lockValue), this.planeAxisValue, touch) ?? guideKeyHint(m, n, this.guideOn, this.opts.guideKey ?? 'Control', touch);
+    const hint = lockHint(m, n, lockName(this.lockValue), this.planeAxisValue, touch) ?? guideKeyHint(m, n, this.guideOn, this.opts.guideKey ?? 'Control', touch);
+    // 끌어온 점이 있으면 그 수를 뒤에 따로(번역은 " · "로 나눠 조각마다 찾는다)
+    const t = m ? trackHint(this.tracker.size) : null;
+    return hint && t ? `${hint} · ${t}` : (hint ?? t);
+  }
+
+  /** 다른 점에서 끌어온 축을 쓰는지(기본 켬) */
+  get track(): boolean {
+    return this.trackOn;
+  }
+
+  /** 끌어온 축 켜고 끄기. 끄면 끌어온 점과 머무르기를 버린다(상태가 없어 추정·그림이 예전과 같다) */
+  setTrack(on: boolean): void {
+    if (this.disposed || on === this.trackOn) return;
+    this.trackOn = on;
+    if (!on) this.forgetTracks();
+  }
+
+  /** 기억한 끌어온 점(새것이 앞, 복사본) */
+  get trackPoints(): V3[] {
+    return this.tracker.points;
   }
 
   /** 화살표로 고정한 각도기 평면의 축(중심을 찍기 전, 없으면 null) */
@@ -1239,6 +1296,7 @@ export class MeasureTool {
     this.pts = [];
     this.startEdge = null;
     this.dropLock();
+    this.forgetTracks(false);
     const made = edge ? this.addGuideLine(end, sub(edge[1], edge[0])) : this.addGuidePoint(end);
     this.setResult(tapeResult(a, end), edge);
     this.hoverDirty = true;
@@ -1273,6 +1331,7 @@ export class MeasureTool {
     this.pts = [];
     this.normal = null;
     this.dropLock();
+    this.forgetTracks(false);
     const made = this.addGuideLine(c, dir);
     this.setResult(protractorResult(c, base, end, n));
     this.hoverDirty = true;
@@ -1313,6 +1372,7 @@ export class MeasureTool {
     this.normal = null;
     this.centers = [];
     this.dropLock();
+    this.forgetTracks(false);
     this.parallelRef = null;
     this.planeAxisValue = null;
     this.lastTap = null;
@@ -1325,7 +1385,7 @@ export class MeasureTool {
 
   /**
    * 키(keydown·keyup 모두 넘긴다). 처리했으면 true.
-   * Esc: 진행 중 점 취소 → 화살표로 고정한 각도기 평면 풀기 → 결과 지우기 → (지울 것이 없으면) false — 앱이 도구를 끈다.
+   * Esc: 진행 중 점 취소(끌어온 점도 잊는다) → 끌어온 점 잊기 → 화살표로 고정한 각도기 평면 풀기 → 결과 지우기 → (지울 것이 없으면) false — 앱이 도구를 끈다.
    * Shift: 누르고 있는 동안 방향을 잡는 중이면 지금 방향 추론 잠금, 각도기 중심을 찍기 전이면 커서 밑 평면 고정.
    * →·←·↑·↓(keydown): 축·나란히 잠금 켜고 끄기, 각도기 중심을 찍기 전에는 →·←·↑로 각도기 평면 고정(앱은 목록·입력 칸의 화살표를 넘기지 않는다).
    * 안내 두기 키(Ctrl, Mac은 Option): 그 키만 눌렀다 떼면(keyup) 안내 두기 켜고 끄기 — 그사이 다른 키·누르기·휠이 있으면 바꾸지 않는다(Ctrl+O 등).
@@ -1359,6 +1419,10 @@ export class MeasureTool {
         this.startEdge = null;
         this.normal = null;
         this.dropLock();
+        this.forgetTracks(false);
+        this.hoverDirty = true;
+      } else if (this.tracker.size) {
+        this.forgetTracks(false);
         this.hoverDirty = true;
       } else if (this.planeAxisValue) {
         this.planeAxisValue = null;
@@ -1513,7 +1577,60 @@ export class MeasureTool {
       guideLines: this.shownValue ? this.guideLns : [],
       parallelRef: this.parallelRef,
       lock: this.pts.length ? this.lockValue : null,
+      tracks: this.trackOn ? this.tracker.view : null,
     });
+  }
+
+  /**
+   * 머무르기(커서 추정마다): 마우스·펜 커서나 정밀 조준 십자선이 점 추정 위에 머물기 시작하면 TRACK_DWELL_MS 뒤 그 점을 기억한다.
+   * 다른 점·점이 아닌 추정·손가락·벗어남이면 머무르기를 버린다(코어 MeasureTracker.hover). 방금 누른 점과 시작점은 기억하지 않는다
+   */
+  private dwell(snap: Snap | null, c: Cursor): void {
+    if (!this.trackOn) return;
+    let p: V3 | null = (c.type === 'mouse' || c.type === 'pen' || c.type === 'aim') && dwellPoint(snap) ? snap!.point : null;
+    if (p && this.pressedPoint && samePoint(p, this.pressedPoint)) p = null;
+    else this.pressedPoint = null;
+    if (p && this.pts[0] && samePoint(p, this.pts[0])) p = null;
+    // 정밀 조준: 머물기 시작한 자리에서 AIM_DWELL_PX 안이면 그 자리로 본다(손가락 떨림)
+    let { x, y } = c;
+    const at = this.aimDwellAt;
+    if (c.type === 'aim' && at && Math.hypot(x - at.x, y - at.y) <= AIM_DWELL_PX) ({ x, y } = at);
+    const step = this.tracker.hover(p, x, y);
+    if (step === 'keep') return;
+    this.stopDwell();
+    this.aimDwellAt = step === 'start' && c.type === 'aim' ? { x, y } : null;
+    if (step === 'start')
+      this.dwellTimer = setTimeout(() => {
+        this.dwellTimer = null;
+        this.aimDwellAt = null;
+        if (this.disposed || !this.tracker.commit()) return;
+        this.hoverDirty = true;
+        this.refreshHint();
+        this.overlay.invalidate();
+      }, TRACK_DWELL_MS);
+  }
+
+  /** 머무르기 타이머만 멈춘다 */
+  private stopDwell(): void {
+    if (this.dwellTimer === null) return;
+    clearTimeout(this.dwellTimer);
+    this.dwellTimer = null;
+  }
+
+  /** 머무르기를 버린다(누르기·끌기·캔버스를 떠남) */
+  private cancelDwell(): void {
+    this.stopDwell();
+    this.aimDwellAt = null;
+    this.tracker.cancel();
+  }
+
+  /** 끌어온 점과 머무르기를 잊는다. notify면 다시 추정하고 알린다(부른 쪽이 곧 알리면 false) */
+  private forgetTracks(notify = true): void {
+    this.cancelDwell();
+    if (!this.tracker.clear() || !notify) return;
+    this.hoverDirty = true;
+    this.refreshHint();
+    this.overlay.invalidate();
   }
 
   /** 지나간 모서리(나란함 기준)와, 방향을 잡는 동안 본 방향 추론을 기억한다 */
@@ -1563,6 +1680,8 @@ export class MeasureTool {
     if (!this.modeValue) return;
     // Ctrl·Option을 누른 채 누르면 안내 두기 키 누르기가 아니다
     this.modTap = false;
+    // 누르기·끌기는 머무르기가 아니다
+    this.cancelDwell();
     const p = this.local(e);
     const type = e.pointerType || 'mouse';
     // 둘째 손가락·다른 단추가 함께 눌리면 누르기가 아니다(코어가 확대·이동한다)
@@ -1632,6 +1751,7 @@ export class MeasureTool {
   private onLeave(): void {
     if (!this.modeValue || this.presses.size) return;
     if (this.cursor?.type === 'touch') return;
+    this.cancelDwell();
     this.cursor = null;
     this.hover = null;
     this.hoverPoint = null;
@@ -1737,6 +1857,8 @@ export class MeasureTool {
     const snap = this.snapAt(x, y, type, f);
     if (!snap) return;
     this.learn(snap);
+    // 방금 누른 점은 커서가 떠날 때까지 머물러도 끌어오지 않는다
+    this.pressedPoint = snap.point;
     if (this.modeValue === 'tape') {
       const edge = edgeOfTap(snap);
       // 모서리 두 번 누르기: 첫 누르기가 모서리에 붙었고 둘째가 빈 곳·다른 직선의 모서리가 아니면 그 모서리 위 안내선
@@ -1781,6 +1903,8 @@ export class MeasureTool {
         }
         this.pts = [];
         this.startEdge = null;
+        // 측정을 마치면 끌어온 점을 잊는다(첫 점에서는 남긴다 — 줄 맞춘 자리에 쓴다)
+        this.forgetTracks(false);
         this.setResult(tapeResult(a, end), edge);
       }
     } else if (this.modeValue === 'protractor') {
@@ -1804,6 +1928,7 @@ export class MeasureTool {
           const a = this.pts[1]!;
           this.pts = [];
           this.normal = null;
+          this.forgetTracks(false);
           // 안내 두기: 중심을 지나 잰 방향으로 안내선(SketchUp 각도기 셋째 누르기)
           if (this.guideOn) {
             sel = this.addGuideLine(c, sub(p, c));
@@ -1881,6 +2006,8 @@ export class MeasureTool {
     this.stopAimTimer();
     this.aimId = null;
     this.dropLock();
+    this.forgetTracks(false);
+    this.pressedPoint = null;
     this.parallelRef = null;
     this.planeAxisValue = null;
     this.selGuide = null;
@@ -1897,9 +2024,10 @@ export class MeasureTool {
       this.lastHint = h;
       this.opts.onHint?.(h);
     }
-    const [lock, plane] = this.lockNote;
-    if (lock !== this.lockValue || plane !== this.planeAxisValue) {
-      this.lockNote = [this.lockValue, this.planeAxisValue];
+    const [lock, plane, tracks] = this.lockNote;
+    const n = this.tracker.size;
+    if (lock !== this.lockValue || plane !== this.planeAxisValue || tracks !== n) {
+      this.lockNote = [this.lockValue, this.planeAxisValue, n];
       this.opts.onLock?.();
     }
   }
@@ -1919,6 +2047,7 @@ export class MeasureTool {
     const snap = this.snapAt(c.x, c.y, c.type, f);
     this.hover = snap;
     this.hoverPoint = null;
+    this.dwell(snap, c);
     if (!snap) return;
     this.learn(snap);
     if (this.modeValue === 'protractor') {
@@ -1968,6 +2097,8 @@ export class MeasureTool {
     if ((live?.kind === 'parallel' || (live?.kind === 'perpendicular' && (live.inferred || live.locked))) && live.edge)
       this.segment(f, live.edge[0], live.edge[1], 'measure-parallel-ref', { stroke: SNAP_COLORS.parallel, 'stroke-width': 2.5, 'stroke-dasharray': '2 4' });
     if (live?.from) this.lockFrom(f, live);
+    // 끌어온 점(+)과 붙은 끌어온 축(그 점에서 커서 자리까지 축 색 점선)
+    if (this.tracker.size) this.trackMarks(f, live);
     if (this.modeValue === 'tape') {
       const a = this.pts[0];
       if (a) {
@@ -2170,7 +2301,9 @@ export class MeasureTool {
    * 진행 중 선(시작점 → 커서). 축 고정이면 그 축 색, 나란함은 자홍(SketchUp 관례).
    * 잠갔으면 굵은 실선(축 색, 나란함·수직은 자홍 — SketchUp 추론 잠금처럼)
    */
-  private rubber(f: ViewFrame, a: readonly number[], b: readonly number[], snap: Snap | null | undefined): void {
+  private rubber(f: ViewFrame, a: readonly number[], b: readonly number[], snap0: Snap | null | undefined): void {
+    // 끌어온 점을 지나는 축 위 점은 시작점에서 그 축 방향이 아니라 보통 선(축 색은 끌어온 점선이 맡는다)
+    const snap = snap0?.trackFrom && !snap0.dir ? null : snap0;
     const attrs: Record<string, string | number> = { 'stroke-dasharray': '6 4' };
     const axis = snap?.axis;
     const color = lockColor(snap);
@@ -2192,6 +2325,33 @@ export class MeasureTool {
       cls += ' measure-locked';
     }
     this.segment(f, a, b, cls, attrs);
+  }
+
+  /**
+   * 끌어온 점 표식(작은 +, 흰 테두리)과, 지금 추정이 끌어온 축이면 그 점에서 추정 점까지 점선(SketchUp "점에서" — 끌어온 점을 지나는 축이면 그 축 색,
+   * 시작점 축 위 줄 맞춘 자리면 두 점을 잇는 선이 축과 나란할 때만 그 축 색, 아니면 글자 색). 그 축을 끌어온 점의 +는 크게 그 색으로
+   */
+  private trackMarks(f: ViewFrame, live: Snap | null): void {
+    const from = live?.kind === 'axis' ? live.trackFrom : undefined;
+    let color = 'currentColor';
+    if (from && live) {
+      const axis = live.dir ? axisOf(sub(live.point, from), this.axes) : (live.axis ?? null);
+      if (axis) color = AXIS_COLORS[axis];
+      this.segment(f, from, live.point, 'measure-track-line', { stroke: color, 'stroke-width': 1.75, 'stroke-dasharray': '2 3', 'data-axis': axis ?? '' });
+    }
+    for (const p of this.tracker.view) {
+      const s = screenPoint(f, p, 20);
+      if (!s) continue;
+      const on = !!from && samePoint(p, from);
+      const r = on ? 6 : 4.5;
+      const d = `M${s[0] - r},${s[1]}h${2 * r}M${s[0]},${s[1] - r}v${2 * r}`;
+      const g = svgEl('g', { class: on ? 'measure-track is-from' : 'measure-track' });
+      g.append(
+        svgEl('path', { d, stroke: '#ffffff', 'stroke-width': on ? 4.5 : 3.5, 'stroke-linecap': 'round' }),
+        svgEl('path', { d, stroke: on ? color : 'currentColor', 'stroke-width': on ? 2.25 : 1.5, 'stroke-linecap': 'round' }),
+      );
+      this.g.append(g);
+    }
   }
 
   /** 잠근 선으로 옮겨 온 점: 커서 밑 점에서 잠근 선 위 점까지 가는 점선과 그 점의 작은 원 */

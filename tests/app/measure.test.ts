@@ -52,7 +52,12 @@ import {
   GUIDE_CLEAR_FILE_LABEL,
   GUIDE_REDO_LABEL,
   labelSpot,
+  AIM_DWELL_PX,
+  dwellPoint,
+  trackHint,
 } from '../../src/app/measure';
+import { AXIS_COLORS, TRACK_ALIGN_LABEL, TRACK_AXIS_LABELS } from '../../src/app/snap';
+import { TRACK_DWELL_MS } from 'opencad-viewer3d/track';
 import { GUIDE_STORE_KEY, readGuideFiles } from '../../src/app/guidestore';
 import type { V3 } from 'opencad-viewer3d/math';
 import { Overlay, frameFor } from '../../src/app/overlay';
@@ -2281,5 +2286,243 @@ describe('측정 도구: 결과 글이 십자선·툴팁·측정 띠를 비켜 �
     expect(moved.classList.contains('is-moved')).toBe(true);
     expect(moved.style.transform).toBe('none');
     expect(parseFloat(moved.style.top) + 18).toBeLessThanOrEqual(95);
+  });
+});
+
+describe('측정 도구: 다른 점에서 끌어온 축(점 위에 머물기 — SketchUp "점에서")', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // 둘레 고르기 시간 한도가 기계 부하로 갈리지 않게 시계를 멈춘다
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+  });
+
+  // 넓은 면 위: 끝점 P(40, 30, 0 — 화면 140, 70)에서 위로 60인 모서리, 시작점으로 쓸 끝점 A(0, −40, 0 — 화면 100, 140)에서 −X로 30인 모서리
+  const P: V3 = [40, 30, 0];
+  const A: V3 = [0, -40, 0];
+  const SCENE = (): Pick<Scene3d, 'meshes' | 'lines' | 'units'> => ({
+    units: 'mm',
+    meshes: [quad('f', -95, -95, 95, 95, 0)],
+    lines: [lines('e', [[40, 30, 0, 40, 90, 0], [0, -40, 0, -30, -40, 0]])],
+  });
+  const touch = { pointerType: 'touch' };
+
+  it('작은 함수: 점 추정만 머물고(방향 추론·잠근 점은 아님), 끌어온 점 수 안내', () => {
+    expect(dwellPoint({ kind: 'endpoint' })).toBe(true);
+    expect(dwellPoint({ kind: 'perpendicular' })).toBe(true);
+    expect(dwellPoint({ kind: 'perpendicular', inferred: true })).toBe(false);
+    expect(dwellPoint({ kind: 'endpoint', locked: true })).toBe(false);
+    for (const kind of ['onEdge', 'onFace', 'axis', 'parallel', 'free'] as const) expect(dwellPoint({ kind })).toBe(false);
+    expect(dwellPoint(null)).toBe(false);
+    expect(trackHint(0)).toBeNull();
+    expect(trackHint(2)).toBe('끌어온 점 2개');
+    expect(AIM_DWELL_PX).toBeLessThan(snapRadius('aim') / 2);
+  });
+
+  it('줄자: 끝점 위에 0.5초 머물면 끌어오고, 그 점의 축과 시작점 축 위 줄 맞춘 자리에 붙어 잰다(마치면 잊는다)', () => {
+    const r = rig(SCENE());
+    r.tool.setMode('tape');
+    r.move(141.2, 70.6);
+    expect(r.tip()).toBe('끝점');
+    vi.advanceTimersByTime(TRACK_DWELL_MS - 1);
+    expect(r.tool.trackPoints).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(r.tool.trackPoints).toEqual([P]);
+    r.overlay.paintNow();
+    expect(r.qa('.measure-track')).toHaveLength(1);
+    // 상태 줄·측정 띠: 잠금(안내 두기 키) 안내 뒤에 끌어온 점 수(onLock으로 알린다)
+    expect(r.tool.lockHintText(false)).toBe('Ctrl: 안내 두기 · 끌어온 점 1개');
+    expect(r.tool.lockHintText(true)).toBe('끌어온 점 1개');
+    const notes = r.locks.length;
+    expect(notes).toBeGreaterThan(0);
+
+    // 끌어온 점의 빨강 축: 축 색 점선과 큰 +
+    r.move(170.4, 72.7);
+    expect(r.tip()).toBe(TRACK_AXIS_LABELS.x);
+    expect(r.q('line.measure-track-line')?.getAttribute('stroke')).toBe(AXIS_COLORS.x);
+    expect(r.q('.measure-track.is-from')).not.toBeNull();
+    expect(r.q('.measure-snap-axis')?.getAttribute('fill')).toBe(AXIS_COLORS.x);
+
+    // 시작점(끝점 A)을 찍어도 끌어온 점은 남는다
+    r.click(100.6, 140.4);
+    expect(r.tool.pointCount).toBe(1);
+    expect(r.tool.trackPoints).toEqual([P]);
+    // 시작점 빨강 축 위에서 P와 줄 맞춘 자리(40, −40): 고무줄은 빨강, P에서 내려오는 점선은 녹색
+    r.move(140.6, 137.2);
+    expect(r.tip()).toBe(`빨강 축에 · ${TRACK_ALIGN_LABEL} · 40 mm`);
+    expect(r.q('line.measure-rubber')?.getAttribute('data-axis')).toBe('x');
+    expect(r.q('line.measure-track-line')?.getAttribute('stroke')).toBe(AXIS_COLORS.y);
+    // 끌어온 점의 녹색 축 위(시작점에서 축 방향이 아님): 고무줄은 보통 선, 점선은 녹색
+    r.move(142.3, 92.6);
+    expect(r.tip()?.startsWith(`${TRACK_AXIS_LABELS.y} · `)).toBe(true);
+    const rubber = r.q('line.measure-rubber')!;
+    expect(rubber.getAttribute('data-axis')).toBeNull();
+    expect(rubber.getAttribute('stroke')).toBe('currentColor');
+    expect(r.q('line.measure-track-line')?.getAttribute('stroke')).toBe(AXIS_COLORS.y);
+    // 끌어온 점의 축은 시작점을 지나지 않아 Shift로 잠그지 않는다
+    r.key('Shift');
+    expect(r.tool.inferenceLock).toBeNull();
+    r.key('Shift', 'keyup');
+
+    r.click(140.6, 137.2);
+    expect(r.results.at(-1)).toMatchObject({ kind: 'tape', a: A, b: [40, -40, 0], distance: 40 });
+    expect(r.tool.trackPoints).toEqual([]);
+    expect(r.qa('.measure-track')).toHaveLength(0);
+    expect(r.tool.lockHintText(false)).not.toContain('끌어온 점');
+    // 안내가 아니다: 안내·되돌리기 목록이 그대로
+    expect(r.tool.guides).toHaveLength(0);
+    expect(r.tool.guideLines).toHaveLength(0);
+    expect(r.tool.canUndo).toBe(false);
+  });
+
+  it('줄 맞춘 자리는 Shift로 그 축에 잠근다(시작점 축)', () => {
+    const r = rig(SCENE());
+    r.tool.setMode('tape');
+    r.move(141.2, 70.6);
+    vi.advanceTimersByTime(TRACK_DWELL_MS);
+    r.click(100.6, 140.4);
+    r.move(140.6, 137.2);
+    r.key('Shift');
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'x', source: 'shift' });
+    // 잠근 동안은 끌어온 축을 보지 않는다(잠근 선 위 점)
+    r.move(142.3, 92.6, { shift: true });
+    expect(r.tip()?.startsWith('빨강 축에 · 잠금')).toBe(true);
+  });
+
+  it('마우스는 2화소 안에서 머물러야 하고, 방금 누른 점·시작점·손가락 탭은 끌어오지 않는다', () => {
+    const r = rig(SCENE());
+    r.tool.setMode('tape');
+    r.move(141.2, 70.6);
+    vi.advanceTimersByTime(TRACK_DWELL_MS - 100);
+    // 같은 끝점이라도 2화소 넘게 움직이면 처음부터
+    r.move(144.1, 70.6);
+    vi.advanceTimersByTime(TRACK_DWELL_MS - 100);
+    expect(r.tool.trackPoints).toEqual([]);
+    vi.advanceTimersByTime(100);
+    expect(r.tool.trackPoints).toEqual([P]);
+    r.key('Escape');
+    expect(r.tool.trackPoints).toEqual([]);
+
+    // 누른 점(시작점): 머물러도, 떠났다 돌아와도 기억하지 않는다
+    r.click(141.2, 70.6);
+    vi.advanceTimersByTime(TRACK_DWELL_MS * 2);
+    expect(r.tool.trackPoints).toEqual([]);
+    r.move(170.4, 120.3);
+    r.move(141.2, 70.6);
+    vi.advanceTimersByTime(TRACK_DWELL_MS * 2);
+    expect(r.tool.trackPoints).toEqual([]);
+    // 줄자를 마친 끝점(방금 누른 점)도 커서가 떠날 때까지는 기억하지 않고, 떠났다 돌아오면 기억한다
+    r.click(100.6, 140.4);
+    expect(r.results.at(-1)).toMatchObject({ kind: 'tape', a: P, b: A });
+    vi.advanceTimersByTime(TRACK_DWELL_MS * 2);
+    expect(r.tool.trackPoints).toEqual([]);
+    r.move(120.3, 120.7);
+    r.move(100.6, 140.4);
+    vi.advanceTimersByTime(TRACK_DWELL_MS);
+    expect(r.tool.trackPoints).toEqual([A]);
+    r.tool.clear();
+    expect(r.tool.trackPoints).toEqual([]);
+
+    // 손가락 탭: 커서가 없어 머무르지 않는다
+    r.click(141.2, 70.6, touch);
+    r.click(170.4, 120.3, touch);
+    vi.advanceTimersByTime(TRACK_DWELL_MS * 2);
+    expect(r.tool.trackPoints).toEqual([]);
+    // 캔버스를 떠나면 머무르기를 버린다
+    r.tool.clear();
+    r.move(141.2, 70.6);
+    r.ptr('pointerleave', 141.2, 70.6);
+    vi.advanceTimersByTime(TRACK_DWELL_MS * 2);
+    expect(r.tool.trackPoints).toEqual([]);
+  });
+
+  it('정밀 조준 십자선은 손가락이 조금 떨려도(AIM_DWELL_PX 안) 머문 것으로 보고 끌어온다', () => {
+    const r = rig(SCENE());
+    r.tool.setMode('tape');
+    r.ptr('pointerdown', 141, 70 + AIM_OFFSET_PX + 0.5, { ...touch, buttons: 1 });
+    vi.advanceTimersByTime(AIM_HOLD_MS);
+    expect(r.tool.aiming).toBe(true);
+    r.overlay.paintNow();
+    expect(r.tip()).toBe('끝점');
+    for (const [dx, t] of [[3, 150], [-2, 150], [1.5, 150]] as const) {
+      r.ptr('pointermove', 141 + dx, 70 + AIM_OFFSET_PX + 1, { ...touch, buttons: 1 });
+      r.overlay.paintNow();
+      vi.advanceTimersByTime(t);
+    }
+    expect(r.tool.trackPoints).toEqual([]);
+    vi.advanceTimersByTime(TRACK_DWELL_MS - 450);
+    expect(r.tool.trackPoints).toEqual([P]);
+    // 십자선을 끌어온 빨강 축으로 옮겨 떼면 그 자리를 시작점으로
+    r.ptr('pointermove', 170.4, 72.7 + AIM_OFFSET_PX, { ...touch, buttons: 1 });
+    r.overlay.paintNow();
+    expect(r.tip()).toBe(TRACK_AXIS_LABELS.x);
+    r.ptr('pointerup', 170.4, 72.7 + AIM_OFFSET_PX, touch);
+    expect(r.tool.pointCount).toBe(1);
+    expect(r.tool.trackPoints).toEqual([P]);
+    // 탭으로도 끌어온 축에 붙는다(손가락 추정 반경)
+    r.click(140.5, 150.3, touch);
+    expect(r.results.at(-1)).toMatchObject({ kind: 'tape' });
+    const b = (r.results.at(-1) as { b: V3 }).b;
+    expect(b[0]).toBeCloseTo(40, 9);
+    expect(b[1]).toBeCloseTo(-50.3, 1);
+  });
+
+  it('각도기: 잴 방향을 끌어온 점의 축 위로 잡는다', () => {
+    const r = rig(SCENE());
+    r.tool.setMode('protractor');
+    r.click(100.6, 140.4);
+    r.click(70.4, 140.3);
+    expect(r.tool.pointCount).toBe(2);
+    r.move(141.2, 70.6);
+    vi.advanceTimersByTime(TRACK_DWELL_MS);
+    expect(r.tool.trackPoints).toEqual([P]);
+    r.move(142.3, 92.6);
+    expect(r.tip()?.startsWith(`${TRACK_AXIS_LABELS.y} · `)).toBe(true);
+    r.click(142.3, 92.6);
+    const res = r.results.at(-1) as MeasureToolResult & { angle: number; b: V3 };
+    expect(res.kind).toBe('protractor');
+    expect(res.b[0]).toBeCloseTo(40, 9);
+    expect(res.angle).toBeCloseTo(180 - (Math.atan2(res.b[1] + 40, 40) * 180) / Math.PI, 9);
+    expect(r.tool.trackPoints).toEqual([]);
+  });
+
+  it('도구를 바꾸거나 끄면 잊고, 끄면(setTrack(false)) 머물러도 상태가 없어 추정·그림이 끌어오기 전과 같다', () => {
+    const r = rig(SCENE());
+    r.tool.setMode('tape');
+    r.move(141.2, 70.6);
+    vi.advanceTimersByTime(TRACK_DWELL_MS);
+    expect(r.tool.trackPoints).toHaveLength(1);
+    r.tool.setMode('protractor');
+    expect(r.tool.trackPoints).toEqual([]);
+    r.move(141.2, 70.6);
+    vi.advanceTimersByTime(TRACK_DWELL_MS);
+    expect(r.tool.trackPoints).toHaveLength(1);
+    r.tool.setTrack(false);
+    expect(r.tool.track).toBe(false);
+    expect(r.tool.trackPoints).toEqual([]);
+
+    // 같은 움직임: 끈 채 머문 것 · 끈 채 머물지 않은 것 · 켠 채 머물지 않은 것의 추정·결과·그림이 모두 같다
+    const run = (o: Partial<MeasureToolOptions>, wait: boolean): string[] => {
+      const q = rig(SCENE(), TOP, DEFAULT_UNITS, o);
+      q.tool.setMode('tape');
+      const out: string[] = [];
+      const shot = (): void => void out.push(`${q.tip()}|${q.q('g.measure')?.innerHTML}|${JSON.stringify(q.results.at(-1) ?? null)}|${q.tool.lockHintText(false)}`);
+      for (const [x, y, click] of [[141.2, 70.6, false], [170.4, 72.7, false], [100.6, 140.4, true], [141.2, 70.6, false], [140.6, 137.2, false], [142.3, 92.6, false], [140.6, 137.2, true]] as const) {
+        if (click) q.click(x, y);
+        else q.move(x, y);
+        if (wait) vi.advanceTimersByTime(TRACK_DWELL_MS * 2);
+        q.overlay.paintNow();
+        shot();
+      }
+      return out;
+    };
+    const offWait = run({ track: false }, true);
+    expect(run({ track: false }, false)).toEqual(offWait);
+    expect(run({}, false)).toEqual(offWait);
+    // 켠 채 머물면 달라진다(시험이 끌어온 축을 실제로 거친다)
+    expect(run({}, true)).not.toEqual(offWait);
   });
 });

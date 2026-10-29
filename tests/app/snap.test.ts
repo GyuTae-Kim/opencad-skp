@@ -11,6 +11,9 @@ import {
   FACE_EDGE_SIN,
   SNAP_RADIUS_PX,
   TOUCH_SNAP_RADIUS_PX,
+  TRACK_ALIGN_LABEL,
+  TRACK_AXIS_LABELS,
+  AXIS_LABELS,
   alongAxis,
   axisInferenceLock,
   axisLock,
@@ -751,5 +754,93 @@ describe('추정: 안내점·안내선(누르면 고를 안내)', () => {
     const e = chooseSnap({ ...base, x: 101, y: 101, pick: pick(101, 101) });
     expect(e.kind).toBe('endpoint');
     expect(e.guide).toBeUndefined();
+  });
+});
+
+describe('추정: 다른 점에서 끌어온 축(코어 0.16.0 trackCrossSnap·trackAxisSnap)', () => {
+  // 넓은 면(z = 0) 위에 모서리 하나(끝점 P = (40, 30, 0), 화면 140, 70 — 위로 60)
+  const P: V3 = [40, 30, 0];
+  const scene: SnapScene = { meshes: [quad('f', -95, -95, 95, 95, 0)], lines: [lines('e', [[40, 30, 0, 40, 90, 0]])] };
+  const pick = picker(scene);
+  const at = (x: number, y: number, o: { from?: V3 | null; tracks?: V3[] | null; lock?: InferenceLock | null; axisDirs?: AxisDirs | null; radius?: number } = {}): Snap => {
+    const radius = o.radius ?? SNAP_RADIUS_PX;
+    const probes = probeOffsets(radius).map(([dx, dy]) => pick(x + dx, y + dy));
+    return chooseSnap({ frame: topFrame, x, y, pick: pick(x, y), probes, scene, radius, from: o.from ?? null, anchor: [0, 0, 0], lock: o.lock ?? null, tracks: o.tracks ?? null, axisDirs: o.axisDirs ?? null });
+  };
+
+  it('시작점 전: 면 위 대신 끌어온 점을 지나는 축 위 점(방향이 없어 잠그지 않는다)', () => {
+    expect(at(170.4, 72.7).kind).toBe('onFace');
+    const s = at(170.4, 72.7, { tracks: [P] });
+    expect(s).toMatchObject({ kind: 'axis', axis: 'x', label: TRACK_AXIS_LABELS.x, trackFrom: P });
+    close(s.point, [70.4, 30, 0], 1e-6);
+    expect(s.dir).toBeUndefined();
+    expect(lockOf(s, null)).toBeNull();
+    // 녹색 축(P에서 아래로 — 위는 모서리가 맡는다)
+    const g = at(142.6, 120.3, { tracks: [P] });
+    expect(g).toMatchObject({ kind: 'axis', axis: 'y', label: TRACK_AXIS_LABELS.y });
+    close(g.point, [40, -20.3, 0], 1e-6);
+    // 추정 반경 밖이면 그대로 면 위, 끌어온 점 둘레(점 추정이 맡는다)는 끝점
+    expect(at(170.4, 84.2, { tracks: [P] }).kind).toBe('onFace');
+    expect(at(141.3, 71.2, { tracks: [P] }).kind).toBe('endpoint');
+  });
+
+  it('시작점이 있으면 시작점 축 위에서 끌어온 점과 줄 맞춘 자리가 축 고정보다 먼저(잠글 수 있다)', () => {
+    const A: V3 = [0, -40, 0];
+    // 시작점 빨강 축 위 x = 40 둘레: 끌어온 점이 없으면 축 고정(커서 광선에 가까운 자리)
+    const plain = at(140.6, 137.2, { from: A });
+    expect(plain).toMatchObject({ kind: 'axis', axis: 'x', label: AXIS_LABELS.x });
+    expect(plain.point[0]).toBeCloseTo(40.6, 6);
+    expect(plain.trackFrom).toBeUndefined();
+    const s = at(140.6, 137.2, { from: A, tracks: [P] });
+    expect(s).toMatchObject({ kind: 'axis', axis: 'x', label: `${AXIS_LABELS.x} · ${TRACK_ALIGN_LABEL}`, trackFrom: P, dir: [1, 0, 0] });
+    close(s.point, [40, -40, 0], 1e-9);
+    expect(lockOf(s, A)).toMatchObject({ kind: 'axis', axis: 'x', label: AXIS_LABELS.x, dir: [1, 0, 0] });
+    // 줄 맞춘 자리에서 멀면(추정 반경 밖) 축 고정
+    const far = at(170.4, 138.1, { from: A, tracks: [P] });
+    expect(far).toMatchObject({ kind: 'axis', axis: 'x', label: AXIS_LABELS.x });
+    expect(far.trackFrom).toBeUndefined();
+    // 축 고정이 맞지 않는 자리: 끌어온 점을 지나는 녹색 축(시작점에서 그 축 방향이 아니다)
+    const t = at(142.3, 92.6, { from: A, tracks: [P] });
+    expect(t).toMatchObject({ kind: 'axis', axis: 'y', label: TRACK_AXIS_LABELS.y, trackFrom: P });
+    expect(t.dir).toBeUndefined();
+    close(t.point, [40, 7.4, 0], 1e-6);
+  });
+
+  it('잠근 동안·점 추정·끌어온 점이 시작점이면 끌어온 축을 보지 않는다', () => {
+    const A: V3 = [0, -40, 0];
+    const lock = axisInferenceLock('y');
+    const l = at(170.4, 72.7, { from: A, tracks: [P], lock });
+    expect(l).toMatchObject({ kind: 'axis', axis: 'y', locked: true });
+    expect(l.trackFrom).toBeUndefined();
+    // 모서리 위(선 추정)가 먼저
+    expect(at(140.8, 55.2, { tracks: [P] }).kind).toBe('onEdge');
+    // 시작점과 같은 끌어온 점: 줄 맞춘 자리도 그 점의 축도 없다(시작점 축 고정이 맡는다)
+    const same = at(170.4, 72.7, { from: P, tracks: [P] });
+    expect(same).toMatchObject({ kind: 'axis', axis: 'x', label: AXIS_LABELS.x });
+    expect(same.trackFrom).toBeUndefined();
+  });
+
+  it('모형의 그리기 축을 옮겼으면 그 축으로 끌어온다', () => {
+    const c = Math.cos(Math.PI / 6), sn = Math.sin(Math.PI / 6);
+    const axes: AxisDirs = { x: [c, sn, 0], y: [-sn, c, 0], z: [0, 0, 1] };
+    // P에서 옮긴 빨강 축으로 40 간 자리 둘레(화면에서 2화소 비낌)
+    const q: V3 = [P[0] + 40 * c, P[1] + 40 * sn, 0];
+    const s = at(100 + q[0] + 1.3, 100 - q[1] + 1.1, { tracks: [P], axisDirs: axes });
+    expect(s).toMatchObject({ kind: 'axis', axis: 'x', trackFrom: P });
+    const w = [s.point[0] - P[0], s.point[1] - P[1]];
+    expect(Math.abs(w[0] * sn - w[1] * c)).toBeLessThan(1e-6);
+    // 세계 축이면 같은 자리는 끌어온 축 밖(면 위)
+    expect(at(100 + q[0] + 1.3, 100 - q[1] + 1.1, { tracks: [P] }).kind).toBe('onFace');
+  });
+
+  it('끌어온 점이 없으면(빈 배열·null) 추정이 예전과 같다', () => {
+    const A: V3 = [0, -40, 0];
+    for (const from of [null, A])
+      for (let x = 12.3; x < 200; x += 17.9)
+        for (let y = 9.7; y < 200; y += 19.3) {
+          const base = at(x, y, { from });
+          expect(at(x, y, { from, tracks: [] }), `${x},${y}`).toEqual(base);
+          expect(base.trackFrom).toBeUndefined();
+        }
   });
 });
