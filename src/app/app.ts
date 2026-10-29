@@ -414,6 +414,8 @@ export class SkpViewerApp implements PanelHost {
   private notice: AppSnapshot['notice'] = null;
   private menu: HTMLElement | null = null;
   private dragDepth = 0;
+  /** 3D 보기를 마지막으로 뗀 자리(화면 좌표)와 때 — 코어 onPick에 자리가 없어 고르기 도구가 안내를 고를 때 쓴다 */
+  private lastUp: { x: number; y: number; t: number } | null = null;
   /** 최근 문서(이 브라우저의 IndexedDB에만) — 시작 화면 카드 */
   private readonly recent = new RecentStore();
   private readonly recentCard = h('section', { class: 'recent', 'aria-labelledby': 'recent-title', hidden: true });
@@ -610,10 +612,13 @@ export class SkpViewerApp implements PanelHost {
     // 그룹을 고른 뒤 누른 면·모서리 하나만(면 넓이·모서리 길이) — 휴대폰에서 패널을 열지 않고
     const selPart = h('button', { class: 'mb-btn', type: 'button', title: '누른 면 하나의 넓이(모서리면 길이)만 보기', hidden: true, html: `${icon('face', 16)}<span class="mb-part">면만</span>` });
     selPart.addEventListener('click', () => this.selectPickedPart());
-    const selMore = h('button', { class: 'mb-btn', type: 'button', title: '패널의 선택 탭에서 전체 정보 보기', html: `${icon('panel', 16)}<span>자세히</span>` });
+    const selMore = h('button', { class: 'mb-btn sel-more', type: 'button', title: '패널의 선택 탭에서 전체 정보 보기', html: `${icon('panel', 16)}<span>자세히</span>` });
     selMore.addEventListener('click', () => this.showEntityTab());
     const selClose = h('button', { class: 'mb-btn icon', type: 'button', title: '선택 해제', 'aria-label': '선택 해제', html: icon('close', 16) });
-    selClose.addEventListener('click', () => this.applySelection(null, false));
+    selClose.addEventListener('click', () => {
+      this.measureTool?.deselectGuide();
+      this.applySelection(null, false);
+    });
     const selBar = h('div', { class: 'measure-bar sel-bar', role: 'status', hidden: true }, selText, h('div', { class: 'mb-acts' }, selPart, selMore, selClose));
     // 카메라 띠: 걷기(1인칭)·시야각·2점 투시(보기 설정 메뉴로 연다, 걸으면 늘 보인다). 휴대폰은 걷는 동안 왼쪽 아래에 조이스틱
     const camText = h('div', { class: 'mb-text cam-text' });
@@ -1312,6 +1317,9 @@ export class SkpViewerApp implements PanelHost {
     tool.mountUndo(this.vcb.el);
     // 측정 띠 위의 잠글 방향 고르기 줄(한 손 잠금 — 잠금 단추를 눌렀는데 맞춘 방향이 없을 때)
     tool.mountLockMenu(this.els.measureBar);
+    // 고른 것 카드의 고른 안내 지우기 단추(고르기 도구로 고른 안내 — 선택 해제 ✕ 앞)
+    const selActs = this.els.selBar.querySelector<HTMLElement>('.mb-acts');
+    if (selActs) tool.mountGuideDelete(selActs);
     // 문서를 연 뒤에 받았으면 그 파일의 안내를 되살린다
     if (this.doc) tool.openFile(this.docPrint);
     return tool;
@@ -1367,6 +1375,8 @@ export class SkpViewerApp implements PanelHost {
     v.host.addEventListener(
       'pointerup',
       (e) => {
+        // 3D 누르기 자리(코어 onPick이 이 뒤에 온다 — 고르기 도구가 그 자리의 안내를 고른다)
+        if (e.target === cv) this.lastUp = { x: e.clientX, y: e.clientY, t: performance.now() };
         const d = cubeDown;
         cubeDown = null;
         if (d && cube?.contains(e.target as Node) && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 3) this.unwidenScene();
@@ -1383,6 +1393,12 @@ export class SkpViewerApp implements PanelHost {
     if (this.measureTool?.active) return;
     // 걷는 중 누르기는 고르지 않는다(두 번 누르기는 코어가 그 자리에 서는 데 쓰고 두 번째는 알리지 않는다 — 그룹에 들어가지 않게)
     if (this.walking) return;
+    // 안내점·안내선 둘레를 누르면 형상 대신 그 안내를 고른다(SketchUp 고르기 도구 — 측정 도구 조각의 pickGuide, 없으면 고른 안내를 푼다)
+    const up = this.lastUp;
+    if (up && performance.now() - up.t < 1000 && this.measureTool?.pickGuide(up.x, up.y, e?.pointerType ?? 'mouse')) {
+      this.applySelection(null, false);
+      return;
+    }
     // 단면에서 잘린 면(채운 면)은 형상이 아니므로 고르기에서 무시한다
     if (p?.section) return;
     if (e?.clicks === 2 && this.enterLevel(p)) return;
@@ -1515,6 +1531,8 @@ export class SkpViewerApp implements PanelHost {
   private applySelection(sel: Selection | null, reveal: boolean): void {
     const d = this.doc;
     if (!d) return;
+    // 형상을 고르면 고른 안내는 푼다(고른 것은 하나씩)
+    if (sel) this.measureTool?.deselectGuide();
     d.selection = sel;
     if (!sel) d.pick = null;
     const ids = selectionIds(d, sel);
@@ -3011,6 +3029,11 @@ export class SkpViewerApp implements PanelHost {
         return;
       }
     }
+    // 고르기 도구로 고른 안내(줄자·각도기를 끈 동안): Delete·Backspace로 지우고 Esc로 푼다
+    if (tool?.selectKey(ev)) {
+      ev.stopPropagation();
+      return;
+    }
     const act = keyAction({
       key: ev.key,
       ctrl: ev.ctrlKey,
@@ -3280,7 +3303,7 @@ export class SkpViewerApp implements PanelHost {
     else if (this.measuring) sel = this.measureHint ?? '측정: 점을 누르세요';
     else if (this.measureFirstUse.wanted) sel = '측정 도구를 받는 중…';
     else {
-      sel = selectionText(d, d.selection, d.pick);
+      sel = this.measureTool?.guidePickText(!!this.coarseQuery?.matches) ?? selectionText(d, d.selection, d.pick);
       picked = !!sel;
     }
     // 측정 잠금 안내는 안내 글과 따로 둔다(번역이 안내 글 전체를 한 덩어리로 찾게)
@@ -3298,9 +3321,16 @@ export class SkpViewerApp implements PanelHost {
   private refreshSelBar(): void {
     const e = this.els;
     const d = this.doc;
-    // 카메라 띠가 열려 있으면 그 자리를 쓴다
-    const on = !!d && !!d.selection && !this.measuring && !this.panelOpen && e.camBar.hidden;
+    // 카메라 띠가 열려 있으면 그 자리를 쓴다. 고르기 도구로 고른 안내는 패널을 열었거나 넓은 화면이어도 띄운다(지우기 단추 — 측정 도구 조각이 붙임)
+    const guide = !!d && !this.measuring && e.camBar.hidden ? (this.measureTool?.guidePickText(true) ?? null) : null;
+    const on = !!guide || (!!d && !!d.selection && !this.measuring && !this.panelOpen && e.camBar.hidden);
     e.selBar.hidden = !on;
+    e.selBar.classList.toggle('is-guide', !!guide);
+    if (guide) {
+      e.selText.replaceChildren(h('b', { class: 'mb-value' }, guide));
+      e.selPart.hidden = true;
+      return;
+    }
     if (!on || !d) return;
     const info = entityInfo(selectionEntity(d), d.units, mmPerSceneUnit(d.scene.units));
     const name = cardName(info);
