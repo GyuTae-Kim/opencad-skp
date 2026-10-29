@@ -56,6 +56,9 @@
  *   끌어온 점은 작은 +로, 붙은 축은 그 점에서 커서 자리까지 축 색 점선으로 그린다(축끼리의 교차는 두 점에서). 손가락 탭은 커서가 없어 머무르지 않는다(정밀 조준으로 머문다).
  *   방금 누른 점과 진행 중 측정의 시작점은 머물러도 기억하지 않는다. 측정을 마치거나(두 점째·셋째 점·칸 넣기) 지우기·Esc·도구 바꾸기·끄기면 잊는다.
  *   안내가 아니라서 되돌리기·파일별 안내 기억에 들지 않고 고르거나 지우지도 않는다. 끄면 상태가 없어 추정·그림이 예전과 같다.
+ * 축이 모서리·면과 만나는 점(SketchUp 추론 합치기 — 기본 켬, setAxisMeets): 시작점 축이 모서리·안내선과 만나는 점("빨강 축에 · 모서리에" — 모서리 위 표식,
+ *   축 색 고무줄, Shift로 그 축에 잠근다)과 시작점 축·끌어온 축이 커서 밑 면을 뚫는 점("빨강 축에 · 면에", "끌어온 점의 빨강 축에 · 면에" — 면 위 표식)에
+ *   붙는다(snap.ts — 코어 0.18.0 axisEdgeSnap·axisFaceSnap). 면은 커서와 같은 고르기로 그 자리에서 다시 맞춰 본다. 끄면 추정·그림이 예전과 같다.
  * 그리기는 덧그림 층의 SVG 묶음(g.measure)과 DOM 라벨(div.measure-layer)로 하고, 숫자 글은 모형 단위(units.ts)로 쓴다.
  */
 import type { Viewer3d } from 'opencad-viewer3d';
@@ -211,6 +214,8 @@ export interface MeasureToolOptions {
   labelAvoid?: () => readonly (Element | null | undefined)[];
   /** 다른 점에서 끌어온 축(점 위에 머물러 기억한 점의 축 — 기본 켬, setTrack으로 바꾼다) */
   track?: boolean;
+  /** 시작점 축이 모서리와 만나는 점, 시작점 축·끌어온 축이 면을 뚫는 점에 붙기(기본 켬, setAxisMeets로 바꾼다) */
+  axisMeets?: boolean;
 }
 
 /**
@@ -729,6 +734,8 @@ export class MeasureTool {
   private lockNote: [MeasureLock | null, Axis | null, number] = [null, null, 0];
   /** 다른 점에서 끌어온 축을 쓰는지와 끌어온 점·머무르기 상태(코어 MeasureTracker — 시간은 dwellTimer가 잰다) */
   private trackOn: boolean;
+  /** 축이 모서리·면과 만나는 점에 붙는지 */
+  private meetsOn: boolean;
   private readonly tracker = new MeasureTracker();
   private dwellTimer: ReturnType<typeof setTimeout> | null = null;
   /** 정밀 조준이 머물기 시작한 자리(떨림을 받는 기준) */
@@ -778,6 +785,7 @@ export class MeasureTool {
   ) {
     this.storage = opts.storage === undefined ? safeStorage() : opts.storage;
     this.trackOn = opts.track !== false;
+    this.meetsOn = opts.axisMeets !== false;
     let shown = true;
     try {
       shown = this.storage?.getItem(GUIDES_SHOWN_KEY) !== '0';
@@ -911,6 +919,19 @@ export class MeasureTool {
     if (this.disposed || on === this.trackOn) return;
     this.trackOn = on;
     if (!on) this.forgetTracks();
+  }
+
+  /** 시작점 축이 모서리와 만나는 점, 시작점 축·끌어온 축이 면을 뚫는 점에 붙는지(기본 켬) */
+  get axisMeets(): boolean {
+    return this.meetsOn;
+  }
+
+  /** 축이 모서리·면과 만나는 점 켜고 끄기(끄면 추정·그림이 예전과 같다) */
+  setAxisMeets(on: boolean): void {
+    if (this.disposed || on === this.meetsOn) return;
+    this.meetsOn = on;
+    this.hoverDirty = true;
+    this.overlay.invalidate();
   }
 
   /** 기억한 끌어온 점(새것이 앞, 복사본) */
@@ -1587,6 +1608,9 @@ export class MeasureTool {
       parallelRef: this.parallelRef,
       lock: this.pts.length ? this.lockValue : null,
       tracks: this.trackOn ? this.tracker.view : null,
+      // 축이 면을 뚫는 점은 커서와 같은 고르기로 그 자리에서 다시 맞춰 본다(숨긴 항목·단면에서 잘린 쪽은 코어 고르기가 거른다)
+      axisMeets: this.meetsOn,
+      faceAt: this.meetsOn ? (sx: number, sy: number) => v.pick(sx, sy) : null,
     });
   }
 
@@ -1645,8 +1669,8 @@ export class MeasureTool {
   /** 지나간 모서리(나란함 기준)와, 방향을 잡는 동안 본 방향 추론을 기억한다 */
   private learn(snap: Snap): void {
     if (snap.locked) return;
-    // 모서리에 수직 추론의 edge는 이미 기준 모서리다. 끌어온 축이 모서리와 만나는 점도 그 모서리를 지나간 것이다
-    if (snap.edge && (REF_KINDS.has(snap.kind) || (snap.kind === 'axis' && snap.trackFrom)) && !snap.inferred) this.parallelRef = [snap.edge[0], snap.edge[1]];
+    // 모서리에 수직 추론의 edge는 이미 기준 모서리다. 끌어온 축·시작점 축이 모서리와 만나는 점(축 위 점 가운데 edge가 있는 것)도 그 모서리를 지나간 것이다
+    if (snap.edge && (REF_KINDS.has(snap.kind) || snap.kind === 'axis') && !snap.inferred) this.parallelRef = [snap.edge[0], snap.edge[1]];
     if (this.directing) this.lastLockable = this.lockable(snap) ?? this.lastLockable;
   }
 
@@ -2384,16 +2408,19 @@ export class MeasureTool {
 
   /**
    * 추정 표식: 끝점 초록 원, 중간점 청록 원, 중심 초록 원과 십자, 교차점 빨강 ×, 수직 자홍 직각 표, 모서리 위 빨강 사각형, 면 위 파랑 마름모, 축 위 축 색 작은 사각형.
-   * 끌어온 축이 다른 선과 만나는 점은 글에 맞춰 끌어온 축끼리의 교차면 교차점(빨강 ×), 모서리·안내선과 만나면 모서리 위(빨강 사각형) — 끌어온 축은 점선 색이 보인다
+   * 축이 다른 선·면과 만나는 점은 글에 맞춰 끌어온 축끼리의 교차면 교차점(빨강 ×), 모서리·안내선과 만나면 모서리 위(빨강 사각형), 면을 뚫으면 면 위(파랑 마름모) —
+   * 어느 축인지는 고무줄(시작점 축)·점선(끌어온 축) 색이 보인다. data-meet은 그 종류, 끌어온 축이면 data-track도 같은 값
    */
   private marker(f: ViewFrame, snap: Snap): void {
     const s = screenPoint(f, snap.point, 20);
     if (!s) return;
     const [x, y] = s;
-    const track = snap.kind === 'axis' && snap.trackFrom ? (snap.trackOther ? 'pair' : snap.edge ? 'edge' : null) : null;
-    const kind: SnapKind = track === 'pair' ? 'intersection' : track === 'edge' ? 'onEdge' : snap.kind;
+    const meet = snap.kind === 'axis' ? (snap.trackFrom && snap.trackOther ? 'pair' : snap.edge ? 'edge' : snap.face ? 'face' : null) : null;
+    const track = snap.trackFrom ? meet : null;
+    const kind: SnapKind = meet === 'pair' ? 'intersection' : meet === 'edge' ? 'onEdge' : meet === 'face' ? 'onFace' : snap.kind;
     const color = kind === 'axis' && snap.axis ? AXIS_COLORS[snap.axis] : SNAP_COLORS[kind];
     const base: Record<string, string | number> = { class: `measure-snap measure-snap-${snap.kind}`, 'data-kind': snap.kind, fill: color, stroke: '#ffffff', 'stroke-width': 1.25 };
+    if (meet) base['data-meet'] = meet;
     if (track) base['data-track'] = track;
     let el: SVGElement;
     if (kind === 'endpoint' || kind === 'midpoint') el = svgEl('circle', { ...base, cx: x, cy: y, r: 5 });
@@ -2404,7 +2431,7 @@ export class MeasureTool {
     } else if (kind === 'intersection') {
       // 교차점: 흰 테두리를 두른 빨강 ×(SketchUp 교차점 표식)
       const d = `M${x - 5},${y - 5}L${x + 5},${y + 5}M${x + 5},${y - 5}L${x - 5},${y + 5}`;
-      el = svgEl('g', track ? { class: base.class, 'data-kind': snap.kind, 'data-track': track } : { class: base.class, 'data-kind': snap.kind });
+      el = svgEl('g', { class: base.class, 'data-kind': snap.kind, ...(meet ? { 'data-meet': meet } : {}), ...(track ? { 'data-track': track } : {}) });
       el.append(svgEl('path', { d, stroke: '#ffffff', 'stroke-width': 4.5, 'stroke-linecap': 'round' }), svgEl('path', { d, stroke: color, 'stroke-width': 2.25, 'stroke-linecap': 'round' }));
     } else if (kind === 'perpendicular') {
       // 직각 표(ㄴ 모양)

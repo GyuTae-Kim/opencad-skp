@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeFrame, dirToAngles, projectToScreen, type CameraState, type ViewFrame } from 'opencad-viewer3d/camera';
+import { computeFrame, dirToAngles, projectToScreen, screenRay, type CameraState, type ViewFrame } from 'opencad-viewer3d/camera';
 import { buildBvh } from 'opencad-viewer3d/bvh';
 import { pickScene } from 'opencad-viewer3d/scenepick';
 import type { LineSet3d, Mesh3d, Pick3d } from 'opencad-viewer3d/types';
@@ -9,6 +9,7 @@ import {
   AXIS_DIRS,
   CORE_PICK_TOLERANCE_PX,
   FACE_EDGE_SIN,
+  FACE_HIT_CHECKS,
   SNAP_RADIUS_PX,
   TOUCH_SNAP_RADIUS_PX,
   TRACK_ALIGN_LABEL,
@@ -977,5 +978,247 @@ describe('추정: 끌어온 축끼리의 교차·끌어온 축과 모서리의 �
           expect(at(scene, x, y, { from, tracks: [] }), `${x},${y}`).toEqual(base);
           expect(base.trackFrom).toBeUndefined();
         }
+  });
+});
+
+describe('추정: 시작점 축이 모서리와 만나는 점(코어 0.18.0 axisEdgeSnap)', () => {
+  // 넓은 면(z = 0) 위: 비낀 모서리 s((−80, −20) → (60, 120) — 가운데 점 (−10, 50)), 가로 모서리 h(y = 50, x −60~100 — 화면 y = 50, 가운데 점 (20, 50)).
+  // 시작점 A(0, −40 — 화면 100, 140)
+  const face = quad('f', -95, -95, 95, 95, 0);
+  const S = lines('s', [[-80, -20, 0, 60, 120, 0]]);
+  const H = lines('h', [[-60, 50, 0, 100, 50, 0]]);
+  const A: V3 = [0, -40, 0];
+  type Opt = { from?: V3 | null; tracks?: V3[] | null; meets?: boolean; kept?: ((p: V3) => boolean) | null; visible?: ((p: V3) => boolean) | null; guideLines?: { point: V3; dir: V3 }[]; axisDirs?: AxisDirs | null };
+  const at = (scene: SnapScene, x: number, y: number, o: Opt = {}): Snap => {
+    const pick = picker(scene);
+    const probes = probeOffsets(SNAP_RADIUS_PX).map(([dx, dy]) => pick(x + dx, y + dy));
+    return chooseSnap({
+      frame: topFrame, x, y, pick: pick(x, y), probes, scene, radius: SNAP_RADIUS_PX, from: o.from === undefined ? A : o.from, anchor: [0, 0, 0],
+      tracks: o.tracks ?? null, kept: o.kept ?? null, visible: o.visible ?? null, guideLines: o.guideLines ?? [], axisDirs: o.axisDirs ?? null,
+      axisMeets: o.meets ?? true, faceAt: pick,
+    });
+  };
+
+  it('시작점 축이 모서리 안쪽과 만나는 점이 모서리 위보다 먼저(그 축 방향 — Shift로 그 축에 잠근다)', () => {
+    const scene: SnapScene = { meshes: [face], lines: [S] };
+    // A의 녹색 축(x = 0)이 s와 (0, 60) — 화면 (100, 40)에서 만난다
+    const off = at(scene, 101.2, 41.5, { meets: false });
+    expect(off.kind).toBe('onEdge');
+    const s = at(scene, 101.2, 41.5);
+    expect(s).toMatchObject({ kind: 'axis', axis: 'y', label: `${AXIS_LABELS.y} · ${SNAP_LABELS.onEdge}`, dir: [0, 1, 0], id: 's' });
+    expect(s.edge).toEqual([[-80, -20, 0], [60, 120, 0]]);
+    // 축에서 변하지 않는 좌표는 시작점 값 그대로(셈 오차 없이 축 위)
+    expect(s.point[0]).toBe(0);
+    expect(s.point[2]).toBe(0);
+    expect(s.point[1]).toBeCloseTo(60, 9);
+    expect(s.trackFrom).toBeUndefined();
+    expect(s.face).toBeUndefined();
+    const l = lockOf(s, A)!;
+    expect(l).toMatchObject({ kind: 'axis', axis: 'y', label: AXIS_LABELS.y });
+    expect(l.edge).toBeUndefined();
+    // 시작점이 없으면 없다(끌어온 점도 없을 때) — 모서리 위 그대로
+    expect(at(scene, 101.2, 41.5, { from: null }).kind).toBe('onEdge');
+    // 만나는 점에서 추정 반경 밖이면 모서리 위
+    expect(at(scene, 120.3, 20.5).kind).toBe('onEdge');
+  });
+
+  it('축과 수직인 모서리에서는 시작점에서 내린 수직 발(점 추정)이 먼저다', () => {
+    const scene: SnapScene = { meshes: [face], lines: [H] };
+    expect(at(scene, 101.2, 51.3).kind).toBe('perpendicular');
+    expect(at(scene, 101.2, 51.3, { meets: false }).kind).toBe('perpendicular');
+  });
+
+  it('단면에 잘린 쪽·가린 점은 빼고, 안내선과도 만난다(덧그림이라 단면·가림을 보지 않는다)', () => {
+    const scene: SnapScene = { meshes: [face], lines: [S] };
+    expect(at(scene, 101.2, 41.5, { kept: (p) => p[1] < 50 }).kind).toBe('onEdge');
+    expect(at(scene, 101.2, 41.5, { visible: () => false }).kind).toBe('onEdge');
+    const g = at({ meshes: [face], lines: [] }, 101.2, 41.5, { guideLines: [{ point: [0, 60, 0], dir: [Math.SQRT1_2, Math.SQRT1_2, 0] }], kept: () => false, visible: () => false });
+    expect(g).toMatchObject({ kind: 'axis', axis: 'y', label: `${AXIS_LABELS.y} · ${GUIDE_LINE_LABEL}`, dir: [0, 1, 0] });
+    expect(g.point[0]).toBe(0);
+    expect(g.point[1]).toBeCloseTo(60, 9);
+  });
+
+  it('잠근 동안에는 잠근 선 위 점이고, 모형의 그리기 축을 옮겼으면 그 축으로 만나는 점을 찾는다', () => {
+    const scene: SnapScene = { meshes: [face], lines: [S] };
+    const pick = picker(scene);
+    const lock = lockOf(at(scene, 101.2, 41.5), A)!;
+    const locked = chooseSnap({ frame: topFrame, x: 101.2, y: 41.5, pick: pick(101.2, 41.5), probes: [], scene, from: A, lock, axisMeets: true, faceAt: pick });
+    expect(locked).toMatchObject({ kind: 'axis', axis: 'y', locked: true });
+    expect(locked.edge).toBeUndefined();
+    // 옮긴 녹색 축(30° 돌림)이 s와 만나는 점: A + t·(−sin, cos)이 y = x + 60 위
+    const c = Math.cos(Math.PI / 6), sn = Math.sin(Math.PI / 6);
+    const axes: AxisDirs = { x: [c, sn, 0], y: [-sn, c, 0], z: [0, 0, 1] };
+    const t = 100 / (c + sn);
+    const m: V3 = [-sn * t, -40 + c * t, 0];
+    const s = at(scene, 100 + m[0] + 1.2, 100 - m[1] + 1.1, { axisDirs: axes });
+    expect(s).toMatchObject({ kind: 'axis', axis: 'y' });
+    close(s.point, m, 1e-6);
+    close(s.dir!, axes.y, 1e-12);
+    // 세계 축이면 같은 자리는 모서리 위
+    expect(at(scene, 100 + m[0] + 1.2, 100 - m[1] + 1.1).kind).toBe('onEdge');
+  });
+
+  it('끌어온 축과 같은 점을 두 길로 구하면 끌어온 축과 모서리의 교차(17차 값이 남는다)', () => {
+    // 끌어온 점 P(0, −10)가 A의 녹색 축 위: P의 녹색 축이 s와 만나는 점이 곧 A의 녹색 축이 s와 만나는 점
+    const P: V3 = [0, -10, 0];
+    const scene: SnapScene = { meshes: [face], lines: [S] };
+    const s = at(scene, 101.2, 41.5, { tracks: [P] });
+    expect(s).toEqual(at(scene, 101.2, 41.5, { tracks: [P], meets: false }));
+    expect(s).toMatchObject({ kind: 'axis', axis: 'y', trackFrom: P, dir: [0, 1, 0], label: `${TRACK_AXIS_LABELS.y} · ${SNAP_LABELS.onEdge}` });
+  });
+
+  it('끄거나(axisMeets 없음·false) 시작점·끌어온 점이 없으면 추정이 예전과 같다', () => {
+    const scene: SnapScene = { meshes: [face], lines: [S, H] };
+    const pick = picker(scene);
+    for (const from of [null, A, [-80, 50, 0] as V3])
+      for (let x = 11.3; x < 200; x += 13.7)
+        for (let y = 8.9; y < 200; y += 11.9) {
+          const probes = probeOffsets(SNAP_RADIUS_PX).map(([dx, dy]) => pick(x + dx, y + dy));
+          const base = chooseSnap({ frame: topFrame, x, y, pick: pick(x, y), probes, scene, from, anchor: [0, 0, 0] });
+          expect(at(scene, x, y, { from, meets: false }), `${x},${y}`).toEqual(base);
+          if (!from) expect(at(scene, x, y, { from }), `${x},${y}`).toEqual(base);
+        }
+  });
+});
+
+describe('추정: 시작점 축·끌어온 축이 면을 뚫는 점(코어 0.18.0 axisFaceSnap)', () => {
+  // 앞 위에서 비스듬히 본 원근: 비탈 면 roof(z = 40 + y/2, x −60~60, y −40~40), 시작점 A(10, −10, −20) — A의 파랑 축이 roof를 (10, −10, 35)에서 뚫는다
+  const ang = dirToAngles([0.3, -1, 0.8]);
+  const CAM: CameraState = { target: [0, 0, 20], distance: 320, yaw: ang.yaw, pitch: ang.pitch, projection: 'perspective', fovY: FOV };
+  const f = computeFrame(CAM, W, W, { center: [0, 0, 20], radius: 300 });
+  const mesh = (id: string, p: V3[]): Mesh3d => ({ id, positions: Float32Array.from(p.flat()), indices: Uint32Array.from([0, 1, 2, 0, 2, 3]), color: [0.8, 0.8, 0.8, 1] });
+  const roof = mesh('roof', [[-60, -40, 20], [60, -40, 20], [60, 40, 60], [-60, 40, 60]]);
+  const A: V3 = [10, -10, -20];
+  const M: V3 = [10, -10, 35];
+  const sm = projectToScreen(f, M)!;
+  // 화면에서 빨강 축 방향과 그에 수직인 방향(커서를 M에서 비켜 둘 쪽)
+  const sx0 = projectToScreen(f, [M[0] + 10, M[1], M[2]])!;
+  const ux = [(sx0[0] - sm[0]) / Math.hypot(sx0[0] - sm[0], sx0[1] - sm[1]), (sx0[1] - sm[1]) / Math.hypot(sx0[0] - sm[0], sx0[1] - sm[1])];
+  const nv = [-ux[1]!, ux[0]!];
+  type Opt = { from?: V3 | null; tracks?: V3[] | null; meets?: boolean; faceAt?: ((x: number, y: number) => Pick3d | null) | null; kept?: ((p: V3) => boolean) | null };
+  const at = (scene: SnapScene, x: number, y: number, o: Opt = {}): Snap => {
+    const pick = picker(scene, f);
+    const probes = probeOffsets(SNAP_RADIUS_PX).map(([dx, dy]) => pick(x + dx, y + dy));
+    return chooseSnap({
+      frame: f, x, y, pick: pick(x, y), probes, scene, radius: SNAP_RADIUS_PX, from: o.from === undefined ? A : o.from, anchor: [0, 0, 20],
+      tracks: o.tracks ?? null, kept: o.kept ?? null, axisMeets: o.meets ?? true, faceAt: o.faceAt === undefined ? pick : o.faceAt,
+    });
+  };
+  const cx = sm[0] + 1.2, cy = sm[1] + 0.9;
+
+  it('시험 장면: 비탈 면이 눈 쪽을 보고 M 자리에서 맞는다', () => {
+    const k = picker({ meshes: [roof], lines: [] }, f)(sm[0], sm[1]);
+    expect(k?.kind).toBe('mesh');
+    close(k!.point, M, 1e-6);
+  });
+
+  it('시작점 축이 커서 밑 면을 뚫는 점(면 위 표식 — 그 축 방향이라 Shift로 그 축에 잠근다)', () => {
+    const scene: SnapScene = { meshes: [roof], lines: [] };
+    // 끄면 예전처럼 파랑 축 위에서 커서 광선에 가장 가까운 점(면에서 조금 떨어져 있다)
+    const off = at(scene, cx, cy, { meets: false });
+    expect(off).toMatchObject({ kind: 'axis', axis: 'z', label: AXIS_LABELS.z });
+    expect(Math.abs(off.point[2] - 35)).toBeGreaterThan(1e-3);
+    const s = at(scene, cx, cy);
+    expect(s).toMatchObject({ kind: 'axis', axis: 'z', label: `${AXIS_LABELS.z} · ${SNAP_LABELS.onFace}`, dir: [0, 0, 1], id: 'roof' });
+    // 축에서 변하지 않는 좌표는 시작점 값 그대로, 면 위 높이는 꼭짓점으로 정한 평면에서
+    expect(s.point[0]).toBe(10);
+    expect(s.point[1]).toBe(-10);
+    expect(s.point[2]).toBeCloseTo(35, 9);
+    expect(s.face).toMatchObject({ id: 'roof' });
+    expect([0, 1]).toContain(s.face!.index);
+    close(s.face!.normal, [0, -1 / Math.sqrt(5), 2 / Math.sqrt(5)], 1e-6);
+    close(s.normal!, s.face!.normal, 1e-12);
+    expect(s.edge).toBeUndefined();
+    expect(s.trackFrom).toBeUndefined();
+    expect(lockOf(s, A)).toMatchObject({ kind: 'axis', axis: 'z' });
+    // 다시 맞춰 볼 고르기가 없으면(faceAt) 면을 뚫는 점을 보지 않는다
+    expect(at(scene, cx, cy, { faceAt: null })).toEqual(off);
+    // 그 자리에서 면이 맞지 않으면(단면에 잘린 쪽·숨긴 항목 — 부른 쪽 고르기가 거른다) 붙지 않는다
+    expect(at(scene, cx, cy, { faceAt: () => null })).toEqual(off);
+    // 단면 채운 면 위면 후보가 없다
+    const pick = picker(scene, f);
+    const k = pick(cx, cy)!;
+    const sec = chooseSnap({ frame: f, x: cx, y: cy, pick: { ...k, section: true }, probes: [], scene, from: A, anchor: [0, 0, 20], axisMeets: true, faceAt: pick });
+    expect(sec.face).toBeUndefined();
+  });
+
+  it('앞에 다른 면이 그 점을 가리면 붙지 않는다(그 자리에서 맨 앞 면이 다시 맞는다)', () => {
+    // 눈과 M 사이(40%)에 눈을 마주 보는 작은 판(세계 반지름 2)
+    const c = M.map((v, i) => v + (f.eye[i]! - v) * 0.4) as V3;
+    const r = f.basis.right, u = f.basis.up;
+    const pt = (a: number, b: number): V3 => [c[0] + r[0] * a + u[0] * b, c[1] + r[1] * a + u[1] * b, c[2] + r[2] * a + u[2] * b];
+    const shade = mesh('shade', [pt(-2, -2), pt(2, -2), pt(2, 2), pt(-2, 2)]);
+    // 커서는 M에서 8화소 비켜(판 밖, 비탈 면 위)
+    const x = sm[0] - nv[0]! * 8 + ux[0]! * 0.37, y = sm[1] - nv[1]! * 8 + ux[1]! * 0.37;
+    const open = at({ meshes: [roof], lines: [] }, x, y);
+    expect(open).toMatchObject({ kind: 'axis', axis: 'z', face: { id: 'roof' } });
+    const hid = at({ meshes: [roof, shade], lines: [] }, x, y);
+    expect(hid.face).toBeUndefined();
+  });
+
+  it('면 위에 그린 선은 면을 가리지 않는다(그 선이 면 평면 위일 때만 — 떠 있는 선 밑은 모른다)', () => {
+    // 커서는 M에서 8화소 비켜 두고, 반대쪽 3화소 자리를 지나는 빨강 축 방향 선(코어 고르기 허용 6화소 안이라 그 자리 고르기는 선)
+    const x = sm[0] - nv[0]! * 8 + ux[0]! * 0.37, y = sm[1] - nv[1]! * 8 + ux[1]! * 0.37;
+    const ray = screenRay(f, sm[0] + nv[0]! * 3, sm[1] + nv[1]! * 3);
+    const n = [0, -1 / Math.sqrt(5), 2 / Math.sqrt(5)];
+    const lineOn = (lift: number): LineSet3d => {
+      // 비탈 면 평면을 법선 쪽으로 lift만큼 옮긴 평면과 광선이 만나는 점을 지나는 빨강 축 방향 선
+      const p0 = [M[0] + n[0]! * lift, M[1] + n[1]! * lift, M[2] + n[2]! * lift];
+      const k = ((p0[0]! - ray.origin[0]) * n[0]! + (p0[1]! - ray.origin[1]) * n[1]! + (p0[2]! - ray.origin[2]) * n[2]!) / (ray.dir[0] * n[0]! + ray.dir[1] * n[1]! + ray.dir[2] * n[2]!);
+      const q = [ray.origin[0] + ray.dir[0] * k, ray.origin[1] + ray.dir[1] * k, ray.origin[2] + ray.dir[2] * k];
+      return lines(`l${lift}`, [[q[0]! - 50, q[1]!, q[2]!, q[0]! + 50, q[1]!, q[2]!]]);
+    };
+    const pick = picker({ meshes: [roof], lines: [lineOn(0)] }, f);
+    expect(pick(sm[0], sm[1])?.kind).toBe('line');
+    expect(pick(x, y)?.kind).toBe('mesh');
+    const s = at({ meshes: [roof], lines: [lineOn(0)] }, x, y);
+    expect(s).toMatchObject({ kind: 'axis', axis: 'z', label: `${AXIS_LABELS.z} · ${SNAP_LABELS.onFace}`, face: { id: 'roof' } });
+    expect(s.point[0]).toBe(10);
+    expect(s.point[2]).toBeCloseTo(35, 9);
+    // 면에서 6만큼 떠 있는 선(눈 쪽)이면 그 밑 면이 보이는지 모르니 붙지 않는다
+    expect(picker({ meshes: [roof], lines: [lineOn(6)] }, f)(sm[0], sm[1])?.kind).toBe('line');
+    expect(at({ meshes: [roof], lines: [lineOn(6)] }, x, y).face).toBeUndefined();
+    // 면 위 선이어도 그 자리가 단면에 잘린 쪽이면 붙지 않는다
+    expect(at({ meshes: [roof], lines: [lineOn(0)] }, x, y, { kept: (p) => p[2] < 30 }).face).toBeUndefined();
+  });
+
+  it('끌어온 축이 면을 뚫는 점(시작점 전에도 — 끌어온 점에서 점선, 방향이 없어 잠그지 않는다)', () => {
+    const scene: SnapScene = { meshes: [roof], lines: [] };
+    const P: V3 = [10, -10, -20];
+    const off = at(scene, cx, cy, { from: null, tracks: [P], meets: false });
+    expect(off).toMatchObject({ kind: 'axis', axis: 'z', label: TRACK_AXIS_LABELS.z, trackFrom: P });
+    const s = at(scene, cx, cy, { from: null, tracks: [P] });
+    expect(s).toMatchObject({ kind: 'axis', axis: 'z', label: `${TRACK_AXIS_LABELS.z} · ${SNAP_LABELS.onFace}`, trackFrom: P, face: { id: 'roof' } });
+    expect(s.point.slice(0, 2)).toEqual([10, -10]);
+    expect(s.dir).toBeUndefined();
+    expect(lockOf(s, null)).toBeNull();
+    // 끌어온 점이 시작점 축 위면 그 시작점 축이 먼저(같은 점 — 같은 거리면 앞 직선)
+    const t = at(scene, cx, cy, { tracks: [[10, -10, -60]] });
+    expect(t).toMatchObject({ kind: 'axis', axis: 'z', label: `${AXIS_LABELS.z} · ${SNAP_LABELS.onFace}`, dir: [0, 0, 1] });
+    expect(t.trackFrom).toBeUndefined();
+    // 끌어온 점이 시작점과 같으면 그 점은 직선에 넣지 않는다
+    expect(at(scene, cx, cy, { tracks: [A] })).toEqual(at(scene, cx, cy));
+  });
+
+  it(`다시 맞춰 보는 고르기는 한 번 추정에 ${FACE_HIT_CHECKS}번까지`, () => {
+    const scene: SnapScene = { meshes: [roof], lines: [] };
+    const pick = picker(scene, f);
+    let n = 0;
+    const counted = (x: number, y: number): Pick3d | null => (n++, pick(x, y));
+    // 파랑 축이 M 둘레(화면 1화소쯤)를 뚫는 서로 다른 끌어온 점 여섯(반 화소 안이면 시작점 축과 같은 직선으로 보고 뺀다) —
+    // 시작점과 함께 그 자리를 다시 맞춰 볼 직선 일곱
+    const tracks: V3[] = [[11, -10, -40], [9, -10, -60], [10, -9, -80], [10, -11, -30], [10.7, -10.7, -50], [9.3, -9.3, -70]];
+    const s = at(scene, cx, cy, { tracks, faceAt: counted });
+    expect(s).toMatchObject({ kind: 'axis', axis: 'z', face: { id: 'roof' } });
+    expect(n).toBe(7);
+    // 그 자리에서 늘 다른 점이 맞으면(같은 평면을 다시 구해 직선마다 AXIS_FACE_STEPS번) 한도에서 멈추고 붙지 않는다
+    n = 0;
+    const far = (x: number, y: number): Pick3d | null => {
+      n++;
+      const k = pick(x, y);
+      return k && { ...k, point: [k.point[0], k.point[1] + 30, k.point[2] + 15] };
+    };
+    expect(at(scene, cx, cy, { tracks, faceAt: far }).face).toBeUndefined();
+    expect(n).toBe(FACE_HIT_CHECKS);
   });
 });

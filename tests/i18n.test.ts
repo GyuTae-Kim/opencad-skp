@@ -114,6 +114,10 @@ describe('language URLs and UI presentation', () => {
         texts.add(`${TRACK_AXIS_LABELS[axis]} · ${on} · 35 mm`);
         texts.add(`${TRACK_AXIS_LABELS[axis]} · ${on} · 잠금 · 35 mm`);
       }
+      // 19차: 시작점 축이 모서리·안내선과 만나는 점, 시작점 축·끌어온 축이 면을 뚫는 점(축 글 · 모서리에/안내선에/면에 · 길이·각도)
+      for (const on of [SNAP_LABELS.onEdge, GUIDE_LINE_LABEL, SNAP_LABELS.onFace])
+        for (const tail of ['', ' · 55 mm', ' · 30.0°']) texts.add(`${AXIS_LABELS[axis]} · ${on}${tail}`);
+      for (const tail of ['', ' · 55 mm', ' · 30.0°']) texts.add(`${TRACK_AXIS_LABELS[axis]} · ${SNAP_LABELS.onFace}${tail}`);
     }
     // 끌어온 축끼리의 교차점(글만 · 길이 · 각도)
     for (const t of Object.values(TRACK_PAIR_LABELS)) for (const tail of ['', ' · 70 mm', ' · 45.0°', ' · 잠금 · 70 mm']) texts.add(`${t}${tail}`);
@@ -132,6 +136,9 @@ describe('language URLs and UI presentation', () => {
     expect(translate(`${TRACK_AXIS_LABELS.y} · ${SNAP_LABELS.onEdge} · 35 mm`, 'en')).toBe('On green axis from tracked point · On edge · 35 mm');
     expect(translate(`${TRACK_PAIR_LABELS.xy} · 70 mm`, 'en')).toBe('Intersection of tracked red and green axes · 70 mm');
     expect(translate(TRACK_PAIR_LABELS.yz, 'ja')).toBe('追跡点の緑軸と青軸の交点');
+    expect(translate(`${AXIS_LABELS.x} · ${SNAP_LABELS.onEdge} · 55 mm`, 'en')).toBe('On red axis · On edge · 55 mm');
+    expect(translate(`${AXIS_LABELS.z} · ${SNAP_LABELS.onFace}`, 'en')).toBe('On blue axis · On face');
+    expect(translate(`${TRACK_AXIS_LABELS.z} · ${SNAP_LABELS.onFace} · 55 mm`, 'en')).toBe('On blue axis from tracked point · On face · 55 mm');
     expect(translate(`Ctrl: 안내 두기 · ${trackHint(2)}`, 'en')).toBe('Ctrl: place guides · Tracked points: 2');
     expect(translate(trackHint(3)!, 'ja')).toBe('追跡点 3個');
     expect(translate('안내 5', 'en')).toBe('Guides 5');
