@@ -3372,7 +3372,8 @@ export class SkpViewerApp implements PanelHost {
       const lock = this.measureLockHint();
       if (lock) t.append(h('span', { class: 'mb-sub mb-lock-hint' }, lock));
     }
-    e.measureClear.disabled = !d.measure && !tool.pointCount;
+    // 다시 재기: 진행 중 점·결과·끌어온 점이 있으면(지울 것을 측정 조각이 정한다 — 결과는 d.measure와 같다)
+    e.measureClear.disabled = !tool.clearable;
     e.measureCopy.disabled = !d.measure;
     // 방향을 잡는 동안은 복사(결과가 없다) 자리에 잠금 단추
     const directing = tool.directing;

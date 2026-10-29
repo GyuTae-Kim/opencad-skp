@@ -56,7 +56,7 @@ import {
   dwellPoint,
   trackHint,
 } from '../../src/app/measure';
-import { AXIS_COLORS, TRACK_ALIGN_LABEL, TRACK_AXIS_LABELS } from '../../src/app/snap';
+import { AXIS_COLORS, SNAP_COLORS, SNAP_LABELS, TRACK_ALIGN_LABEL, TRACK_AXIS_LABELS, TRACK_PAIR_LABELS } from '../../src/app/snap';
 import { TRACK_DWELL_MS } from 'opencad-viewer3d/track';
 import { GUIDE_STORE_KEY, readGuideFiles } from '../../src/app/guidestore';
 import type { V3 } from 'opencad-viewer3d/math';
@@ -2524,5 +2524,104 @@ describe('측정 도구: 다른 점에서 끌어온 축(점 위에 머물기 —
     expect(run({}, false)).toEqual(offWait);
     // 켠 채 머물면 달라진다(시험이 끌어온 축을 실제로 거친다)
     expect(run({}, true)).not.toEqual(offWait);
+  });
+});
+
+describe('측정 도구: 끌어온 축끼리의 교차·끌어온 축과 모서리의 교차(코어 0.17.0)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+  });
+
+  // 넓은 면 위: 끝점 P(40, 30 — 화면 140, 70)에서 위로 60인 모서리, 끝점 A(0, −40 — 화면 100, 140)에서 −X로 30인 모서리,
+  // 가로 모서리 g(y = 60, x −60~20 — 화면 y = 40)
+  const P: V3 = [40, 30, 0];
+  const A: V3 = [0, -40, 0];
+  const SCENE = (): Pick<Scene3d, 'meshes' | 'lines' | 'units'> => ({
+    units: 'mm',
+    meshes: [quad('f', -95, -95, 95, 95, 0)],
+    lines: [lines('e', [[40, 30, 0, 40, 90, 0], [0, -40, 0, -30, -40, 0], [-60, 60, 0, 20, 60, 0]])],
+  });
+  const dwellOn = (r: Rig, x: number, y: number): void => {
+    r.move(x, y);
+    vi.advanceTimersByTime(TRACK_DWELL_MS);
+  };
+
+  it('두 점을 끌어오면 그 축이 만나는 점: 두 점에서 축 색 점선, 교차점 표식(빨강 ×)과 글, 누르면 그 점에서 잰다', () => {
+    const r = rig(SCENE());
+    r.tool.setMode('tape');
+    dwellOn(r, 141.2, 70.6);
+    dwellOn(r, 100.6, 140.4);
+    expect(r.tool.trackPoints).toEqual([A, P]);
+    // A의 녹색 축(x = 0)과 P의 빨강 축(y = 30)이 (0, 30) — 화면 (100, 70)에서 만난다
+    r.move(101.3, 71.2);
+    expect(r.tip()).toBe(TRACK_PAIR_LABELS.xy);
+    const strokes = r.qa('line.measure-track-line').map((l) => l.getAttribute('stroke'));
+    expect(strokes).toEqual([AXIS_COLORS.y, AXIS_COLORS.x]);
+    expect(r.qa('.measure-track.is-from')).toHaveLength(2);
+    const mark = r.q('[data-track="pair"]')!;
+    expect(mark.getAttribute('data-kind')).toBe('axis');
+    expect(mark.querySelector('path:last-child')?.getAttribute('stroke')).toBe(SNAP_COLORS.intersection);
+    // 시작점을 그 점에 찍는다(끌어온 점은 남는다)
+    r.click(101.3, 71.2);
+    expect(r.tool.pointCount).toBe(1);
+    expect(r.tool.trackPoints).toHaveLength(2);
+    r.click(141.2, 70.6);
+    expect(r.results.at(-1)).toMatchObject({ kind: 'tape', a: [0, 30, 0], b: P, distance: 40 });
+    expect(r.tool.trackPoints).toEqual([]);
+  });
+
+  it('끌어온 축이 모서리와 만나는 점: 모서리 위 표식(빨강 사각형)과 축 색 점선, 그 점에서 잰다', () => {
+    const r = rig(SCENE());
+    r.tool.setMode('tape');
+    // 끌어오기 전에는 모서리 위
+    r.move(101.2, 41.3);
+    expect(r.tip()).toBe(SNAP_LABELS.onEdge);
+    dwellOn(r, 100.6, 140.4);
+    expect(r.tool.trackPoints).toEqual([A]);
+    // A의 녹색 축(x = 0)이 g와 (0, 60) — 화면 (100, 40)에서 만난다
+    r.move(101.2, 41.3);
+    expect(r.tip()).toBe(`${TRACK_AXIS_LABELS.y} · ${SNAP_LABELS.onEdge}`);
+    expect(r.q('line.measure-track-line')?.getAttribute('stroke')).toBe(AXIS_COLORS.y);
+    const mark = r.q('[data-track="edge"]')!;
+    expect(mark.tagName.toLowerCase()).toBe('rect');
+    expect(mark.getAttribute('fill')).toBe(SNAP_COLORS.onEdge);
+    r.click(101.2, 41.3);
+    r.click(141.2, 70.6);
+    expect(r.results.at(-1)).toMatchObject({ kind: 'tape', a: [0, 60, 0], b: P, distance: 50 });
+  });
+
+  it('다시 재기로 지울 것(clearable): 진행 중 점·결과·끌어온 점 — 끌어온 점만 남아도 켜진다', () => {
+    const r = rig(SCENE());
+    r.tool.setMode('tape');
+    expect(r.tool.clearable).toBe(false);
+    const locks = r.locks.length;
+    dwellOn(r, 141.2, 70.6);
+    expect(r.tool.pointCount).toBe(0);
+    expect(r.tool.result).toBeNull();
+    expect(r.tool.clearable).toBe(true);
+    // 끌어온 점 수가 바뀌면 알린다(앱이 측정 띠 단추를 다시 맞춘다)
+    expect(r.locks.length).toBeGreaterThan(locks);
+    const n = r.locks.length;
+    r.tool.clear();
+    expect(r.tool.trackPoints).toEqual([]);
+    expect(r.tool.clearable).toBe(false);
+    expect(r.locks.length).toBeGreaterThan(n);
+    // 진행 중 점·결과
+    r.click(141.2, 70.6);
+    expect(r.tool.clearable).toBe(true);
+    r.click(100.6, 140.4);
+    expect(r.tool.pointCount).toBe(0);
+    expect(r.tool.clearable).toBe(true);
+    r.tool.clear();
+    expect(r.tool.clearable).toBe(false);
+    // 끄면 끌어온 점이 없어 머물러도 켜지지 않는다
+    r.tool.setTrack(false);
+    dwellOn(r, 141.2, 70.6);
+    expect(r.tool.clearable).toBe(false);
   });
 });

@@ -51,8 +51,9 @@
  *   각도기 중심을 찍기 전 →·←·↑는 각도기 평면을 그 축에 고정한다(빨강·녹색·파랑 각도기, 다시 누르면 풀기).
  * 다른 점에서 끌어온 축(SketchUp "점에서" 추론 — 기본 켬, setTrack): 마우스·펜 커서나 정밀 조준 십자선이 점 추정(끝점·중간점·중심·교차점·수직 발·안내점) 위에
  *   TRACK_DWELL_MS(0.5초) 동안 머물면(마우스·펜은 2화소, 조준은 손가락 떨림을 받아 AIM_DWELL_PX 안) 그 점을 최근 셋까지 기억한다(코어 0.16.0 MeasureTracker).
- *   그 뒤 면 위·빈 곳이면 시작점 축 위에서 그 점과 줄 맞춘 자리, 그 점을 지나는 축 위에도 붙는다(snap.ts — 축은 모형의 그리기 축).
- *   끌어온 점은 작은 +로, 붙은 축은 그 점에서 커서 자리까지 축 색 점선으로 그린다. 손가락 탭은 커서가 없어 머무르지 않는다(정밀 조준으로 머문다).
+ *   그 뒤 모서리 위·면 위·빈 곳이면 시작점 축 위에서 그 점과 줄 맞춘 자리, 끌어온 두 점의 축이 만나는 점(코어 0.17.0), 끌어온 축이 모서리·안내선과
+ *   만나는 점(0.17.0)에, 면 위·빈 곳이면 그 점을 지나는 축 위에도 붙는다(snap.ts — 축은 모형의 그리기 축).
+ *   끌어온 점은 작은 +로, 붙은 축은 그 점에서 커서 자리까지 축 색 점선으로 그린다(축끼리의 교차는 두 점에서). 손가락 탭은 커서가 없어 머무르지 않는다(정밀 조준으로 머문다).
  *   방금 누른 점과 진행 중 측정의 시작점은 머물러도 기억하지 않는다. 측정을 마치거나(두 점째·셋째 점·칸 넣기) 지우기·Esc·도구 바꾸기·끄기면 잊는다.
  *   안내가 아니라서 되돌리기·파일별 안내 기억에 들지 않고 고르거나 지우지도 않는다. 끄면 상태가 없어 추정·그림이 예전과 같다.
  * 그리기는 덧그림 층의 SVG 묶음(g.measure)과 DOM 라벨(div.measure-layer)로 하고, 숫자 글은 모형 단위(units.ts)로 쓴다.
@@ -849,6 +850,14 @@ export class MeasureTool {
     return this.pts.length;
   }
 
+  /**
+   * 다시 재기(clear)로 지울 것이 있는지: 진행 중 점·결과·끌어온 점. 앱의 측정 띠 다시 재기 단추가 이것으로 켜고 끈다
+   * (휴대폰은 Esc가 없어 끌어온 점만 남았을 때도 이 단추로 지운다 — 단추 상태를 이 조각이 정해 첫 화면 JS를 늘리지 않는다)
+   */
+  get clearable(): boolean {
+    return this.pts.length > 0 || !!this.resultValue || this.tracker.size > 0;
+  }
+
   /** 마지막 측정 결과 */
   get result(): MeasureToolResult | null {
     return this.resultValue;
@@ -1636,8 +1645,8 @@ export class MeasureTool {
   /** 지나간 모서리(나란함 기준)와, 방향을 잡는 동안 본 방향 추론을 기억한다 */
   private learn(snap: Snap): void {
     if (snap.locked) return;
-    // 모서리에 수직 추론의 edge는 이미 기준 모서리다
-    if (snap.edge && REF_KINDS.has(snap.kind) && !snap.inferred) this.parallelRef = [snap.edge[0], snap.edge[1]];
+    // 모서리에 수직 추론의 edge는 이미 기준 모서리다. 끌어온 축이 모서리와 만나는 점도 그 모서리를 지나간 것이다
+    if (snap.edge && (REF_KINDS.has(snap.kind) || (snap.kind === 'axis' && snap.trackFrom)) && !snap.inferred) this.parallelRef = [snap.edge[0], snap.edge[1]];
     if (this.directing) this.lastLockable = this.lockable(snap) ?? this.lastLockable;
   }
 
@@ -2329,26 +2338,31 @@ export class MeasureTool {
 
   /**
    * 끌어온 점 표식(작은 +, 흰 테두리)과, 지금 추정이 끌어온 축이면 그 점에서 추정 점까지 점선(SketchUp "점에서" — 끌어온 점을 지나는 축이면 그 축 색,
-   * 시작점 축 위 줄 맞춘 자리면 두 점을 잇는 선이 축과 나란할 때만 그 축 색, 아니면 글자 색). 그 축을 끌어온 점의 +는 크게 그 색으로
+   * 시작점 축 위 줄 맞춘 자리면 두 점을 잇는 선이 축과 나란할 때만 그 축 색, 아니면 글자 색). 그 축을 끌어온 점의 +는 크게 그 색으로.
+   * 끌어온 축끼리의 교차면 둘째 끌어온 점에서도 그 축 색 점선을 긋고 그 점의 +도 크게 그 색으로
    */
   private trackMarks(f: ViewFrame, live: Snap | null): void {
     const from = live?.kind === 'axis' ? live.trackFrom : undefined;
+    const other = from ? live!.trackOther : undefined;
     let color = 'currentColor';
     if (from && live) {
       const axis = live.dir ? axisOf(sub(live.point, from), this.axes) : (live.axis ?? null);
       if (axis) color = AXIS_COLORS[axis];
       this.segment(f, from, live.point, 'measure-track-line', { stroke: color, 'stroke-width': 1.75, 'stroke-dasharray': '2 3', 'data-axis': axis ?? '' });
+      if (other) this.segment(f, other.from, live.point, 'measure-track-line', { stroke: AXIS_COLORS[other.axis], 'stroke-width': 1.75, 'stroke-dasharray': '2 3', 'data-axis': other.axis });
     }
     for (const p of this.tracker.view) {
       const s = screenPoint(f, p, 20);
       if (!s) continue;
-      const on = !!from && samePoint(p, from);
+      const on1 = !!from && samePoint(p, from);
+      const on2 = !on1 && !!other && samePoint(p, other.from);
+      const on = on1 || on2;
       const r = on ? 6 : 4.5;
       const d = `M${s[0] - r},${s[1]}h${2 * r}M${s[0]},${s[1] - r}v${2 * r}`;
       const g = svgEl('g', { class: on ? 'measure-track is-from' : 'measure-track' });
       g.append(
         svgEl('path', { d, stroke: '#ffffff', 'stroke-width': on ? 4.5 : 3.5, 'stroke-linecap': 'round' }),
-        svgEl('path', { d, stroke: on ? color : 'currentColor', 'stroke-width': on ? 2.25 : 1.5, 'stroke-linecap': 'round' }),
+        svgEl('path', { d, stroke: on1 ? color : on2 ? AXIS_COLORS[other!.axis] : 'currentColor', 'stroke-width': on ? 2.25 : 1.5, 'stroke-linecap': 'round' }),
       );
       this.g.append(g);
     }
@@ -2368,30 +2382,36 @@ export class MeasureTool {
     this.g.append(svgEl('circle', { class: 'measure-point', cx: s[0], cy: s[1], r: 3.5, fill: 'currentColor', stroke: '#ffffff', 'stroke-width': 1 }));
   }
 
-  /** 추정 표식: 끝점 초록 원, 중간점 청록 원, 중심 초록 원과 십자, 교차점 빨강 ×, 수직 자홍 직각 표, 모서리 위 빨강 사각형, 면 위 파랑 마름모, 축 위 축 색 작은 사각형 */
+  /**
+   * 추정 표식: 끝점 초록 원, 중간점 청록 원, 중심 초록 원과 십자, 교차점 빨강 ×, 수직 자홍 직각 표, 모서리 위 빨강 사각형, 면 위 파랑 마름모, 축 위 축 색 작은 사각형.
+   * 끌어온 축이 다른 선과 만나는 점은 글에 맞춰 끌어온 축끼리의 교차면 교차점(빨강 ×), 모서리·안내선과 만나면 모서리 위(빨강 사각형) — 끌어온 축은 점선 색이 보인다
+   */
   private marker(f: ViewFrame, snap: Snap): void {
     const s = screenPoint(f, snap.point, 20);
     if (!s) return;
     const [x, y] = s;
-    const color = snap.kind === 'axis' && snap.axis ? AXIS_COLORS[snap.axis] : SNAP_COLORS[snap.kind];
-    const base = { class: `measure-snap measure-snap-${snap.kind}`, 'data-kind': snap.kind, fill: color, stroke: '#ffffff', 'stroke-width': 1.25 };
+    const track = snap.kind === 'axis' && snap.trackFrom ? (snap.trackOther ? 'pair' : snap.edge ? 'edge' : null) : null;
+    const kind: SnapKind = track === 'pair' ? 'intersection' : track === 'edge' ? 'onEdge' : snap.kind;
+    const color = kind === 'axis' && snap.axis ? AXIS_COLORS[snap.axis] : SNAP_COLORS[kind];
+    const base: Record<string, string | number> = { class: `measure-snap measure-snap-${snap.kind}`, 'data-kind': snap.kind, fill: color, stroke: '#ffffff', 'stroke-width': 1.25 };
+    if (track) base['data-track'] = track;
     let el: SVGElement;
-    if (snap.kind === 'endpoint' || snap.kind === 'midpoint') el = svgEl('circle', { ...base, cx: x, cy: y, r: 5 });
-    else if (snap.kind === 'center') {
+    if (kind === 'endpoint' || kind === 'midpoint') el = svgEl('circle', { ...base, cx: x, cy: y, r: 5 });
+    else if (kind === 'center') {
       el = svgEl('g', { class: base.class, 'data-kind': snap.kind });
       el.append(svgEl('circle', { cx: x, cy: y, r: 6, fill: 'none', stroke: '#ffffff', 'stroke-width': 3 }), svgEl('circle', { cx: x, cy: y, r: 6, fill: 'none', stroke: color, 'stroke-width': 1.75 }));
       el.append(svgEl('path', { d: `M${x - 3.5},${y}h7M${x},${y - 3.5}v7`, stroke: color, 'stroke-width': 1.5 }));
-    } else if (snap.kind === 'intersection') {
+    } else if (kind === 'intersection') {
       // 교차점: 흰 테두리를 두른 빨강 ×(SketchUp 교차점 표식)
       const d = `M${x - 5},${y - 5}L${x + 5},${y + 5}M${x + 5},${y - 5}L${x - 5},${y + 5}`;
-      el = svgEl('g', { class: base.class, 'data-kind': snap.kind });
+      el = svgEl('g', track ? { class: base.class, 'data-kind': snap.kind, 'data-track': track } : { class: base.class, 'data-kind': snap.kind });
       el.append(svgEl('path', { d, stroke: '#ffffff', 'stroke-width': 4.5, 'stroke-linecap': 'round' }), svgEl('path', { d, stroke: color, 'stroke-width': 2.25, 'stroke-linecap': 'round' }));
-    } else if (snap.kind === 'perpendicular') {
+    } else if (kind === 'perpendicular') {
       // 직각 표(ㄴ 모양)
       el = svgEl('path', { class: base.class, 'data-kind': snap.kind, d: `M${x - 6},${y - 6}v12h12`, fill: 'none', stroke: color, 'stroke-width': 2.5, 'stroke-linejoin': 'round' });
-    } else if (snap.kind === 'onFace') el = svgEl('polygon', { ...base, points: `${x},${y - 6.5} ${x + 6.5},${y} ${x},${y + 6.5} ${x - 6.5},${y}` });
+    } else if (kind === 'onFace') el = svgEl('polygon', { ...base, points: `${x},${y - 6.5} ${x + 6.5},${y} ${x},${y + 6.5} ${x - 6.5},${y}` });
     else {
-      const h = snap.kind === 'onEdge' ? 4.5 : 3.5;
+      const h = kind === 'onEdge' ? 4.5 : 3.5;
       el = svgEl('rect', { ...base, x: x - h, y: y - h, width: 2 * h, height: 2 * h });
     }
     this.g.append(el);
