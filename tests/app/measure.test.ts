@@ -2738,3 +2738,103 @@ describe('측정 도구: 시작점 축·끌어온 축이 모서리·면과 만�
     expect(r.tip()).toBe(TRACK_AXIS_LABELS.z);
   });
 });
+
+describe('측정 도구: 잠근 선이 모서리·면과 만나는 점(코어 0.19.0)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+  });
+
+  // 넓은 면 위: 끝점 A(0, −40 — 화면 100, 140)에서 −X로 30인 모서리, 비낀 모서리 s(y = x + 60 — 잠근 녹색 축과 (0, 60) — 화면 (100, 40)에서 만난다)
+  const SCENE = (): Pick<Scene3d, 'meshes' | 'lines' | 'units'> => ({
+    units: 'mm',
+    meshes: [quad('f', -95, -95, 95, 95, 0)],
+    lines: [lines('e', [[0, -40, 0, -30, -40, 0], [-80, -20, 0, 60, 120, 0]])],
+  });
+
+  it('줄자: Shift로 녹색 축을 잠근 채 비낀 모서리를 가리키면 만나는 점 — 모서리 위 표식에 잠금 고리, 그 점에서 잰다(끄면 예전처럼 커서에 가까운 점)', () => {
+    const r = rig(SCENE());
+    expect(r.tool.lockMeets).toBe(true);
+    r.tool.setMode('tape');
+    r.click(100.6, 140.4);
+    // 모서리에서 먼 녹색 축 위에서 잠근다
+    r.move(100.4, 80.3);
+    expect(r.tip()?.startsWith(`${AXIS_LABELS.y} · `)).toBe(true);
+    r.key('Shift');
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'y', source: 'shift' });
+    r.move(101.2, 41.5, { shift: true });
+    expect(r.tip()).toBe(`${AXIS_LABELS.y} · ${SNAP_LABELS.onEdge} · 잠금 · 100 mm`);
+    const mark = r.q('[data-meet="edge"]')!;
+    expect(mark.tagName.toLowerCase()).toBe('rect');
+    expect(mark.getAttribute('fill')).toBe(SNAP_COLORS.onEdge);
+    expect(mark.getAttribute('data-kind')).toBe('axis');
+    expect(r.q('.measure-lock-ring')).not.toBeNull();
+    const rubber = r.q('line.measure-rubber')!;
+    expect(rubber.getAttribute('data-locked')).toBe('axis');
+    expect(rubber.getAttribute('stroke')).toBe(AXIS_COLORS.y);
+    // 끄면 같은 자리는 예전처럼 잠근 선 위 커서에 가까운 점(만나는 점 표식 없음)
+    r.tool.setLockMeets(false);
+    expect(r.tool.lockMeets).toBe(false);
+    r.move(101.3, 41.5, { shift: true });
+    expect(r.tip()?.startsWith(`${AXIS_LABELS.y} · 잠금 · `)).toBe(true);
+    expect(r.tip()).not.toBe(`${AXIS_LABELS.y} · 잠금 · 100 mm`);
+    expect(r.q('[data-meet]')).toBeNull();
+    expect(r.q('.measure-lock-ring')).not.toBeNull();
+    r.tool.setLockMeets(true);
+    r.move(101.2, 41.5, { shift: true });
+    r.click(101.2, 41.5, { shift: true });
+    const res = r.results.at(-1);
+    expect(res).toMatchObject({ kind: 'tape', a: [0, -40, 0] });
+    if (res?.kind !== 'tape') return;
+    expect(res.b[0]).toBe(0);
+    expect(res.b[1]).toBeCloseTo(60, 9);
+    expect(res.distance).toBeCloseTo(100, 9);
+    // 선택으로 처음부터 끌 수도 있다
+    expect(rig(SCENE(), TOP, DEFAULT_UNITS, { lockMeets: false }).tool.lockMeets).toBe(false);
+  });
+
+  it('잠금 단추(손가락 기기)로 잠가도 같다', () => {
+    const r = rig(SCENE());
+    r.tool.setMode('tape');
+    r.click(100.6, 140.4);
+    expect(r.tool.setInferenceLock('y')).toBe(true);
+    r.move(101.2, 41.5);
+    expect(r.tip()).toBe(`${AXIS_LABELS.y} · ${SNAP_LABELS.onEdge} · 잠금 · 100 mm`);
+    expect(r.tool.inferenceLock).toMatchObject({ axis: 'y', source: 'button' });
+  });
+
+  it('줄자: ↑로 파랑 축을 잠근 채 비탈 면을 가리키면 뚫는 점 — 면 위 표식에 잠금 고리', () => {
+    const ang = dirToAngles([0.3, -1, 0.8]);
+    const CAM: CameraState = { target: [0, 0, 20], distance: 320, yaw: ang.yaw, pitch: ang.pitch, projection: 'perspective', fovY: FOV };
+    const scene = (): Pick<Scene3d, 'meshes' | 'lines' | 'units'> => ({
+      units: 'mm',
+      meshes: [{ id: 'roof', positions: Float32Array.from([-60, -40, 20, 60, -40, 20, 60, 40, 60, -60, 40, 60]), indices: Uint32Array.from([0, 1, 2, 0, 2, 3]), color: [0.8, 0.8, 0.8, 1] }],
+      lines: [lines('a', [[10, -10, -20, 30, -10, -20]])],
+    });
+    const f = frameFor(CAM, W, W);
+    const sa = projectToScreen(f, [10, -10, -20])!;
+    const sm = projectToScreen(f, [10, -10, 35])!;
+    const r = rig(scene(), CAM);
+    r.tool.setMode('tape');
+    r.click(sa[0] + 0.4, sa[1] - 0.3);
+    expect(r.tool.pointCount).toBe(1);
+    r.key('ArrowUp');
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'z', source: 'key' });
+    r.move(sm[0] + 1.2, sm[1] + 0.9);
+    expect(r.tip()).toBe(`${AXIS_LABELS.z} · ${SNAP_LABELS.onFace} · 잠금 · 55 mm`);
+    const mark = r.q('[data-meet="face"]')!;
+    expect(mark.tagName.toLowerCase()).toBe('polygon');
+    expect(mark.getAttribute('fill')).toBe(SNAP_COLORS.onFace);
+    expect(r.q('.measure-lock-ring')).not.toBeNull();
+    r.click(sm[0] + 1.2, sm[1] + 0.9);
+    const res = r.results.at(-1);
+    expect(res).toMatchObject({ kind: 'tape', a: [10, -10, -20] });
+    if (res?.kind !== 'tape') return;
+    expect(res.b.slice(0, 2)).toEqual([10, -10]);
+    expect(res.b[2]).toBeCloseTo(35, 9);
+  });
+});

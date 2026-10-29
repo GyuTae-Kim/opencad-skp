@@ -48,6 +48,8 @@
  *   (빨강·녹색·파랑 축, 모서리와 나란히, 지나간 모서리에 수직, 시작점에서 내린 수직)을 잠그고 떼면 푼다. →·←·↑는 빨강·녹색·파랑 축, ↓는 모서리와 나란히·수직
  *   (지금 커서 밑 것, 없으면 앞서 지나간 모서리와 나란히)을 잠그고 같은 키를 다시 누르면 푼다. 손가락 기기는 앱의 잠금 단추(setInferenceLock).
  *   잠그면 그 선 위에만 찍고(다른 점을 가리키면 그 점을 선에 내린 자리 — 높이 옮겨 재기), 점을 찍거나 취소·지우기를 하면 풀린다.
+ *   잠근 채 점이 아닌 형상을 가리키면 잠근 선이 그 모서리·안내선과 만나는 점("빨강 축에 · 모서리에 · 잠금" — 모서리 위 표식에 잠금 고리)과
+ *   커서 밑 면을 뚫는 점("· 면에 · 잠금" — 면 위 표식)에 붙는다(기본 켬, setLockMeets — snap.ts, 코어 0.19.0 lockEdgeSnap·lockFaceSnap).
  *   각도기 중심을 찍기 전 →·←·↑는 각도기 평면을 그 축에 고정한다(빨강·녹색·파랑 각도기, 다시 누르면 풀기).
  * 다른 점에서 끌어온 축(SketchUp "점에서" 추론 — 기본 켬, setTrack): 마우스·펜 커서나 정밀 조준 십자선이 점 추정(끝점·중간점·중심·교차점·수직 발·안내점) 위에
  *   TRACK_DWELL_MS(0.5초) 동안 머물면(마우스·펜은 2화소, 조준은 손가락 떨림을 받아 AIM_DWELL_PX 안) 그 점을 최근 셋까지 기억한다(코어 0.16.0 MeasureTracker).
@@ -216,6 +218,8 @@ export interface MeasureToolOptions {
   track?: boolean;
   /** 시작점 축이 모서리와 만나는 점, 시작점 축·끌어온 축이 면을 뚫는 점에 붙기(기본 켬, setAxisMeets로 바꾼다) */
   axisMeets?: boolean;
+  /** 잠근 동안 잠근 선이 모서리·안내선과 만나는 점, 면을 뚫는 점에 붙기(기본 켬, setLockMeets로 바꾼다) */
+  lockMeets?: boolean;
 }
 
 /**
@@ -736,6 +740,8 @@ export class MeasureTool {
   private trackOn: boolean;
   /** 축이 모서리·면과 만나는 점에 붙는지 */
   private meetsOn: boolean;
+  /** 잠근 선이 모서리·면과 만나는 점에 붙는지 */
+  private lockMeetsOn: boolean;
   private readonly tracker = new MeasureTracker();
   private dwellTimer: ReturnType<typeof setTimeout> | null = null;
   /** 정밀 조준이 머물기 시작한 자리(떨림을 받는 기준) */
@@ -786,6 +792,7 @@ export class MeasureTool {
     this.storage = opts.storage === undefined ? safeStorage() : opts.storage;
     this.trackOn = opts.track !== false;
     this.meetsOn = opts.axisMeets !== false;
+    this.lockMeetsOn = opts.lockMeets !== false;
     let shown = true;
     try {
       shown = this.storage?.getItem(GUIDES_SHOWN_KEY) !== '0';
@@ -930,6 +937,19 @@ export class MeasureTool {
   setAxisMeets(on: boolean): void {
     if (this.disposed || on === this.meetsOn) return;
     this.meetsOn = on;
+    this.hoverDirty = true;
+    this.overlay.invalidate();
+  }
+
+  /** 잠근 동안 잠근 선이 모서리·안내선과 만나는 점, 면을 뚫는 점에 붙는지(기본 켬) */
+  get lockMeets(): boolean {
+    return this.lockMeetsOn;
+  }
+
+  /** 잠근 선이 모서리·면과 만나는 점 켜고 끄기(끄면 잠근 동안 추정·그림이 예전과 같다) */
+  setLockMeets(on: boolean): void {
+    if (this.disposed || on === this.lockMeetsOn) return;
+    this.lockMeetsOn = on;
     this.hoverDirty = true;
     this.overlay.invalidate();
   }
@@ -1608,9 +1628,10 @@ export class MeasureTool {
       parallelRef: this.parallelRef,
       lock: this.pts.length ? this.lockValue : null,
       tracks: this.trackOn ? this.tracker.view : null,
-      // 축이 면을 뚫는 점은 커서와 같은 고르기로 그 자리에서 다시 맞춰 본다(숨긴 항목·단면에서 잘린 쪽은 코어 고르기가 거른다)
+      // 축·잠근 선이 면을 뚫는 점은 커서와 같은 고르기로 그 자리에서 다시 맞춰 본다(숨긴 항목·단면에서 잘린 쪽은 코어 고르기가 거른다)
       axisMeets: this.meetsOn,
-      faceAt: this.meetsOn ? (sx: number, sy: number) => v.pick(sx, sy) : null,
+      lockMeets: this.lockMeetsOn,
+      faceAt: this.meetsOn || this.lockMeetsOn ? (sx: number, sy: number) => v.pick(sx, sy) : null,
     });
   }
 
@@ -2409,13 +2430,17 @@ export class MeasureTool {
   /**
    * 추정 표식: 끝점 초록 원, 중간점 청록 원, 중심 초록 원과 십자, 교차점 빨강 ×, 수직 자홍 직각 표, 모서리 위 빨강 사각형, 면 위 파랑 마름모, 축 위 축 색 작은 사각형.
    * 축이 다른 선·면과 만나는 점은 글에 맞춰 끌어온 축끼리의 교차면 교차점(빨강 ×), 모서리·안내선과 만나면 모서리 위(빨강 사각형), 면을 뚫으면 면 위(파랑 마름모) —
-   * 어느 축인지는 고무줄(시작점 축)·점선(끌어온 축) 색이 보인다. data-meet은 그 종류, 끌어온 축이면 data-track도 같은 값
+   * 어느 축인지는 고무줄(시작점 축)·점선(끌어온 축) 색이 보인다. data-meet은 그 종류, 끌어온 축이면 data-track도 같은 값.
+   * 잠근 선이 모서리·안내선과 만나는 점·면을 뚫는 점도 같은 표식(data-meet)에 잠금 고리를 두른다
    */
   private marker(f: ViewFrame, snap: Snap): void {
     const s = screenPoint(f, snap.point, 20);
     if (!s) return;
     const [x, y] = s;
-    const meet = snap.kind === 'axis' ? (snap.trackFrom && snap.trackOther ? 'pair' : snap.edge ? 'edge' : snap.face ? 'face' : null) : null;
+    // 잠근 선 위 점은 잠근 선이 모서리·안내선과 만나는 점(lockEdge)·면을 뚫는 점(face)만 — 그 밖의 edge는 나란함·수직 잠금의 기준 모서리다
+    const meet = snap.locked
+      ? snap.lockEdge ? 'edge' : snap.face ? 'face' : null
+      : snap.kind === 'axis' ? (snap.trackFrom && snap.trackOther ? 'pair' : snap.edge ? 'edge' : snap.face ? 'face' : null) : null;
     const track = snap.trackFrom ? meet : null;
     const kind: SnapKind = meet === 'pair' ? 'intersection' : meet === 'edge' ? 'onEdge' : meet === 'face' ? 'onFace' : snap.kind;
     const color = kind === 'axis' && snap.axis ? AXIS_COLORS[snap.axis] : SNAP_COLORS[kind];

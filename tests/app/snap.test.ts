@@ -1222,3 +1222,136 @@ describe('추정: 시작점 축·끌어온 축이 면을 뚫는 점(코어 0.18.
     expect(n).toBe(FACE_HIT_CHECKS);
   });
 });
+
+describe('추정: 잠근 선이 모서리와 만나는 점·면을 뚫는 점(코어 0.19.0 lockEdgeSnap·lockFaceSnap)', () => {
+  // 넓은 면(z = 0) 위: 비낀 모서리 s(y = x + 60, x −80~60), 가로 모서리 h(y = 50, x −60~100), 짧은 모서리 t(y = 55, x 3~40 — 끝점 (3, 55)이 화면 (103, 45)).
+  // 시작점 A(0, −40 — 화면 100, 140). 잠근 녹색 축(x = 0)은 s와 (0, 60) — 화면 (100, 40)에서 만난다
+  const face = quad('f', -95, -95, 95, 95, 0);
+  const S = lines('s', [[-80, -20, 0, 60, 120, 0]]);
+  const H = lines('h', [[-60, 50, 0, 100, 50, 0]]);
+  const T = lines('t', [[3, 55, 0, 40, 55, 0]]);
+  const A: V3 = [0, -40, 0];
+  const Y = axisInferenceLock('y');
+  type Opt = { lock?: InferenceLock | null; lockMeets?: boolean; meets?: boolean; kept?: ((p: V3) => boolean) | null; visible?: ((p: V3) => boolean) | null; guideLines?: { point: V3; dir: V3 }[] };
+  const at = (scene: SnapScene, x: number, y: number, o: Opt = {}): Snap => {
+    const pick = picker(scene);
+    const probes = probeOffsets(SNAP_RADIUS_PX).map(([dx, dy]) => pick(x + dx, y + dy));
+    return chooseSnap({
+      frame: topFrame, x, y, pick: pick(x, y), probes, scene, radius: SNAP_RADIUS_PX, from: A, anchor: [0, 0, 0], lock: o.lock === undefined ? Y : o.lock,
+      kept: o.kept ?? null, visible: o.visible ?? null, guideLines: o.guideLines ?? [], axisMeets: o.meets ?? true, lockMeets: o.lockMeets ?? true, faceAt: pick,
+    });
+  };
+
+  it('잠근 축이 커서 둘레 모서리와 만나는 점(모서리 위 표식 글 — 잠근 선의 남은 좌표는 시작점 그대로)', () => {
+    const scene: SnapScene = { meshes: [face], lines: [S] };
+    // 끄면 예전처럼 잠근 선 위에서 커서 광선에 가장 가까운 점
+    const off = at(scene, 101.2, 41.5, { lockMeets: false });
+    expect(off).toMatchObject({ kind: 'axis', axis: 'y', label: AXIS_LABELS.y, locked: true });
+    expect(off.point[1]).toBeCloseTo(58.5, 9);
+    expect(off.lockEdge).toBeUndefined();
+    const s = at(scene, 101.2, 41.5);
+    expect(s).toMatchObject({ kind: 'axis', axis: 'y', label: `${AXIS_LABELS.y} · ${SNAP_LABELS.onEdge}`, dir: [0, 1, 0], locked: true, id: 's' });
+    expect(s.lockEdge).toEqual([[-80, -20, 0], [60, 120, 0]]);
+    expect(s.point[0]).toBe(0);
+    expect(s.point[2]).toBe(0);
+    expect(s.point[1]).toBeCloseTo(60, 9);
+    // 축 잠금에는 기준 모서리(edge)·옮겨 온 점(from)·면이 없다
+    expect(s.edge).toBeUndefined();
+    expect(s.from).toBeUndefined();
+    expect(s.face).toBeUndefined();
+    // 잠근 선이 지나는 곳에서 추정 반경 밖이면 잠근 선 위 커서에 가까운 점
+    expect(at(scene, 125.3, 41.5).lockEdge).toBeUndefined();
+    // 잠그기 전 시작점 축이 모서리와 만나는 점과 같은 자리에 남는다(Shift를 눌러도 점이 옮겨 가지 않는다)
+    const open = at(scene, 101.2, 41.5, { lock: null });
+    expect(open).toMatchObject({ kind: 'axis', axis: 'y', label: `${AXIS_LABELS.y} · ${SNAP_LABELS.onEdge}` });
+    expect(lockOf(open, A)).toMatchObject({ kind: 'axis', axis: 'y' });
+    expect(s.point).toEqual(open.point);
+  });
+
+  it('커서 밑 점 추정(끝점 등)이 먼저다 — 그 점을 잠근 선에 내린 자리', () => {
+    // t의 끝점(3, 55)이 커서에서 1.4화소, 잠근 축과 s가 만나는 점이 4.5화소
+    const s = at({ meshes: [face], lines: [S, T] }, 102, 44);
+    expect(s).toMatchObject({ kind: 'axis', axis: 'y', label: AXIS_LABELS.y, locked: true, from: [3, 55, 0], fromKind: 'endpoint' });
+    expect(s.point[0]).toBe(0);
+    expect(s.point[1]).toBeCloseTo(55, 9);
+    expect(s.lockEdge).toBeUndefined();
+  });
+
+  it('잠근 선은 잠금 종류와 상관없다(나란함 — 기준 모서리는 edge에 그대로)', () => {
+    // A를 지나 (1, 2, 0) 방향과 나란한 선이 h와 (45, 50) — 화면 (145, 50)에서 만난다
+    const par = parallelInferenceLock([[0, 0, 0], [1, 2, 0]])!;
+    const s = at({ meshes: [face], lines: [H] }, 146.1, 51.2, { lock: par });
+    expect(s).toMatchObject({ kind: 'parallel', label: `${SNAP_LABELS.parallel} · ${SNAP_LABELS.onEdge}`, locked: true, id: 'h' });
+    close(s.point, [45, 50, 0], 1e-9);
+    expect(s.edge).toEqual([[0, 0, 0], [1, 2, 0]]);
+    expect(s.lockEdge).toEqual([[-60, 50, 0], [100, 50, 0]]);
+  });
+
+  it('단면에 잘린 쪽·가린 점은 빼고, 안내선과도 만난다(덧그림이라 단면·가림을 보지 않는다)', () => {
+    const scene: SnapScene = { meshes: [face], lines: [S] };
+    expect(at(scene, 101.2, 41.5, { kept: (p) => p[1] < 50 }).lockEdge).toBeUndefined();
+    expect(at(scene, 101.2, 41.5, { visible: () => false }).lockEdge).toBeUndefined();
+    const g = at({ meshes: [face], lines: [] }, 101.2, 41.5, { guideLines: [{ point: [0, 60, 0], dir: [Math.SQRT1_2, Math.SQRT1_2, 0] }], kept: () => false, visible: () => false });
+    expect(g).toMatchObject({ kind: 'axis', axis: 'y', label: `${AXIS_LABELS.y} · ${GUIDE_LINE_LABEL}`, locked: true });
+    expect(g.point[0]).toBe(0);
+    expect(g.point[1]).toBeCloseTo(60, 9);
+    expect(g.lockEdge).toBeDefined();
+  });
+
+  it('끄거나(lockMeets 없음·false) 잠그지 않았으면 추정이 예전과 같고, 켜도 만나는 점이 아닌 곳은 같다', () => {
+    const scene: SnapScene = { meshes: [face], lines: [S, H, T] };
+    const pick = picker(scene);
+    const par = parallelInferenceLock([[0, 0, 0], [1, 2, 0]]);
+    let meets = 0;
+    for (const lock of [null, Y, axisInferenceLock('x'), par])
+      for (let x = 11.3; x < 200; x += 13.7)
+        for (let y = 8.9; y < 200; y += 11.9) {
+          const probes = probeOffsets(SNAP_RADIUS_PX).map(([dx, dy]) => pick(x + dx, y + dy));
+          const base = chooseSnap({ frame: topFrame, x, y, pick: pick(x, y), probes, scene, radius: SNAP_RADIUS_PX, from: A, anchor: [0, 0, 0], lock, axisMeets: true, faceAt: pick });
+          expect(at(scene, x, y, { lock, lockMeets: false }), `${x},${y}`).toEqual(base);
+          const on = at(scene, x, y, { lock });
+          if (!lock) expect(on, `${x},${y}`).toEqual(base);
+          else if (on.lockEdge || on.face) meets++;
+          else expect(on, `${x},${y}`).toEqual(base);
+        }
+    expect(meets).toBeGreaterThan(0);
+  });
+
+  // 앞 위에서 비스듬히 본 원근: 비탈 면 roof(z = 40 + y/2), 시작점 B(10, −10, −20) — 잠근 파랑 축이 roof를 M(10, −10, 35)에서 뚫는다
+  const ang = dirToAngles([0.3, -1, 0.8]);
+  const CAM: CameraState = { target: [0, 0, 20], distance: 320, yaw: ang.yaw, pitch: ang.pitch, projection: 'perspective', fovY: FOV };
+  const f = computeFrame(CAM, W, W, { center: [0, 0, 20], radius: 300 });
+  const roof: Mesh3d = { id: 'roof', positions: Float32Array.from([-60, -40, 20, 60, -40, 20, 60, 40, 60, -60, 40, 60]), indices: Uint32Array.from([0, 1, 2, 0, 2, 3]), color: [0.8, 0.8, 0.8, 1] };
+  const B: V3 = [10, -10, -20];
+  const sm = projectToScreen(f, [10, -10, 35])!;
+  const roofAt = (x: number, y: number, o: { lock?: InferenceLock; lockMeets?: boolean; faceAt?: ((x: number, y: number) => Pick3d | null) | null } = {}): Snap => {
+    const scene: SnapScene = { meshes: [roof], lines: [] };
+    const pick = picker(scene, f);
+    const probes = probeOffsets(SNAP_RADIUS_PX).map(([dx, dy]) => pick(x + dx, y + dy));
+    return chooseSnap({
+      frame: f, x, y, pick: pick(x, y), probes, scene, radius: SNAP_RADIUS_PX, from: B, anchor: [0, 0, 20], lock: o.lock ?? axisInferenceLock('z'),
+      axisMeets: true, lockMeets: o.lockMeets ?? true, faceAt: o.faceAt === undefined ? pick : o.faceAt,
+    });
+  };
+
+  it('잠근 축이 커서 밑 면을 뚫는 점(면 위 표식 글 — 그 면과 법선)', () => {
+    const cx = sm[0] + 1.2, cy = sm[1] + 0.9;
+    const off = roofAt(cx, cy, { lockMeets: false });
+    expect(off).toMatchObject({ kind: 'axis', axis: 'z', label: AXIS_LABELS.z, locked: true });
+    expect(Math.abs(off.point[2] - 35)).toBeGreaterThan(1e-3);
+    const s = roofAt(cx, cy);
+    expect(s).toMatchObject({ kind: 'axis', axis: 'z', label: `${AXIS_LABELS.z} · ${SNAP_LABELS.onFace}`, dir: [0, 0, 1], locked: true, id: 'roof' });
+    expect(s.point[0]).toBe(10);
+    expect(s.point[1]).toBe(-10);
+    expect(s.point[2]).toBeCloseTo(35, 9);
+    expect(s.face).toMatchObject({ id: 'roof' });
+    close(s.face!.normal, [0, -1 / Math.sqrt(5), 2 / Math.sqrt(5)], 1e-6);
+    close(s.normal!, s.face!.normal, 1e-12);
+    expect(s.lockEdge).toBeUndefined();
+    // 다시 맞춰 볼 고르기가 없거나 그 자리에서 면이 맞지 않으면 붙지 않는다
+    expect(roofAt(cx, cy, { faceAt: null })).toEqual(off);
+    expect(roofAt(cx, cy, { faceAt: () => null })).toEqual(off);
+    // 면과 나란한 잠근 선(빨강 축 — 비탈이 X 방향으로는 기울지 않았다)은 뚫지 않는다
+    expect(roofAt(cx, cy, { lock: axisInferenceLock('x') }).face).toBeUndefined();
+  });
+});

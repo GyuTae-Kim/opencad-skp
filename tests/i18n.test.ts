@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 const { JSDOM } = createRequire(import.meta.url)('jsdom');
 import { installLocalization } from '../src/app/i18n';
 import { GUIDE_CLEAR_FILE_LABEL, GUIDE_REDO_LABEL, GUIDE_UNDO_LABEL, GUIDES_SHOWN_LABEL, guideKeyHint, lockHint, measureHint, trackHint } from '../src/app/measure';
-import { AXIS_LABELS, GUIDE_LINE_LABEL, SNAP_LABELS, TRACK_ALIGN_LABEL, TRACK_AXIS_LABELS, TRACK_PAIR_LABELS } from '../src/app/snap';
+import { AXIS_LABELS, FACE_PERPENDICULAR_LABEL, GUIDE_LINE_LABEL, SNAP_LABELS, TRACK_ALIGN_LABEL, TRACK_AXIS_LABELS, TRACK_PAIR_LABELS } from '../src/app/snap';
 import { SHORTCUTS } from '../src/app/shortcuts';
 import { chunkFailText } from '../src/app/core';
 import { catalogs, currentLanguage, languageUrl, languages, translate } from '../site/i18n.mjs';
@@ -119,6 +119,10 @@ describe('language URLs and UI presentation', () => {
         for (const tail of ['', ' · 55 mm', ' · 30.0°']) texts.add(`${AXIS_LABELS[axis]} · ${on}${tail}`);
       for (const tail of ['', ' · 55 mm', ' · 30.0°']) texts.add(`${TRACK_AXIS_LABELS[axis]} · ${SNAP_LABELS.onFace}${tail}`);
     }
+    // 20차: 잠근 선(축·나란함·수직)이 모서리·안내선과 만나는 점, 면을 뚫는 점(잠금 글 · 모서리에/안내선에/면에 · 잠금 · 길이·각도)
+    for (const lock of [...Object.values(AXIS_LABELS), SNAP_LABELS.parallel, SNAP_LABELS.perpendicular, FACE_PERPENDICULAR_LABEL])
+      for (const on of [SNAP_LABELS.onEdge, GUIDE_LINE_LABEL, SNAP_LABELS.onFace])
+        for (const tail of ['', ' · 55 mm', ' · 30.0°']) texts.add(`${lock} · ${on} · 잠금${tail}`);
     // 끌어온 축끼리의 교차점(글만 · 길이 · 각도)
     for (const t of Object.values(TRACK_PAIR_LABELS)) for (const tail of ['', ' · 70 mm', ' · 45.0°', ' · 잠금 · 70 mm']) texts.add(`${t}${tail}`);
     for (const n of [1, 2, 3]) {
@@ -138,6 +142,8 @@ describe('language URLs and UI presentation', () => {
     expect(translate(TRACK_PAIR_LABELS.yz, 'ja')).toBe('追跡点の緑軸と青軸の交点');
     expect(translate(`${AXIS_LABELS.x} · ${SNAP_LABELS.onEdge} · 55 mm`, 'en')).toBe('On red axis · On edge · 55 mm');
     expect(translate(`${AXIS_LABELS.z} · ${SNAP_LABELS.onFace}`, 'en')).toBe('On blue axis · On face');
+    expect(translate(`${AXIS_LABELS.y} · ${SNAP_LABELS.onEdge} · 잠금 · 100 mm`, 'en')).toBe('On green axis · On edge · Locked · 100 mm');
+    expect(translate(`${SNAP_LABELS.parallel} · ${SNAP_LABELS.onFace} · 잠금`, 'de')).toBe(`${translate(SNAP_LABELS.parallel, 'de')} · ${translate(SNAP_LABELS.onFace, 'de')} · ${translate('잠금', 'de')}`);
     expect(translate(`${TRACK_AXIS_LABELS.z} · ${SNAP_LABELS.onFace} · 55 mm`, 'en')).toBe('On blue axis from tracked point · On face · 55 mm');
     expect(translate(`Ctrl: 안내 두기 · ${trackHint(2)}`, 'en')).toBe('Ctrl: place guides · Tracked points: 2');
     expect(translate(trackHint(3)!, 'ja')).toBe('追跡点 3個');
