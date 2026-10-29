@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
 const { JSDOM } = createRequire(import.meta.url)('jsdom');
 import { installLocalization } from '../src/app/i18n';
-import { GUIDE_CLEAR_FILE_LABEL, GUIDE_REDO_LABEL, GUIDE_UNDO_LABEL, GUIDES_SHOWN_LABEL, guideKeyHint, lockHint, measureHint, trackHint } from '../src/app/measure';
+import { GUIDE_CLEAR_FILE_LABEL, GUIDE_REDO_LABEL, GUIDE_UNDO_LABEL, GUIDES_SHOWN_LABEL, LOCK_HINTS, LOCK_MENU_LABEL, guideKeyHint, lockHint, measureHint, trackHint } from '../src/app/measure';
 import { AXIS_LABELS, FACE_PERPENDICULAR_LABEL, GUIDE_LINE_LABEL, SNAP_LABELS, TRACK_ALIGN_LABEL, TRACK_AXIS_LABELS, TRACK_PAIR_LABELS } from '../src/app/snap';
 import { SHORTCUTS } from '../src/app/shortcuts';
 import { chunkFailText } from '../src/app/core';
@@ -100,7 +100,8 @@ describe('language URLs and UI presentation', () => {
       for (const n of [0, 1, 2]) for (const lock of locks) for (const plane of [null, 'x', 'y', 'z'] as const) for (const touch of [false, true]) texts.add(lockHint(mode, n, lock, plane, touch) ?? '');
     for (const t of ['모서리와 나란히 · 50 mm', '빨강 축에 · 잠금 · 60 mm', '녹색 축에 · 잠금', '파랑 축에 · 잠금 · 30 mm', '모서리와 나란히 · 잠금 · 78 mm', '면에 수직 · 잠금 · 12 mm',
       '지금 방향 잠그기(다시 누르면 풀기)', '방향 잠금', '방향 잠금 풀기',
-      '잠글 방향이 없습니다: 길게 눌러 조준하며 축·나란한 방향에 맞춘 뒤 누르세요', '잠글 방향이 없습니다: 커서를 축·나란한 방향에 맞춘 뒤 누르세요',
+      // 22차 한 손 잠금: 측정 띠 위 잠글 방향 고르기 줄(이름과 단추 — 단추 글은 잠금 안내와 같다)
+      LOCK_MENU_LABEL, ...Object.values(LOCK_HINTS),
       '줄자 (T): 두 점 거리 — 끝점·중간점·모서리·면에 붙고, 축·모서리와 나란한 방향이면 그 선에 고정(Shift·화살표로 잠금) · Esc 지우기',
       '각도기: 중심 → 기준 방향 → 잴 방향(Shift = 평면 고정·방향 잠금) · Esc 지우기']) texts.add(t);
     // 다른 점에서 끌어온 축: 툴팁(끌어온 점의 축 · 시작점 축 위 줄 맞춘 자리 · 길이)과 상태 줄·측정 띠의 끌어온 점 수(잠금 안내 뒤에 " · "로)

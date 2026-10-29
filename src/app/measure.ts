@@ -135,6 +135,12 @@ export const LOCK_HINTS: Readonly<Record<LockName, string>> = Object.freeze({
 /** 화살표로 고정한 각도기 평면(그 축이 법선 — SketchUp의 빨강·녹색·파랑 각도기) */
 export const PLANE_HINTS: Readonly<Record<Axis, string>> = Object.freeze({ x: '빨강 각도기로 고정', y: '녹색 각도기로 고정', z: '파랑 각도기로 고정' });
 
+/** 잠글 방향 고르기(22차 한 손 잠금): 축 이름 · 모서리와 나란히 */
+export type LockChoice = Axis | 'parallel';
+
+/** 측정 띠의 잠글 방향 고르기 줄 이름(접근성) */
+export const LOCK_MENU_LABEL = '잠글 방향 고르기';
+
 /** 키보드 기기에서 방향을 잡는 동안 잠그는 법 */
 export const LOCK_KEYS_HINT = 'Shift·화살표로 방향 잠금';
 
@@ -825,6 +831,8 @@ export class MeasureTool {
   /** 측정 띠(측정값 칸 줄)의 되돌리기·다시 하기 단추(mountUndo로 붙인다) */
   private undoBtn: HTMLButtonElement | null = null;
   private redoBtn: HTMLButtonElement | null = null;
+  /** 측정 띠의 잠글 방향 고르기 줄(mountLockMenu로 붙인다 — 22차 한 손 잠금) */
+  private lockMenu: HTMLDivElement | null = null;
   /** 안내를 기억하는 파일 열쇠(내용 지문 16진 — 지문을 받기 전·기억하지 않으면 null)와 openFile 차례(늦게 온 지문은 버린다) */
   private fileKey: string | null = null;
   private fileTicket = 0;
@@ -1034,6 +1042,97 @@ export class MeasureTool {
     if (!l) return false;
     this.setLock({ ...l, source: 'button' });
     return true;
+  }
+
+  /**
+   * 고를 수 있는 잠글 방향(방향을 잡는 동안만, 아니면 빈 목록): 빨강·녹색·파랑 축, 앞서 지나간 모서리가 있으면 그 모서리와 나란히(↓와 같은 기준).
+   * 22차 한 손 잠금 — SketchUp for iPad 줄자의 도구 모드(Lock X·Y·Z·Lock Parallel)처럼 둘째 손가락 없이 고른다(lockTo·toggleLockMenu)
+   */
+  get lockChoices(): LockChoice[] {
+    if (!this.directing) return [];
+    return this.parallelRef ? ['x', 'y', 'z', 'parallel'] : ['x', 'y', 'z'];
+  }
+
+  /** 고른 방향으로 잠근다(단추 잠금 — 다시 누르거나 점을 찍고 취소하면 풀린다). 방향을 잡는 중이 아니거나 그 방향이 없으면 false */
+  lockTo(choice: LockChoice): boolean {
+    if (!this.directing) return false;
+    const l = choice === 'parallel' ? (this.parallelRef ? parallelInferenceLock(this.parallelRef) : null) : axisInferenceLock(choice, this.axes);
+    if (!l) return false;
+    this.setLock({ ...l, source: 'button' });
+    return true;
+  }
+
+  /**
+   * 측정 띠에 잠글 방향 고르기 줄을 붙인다(앱이 띠를 만든 뒤 한 번 — mountUndo처럼). 줄은 띠 위에 뜨고(.mb-lockmenu),
+   * 단추마다 잠금 안내 글(LOCK_HINTS — "빨강 축으로 잠금")과 축 색 견본. 손가락·펜은 누르는 순간에 받는다(정밀 조준 중 둘째 손가락도 되게)
+   */
+  mountLockMenu(host: HTMLElement): void {
+    if (this.lockMenu) {
+      host.append(this.lockMenu);
+      return;
+    }
+    const m = document.createElement('div');
+    m.className = 'mb-lockmenu';
+    m.setAttribute('role', 'group');
+    m.setAttribute('aria-label', LOCK_MENU_LABEL);
+    m.hidden = true;
+    let pressedAt = -Infinity;
+    const pick = (b: Element | null): void => {
+      const c = b?.getAttribute('data-lock') as LockChoice | null | undefined;
+      if (!c) return;
+      this.lockTo(c);
+      this.toggleLockMenu(false);
+    };
+    m.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse') return;
+      const b = (e.target as Element | null)?.closest?.('[data-lock]') ?? null;
+      if (!b) return;
+      e.preventDefault();
+      pressedAt = now();
+      pick(b);
+    });
+    m.addEventListener('click', (e) => {
+      if (now() - pressedAt < 1000) return;
+      pick((e.target as Element | null)?.closest?.('[data-lock]') ?? null);
+    });
+    this.lockMenu = m;
+    host.append(m);
+  }
+
+  /** 잠글 방향 고르기 줄이 열렸는지 */
+  get lockMenuOpen(): boolean {
+    return !!this.lockMenu && !this.lockMenu.hidden;
+  }
+
+  /**
+   * 잠글 방향 고르기 줄 열기·닫기(on이 없으면 바꾸기). 방향을 잡는 중이 아니면(고를 방향이 없으면) 닫는다. 열었으면 true.
+   * 고르거나, 점을 찍거나 취소·지우기·도구 바꾸기로 방향을 잡지 않게 되거나, 다른 길로 잠그면 닫힌다(refreshHint)
+   */
+  toggleLockMenu(on?: boolean): boolean {
+    const m = this.lockMenu;
+    if (!m) return false;
+    const choices = this.lockChoices;
+    const open = (on ?? m.hidden) && choices.length > 0 && !this.lockValue;
+    if (open) {
+      m.replaceChildren(
+        ...choices.map((c) => {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'mb-btn mb-lockpick';
+          b.setAttribute('data-lock', c);
+          const sw = document.createElement('span');
+          sw.className = 'mb-lockswatch';
+          sw.style.background = c === 'parallel' ? SNAP_COLORS.parallel : AXIS_COLORS[c];
+          b.append(sw, LOCK_HINTS[c]);
+          return b;
+        }),
+      );
+    }
+    if (m.hidden === !open) return open;
+    m.hidden = !open;
+    // 결과 글·툴팁이 줄을 비키게 다시 그린다
+    this.overlay.invalidate();
+    return open;
   }
 
   /** 줄자 시작점이 모서리 위라 친 길이가 나란한 안내선이 되는지 */
@@ -1776,6 +1875,7 @@ export class MeasureTool {
     this.syncPainter();
     this.undoBtn?.remove();
     this.redoBtn?.remove();
+    this.lockMenu?.remove();
     for (const f of this.off.splice(0)) f();
     this.presses.clear();
   }
@@ -2135,6 +2235,8 @@ export class MeasureTool {
       this.lastHint = h;
       this.opts.onHint?.(h);
     }
+    // 방향을 잡지 않게 되거나(점을 찍음·취소·도구 바꾸기) 잠갔으면 잠글 방향 고르기 줄을 닫는다
+    if (this.lockMenu && !this.lockMenu.hidden && (!this.directing || this.lockValue)) this.toggleLockMenu(false);
     const [lock, plane, tracks] = this.lockNote;
     const n = this.tracker.size;
     if (lock !== this.lockValue || plane !== this.planeAxisValue || tracks !== n) {
@@ -2266,12 +2368,13 @@ export class MeasureTool {
 
   /**
    * 3D 보기 위에 떠서 결과 글·툴팁이 비킬 것(캔버스 기준): 앱이 알려 준 요소(측정 띠·측정값 칸·장면 탭 등 — labelAvoid),
-   * 코어 뷰 큐브(보일 때만 — 덧그림이 그 위라 결과 글이 큐브를 덮는다)
+   * 코어 뷰 큐브(보일 때만 — 덧그림이 그 위라 결과 글이 큐브를 덮는다), 잠글 방향 고르기 줄(열렸을 때)
    */
   private coverAreas(): MeasureLabelRect[] {
     const els: (Element | null | undefined)[] = [...(this.opts.labelAvoid?.() ?? [])];
     const v = this.viewer;
     if (v.viewCubeVisible) els.push(v.canvas.parentElement?.querySelector(CUBE_SELECTOR));
+    if (this.lockMenu && !this.lockMenu.hidden) els.push(this.lockMenu);
     if (!els.some((e) => !!e)) return [];
     return coverRects(v.canvas.getBoundingClientRect(), els.map((e) => e?.getBoundingClientRect()));
   }

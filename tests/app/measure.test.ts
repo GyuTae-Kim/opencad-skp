@@ -54,6 +54,7 @@ import {
   labelSpot,
   edgeBands,
   coverRects,
+  LOCK_MENU_LABEL,
   AIM_DWELL_PX,
   dwellPoint,
   trackHint,
@@ -2374,6 +2375,91 @@ describe('측정 도구: 결과 글이 십자선·툴팁·측정 띠를 비켜 �
     fake.viewCubeVisible = false;
     r.move(30, 20);
     expect([label().style.left, label().style.top, label().classList.contains('is-moved')]).toEqual(['150px', '100px', false]);
+  });
+});
+
+describe('측정 도구: 잠글 방향 고르기(한 손 잠금 — 22차, SketchUp for iPad 줄자의 Lock X·Y·Z·Lock Parallel 도구 모드처럼)', () => {
+  const press = (el: Element | null, pointerType: string): void => {
+    const e = new MouseEvent('pointerdown', { bubbles: true, cancelable: true });
+    Object.defineProperty(e, 'pointerType', { value: pointerType });
+    el!.dispatchEvent(e);
+  };
+
+  it('방향을 잡는 동안만 열리고, 고르면 그 방향으로 잠근 뒤 닫힌다 — 마우스·키보드는 click, 손가락은 누르는 순간', () => {
+    const r = rig({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 10, 0, 0]]), lines('h', [[50, -50, 0, 80, -50, 0]])] });
+    const band = document.createElement('div');
+    document.body.append(band);
+    r.tool.mountLockMenu(band);
+    const menu = band.querySelector('.mb-lockmenu') as HTMLElement;
+    expect(menu.hidden).toBe(true);
+    expect(menu.getAttribute('role')).toBe('group');
+    expect(menu.getAttribute('aria-label')).toBe(LOCK_MENU_LABEL);
+    r.tool.setMode('tape');
+    // 점을 찍기 전에는 고를 방향이 없다
+    expect(r.tool.lockChoices).toEqual([]);
+    expect(r.tool.toggleLockMenu(true)).toBe(false);
+    expect(r.tool.lockTo('x')).toBe(false);
+    const tap = (x: number, y: number): void => {
+      r.ptr('pointerdown', x, y, { pointerType: 'touch', buttons: 1 });
+      r.ptr('pointerup', x, y, { pointerType: 'touch' });
+      r.overlay.paintNow();
+    };
+    // 마우스: 모서리 끝을 시작점으로 찍으면 그 모서리(↓와 같은 기준 — 앞서 지나간 모서리)와 나란히도 고를 수 있다
+    r.click(101, 100);
+    expect(r.tool.lockChoices).toEqual(['x', 'y', 'z', 'parallel']);
+    r.move(165, 150);
+    expect(r.tool.toggleLockMenu()).toBe(true);
+    expect(r.tool.lockMenuOpen).toBe(true);
+    expect([...menu.querySelectorAll('[data-lock]')].map((b) => b.textContent)).toEqual([LOCK_HINTS.x, LOCK_HINTS.y, LOCK_HINTS.z, LOCK_HINTS.parallel]);
+    expect((menu.querySelector('[data-lock="y"] .mb-lockswatch') as HTMLElement).style.background).not.toBe('');
+    // 같은 것을 다시 바꾸면 닫힌다
+    expect(r.tool.toggleLockMenu()).toBe(false);
+    expect(menu.hidden).toBe(true);
+    r.tool.toggleLockMenu(true);
+    // 마우스는 누르기(pointerdown)를 넘기고 click으로 고른다
+    press(menu.querySelector('[data-lock="parallel"]'), 'mouse');
+    expect(r.tool.inferenceLock).toBeNull();
+    (menu.querySelector('[data-lock="parallel"]') as HTMLElement).click();
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'parallel', source: 'button' });
+    expect(r.tool.lockMenuOpen).toBe(false);
+    expect(r.locks.at(-1)).toBe('parallel');
+    // 잠근 동안은 열지 않는다
+    expect(r.tool.toggleLockMenu(true)).toBe(false);
+    r.tool.setInferenceLock(false);
+    r.tool.clear();
+    // 손가락(한 손): 시작점을 탭하면 아직 본 방향이 없어 단추 잠금은 못 하지만, 고르기 줄에서 빨강 축을 고르면 잠근다
+    tap(101, 100);
+    expect(r.tool.setInferenceLock(true)).toBe(false);
+    expect(r.tool.toggleLockMenu(true)).toBe(true);
+    press(menu.querySelector('[data-lock="x"]'), 'touch');
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'x', source: 'button' });
+    expect(r.tool.lockMenuOpen).toBe(false);
+    // 뒤따르는 click(같은 누르기)은 넘긴다 — 풀리거나 다시 잠그지 않는다
+    (menu.querySelector('[data-lock="x"]') as HTMLElement | null)?.click();
+    expect(r.tool.inferenceLock?.axis).toBe('x');
+    // 같은 엄지로 다른 곳을 탭하면 잠근 선 위(시작점에서 빨강 축)
+    tap(140, 60);
+    const res = r.results.at(-1);
+    if (res?.kind !== 'tape') throw new Error('tape');
+    res.b.forEach((v, i) => expect(v).toBeCloseTo([40, 0, 0][i]!, 6));
+    expect(r.tool.inferenceLock).toBeNull();
+    // 열어 둔 채 점을 찍거나 다시 재기·도구를 끄면 닫힌다
+    tap(101, 100);
+    r.tool.toggleLockMenu(true);
+    tap(165, 150);
+    expect(r.results.at(-1)?.kind).toBe('tape');
+    expect(r.tool.lockMenuOpen).toBe(false);
+    tap(101, 100);
+    r.tool.toggleLockMenu(true);
+    r.tool.clear();
+    expect(r.tool.lockMenuOpen).toBe(false);
+    tap(101, 100);
+    r.tool.toggleLockMenu(true);
+    r.tool.setMode(null);
+    expect(r.tool.lockMenuOpen).toBe(false);
+    // 도구를 버리면 줄도 뗀다
+    r.tool.dispose();
+    expect(menu.isConnected).toBe(false);
   });
 });
 
