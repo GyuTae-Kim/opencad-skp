@@ -1295,8 +1295,8 @@ export class SkpViewerApp implements PanelHost {
       },
       // 안내 두기 켜고 끄기·안내점·안내선 수: 측정 띠 단추·측정값 칸의 안내 수
       onGuides: () => this.refreshStatus(),
-      // 결과 글이 3D 보기 위에 뜬 측정 띠·측정값 칸 밑에 숨지 않게 비켜 둔다
-      labelAvoid: () => [this.els.measureBar, this.vcb.el],
+      // 결과 글·툴팁이 3D 보기 위에 뜬 것(측정 띠와 그 위 기록·알림, 측정값 칸, 장면 탭, 카메라 띠, 걷기 조이스틱 — 뷰 큐브는 측정 도구가 찾는다) 밑에 숨지 않게 비켜 둔다
+      labelAvoid: () => [this.els.measureBar, this.vcb.el, this.els.sceneTabs, this.els.measureLog, this.els.measureFlash, this.els.camBar, this.stick.el],
       guideKey: this.guideKey,
       touch: () => !!this.coarseQuery?.matches,
       curveCenter: (id, seg) => this.curveCenter(id, seg),

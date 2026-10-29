@@ -52,6 +52,8 @@ import {
   GUIDE_CLEAR_FILE_LABEL,
   GUIDE_REDO_LABEL,
   labelSpot,
+  edgeBands,
+  coverRects,
   AIM_DWELL_PX,
   dwellPoint,
   trackHint,
@@ -116,6 +118,23 @@ describe('줄자·각도기 계산', () => {
     expect(tooltipPosition(50, 30, 80, 20, 400, 300, true)).toEqual({ left: 64, top: 48 });
   });
 
+  it('툴팁이 3D 보기 위에 뜬 것(장면 탭·뷰 큐브)을 덮으면 위아래 → 좌우 → 둘 다 뒤집은 첫 빈자리, 덮지 않으면 예전 자리(22차)', () => {
+    // 덮지 않으면 피할 자리를 주어도 같은 자리
+    const far = [{ x: 300, y: 200, width: 50, height: 50 }];
+    for (const a of [[50, 40, false], [380, 40, false], [50, 290, false], [50, 60, true], [50, 30, true]] as const)
+      expect(tooltipPosition(a[0], a[1], 80, 20, 400, 300, a[2], far)).toEqual(tooltipPosition(a[0], a[1], 80, 20, 400, 300, a[2]));
+    // 정밀 조준 툴팁(십자선 위)이 장면 탭 밑이면 십자선 아래로
+    const tabs = { x: 8, y: 8, width: 239, height: 44 };
+    expect(tooltipPosition(100, 70, 80, 17, 375, 600, true)).toEqual({ left: 114, top: 35 });
+    expect(tooltipPosition(100, 70, 80, 17, 375, 600, true, [tabs])).toEqual({ left: 114, top: 88 });
+    // 오른쪽 위 뷰 큐브: 위아래를 바꿔도 걸리면 커서 왼쪽
+    const cube = { x: 291, y: 8, width: 76, height: 76 };
+    expect(tooltipPosition(260, 40, 60, 17, 375, 600, false, [cube])).toEqual({ left: 190, top: 58 });
+    expect(tooltipPosition(260, 60, 60, 17, 375, 600, false, [cube, { x: 180, y: 0, width: 110, height: 100 }])).toEqual({ left: 274, top: 78 });
+    // 모두 걸리면 처음 자리
+    expect(tooltipPosition(100, 70, 80, 17, 375, 600, true, [{ x: 0, y: 0, width: 375, height: 600 }])).toEqual({ left: 114, top: 35 });
+  });
+
   it('툴팁 글·안내·추정 반경', () => {
     expect(joinTip('끝점', '1200 mm')).toBe('끝점 · 1200 mm');
     expect(joinTip('', '5 mm')).toBe('5 mm');
@@ -157,6 +176,8 @@ const quad = (id: string, x0: number, y0: number, x1: number, y1: number, z: num
 
 interface Rig {
   tool: MeasureTool;
+  /** 가짜 뷰어(시험이 viewCubeVisible 같은 것을 바꾼다) */
+  viewer: MeasureViewer;
   overlay: Overlay;
   canvas: HTMLCanvasElement;
   results: (MeasureToolResult | null)[];
@@ -245,6 +266,7 @@ function rig(scene: Pick<Scene3d, 'meshes' | 'lines' | 'units'>, cam: CameraStat
   };
   const r: Rig = {
     tool,
+    viewer,
     overlay,
     canvas,
     results,
@@ -2294,6 +2316,64 @@ describe('측정 도구: 결과 글이 십자선·툴팁·측정 띠를 비켜 �
     expect(moved.classList.contains('is-moved')).toBe(true);
     expect(moved.style.transform).toBe('none');
     expect(parseFloat(moved.style.top) + 18).toBeLessThanOrEqual(95);
+  });
+
+  it('보기 바깥 띠·떠 있는 것의 캔버스 기준 자리(22차): edgeBands는 보기 밖 네 띠, coverRects는 숨긴 것(크기 0)을 뺀다', () => {
+    const bands = edgeBands(375, 693);
+    expect(bands).toHaveLength(4);
+    // 보기 안 글은 띠와 겹치지 않고, 가장자리를 넘은 글은 겹친다
+    const view = { x: 0, y: 0, width: 375, height: 693 };
+    for (const b of bands) expect(b.x + b.width <= view.x || b.y + b.height <= view.y || b.x >= view.width || b.y >= view.height).toBe(true);
+    expect(labelSpot(370, 300, 60, 18, { width: 375, height: 693 }, { rects: bands })).toEqual({ x: 375 - 60 - 4, y: 300 - 18 - 8 });
+    expect(labelSpot(180, 300, 60, 18, { width: 375, height: 693 }, { rects: bands })).toBeNull();
+    expect(coverRects({ left: 0, top: 92 }, [{ left: 291, top: 100, width: 76, height: 76 }, { left: 8, top: 0, width: 0, height: 0 }, null])).toEqual([{ x: 291, y: 8, width: 76, height: 76 }]);
+  });
+
+  it('결과 글이 보기 밖으로 잘리면(기준점은 보기 안) 안으로, 기준점이 보기 밖이면 그대로 — 보이는 뷰 큐브도 비킨다(22차)', () => {
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('measure-label') ? 60 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('measure-label') ? 18 : 0;
+    });
+    const r = rig(EDGES(), TOP);
+    r.tool.setMode('tape');
+    r.click(102, 103);
+    r.click(198, 101);
+    r.move(30, 20);
+    const label = (): HTMLElement => r.q('.measure-label-length') as HTMLElement;
+    expect([label().style.left, label().style.top, label().classList.contains('is-moved')]).toEqual(['150px', '100px', false]);
+    // 결과 가운데(세계 x 50)가 화면 190 — 글(폭 60)이 오른쪽 끝을 넘어 잘리므로 보기 안 기본 귀(오른쪽 위를 안으로 당긴 자리)
+    r.setCamera({ ...TOP, target: [-40, 0, 0] });
+    r.overlay.paintNow();
+    expect([label().style.left, label().style.top, label().classList.contains('is-moved')]).toEqual([`${W - 60 - 4}px`, `${100 - 18 - 8}px`, true]);
+    // 결과 가운데가 보기 밖이라도 글이 보기에 걸치면(화면 215 — 글 185~245) 안으로
+    r.setCamera({ ...TOP, target: [-65, 0, 0] });
+    r.overlay.paintNow();
+    expect([label().style.left, label().classList.contains('is-moved')]).toEqual([`${W - 60 - 4}px`, true]);
+    // 글이 모두 보기 밖(화면 350)이면 옮기지 않는다(선도 보기 밖 — 가장자리에 붙여 두지 않는다)
+    r.setCamera({ ...TOP, target: [-200, 0, 0] });
+    r.overlay.paintNow();
+    expect([label().style.left, label().classList.contains('is-moved')]).toEqual(['350px', false]);
+    // 뷰 큐브(코어가 캔버스 옆에 두는 canvas.v3d-cube)가 결과 글 자리를 덮으면 비킨다 — 보일 때만
+    const cube = document.createElement('canvas');
+    cube.className = 'v3d-cube';
+    cube.getBoundingClientRect = () => ({ left: 120, top: 80, width: 60, height: 40, right: 180, bottom: 120, x: 120, y: 80, toJSON: () => ({}) }) as DOMRect;
+    r.canvas.parentElement!.append(cube);
+    r.setCamera(TOP);
+    r.overlay.paintNow();
+    expect(label().classList.contains('is-moved')).toBe(false);
+    const fake = r.viewer as { viewCubeVisible?: boolean };
+    fake.viewCubeVisible = true;
+    r.move(31, 20);
+    const l = label();
+    expect(l.classList.contains('is-moved')).toBe(true);
+    const [x, y] = [parseFloat(l.style.left), parseFloat(l.style.top)];
+    expect(x + 60 <= 120 || x >= 180 || y + 18 <= 80 || y >= 120).toBe(true);
+    expect(x >= 0 && y >= 0 && x + 60 <= W && y + 18 <= W).toBe(true);
+    fake.viewCubeVisible = false;
+    r.move(30, 20);
+    expect([label().style.left, label().style.top, label().classList.contains('is-moved')]).toEqual(['150px', '100px', false]);
   });
 });
 

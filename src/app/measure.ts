@@ -359,7 +359,7 @@ export interface GuideMenuItem {
 }
 
 /** 이 도구가 쓰는 뷰어 기능(시험에서 가짜로 바꿀 수 있게) */
-export type MeasureViewer = Pick<Viewer3d, 'canvas' | 'pick' | 'getCamera' | 'onCameraChange' | 'getRenderMode' | 'section'> & Partial<Pick<Viewer3d, 'sections'>>;
+export type MeasureViewer = Pick<Viewer3d, 'canvas' | 'pick' | 'getCamera' | 'onCameraChange' | 'getRenderMode' | 'section'> & Partial<Pick<Viewer3d, 'sections' | 'viewCubeVisible'>>;
 /** 이 도구가 쓰는 덧그림 기능 */
 export type MeasureOverlay = Pick<Overlay, 'svg' | 'labels' | 'set' | 'frame' | 'invalidate'>;
 
@@ -597,15 +597,69 @@ export function protractorPoint(ray: Ray, snap: Pick<Snap, 'kind' | 'point'>, ce
 /**
  * 툴팁 자리: 커서 오른쪽 아래, 보기 밖으로 나가면 왼쪽·위로 뒤집는다.
  * above(정밀 조준)면 커서 오른쪽 위 — 아래에는 손가락이 있다. 위가 모자라면 아래로.
+ * avoid(22차 — 3D 보기 위에 뜬 뷰 큐브·장면 탭·측정 띠, coverRects)를 덮으면 위아래 → 좌우 → 둘 다 뒤집은 자리 가운데 비는 첫 자리(모두 걸리면 처음 자리).
+ * 덮지 않으면 예전과 같은 자리다
  */
-export function tooltipPosition(x: number, y: number, w: number, h: number, width: number, height: number, above = false): { left: number; top: number } {
-  let left = x + 14;
-  let top = above ? y - 18 - h : y + 18;
-  if (left + w > width - 2) left = x - 10 - w;
-  if (above ? top < 2 : top + h > height - 2) top = above ? y + 18 : y - 10 - h;
-  left = Math.max(2, Math.min(left, width - w - 2));
-  top = Math.max(2, Math.min(top, height - h - 2));
-  return { left: Math.round(left), top: Math.round(top) };
+export function tooltipPosition(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  width: number,
+  height: number,
+  above = false,
+  avoid: readonly MeasureLabelRect[] = [],
+): { left: number; top: number } {
+  const spot = (flipX: boolean, flipY: boolean): { left: number; top: number } => {
+    let left = flipX ? x - 10 - w : x + 14;
+    const up = above !== flipY;
+    let top = up ? y - 18 - h : y + 18;
+    if (flipX ? left < 2 : left + w > width - 2) left = flipX ? x + 14 : x - 10 - w;
+    if (up ? top < 2 : top + h > height - 2) top = up ? y + 18 : y - 10 - h;
+    left = Math.max(2, Math.min(left, width - w - 2));
+    top = Math.max(2, Math.min(top, height - h - 2));
+    return { left: Math.round(left), top: Math.round(top) };
+  };
+  const first = spot(false, false);
+  if (!avoid.length || !(w > 0 && h > 0)) return first;
+  for (const [fx, fy] of [[false, false], [false, true], [true, false], [true, true]] as const) {
+    const s = fx || fy ? spot(fx, fy) : first;
+    if (!hitsAvoid({ x: s.left, y: s.top, width: w, height: h }, { rects: avoid })) return s;
+  }
+  return first;
+}
+
+/** 코어가 3D 보기 캔버스 옆(같은 부모)에 두는 뷰 큐브 캔버스 — 앱 덧그림(z-index 1)이 그 위라 결과 글이 큐브를 덮는다 */
+export const CUBE_SELECTOR = 'canvas.v3d-cube';
+
+/** 캔버스 가장자리 바깥 띠의 두께(화소) */
+const EDGE_BAND_PX = 4096;
+
+/**
+ * 보기(너비 width·높이 height) 바깥 네 띠(22차): 결과 글이 여기에 걸치면 보기 밖으로 잘린다(휴대폰은 위 도구 띠·아래 상태 줄·화면 끝).
+ * 보기에 걸친 결과 글만 이 띠를 비킨다(settleLabels — 코어 차례의 자리는 보기 안으로 당겨진다)
+ */
+export function edgeBands(width: number, height: number): MeasureLabelRect[] {
+  const B = EDGE_BAND_PX;
+  return [
+    { x: -B, y: -B, width: B, height: height + 2 * B },
+    { x: width, y: -B, width: B, height: height + 2 * B },
+    { x: 0, y: -B, width, height: B },
+    { x: 0, y: height, width, height: B },
+  ];
+}
+
+/**
+ * 3D 보기 위에 떠 있는 요소 자리(화면 좌표 getBoundingClientRect)를 캔버스 왼쪽 위 기준 사각형으로(22차 — NC 23차 coverRects처럼).
+ * 크기가 0인 것(숨긴 요소 — display: none)은 뺀다. 값은 맞추지 않는다(측정 띠·측정값 칸은 21차까지와 같은 자리를 비킨다)
+ */
+export function coverRects(
+  canvas: { left: number; top: number },
+  boxes: readonly ({ left: number; top: number; width: number; height: number } | null | undefined)[],
+): MeasureLabelRect[] {
+  const out: MeasureLabelRect[] = [];
+  for (const b of boxes) if (b && b.width > 0 && b.height > 0) out.push({ x: b.left - canvas.left, y: b.top - canvas.top, width: b.width, height: b.height });
+  return out;
 }
 
 /**
@@ -2202,16 +2256,32 @@ export class MeasureTool {
     if (this.aimId !== null && this.cursor) this.reticle(this.cursor.x, this.cursor.y);
     // 안내 두기: 커서 오른쪽 위에 + (SketchUp 줄자·각도기 커서의 +)
     if (this.guideOn && this.cursor && this.cursor.type !== 'touch' && !this.dragging) this.guidePlus(this.cursor.x, this.cursor.y);
-    this.tooltip(f, tip);
-    this.settleLabels(f);
+    // 3D 보기 위에 뜬 것의 자리는 툴팁이나 결과 글이 있을 때만 한 번 잰다
+    let cover: MeasureLabelRect[] | null = null;
+    const covers = (): MeasureLabelRect[] => (cover ??= this.coverAreas());
+    this.tooltip(f, tip, covers);
+    this.settleLabels(f, covers);
     this.notifyLive(snap);
   }
 
   /**
-   * 결과 글이 정밀 조준 십자선·손가락, 커서 옆 툴팁, 앱이 알려 준 요소(측정 띠·측정값 칸)와 겹치면 비켜 둔다(labelSpot — 코어 placeMeasureLabel 차례).
-   * 겹치지 않으면 가운데 자리 그대로라 그림이 예전과 같다
+   * 3D 보기 위에 떠서 결과 글·툴팁이 비킬 것(캔버스 기준): 앱이 알려 준 요소(측정 띠·측정값 칸·장면 탭 등 — labelAvoid),
+   * 코어 뷰 큐브(보일 때만 — 덧그림이 그 위라 결과 글이 큐브를 덮는다)
    */
-  private settleLabels(f: ViewFrame): void {
+  private coverAreas(): MeasureLabelRect[] {
+    const els: (Element | null | undefined)[] = [...(this.opts.labelAvoid?.() ?? [])];
+    const v = this.viewer;
+    if (v.viewCubeVisible) els.push(v.canvas.parentElement?.querySelector(CUBE_SELECTOR));
+    if (!els.some((e) => !!e)) return [];
+    return coverRects(v.canvas.getBoundingClientRect(), els.map((e) => e?.getBoundingClientRect()));
+  }
+
+  /**
+   * 결과 글이 정밀 조준 십자선·손가락, 커서 옆 툴팁, 3D 보기 위에 뜬 것(coverAreas — 측정 띠·측정값 칸·장면 탭·뷰 큐브)과 겹치거나
+   * 보기에 걸친 글이 보기 밖으로 잘리면(edgeBands — 휴대폰은 위 도구 띠·아래 상태 줄·화면 끝) 비켜 둔다(labelSpot — 코어 placeMeasureLabel 차례).
+   * 겹치지 않으면 가운데 자리 그대로라 그림이 예전과 같다. 글이 모두 보기 밖이면(결과 가운데가 멀리 밖) 가장자리에 붙여 두지 않는다
+   */
+  private settleLabels(f: ViewFrame, covers: () => MeasureLabelRect[]): void {
     if (!this.labelQueue.length) return;
     const rects: MeasureLabelRect[] = [];
     const circles: LabelCircle[] = [];
@@ -2223,17 +2293,13 @@ export class MeasureTool {
     const t = this.tip;
     if (t.style.display !== 'none' && t.parentNode === this.layer && t.offsetWidth > 0 && t.offsetHeight > 0)
       rects.push({ x: parseFloat(t.style.left) || 0, y: parseFloat(t.style.top) || 0, width: t.offsetWidth, height: t.offsetHeight });
-    const els = this.opts.labelAvoid?.() ?? [];
-    if (els.length) {
-      const base = this.viewer.canvas.getBoundingClientRect();
-      for (const el of els) {
-        const r = el?.getBoundingClientRect();
-        if (r && r.width > 0 && r.height > 0) rects.push({ x: r.left - base.left, y: r.top - base.top, width: r.width, height: r.height });
-      }
-    }
-    if (!rects.length && !circles.length) return;
+    rects.push(...covers());
+    const edged = [...rects, ...edgeBands(f.width, f.height)];
     for (const q of this.labelQueue) {
-      const at = labelSpot(q.x, q.y, q.el.offsetWidth, q.el.offsetHeight, f, { rects, circles }, q.seg, q.soft);
+      const w = q.el.offsetWidth, h = q.el.offsetHeight;
+      const inView = q.x + w / 2 > 0 && q.y + h / 2 > 0 && q.x - w / 2 < f.width && q.y - h / 2 < f.height;
+      if (!inView && !rects.length && !circles.length) continue;
+      const at = labelSpot(q.x, q.y, w, h, f, { rects: inView ? edged : rects, circles }, q.seg, q.soft);
       if (!at) continue;
       q.el.style.left = `${Math.round(at.x)}px`;
       q.el.style.top = `${Math.round(at.y)}px`;
@@ -2323,7 +2389,7 @@ export class MeasureTool {
     this.g.append(g);
   }
 
-  private tooltip(f: ViewFrame, text: string | null): void {
+  private tooltip(f: ViewFrame, text: string | null, covers: () => readonly MeasureLabelRect[]): void {
     const c = this.cursor;
     const el = this.tip;
     if (!c || !text || this.dragging) {
@@ -2333,7 +2399,7 @@ export class MeasureTool {
     el.textContent = text;
     el.style.display = 'block';
     this.layer.append(el);
-    const pos = tooltipPosition(c.x, c.y, el.offsetWidth || 0, el.offsetHeight || 0, f.width, f.height, c.type === 'aim');
+    const pos = tooltipPosition(c.x, c.y, el.offsetWidth || 0, el.offsetHeight || 0, f.width, f.height, c.type === 'aim', covers());
     el.style.left = `${pos.left}px`;
     el.style.top = `${pos.top}px`;
   }
