@@ -6,6 +6,8 @@
  * - 새것부터 8개까지, 60 MB보다 큰 파일은 저장하지 않는다(예제 모형도 저장하지 않는다).
  * - 같은 이름·같은 크기는 한 항목(다시 열면 시간만 새로).
  * - 목록은 이름·크기·시간만 읽는다(파일 바이트는 따로 두어, 목록을 그릴 때 수백 MB를 읽지 않게).
+ * - 파일은 고른 File(Blob) 그대로 저장한다 — 브라우저가 IndexedDB 쪽으로 옮겨 적어 화면이 바이트를 통째로 읽지 않는다.
+ *   Blob을 받지 않는 저장소면 바이트(ArrayBuffer)로 다시 해 본다. 꺼낼 때는 둘 다 올 수 있다(예전 항목과 서비스 워커가 넣은 공유 파일은 ArrayBuffer).
  * - IndexedDB를 쓸 수 없으면(비공개 창 등) 조용히 빈 목록.
  * 순서·개수·크기 규칙은 저장소 바탕(RecentBackend)을 바꿔 끼워 시험한다.
  */
@@ -23,11 +25,12 @@ export interface RecentEntry {
 /** 저장소 바탕: 이름·크기·시간(목록)과 파일 바이트를 따로 둔다 */
 export interface RecentBackend {
   entries(): Promise<RecentEntry[]>;
-  /** 항목과 바이트를 함께 저장(같은 id는 바꾼다) */
-  put(entry: RecentEntry, data: ArrayBuffer): Promise<void>;
+  /** 항목과 파일(Blob 또는 바이트)을 함께 저장(같은 id는 바꾼다) */
+  put(entry: RecentEntry, data: RecentData): Promise<void>;
   /** 항목만 바꾼다(시간 새로) */
   touch(entry: RecentEntry): Promise<void>;
-  data(id: string): Promise<ArrayBuffer | null>;
+  /** 저장한 파일(바이트로 저장한 것도 Blob으로 감싸 낸다 — 워커로는 Blob을 넘긴다) */
+  data(id: string): Promise<Blob | null>;
   /** 바이트 저장소의 열쇠들(최근 문서 id와 한 번 쓸 자리 shared:…) */
   dataKeys(): Promise<string[]>;
   remove(ids: readonly string[]): Promise<void>;
@@ -42,6 +45,9 @@ export const RECENT_STORE = 'recent';
 export const RECENT_DATA_STORE = 'recent-data';
 
 export const recentId = (name: string, size: number): string => `${name}:${size}`;
+
+/** 저장한 파일: Blob(File) 또는 바이트(예전 항목·서비스 워커가 넣은 공유 파일) */
+export type RecentData = Blob | ArrayBuffer;
 
 /** 최근 문서 id(이름:크기) → 이름. 한 번 쓸 자리(shared:시각:이름)도 이름을 꺼낸다 */
 export function nameOfRecentId(id: string): string {
@@ -105,12 +111,14 @@ export class RecentStore {
     }
   }
 
-  /** 연 파일 저장(크기 한도 밖이면 저장하지 않음). 저장했으면 true */
-  async add(name: string, data: ArrayBuffer, now = Date.now()): Promise<boolean> {
-    if (!this.backend || !canKeepRecent(data.byteLength)) return false;
+  /** 연 파일 저장(크기 한도 밖이면 저장하지 않음 — Blob을 받지 않는 저장소면 바이트로 한 번 더). 저장했으면 true */
+  async add(name: string, data: RecentData, now = Date.now()): Promise<boolean> {
+    // Blob은 size, 바이트는 byteLength
+    const size = (data as Blob).size ?? (data as ArrayBuffer).byteLength;
+    if (!this.backend || !canKeepRecent(size)) return false;
     try {
-      const entry: RecentEntry = { id: recentId(name, data.byteLength), name, size: data.byteLength, time: now };
-      await this.backend.put(entry, data);
+      const entry: RecentEntry = { id: recentId(name, size), name, size, time: now };
+      await this.backend.put(entry, data).catch(async () => this.backend!.put(entry, data instanceof Blob ? await data.arrayBuffer() : data));
       const extra = overflowIds(await this.backend.entries());
       if (extra.length) await this.backend.remove(extra);
       return true;
@@ -120,8 +128,8 @@ export class RecentStore {
     }
   }
 
-  /** 저장한 파일 바이트(다시 열기 — 시간을 새로 한다). 없으면 null */
-  async open(id: string, now = Date.now()): Promise<{ entry: RecentEntry; data: ArrayBuffer } | null> {
+  /** 저장한 파일(다시 열기 — 시간을 새로 한다). 없으면 null */
+  async open(id: string, now = Date.now()): Promise<{ entry: RecentEntry; data: Blob } | null> {
     if (!this.backend) return null;
     try {
       const entry = (await this.backend.entries()).find((e) => e.id === id);
@@ -135,8 +143,8 @@ export class RecentStore {
     }
   }
 
-  /** 한 번 쓸 자리(공유 받은 큰 파일, shared:…)의 바이트를 꺼내고 지운다. 없으면 null */
-  async take(key: string): Promise<ArrayBuffer | null> {
+  /** 한 번 쓸 자리(공유 받은 큰 파일, shared:…)의 파일을 꺼내고 지운다. 없으면 null */
+  async take(key: string): Promise<Blob | null> {
     if (!this.backend) return null;
     try {
       const data = await this.backend.data(key);
@@ -253,7 +261,7 @@ export function idbBackend(given?: IDBFactory): RecentBackend | null {
     async data(id) {
       const t = (await open()).transaction(RECENT_DATA_STORE, 'readonly');
       const v = await done(t.objectStore(RECENT_DATA_STORE).get(id));
-      return v instanceof ArrayBuffer ? v : null;
+      return v instanceof Blob ? v : v instanceof ArrayBuffer ? new Blob([v]) : null;
     },
     async dataKeys() {
       const t = (await open()).transaction(RECENT_DATA_STORE, 'readonly');

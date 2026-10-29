@@ -1,8 +1,9 @@
 /**
  * 해석 워커(src/worker/parse.worker.ts)와 화면 사이의 메시지 꼴과 직렬화 도움(순수 함수, DOM 없음).
  *
- * 파일 바이트는 화면 → 워커로 이전(transfer)하고, 결과 장면의 형식 배열·무늬 ImageBitmap은 워커 → 화면으로 이전한다(복사 없이).
- * 한 메시지 안에서 같은 버퍼를 여러 곳이 가리킬 수 있으므로 이전 목록은 버퍼마다 한 번만 넣는다.
+ * 파일은 Blob·File 그대로 화면 → 워커로 넘기고(바이트를 복사하지 않는다 — 워커가 필요한 자리만 읽는다), 결과 장면의 형식 배열·무늬 ImageBitmap은
+ * 워커 → 화면으로 이전한다(복사 없이). 한 메시지 안에서 같은 버퍼를 여러 곳이 가리킬 수 있으므로 이전 목록은 버퍼마다 한 번만 넣는다.
+ * 워커는 결과를 보낸 뒤 파일 내용 지문(SHA-256 — 측정 안내를 파일별로 기억하는 열쇠)을 덩이씩 읽으며 구해 따로 보낸다.
  */
 import type { Scene3d } from 'opencad-viewer3d/types';
 import type { SkpImages } from '../images';
@@ -12,8 +13,8 @@ export interface ParseRequest {
   type: 'open';
   /** 파일 이름(장면 이름) */
   name: string;
-  /** 파일 바이트(이전된다) */
-  bytes: ArrayBuffer;
+  /** 파일(Blob·File — 복사 없이 넘어가고 워커가 필요한 자리만 읽는다) */
+  file: Blob;
   /** 워커가 푸는 무늬 그림(색 바꾸기·알파 재기)의 긴 변 한도(화소, 기본 코어 TEXTURE_LIMIT) — 뷰어의 textureLimit과 같게 */
   textureLimit?: number;
 }
@@ -21,7 +22,9 @@ export interface ParseRequest {
 export type ParseResponse =
   | { id: number; type: 'progress'; fraction: number; stage: string }
   | { id: number; type: 'done'; result: ParseResult }
-  | { id: number; type: 'error'; message: string };
+  | { id: number; type: 'error'; message: string }
+  /** 결과(done) 뒤: 파일 내용 SHA-256 32바이트(못 구하면 null) */
+  | { id: number; type: 'print'; digest: ArrayBuffer | null };
 
 export interface ParseResult {
   scene: Scene3d;
@@ -29,6 +32,8 @@ export interface ParseResult {
   ms: number;
   /** 꾸러미 안 그림(워커가 꺼낸 바이트 — 화면이 Blob 주소로 바꾼다) */
   images?: SkpImages;
+  /** 파일 내용 SHA-256 32바이트(손님이 붙인다 — 워커가 결과 뒤에 보낸다, 못 구하면 null) */
+  print?: Promise<ArrayBuffer | null>;
 }
 
 /**
