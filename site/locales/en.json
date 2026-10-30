@@ -1061,8 +1061,9 @@
   "줄자·각도기를 끈 동안: 고른 것 모두 풀기(브라우저가 그 키를 먼저 쓰면 Esc)": "While Tape Measure and Protractor are off: deselect everything (Esc if the browser takes that key first)",
   "3D 그래픽을 다시 준비하는 중입니다": "Restoring 3D graphics",
   "브라우저가 그래픽 장치를 잠시 놓았습니다. 되찾는 대로 모형을 다시 그립니다.": "The browser briefly released the graphics device. The model will be redrawn as soon as it is back.",
-  "무늬와 곡면 음영을 다시 읽는 중입니다": "Reloading textures and curved-surface shading",
-  "메모리를 아끼려고 놓아 둔 무늬와 음영 자료를 파일에서 다시 읽습니다. 그동안 무늬 면은 평균색으로, 곡면은 각진 음영으로 보입니다.": "Texture and shading data released to save memory is being read again from the file. Until then, textured faces appear in their average color and curved surfaces with faceted shading.",
-  "무늬와 곡면 음영을 다시 읽지 못했습니다": "Could not reload textures and curved-surface shading",
-  "무늬 면은 평균색으로, 곡면은 각진 음영으로 그립니다. 파일을 다시 열면 돌아옵니다.": "Textured faces are drawn in their average color and curved surfaces with faceted shading. Open the file again to bring them back."
+  "색을 바꾼 무늬를 다시 준비하는 중입니다": "Preparing recolored textures again",
+  "메모리를 아끼려고 놓아 둔 무늬 그림을 다시 만듭니다. 그동안 그 무늬 면은 평균색으로 보입니다.": "Texture images released to save memory are being recreated. Until then, those textured faces appear in their average color.",
+  "무늬 일부를 다시 준비하지 못했습니다": "Could not prepare some textures again",
+  "그 무늬 면은 평균색으로 그립니다. 파일을 다시 열면 돌아옵니다.": "Those textured faces are drawn in their average color. Open the file again to bring them back.",
+  "보이는 안내 모두 고르기": "Select all visible guides"
 }

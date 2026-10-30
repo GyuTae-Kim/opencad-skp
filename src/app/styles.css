@@ -1721,6 +1721,7 @@ button.scene-card.sel {
 
 .sel-bar .sel-del,
 .sel-bar .sel-hide,
+.sel-bar .sel-all,
 .sel-bar.is-guide .sel-more {
   display: none;
 }
@@ -1728,6 +1729,13 @@ button.scene-card.sel {
 .sel-bar.is-guide .sel-del,
 .sel-bar.is-guide .sel-hide {
   display: inline-flex;
+}
+
+/* 손가락 기기: 보이는 안내 모두 고르기(29차 — 키보드의 Ctrl+A·⌘A 대신, 더 고를 것이 있을 때만) */
+@media (pointer: coarse) {
+  .sel-bar.is-guide .sel-all:not([hidden]) {
+    display: inline-flex;
+  }
 }
 
 /* 좁은 휴대폰: "다시 재기"·고른 안내 숨기기는 아이콘만(안내 글 자리를 남긴다 — 이름은 aria-label) */

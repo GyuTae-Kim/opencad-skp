@@ -381,6 +381,19 @@ export const GUIDE_HIDE_LABEL = '고른 안내 숨기기';
 export const GUIDE_UNHIDE_LABEL = '숨긴 안내 모두 보이기';
 
 /**
+ * 손가락 기기의 안내 모두 고르기(29차 — SketchUp for iPad 공개 도움말 "Settings Panel": 바로 가기 막대에 기본으로 Select All·Select None이 있다,
+ * "Select Tool"·"Lasso Tool"의 Select All은 "Selects everything in your model."). 고른 것 카드의 단추 글·이름과 보기 설정 메뉴 항목 글.
+ * 키보드의 Ctrl+A·⌘A와 같은 selectAllGuides(보이는 안내만). Select None("Activate this mode to unselect everything in your model.")은 카드의 ✕
+ * (고른 안내와 고른 형상을 모두 푼다 — selectNone과 같다)
+ */
+export const GUIDE_SELECT_ALL_TEXT = '모두';
+export const GUIDE_SELECT_ALL_LABEL = '보이는 안내 모두 고르기';
+
+/** 고른 것 카드의 모두 고르기 단추 그림(점선 상자와 그 안의 점 넷 — 측정 도구 조각에 두어 첫 화면 아이콘 표를 늘리지 않는다) */
+const SELECT_ALL_PATHS =
+  '<rect x="3.5" y="3.5" width="17" height="17" rx="2" stroke-dasharray="3 2.4"/><circle cx="9" cy="9" r="1.6" fill="currentColor"/><circle cx="15" cy="9" r="1.6" fill="currentColor"/><circle cx="9" cy="15" r="1.6" fill="currentColor"/><circle cx="15" cy="15" r="1.6" fill="currentColor"/>';
+
+/**
  * 고른 안내의 이름(상태 줄·고른 것 카드): 하나면 안내점·안내선, 여럿이면 "안내점 2개"·"안내선 3개"·"안내점 2개·안내선 1개". 없으면 null
  */
 export function guideCountText(points: number, lines: number): string | null {
@@ -1132,9 +1145,10 @@ export class MeasureTool {
   private redoBtn: HTMLButtonElement | null = null;
   /** 측정 띠의 잠글 방향 고르기 줄(mountLockMenu로 붙인다 — 22차 한 손 잠금) */
   private lockMenu: HTMLDivElement | null = null;
-  /** 고른 것 카드의 고른 안내 지우기·숨기기 단추(mountGuideDelete로 붙인다 — 23차 고르기 도구로 고른 안내, 숨기기는 25차) */
+  /** 고른 것 카드의 고른 안내 지우기·숨기기 단추(mountGuideDelete로 붙인다 — 23차 고르기 도구로 고른 안내, 숨기기는 25차), 손가락 기기의 모두 고르기(29차) */
   private guideDelBtn: HTMLButtonElement | null = null;
   private guideHideBtn: HTMLButtonElement | null = null;
+  private guideAllBtn: HTMLButtonElement | null = null;
   /** 안내를 기억하는 파일 열쇠(내용 지문 16진 — 지문을 받기 전·기억하지 않으면 null)와 openFile 차례(늦게 온 지문은 버린다) */
   private fileKey: string | null = null;
   private fileTicket = 0;
@@ -1686,12 +1700,18 @@ export class MeasureTool {
 
   /**
    * 보기 설정 메뉴의 안내 항목: "안내점·안내선 보이기", 숨긴 안내가 있으면 "숨긴 안내 모두 보이기"(25차 — unhideGuides),
-   * "이 파일의 안내 모두 지우기"(안내가 없으면 끔 — 측정값 칸의 ✕와 같이 되돌릴 수 있고, 숨긴 안내도 지우며 이 파일의 기억도 지운다. 도구를 끈 동안에도 된다)
+   * "이 파일의 안내 모두 지우기"(안내가 없으면 끔 — 측정값 칸의 ✕와 같이 되돌릴 수 있고, 숨긴 안내도 지우며 이 파일의 기억도 지운다. 도구를 끈 동안에도 된다).
+   * touch(손가락 기기 — 29차)면 보이는 안내가 있을 때 "보이는 안내 모두 고르기"도(키보드의 Ctrl+A·⌘A 대신 — 아무것도 고르지 않았을 때 시작하는 곳,
+   * 다 골랐거나 줄자·각도기를 켠 동안은 끔). 키보드 기기의 메뉴는 그대로다
    */
-  guideMenuItems(): GuideMenuItem[] {
+  guideMenuItems(touch = false): GuideMenuItem[] {
     const unhide: GuideMenuItem[] = this.hidGuides.size ? [{ label: GUIDE_UNHIDE_LABEL, icon: 'show', run: () => this.unhideGuides() }] : [];
+    const v = touch && this.shownValue ? this.visible() : null;
+    const all: GuideMenuItem[] =
+      v && v.vp.length + v.vl.length > 0 ? [{ label: GUIDE_SELECT_ALL_LABEL, icon: 'guide', disabled: !this.canSelectAllGuides, run: () => void this.selectAllGuides() }] : [];
     return [
       this.showGuidesItem(),
+      ...all,
       ...unhide,
       { label: GUIDE_CLEAR_FILE_LABEL, icon: 'trash', disabled: !this.guidePts.length && !this.guideLns.length, run: () => this.clearGuides() },
     ];
@@ -1861,6 +1881,13 @@ export class MeasureTool {
     return true;
   }
 
+  /** 모두 고르기로 더 고를 안내가 있는지(줄자·각도기를 끈 동안, 보이는 안내 가운데 고르지 않은 것이 있다 — 손가락 기기의 단추·메뉴 항목, 29차) */
+  get canSelectAllGuides(): boolean {
+    if (this.disposed || this.modeValue || !this.shownValue) return false;
+    const v = this.visible();
+    return v.vp.length + v.vl.length > this.liveSel().length;
+  }
+
   /**
    * 모두 풀기(26차 — "Selecting Geometry": Edit › Deselect All은 아무것도 고르지 않은 상태로): 고른 안내를 풀고 앱에 고른 형상도 풀게 한다(onSelectNone).
    * 줄자·각도기를 켠 동안은 하지 않는다. 푼 것이 있으면 true
@@ -1906,9 +1933,21 @@ export class MeasureTool {
 
   /**
    * 고른 것 카드(host — 앱 카드의 단추 줄, 맨 끝은 선택 해제 ✕)에 고른 안내 숨기기·지우기 단추를 붙인다(✕ 앞). 카드가 고른 안내를 보일 때만 보이고(CSS .sel-bar.is-guide),
-   * 숨기기는 고른 안내를 숨기고(25차 Edit › Hide — 좁은 휴대폰은 아이콘만), 지우기는 고른 안내를 지운다(여럿이면 함께 — 키보드는 Delete·Backspace)
+   * 숨기기는 고른 안내를 숨기고(25차 Edit › Hide — 좁은 휴대폰은 아이콘만), 지우기는 고른 안내를 지운다(여럿이면 함께 — 키보드는 Delete·Backspace).
+   * 29차: 손가락 기기(CSS pointer: coarse)에서만 보이는 "모두"는 보이는 안내를 모두 고른다(selectAllGuides — 더 고를 것이 없으면 숨김, 카드의 ✕가 모두 풀기)
    */
   mountGuideDelete(host: HTMLElement): void {
+    let a = this.guideAllBtn;
+    if (!a) {
+      a = document.createElement('button');
+      a.type = 'button';
+      a.className = 'mb-btn sel-all';
+      a.title = GUIDE_SELECT_ALL_LABEL;
+      a.setAttribute('aria-label', GUIDE_SELECT_ALL_LABEL);
+      a.innerHTML = `${icon('', 16).replace('</svg>', `${SELECT_ALL_PATHS}</svg>`)}<span>${GUIDE_SELECT_ALL_TEXT}</span>`;
+      a.addEventListener('click', () => this.selectAllGuides());
+      this.guideAllBtn = a;
+    }
     let h = this.guideHideBtn;
     if (!h) {
       h = document.createElement('button');
@@ -1930,13 +1969,15 @@ export class MeasureTool {
       this.guideDelBtn = b;
     }
     const close = host.lastElementChild;
-    host.insertBefore(h, close === h || close === b ? null : close);
+    host.insertBefore(a, close === a || close === h || close === b ? null : close);
+    host.insertBefore(h, a.nextSibling);
     host.insertBefore(b, h.nextSibling);
     this.syncGuideDelete();
   }
 
-  /** 카드의 지우기 단추 이름을 고른 안내 종류·수에 맞춘다(측정값 칸의 지우기 단추와 같은 글) */
+  /** 카드의 지우기 단추 이름을 고른 안내 종류·수에 맞추고(측정값 칸의 지우기 단추와 같은 글), 모두 고르기는 더 고를 것이 있을 때만 */
   private syncGuideDelete(): void {
+    if (this.guideAllBtn) this.guideAllBtn.hidden = !this.canSelectAllGuides;
     const b = this.guideDelBtn;
     if (!b) return;
     const c = this.selCounts();

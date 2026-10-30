@@ -4,11 +4,13 @@
  * 파일은 Blob·File 그대로 화면 → 워커로 넘기고(바이트를 복사하지 않는다 — 워커가 필요한 자리만 읽는다), 결과 장면의 형식 배열·무늬 ImageBitmap은
  * 워커 → 화면으로 이전한다(복사 없이). 한 메시지 안에서 같은 버퍼를 여러 곳이 가리킬 수 있으므로 이전 목록은 버퍼마다 한 번만 넣는다.
  * 워커는 결과를 보낸 뒤 파일 내용 지문(SHA-256 — 측정 안내를 파일별로 기억하는 열쇠)을 덩이씩 읽으며 구해 따로 보낸다.
- * 큰 모형을 놓아 올린 뒤 그래픽 문맥을 되찾으면 화면이 같은 파일을 다시 넘겨 놓은 법선·무늬 좌표와 색을 바꾼 무늬만 받는다(arrays — 27차, release.ts).
- * 큰 모형은 워커가 법선·무늬 좌표를 작은 정수 배열로 줄여 넘기고(packed — 28차, worker/pack.ts), 문맥 복구 때도 같은 꼴로 받는다.
+ * 큰 모형은 워커가 법선·무늬 좌표를 작은 정수 배열로 줄여 넘긴다(packed — 28차, worker/pack.ts).
+ * 큰 모형을 올린 뒤 그래픽 문맥을 되찾으면 화면이 쥐고 있던 색을 바꾼 무늬의 원래 그림 바이트만 작은 손질 워커(worker/recolor.worker.ts)에 넘겨
+ * 다시 손질한 그림을 받는다(recolor — 29차, release.ts. 27·28차는 같은 파일을 해석 워커로 다시 풀었다).
  */
-import type { NormalArray, Scene3d, UvArray, UvTransform } from 'opencad-viewer3d/types';
+import type { Scene3d } from 'opencad-viewer3d/types';
 import type { SkpImages } from '../images';
+import type { SkpTextureInfo } from '../index';
 import type { PackStats } from '../worker/pack';
 
 export interface ParseRequest {
@@ -22,47 +24,37 @@ export interface ParseRequest {
   textureLimit?: number;
 }
 
-/** 다시 받을 그물 하나: id, 정점 수(위치 값 수 / 3 — 다시 푼 그물과 다르면 파일이 바뀐 것이라 주지 않는다), 다시 받을 배열 */
-export interface ArraysWant {
+/**
+ * 쥐어 둔 무늬 하나(29차): 해석 워커가 색을 바꾼 무늬의 원래 그림 파일 바이트(Blob — 그림 꼴은 type)와 그 무늬의 손질 정보(meta.textures — 색 바꾸기·알파).
+ * 문맥을 되찾으면 처음 열 때와 같은 손질(worker/textures.ts)로 다시 그림을 만든다
+ */
+export interface HeldTexture {
   id: string;
-  nv: number;
-  normals: boolean;
-  uvs: boolean;
-  backUvs: boolean;
-  /**
-   * 처음 열 때 워커가 줄인 앞·뒷면 무늬 좌표의 변환(장면 그물의 uvTransform·backUvTransform — 코어 놓기는 지우지 않는다, 28차).
-   * 있으면 워커가 다시 줄여 변환이 같을 때만 주고, 없으면(Float32로 두었던 그물) Float32로 준다
-   */
-  uvT?: UvTransform | null;
-  backUvT?: UvTransform | null;
+  blob: Blob;
+  info: SkpTextureInfo;
 }
 
-/** 같은 파일을 다시 풀어 놓은 배열·무늬만 받기(문맥 복구 — 처음 열 때와 같은 선택으로 푼다) */
-export interface ArraysRequest {
+/** 쥐어 둔 무늬를 다시 손질해 받기(문맥 복구 — 처음 열 때와 같은 한도로 푼다). Blob은 복사 없이 넘어간다 */
+export interface RecolorRequest {
   id: number;
-  type: 'arrays';
-  name: string;
-  file: Blob;
-  meshes: ArraysWant[];
-  /** 다시 풀어 색을 바꿀 무늬 id(처음 열 때 워커가 손질한 그림) */
-  textures: string[];
+  type: 'recolor';
+  textures: HeldTexture[];
+  /** 처음 열 때 해석 워커에 준 무늬 한도(ParseRequest.textureLimit) */
   textureLimit?: number;
-  /** 처음 열 때 워커가 법선을 줄였다(ParseResult.packed — 28차). 다시 준 법선도 같은 꼴(Int8 정점 4값)로 */
-  pack?: boolean;
 }
 
-/** 다시 받은 그물 배열(그물 객체 꼴의 이름 — 코어 0.26.0부터 작은 정수 배열도 받는다)과 무늬(손질한 그림, 손질하지 않은 무늬는 그림 바이트) */
-export interface ArraysResult {
-  meshes: { id: string; normals?: NormalArray; uvs?: UvArray; backUvs?: UvArray }[];
-  textures: { id: string; bitmap?: ImageBitmap; data?: Uint8Array; mime?: string; width?: number; height?: number }[];
-  /** 다시 푼 시간(ms) */
+/** 다시 손질한 무늬(손질한 그림과 크기 — 풀지 못한 무늬는 빠진다) */
+export interface RecolorResult {
+  textures: { id: string; bitmap: ImageBitmap; width: number; height: number }[];
+  /** 다시 손질한 시간(ms) */
   ms: number;
 }
+
+export type RecolorResponse = { id: number; type: 'recolored'; result: RecolorResult } | { id: number; type: 'error'; message: string };
 
 export type ParseResponse =
   | { id: number; type: 'progress'; fraction: number; stage: string }
   | { id: number; type: 'done'; result: ParseResult }
-  | { id: number; type: 'arrays'; result: ArraysResult }
   | { id: number; type: 'error'; message: string }
   /** 결과(done) 뒤: 파일 내용 SHA-256 32바이트(못 구하면 null) */
   | { id: number; type: 'print'; digest: ArrayBuffer | null };
@@ -75,7 +67,7 @@ export interface ParseResult {
   images?: SkpImages;
   /** 파일 내용 SHA-256 32바이트(손님이 붙인다 — 워커가 결과 뒤에 보낸다, 못 구하면 null) */
   print?: Promise<ArrayBuffer | null>;
-  /** 큰 모형이라 워커가 법선·무늬 좌표를 줄였으면 그 셈(worker/pack.ts — 28차). 화면은 문맥 복구 때 같은 꼴로 다시 받는다 */
+  /** 큰 모형이라 워커가 법선·무늬 좌표를 줄였으면 그 셈(worker/pack.ts — 28차) */
   packed?: PackStats;
 }
 
