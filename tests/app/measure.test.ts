@@ -76,6 +76,7 @@ import {
   guideDeleteLabel,
   guideSelectOp,
   guidesInBox,
+  placedRects,
 } from '../../src/app/measure';
 import type { V3 } from 'opencad-viewer3d/math';
 import { Overlay, frameFor } from '../../src/app/overlay';
@@ -3630,5 +3631,96 @@ describe('고르기 도구로 안내 여럿 고르기·숨기기(25차 — Sketc
     // 되돌리면 다시 숨는다
     expect(r.tool.undo()).toBe(true);
     expect(r.tool.hiddenGuideCount).toBe(1);
+  });
+});
+
+describe('결과 글이 먼저 놓인 글상자(모형 글·치수 라벨)를 비켜 그리기(26차 — 코어 0.24.0 placeLabelAmong)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+  const view = { width: 400, height: 300 };
+  const overlaps = (a: { x: number; y: number }, w: number, h: number, b: { x: number; y: number; width: number; height: number }): boolean =>
+    a.x < b.x + b.width && b.x < a.x + w && a.y < b.y + b.height && b.y < a.y + h;
+
+  it('labelSpot: 먼저 놓인 글상자가 없거나 겹치지 않으면 예전과 같고, 겹치면 그것까지 비키며, 비킬 곳이 없으면 가운데 그대로', () => {
+    const bar = { x: 0, y: 260, width: 400, height: 40 };
+    const seg: [number[], number[]] = [[100, 270], [300, 270]];
+    const far = [{ x: 330.5, y: 20.5, width: 50, height: 16 }];
+    // 겹치지 않는 먼저 놓인 글상자는 자리를 바꾸지 않는다(22차 자리 그대로)
+    expect(labelSpot(200, 100, 60, 18, view, { rects: [] }, null, [], far)).toBeNull();
+    expect(labelSpot(200, 270, 60, 18, view, { rects: [bar] }, seg, [], far)).toEqual(labelSpot(200, 270, 60, 18, view, { rects: [bar] }, seg));
+    // 가운데 자리(170~230, 91~109)가 치수 라벨과 겹치면 코어 차례의 첫 빈자리(기준점 오른쪽 위 귀)
+    const dim = { x: 180.5, y: 95.5, width: 40, height: 14 };
+    expect(labelSpot(200, 100, 60, 18, view, { rects: [] }, null, [], [dim])).toEqual({ x: 210, y: 74 });
+    // 오른쪽 위 귀도 다른 라벨이 차지했으면 그다음(왼쪽 위 귀)
+    const upper = { x: 205.5, y: 70.5, width: 70, height: 20 };
+    expect(labelSpot(200, 100, 60, 18, view, { rects: [] }, null, [], [dim, upper])).toEqual({ x: 130, y: 74 });
+    // 측정 띠를 비킨 22차 자리가 라벨과 겹치면 띠와 라벨을 모두 비킨 자리
+    const old = labelSpot(200, 270, 60, 18, view, { rects: [bar] }, seg)!;
+    const onOld = { x: old.x - 5.5, y: old.y + 2.5, width: 40, height: 12 };
+    const moved = labelSpot(200, 270, 60, 18, view, { rects: [bar] }, seg, [], [onOld])!;
+    expect(moved).not.toEqual(old);
+    expect(overlaps(moved, 60, 18, bar) || overlaps(moved, 60, 18, onOld)).toBe(false);
+    // 비킬 곳이 없을 때: 띠와만 겹치던 글은 22차 자리, 라벨과만 겹치던 글은 가운데 그대로
+    const all = [{ x: -10, y: -10, width: 420, height: 320 }];
+    expect(labelSpot(200, 270, 60, 18, view, { rects: [bar] }, seg, [], all)).toEqual(old);
+    expect(labelSpot(200, 100, 60, 18, view, { rects: [] }, null, [], all)).toBeNull();
+    expect(labelSpot(200, 100, 0, 18, view, { rects: [] }, null, [], [dim])).toBeNull();
+  });
+
+  it('placedRects: 모형 라벨 배치의 상자를 사각형으로(흐리게 둔 것·크기 0은 빼고 차례 그대로)', () => {
+    expect(
+      placedRects([
+        { box: { x: 1, y: 2, w: 30, h: 12 } },
+        { box: { x: 5, y: 6, w: 30, h: 12 }, crowded: true },
+        { box: { x: 7, y: 8, w: 0, h: 12 } },
+        { box: { x: 9, y: 10, w: 20, h: 11 }, crowded: false },
+      ]),
+    ).toEqual([
+      { x: 1, y: 2, width: 30, height: 12 },
+      { x: 9, y: 10, width: 20, height: 11 },
+    ]);
+    expect(placedRects([])).toEqual([]);
+  });
+
+  it('줄자 결과 글이 앱이 알려 준 모형 라벨과 겹치면 비켜 두고, 겹치지 않거나 흐린 라벨이면 가운데 그대로', () => {
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('measure-label') ? 60 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('measure-label') ? 18 : 0;
+    });
+    let list: { box: { x: number; y: number; w: number; h: number }; crowded?: boolean }[] = [{ box: { x: 20.5, y: 20.5, w: 40, h: 12 } }];
+    let asked = 0;
+    const r = rig(EDGES(), TOP, DEFAULT_UNITS, {
+      placedLabels: () => {
+        asked++;
+        return list;
+      },
+    });
+    r.tool.setMode('tape');
+    r.move(30, 20);
+    // 결과 글이 없으면 묻지 않는다
+    expect(asked).toBe(0);
+    r.click(102, 103);
+    r.click(198, 101);
+    r.move(30, 20);
+    const label = (): HTMLElement => r.q('.measure-label-length') as HTMLElement;
+    expect([label().style.left, label().style.top, label().classList.contains('is-moved')]).toEqual(['150px', '100px', false]);
+    expect(asked).toBeGreaterThan(0);
+    // 결과 글 가운데 자리(120~180, 91~109)를 치수 라벨이 차지하면 비킨다
+    const dim = { x: 140.5, y: 96.5, width: 30, height: 12 };
+    list = [{ box: { x: dim.x, y: dim.y, w: dim.width, h: dim.height } }];
+    r.move(31, 20);
+    const l = label();
+    expect(l.classList.contains('is-moved')).toBe(true);
+    expect(l.style.transform).toBe('none');
+    const at = { x: parseFloat(l.style.left), y: parseFloat(l.style.top) };
+    expect(overlaps(at, 60, 18, dim)).toBe(false);
+    expect(at.x >= 0 && at.y >= 0 && at.x + 60 <= W && at.y + 18 <= W).toBe(true);
+    // 흐리게 둔 라벨(자리를 차지하지 않음)은 비키지 않는다
+    list = [{ box: { x: dim.x, y: dim.y, w: dim.width, h: dim.height }, crowded: true }];
+    r.move(30, 20);
+    expect([label().style.left, label().style.top, label().classList.contains('is-moved')]).toEqual(['150px', '100px', false]);
   });
 });

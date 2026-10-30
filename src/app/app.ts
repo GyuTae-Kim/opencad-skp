@@ -1301,6 +1301,8 @@ export class SkpViewerApp implements PanelHost {
       onGuidePick: () => this.applySelection(null, false),
       // 결과 글·툴팁이 3D 보기 위에 뜬 것(측정 띠와 그 위 기록·알림, 측정값 칸, 장면 탭, 카메라 띠, 걷기 조이스틱 — 뷰 큐브는 측정 도구가 찾는다) 밑에 숨지 않게 비켜 둔다
       labelAvoid: () => [this.els.measureBar, this.vcb.el, this.els.sceneTabs, this.els.measureLog, this.els.measureFlash, this.els.camBar, this.stick.el],
+      // 결과 글은 먼저 그린 모형 글·치수 라벨(덧그림 층에서 측정 도구보다 앞)과 겹쳐도 비킨다
+      placedLabels: () => this.labels?.placements ?? [],
       guideKey: this.guideKey,
       touch: () => !!this.coarseQuery?.matches,
       curveCenter: (id, seg) => this.curveCenter(id, seg),

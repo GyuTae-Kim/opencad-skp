@@ -37,6 +37,7 @@
  * 파일별 안내 기억: 안내가 바뀔 때마다(되돌리기 포함) 지금 안내를 파일 내용 지문 열쇠로 이 브라우저에 두고(guidestore.ts), 같은 파일을 다시 열면 되살린다.
  *   되돌리기 목록은 기억하지 않는다(되살린 안내가 처음 상태). 모두 지우면 그 파일의 기억도 지운다(되돌리면 다시 기억한다).
  * 결과 글(길이·각도)은 정밀 조준 십자선·손가락·툴팁·앱이 알려 준 측정 띠와 겹치면 코어 placeMeasureLabel 차례로 비켜 둔다(labelSpot).
+ *   먼저 놓인 글상자(앱이 알려 준 모형 글·치수 라벨 — placedLabels, 앞서 놓은 결과 글)와 겹쳐도 코어 0.24.0 placeLabelAmong 차례로 비킨다(26차).
  * 안내 두기(SketchUp 줄자·각도기의 "+" — 이 뷰어는 재기만이 기본): 켜면(setGuideMode, 키보드는 Ctrl — Mac은 Option — 만 눌렀다 떼기)
  *   줄자 둘째 누르기가 안내를 둔다 — 모서리 위에서 시작했으면 그 모서리와 나란히 둘째 점을 지나는 안내선(결과는 모서리에 수직인 거리),
  *   끝점·꼭짓점 같은 점에서 시작했으면 둘째 점에 안내점. 각도기는 셋째 누르기가 중심을 지나 잰 방향으로 안내선을 둔다. 결과는 재기만과 같이 남긴다.
@@ -77,7 +78,16 @@ import { PICK_TOLERANCE_PX, TOUCH_PICK_TOLERANCE_PX, clickCount, dragStartPx, is
 import type { Scene3d } from 'opencad-viewer3d/types';
 import { projectToScreen, screenRay, viewDepth, worldPerPixel, type ViewFrame } from 'opencad-viewer3d/camera';
 import type { V3 } from 'opencad-viewer3d/math';
-import { LABEL_POINT_R, hitsAvoid, placeMeasureLabel, type LabelAvoidAreas, type LabelCircle, type MeasureLabelRect } from 'opencad-viewer3d/measurelabel';
+import {
+  LABEL_POINT_R,
+  hitsAvoid,
+  placeLabelAmong,
+  placeMeasureLabel,
+  rectsOverlap,
+  type LabelAvoidAreas,
+  type LabelCircle,
+  type MeasureLabelRect,
+} from 'opencad-viewer3d/measurelabel';
 import { MeasureTracker, TRACK_DWELL_MS } from 'opencad-viewer3d/track';
 import { safeStorage } from './backdrop';
 import { icon } from './dom';
@@ -230,6 +240,11 @@ export interface MeasureToolOptions {
    * 누르기로 고른 것은 앱이 pickGuide의 값으로 안다
    */
   onGuidePick?: () => void;
+  /**
+   * 결과 글이 비킬 먼저 놓인 글상자(26차 — 앱 덧그림의 모형 글·치수 라벨 배치, 캔버스 왼쪽 위 기준 CSS 화소. crowded — 흐리게 둔 것 — 는 자리를 차지하지 않는다).
+   * 덧그림 층이 이 도구보다 먼저 그리는 층의 것이어야 같은 그림 틀의 자리다
+   */
+  placedLabels?: () => readonly { box: { x: number; y: number; w: number; h: number }; crowded?: boolean }[];
   /** 안내 보이기와 파일별 안내(guidestore.ts)를 기억하는 곳(없으면 이 브라우저 localStorage, null이면 기억하지 않음) */
   storage?: GuideStorage | null;
   /** 결과 글(길이·각도)이 비켜 갈 앱 요소(3D 보기 위에 뜬 측정 띠·측정값 칸 — 보이지 않는 요소는 넘어간다) */
@@ -901,10 +916,23 @@ export function coverRects(
 }
 
 /**
+ * 모형 글·치수 라벨 배치(annotations.ts layoutAnnotations의 box — 글자 수로 어림한 상자, 캔버스 기준) → 결과 글이 비킬 먼저 놓인 글상자(26차).
+ * 흐리게 둔 라벨(crowded — 자리를 차지하지 않는다)과 크기가 0인 것은 뺀다. 차례는 라벨을 놓은 차례 그대로
+ */
+export function placedRects(list: readonly { box: { x: number; y: number; w: number; h: number }; crowded?: boolean }[]): MeasureLabelRect[] {
+  const out: MeasureLabelRect[] = [];
+  for (const p of list) if (!p.crowded && p.box.w > 0 && p.box.h > 0) out.push({ x: p.box.x, y: p.box.y, width: p.box.w, height: p.box.h });
+  return out;
+}
+
+/**
  * 결과 글(줄자 길이·각도기 각도) 자리: 기본은 기준점(x, y) 가운데. 그 자리가 피할 자리(정밀 조준 십자선·손가락, 툴팁, 측정 띠)와 겹치면
  * 코어 0.13.0 순수 함수 placeMeasureLabel의 차례(기준점 오른쪽 위 → 왼쪽 위 → 오른쪽 아래 → 왼쪽 아래 → 화면 선분 seg를 따라 → 피할 자리 위·아래)로
  * 겹치지 않는 첫 자리의 왼쪽 위 좌표(soft — 측정 점 표식 — 까지 비키는 자리를 먼저). 겹치지 않거나, 옮겨도 겹치거나, 크기를 모르면 null(기본 자리 그대로).
- * 코어 거리 글상자를 비키는 setMeasureLabelAvoid와 같은 규칙이다(이 도구는 코어 측정을 쓰지 않아 그 글상자가 없다)
+ * 코어 거리 글상자를 비키는 setMeasureLabelAvoid와 같은 규칙이다(이 도구는 코어 측정을 쓰지 않아 그 글상자가 없다).
+ * placed(26차 — 먼저 놓인 글상자: 모형의 글·치수 라벨, 앞서 놓은 결과 글)가 있으면 코어 0.24.0 placeLabelAmong으로 그것도 비킨다:
+ * 위 자리가 먼저 놓인 글상자와 겹치지 않으면 그 자리 그대로이고(그래서 placed가 비었거나 겹치지 않으면 예전과 같다), 겹치면 먼저 놓인 것까지 비키는 자리.
+ * 피할 자리와는 겹치지 않던 가운데 자리가 먼저 놓인 글상자와만 겹치는데 비킬 곳이 없으면 가운데 그대로(null)
  */
 export function labelSpot(
   x: number,
@@ -915,10 +943,16 @@ export function labelSpot(
   avoid: LabelAvoidAreas,
   seg?: readonly [readonly number[], readonly number[]] | null,
   soft?: readonly LabelCircle[],
+  placed: readonly MeasureLabelRect[] = [],
 ): { x: number; y: number } | null {
-  if (!(width > 0 && height > 0) || !hitsAvoid({ x: x - width / 2, y: y - height / 2, width, height }, avoid)) return null;
-  const r = placeMeasureLabel([x, y], { width, height }, view, soft?.length ? { ...avoid, soft } : avoid, seg);
-  return hitsAvoid(r, avoid) ? null : { x: r.x, y: r.y };
+  if (!(width > 0 && height > 0)) return null;
+  const c = { x: x - width / 2, y: y - height / 2, width, height };
+  const hit = hitsAvoid(c, avoid);
+  if (!hit && !placed.some((p) => rectsOverlap(c, p))) return null;
+  const a = soft?.length ? { ...avoid, soft } : avoid;
+  const r = placed.length ? placeLabelAmong([x, y], { width, height }, view, a, placed, seg) : placeMeasureLabel([x, y], { width, height }, view, a, seg);
+  if (hitsAvoid(r, avoid) || (!hit && placed.some((p) => rectsOverlap(r, p)))) return null;
+  return { x: r.x, y: r.y };
 }
 
 /** 툴팁 글: "끝점 · 1200 mm" */
@@ -2907,7 +2941,9 @@ export class MeasureTool {
   /**
    * 결과 글이 정밀 조준 십자선·손가락, 커서 옆 툴팁, 3D 보기 위에 뜬 것(coverAreas — 측정 띠·측정값 칸·장면 탭·뷰 큐브)과 겹치거나
    * 보기에 걸친 글이 보기 밖으로 잘리면(edgeBands — 휴대폰은 위 도구 띠·아래 상태 줄·화면 끝) 비켜 둔다(labelSpot — 코어 placeMeasureLabel 차례).
-   * 겹치지 않으면 가운데 자리 그대로라 그림이 예전과 같다. 글이 모두 보기 밖이면(결과 가운데가 멀리 밖) 가장자리에 붙여 두지 않는다
+   * 겹치지 않으면 가운데 자리 그대로라 그림이 예전과 같다. 글이 모두 보기 밖이면(결과 가운데가 멀리 밖) 가장자리에 붙여 두지 않는다.
+   * 26차: 보기 안의 결과 글은 먼저 놓인 글상자(모형 글·치수 라벨 — placedLabels, 앞서 놓은 결과 글)와 겹쳐도 코어 0.24.0 placeLabelAmong 차례로 비킨다
+   * (모형 라벨을 먼저 놓고 결과 글을 뒤에 놓는다 — 코어가 덧그림 글상자 뒤에 측정 거리 글상자를 놓는 것과 같다)
    */
   private settleLabels(f: ViewFrame, covers: () => MeasureLabelRect[]): void {
     if (!this.labelQueue.length) return;
@@ -2923,11 +2959,13 @@ export class MeasureTool {
       rects.push({ x: parseFloat(t.style.left) || 0, y: parseFloat(t.style.top) || 0, width: t.offsetWidth, height: t.offsetHeight });
     rects.push(...covers());
     const edged = [...rects, ...edgeBands(f.width, f.height)];
+    const placed = placedRects(this.opts.placedLabels?.() ?? []);
     for (const q of this.labelQueue) {
       const w = q.el.offsetWidth, h = q.el.offsetHeight;
       const inView = q.x + w / 2 > 0 && q.y + h / 2 > 0 && q.x - w / 2 < f.width && q.y - h / 2 < f.height;
       if (!inView && !rects.length && !circles.length) continue;
-      const at = labelSpot(q.x, q.y, w, h, f, { rects: inView ? edged : rects, circles }, q.seg, q.soft);
+      const at = labelSpot(q.x, q.y, w, h, f, { rects: inView ? edged : rects, circles }, q.seg, q.soft, inView ? placed : []);
+      if (inView && w > 0 && h > 0) placed.push({ x: at ? at.x : q.x - w / 2, y: at ? at.y : q.y - h / 2, width: w, height: h });
       if (!at) continue;
       q.el.style.left = `${Math.round(at.x)}px`;
       q.el.style.top = `${Math.round(at.y)}px`;
