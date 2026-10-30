@@ -67,6 +67,7 @@ import { AXIS_COLORS, AXIS_LABELS, SNAP_COLORS, SNAP_LABELS, TRACK_ALIGN_LABEL, 
 import { TRACK_DWELL_MS } from 'opencad-viewer3d/track';
 import { GUIDE_STORE_KEY, readGuideFiles, saveGuides } from '../../src/app/guidestore';
 import {
+  AIM_COVER_GAP_PX,
   GUIDE_HIDE_LABEL,
   GUIDE_HIDE_TEXT,
   GUIDE_UNHIDE_LABEL,
@@ -171,6 +172,37 @@ describe('줄자·각도기 계산', () => {
     expect(snapRadius('aim')).toBeGreaterThan(snapRadius('mouse'));
     expect(aimPoint(30, 100)).toEqual({ x: 30, y: 100 - AIM_OFFSET_PX });
     expect(aimPoint(30, 10)).toEqual({ x: 30, y: 0 });
+  });
+
+  it('정밀 조준 십자선은 3D 보기 위에 뜬 것(장면 탭·뷰 큐브·측정 띠) 밑으로 가지 않고 가장 가까운 변 바깥(보기 안)으로 비킨다(25차)', () => {
+    const view = { width: 375, height: 600 };
+    const tabs = { x: 8, y: 8, width: 239, height: 44 };
+    const cube = { x: 291, y: 8, width: 76, height: 76 };
+    const band = { x: 0, y: 520, width: 375, height: 80 };
+    const all = [tabs, cube, band];
+    const g = AIM_COVER_GAP_PX;
+    // 덮개에서 먼 자리는 예전과 같다
+    expect(aimPoint(100.3, 180.6, all, view)).toEqual(aimPoint(100.3, 180.6));
+    expect(aimPoint(320.4, 300.2, all, view)).toEqual(aimPoint(320.4, 300.2));
+    // 장면 탭 밑: 탭 아래 변 바깥(위 틈·왼쪽 화면 끝으로는 밀지 않는다) — 손가락을 더 올려도 그 자리
+    expect(aimPoint(100.3, 100.6, all, view)).toEqual({ x: 100.3, y: 52 + g });
+    expect(aimPoint(100.3, 30.2, all, view)).toEqual({ x: 100.3, y: 52 + g });
+    // 탭 오른쪽 끝 가까이: 오른쪽 변 바깥이 더 가깝다
+    expect(aimPoint(240.2, 90.4, all, view)).toEqual({ x: 247 + g, y: 90.4 - AIM_OFFSET_PX });
+    // 뷰 큐브 밑: 왼쪽 변 바깥(오른쪽은 화면 끝)
+    expect(aimPoint(330.6, 100.2, all, view)).toEqual({ x: 291 - g, y: 100.2 - AIM_OFFSET_PX });
+    // 아래 띠 위: 띠 위 변 바깥
+    expect(aimPoint(200.2, 590.4, all, view)).toEqual({ x: 200.2, y: 520 - g });
+    // 틈 안(덮개에서 GAP 안)도 변 바깥까지
+    expect(aimPoint(100.3, 52 + g - 3.1 + AIM_OFFSET_PX, all, view)).toEqual({ x: 100.3, y: 52 + g });
+    // 맞붙은 덮개(사이 틈이 GAP 둘보다 좁음): 다른 덮개에 드는 변은 건너뛰어 어느 덮개 밑도 아닌 자리로
+    const near = { x: 250, y: 8, width: 37, height: 30 };
+    const free = (q: { x: number; y: number }): boolean => [near, cube].every((r) => !(q.x > r.x - g && q.x < r.x + r.width + g && q.y > r.y - g && q.y < r.y + r.height + g));
+    for (const [fx, fy] of [[270.2, 80.1], [289.1, 75.3], [300.4, 120.2]] as const) {
+      const p = aimPoint(fx, fy, [near, cube], view);
+      expect(free(p), `${fx},${fy} → ${p.x},${p.y}`).toBe(true);
+      expect(p.x >= g && p.y >= g && p.x <= view.width - g && p.y <= view.height - g).toBe(true);
+    }
   });
 });
 
@@ -878,6 +910,38 @@ describe('측정 도구: 정밀 조준(터치 길게 누르기)', () => {
     expect(r.tip()).toBe('끝점 · 50 mm');
     r.ptr('pointerup', 199, 100 + AIM_OFFSET_PX, touch);
     expect(r.results.at(-1)).toMatchObject({ kind: 'tape', a: [50, 0, 0], b: [100, 0, 0], distance: 50 });
+  });
+
+  it('십자선이 장면 탭(앱이 알려 준 3D 보기 위의 것) 밑으로 가면 탭 아래로 비키고, 떼면 비킨 십자선 자리에 찍는다(25차)', () => {
+    vi.useFakeTimers();
+    // 보기 위 왼쪽 위 장면 탭(캔버스 0,0 기준 8~128 × 8~52)
+    const tabs = document.createElement('div');
+    tabs.getBoundingClientRect = () => ({ left: 8, top: 8, width: 120, height: 44, right: 128, bottom: 52, x: 8, y: 8, toJSON: () => ({}) }) as DOMRect;
+    const r = rig(EDGES(), TOP, DEFAULT_UNITS, { labelAvoid: () => [tabs] });
+    const center = (): [number, number] => {
+      const c = r.q('.measure-aim circle');
+      return [Number(c?.getAttribute('cx')), Number(c?.getAttribute('cy'))];
+    };
+    r.tool.setMode('tape');
+    // 탭에서 먼 자리: 예전처럼 손가락 64화소 위
+    down(r, 160.3, 170.4);
+    vi.advanceTimersByTime(AIM_HOLD_MS);
+    r.overlay.paintNow();
+    expect(center()).toEqual([160.3, 170.4 - AIM_OFFSET_PX]);
+    // 손가락을 탭 밑으로(십자선이 탭에 들 자리): 탭 아래 변 바깥에 머물고, 그 자리의 추정(Y 모서리 끝점 — 화면 (100, 50))을 보인다
+    r.ptr('pointermove', 100.4, 90.6, { ...touch, buttons: 1 });
+    r.overlay.paintNow();
+    expect(center()).toEqual([100.4, 52 + AIM_COVER_GAP_PX]);
+    r.ptr('pointermove', 100.4, 70.6, { ...touch, buttons: 1 });
+    r.overlay.paintNow();
+    expect(center()).toEqual([100.4, 52 + AIM_COVER_GAP_PX]);
+    expect(r.tip()).toBe(SNAP_LABELS.endpoint);
+    // 떼면 비킨 십자선 자리의 추정에 찍는다
+    r.ptr('pointerup', 100.4, 70.6, touch);
+    expect(r.tool.pointCount).toBe(1);
+    r.overlay.paintNow();
+    const dot = r.q('circle.measure-point');
+    expect([Number(dot?.getAttribute('cx')), Number(dot?.getAttribute('cy'))].map((v) => Math.round(v * 10) / 10)).toEqual([100, 50]);
   });
 
   it('누르자마자 끌면 조준하지 않고(궤도), 둘째 손가락이 닿으면 조준을 그만둔다', () => {

@@ -599,9 +599,51 @@ export function snapRadius(pointerType: string): number {
   return pointerType === 'touch' ? TOUCH_SNAP_RADIUS_PX : pointerType === 'aim' ? AIM_SNAP_RADIUS_PX : SNAP_RADIUS_PX;
 }
 
-/** 정밀 조준 십자선 자리: 손가락 바로 위(보기 위 가장자리에서 멈춘다) */
-export function aimPoint(x: number, y: number): { x: number; y: number } {
-  return { x, y: Math.max(0, y - AIM_OFFSET_PX) };
+/** 정밀 조준 십자선이 3D 보기 위에 뜬 것에서 떨어지는 거리(화소) — 십자선 가운데 빈 자리(6)와 둘레가 보이게 */
+export const AIM_COVER_GAP_PX = 8;
+
+/**
+ * 정밀 조준 십자선 자리: 손가락 바로 위(보기 위 가장자리에서 멈춘다). covers(3D 보기 위에 뜬 장면 탭·뷰 큐브·측정 띠 등 — 캔버스 좌표,
+ * 결과 글·툴팁이 비키는 22차 coverAreas와 같은 것)가 있으면 그 밑에 숨지 않게(25차) 그 덮개에 AIM_COVER_GAP_PX 안으로 들어간 자리를
+ * 가장 가까운 변 바깥으로 민다 — 덮개 밑은 보이지 않아 겨눌 수 없으므로 보기 위 가장자리처럼 벽으로 본다(손가락을 더 올려도 십자선은 덮개 아래 변에 머문다).
+ * 민 자리가 보기(view — 없으면 위·왼쪽만) 가장자리에서 GAP 안이면 그 변은 쓰지 않고(장면 탭 위 좁은 틈·화면 끝으로 밀지 않게), 다른 덮개에 드는 변보다
+ * 들지 않는 변을 먼저 쓴다(맞붙은 덮개 사이를 오가지 않게). 덮개마다 한 번
+ */
+export function aimPoint(
+  x: number,
+  y: number,
+  covers: readonly MeasureLabelRect[] = [],
+  view?: { width: number; height: number },
+): { x: number; y: number } {
+  const p = { x, y: Math.max(0, y - AIM_OFFSET_PX) };
+  const g = AIM_COVER_GAP_PX;
+  const w = view?.width ?? Infinity, h = view?.height ?? Infinity;
+  const near = (q: { x: number; y: number }, r: MeasureLabelRect, e: number): boolean =>
+    q.x > r.x - g - e && q.x < r.x + r.width + g + e && q.y > r.y - g - e && q.y < r.y + r.height + g + e;
+  const done = new Set<MeasureLabelRect>();
+  for (;;) {
+    // 덮개(와 GAP)에 든 자리 — 경계 위도 든 것으로
+    const c = covers.find((r) => !done.has(r) && near(p, r, 1e-9));
+    if (!c) break;
+    done.add(c);
+    let best: { x: number; y: number; d: number; free: boolean } | null = null;
+    for (const q of [
+      { x: p.x, y: c.y + c.height + g },
+      { x: c.x + c.width + g, y: p.y },
+      { x: c.x - g, y: p.y },
+      { x: p.x, y: c.y - g },
+    ]) {
+      if (q.x < g || q.y < g || q.x > w - g || q.y > h - g) continue;
+      const d = Math.hypot(q.x - p.x, q.y - p.y);
+      const free = !covers.some((r) => r !== c && near(q, r, 0));
+      if (!best || (free && !best.free) || (free === best.free && d < best.d)) best = { ...q, d, free };
+    }
+    if (best) {
+      p.x = best.x;
+      p.y = best.y;
+    }
+  }
+  return p;
 }
 
 /**
@@ -938,6 +980,9 @@ interface Cursor {
   x: number;
   y: number;
   type: string;
+  /** 정밀 조준 중 손가락 자리(십자선은 그 위 — 덮개를 비키면 손가락과의 거리가 달라진다) */
+  fx?: number;
+  fy?: number;
 }
 
 export class MeasureTool {
@@ -2397,7 +2442,7 @@ export class MeasureTool {
     if (!this.modeValue || !pr || pr.moved || this.cancelTap || this.presses.size !== 1) return;
     this.aimId = id;
     this.dragging = false;
-    this.cursor = { ...aimPoint(pr.lx, pr.ly), type: 'aim' };
+    this.cursor = this.aimCursor(pr.lx, pr.ly);
     this.hoverDirty = true;
     // 짧은 떨림으로 조준이 시작됐음을 알린다(지원하는 기기만)
     try {
@@ -2413,9 +2458,15 @@ export class MeasureTool {
     if (this.aimId === null || e.pointerId !== this.aimId) return;
     e.stopPropagation();
     const p = this.local(e);
-    this.cursor = { ...aimPoint(p.x, p.y), type: 'aim' };
+    this.cursor = this.aimCursor(p.x, p.y);
     this.hoverDirty = true;
     this.overlay.invalidate();
+  }
+
+  /** 손가락 자리(캔버스 좌표)의 정밀 조준 커서: 손가락 위 십자선, 3D 보기 위에 뜬 장면 탭·뷰 큐브·띠 밑이면 비킨다(aimPoint — 25차) */
+  private aimCursor(x: number, y: number): Cursor {
+    const f = this.overlay.frame();
+    return { ...aimPoint(x, y, this.coverAreas(), f ? { width: f.width, height: f.height } : undefined), type: 'aim', fx: x, fy: y };
   }
 
   /** 조준 중인 손가락을 떼면 십자선 자리에 점을 찍는다(떼기 이벤트는 코어에 넘겨 끌기 상태를 끝내게 한다) */
@@ -2865,7 +2916,7 @@ export class MeasureTool {
     const c = this.cursor;
     if (this.aimId !== null && c) {
       circles.push({ x: c.x, y: c.y, r: RETICLE_AVOID_R });
-      rects.push({ x: c.x - 22, y: c.y + AIM_OFFSET_PX - 22, width: 44, height: 44 });
+      rects.push({ x: (c.fx ?? c.x) - 22, y: (c.fy ?? c.y + AIM_OFFSET_PX) - 22, width: 44, height: 44 });
     }
     const t = this.tip;
     if (t.style.display !== 'none' && t.parentNode === this.layer && t.offsetWidth > 0 && t.offsetHeight > 0)
