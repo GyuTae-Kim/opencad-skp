@@ -52,6 +52,9 @@
  *   잠그면 그 선 위에만 찍고(다른 점을 가리키면 그 점을 선에 내린 자리 — 높이 옮겨 재기), 점을 찍거나 취소·지우기를 하면 풀린다.
  *   잠근 채 점이 아닌 형상을 가리키면 잠근 선이 그 모서리·안내선과 만나는 점("빨강 축에 · 모서리에 · 잠금" — 모서리 위 표식에 잠금 고리)과
  *   커서 밑 면을 뚫는 점("· 면에 · 잠금" — 면 위 표식)에 붙는다(기본 켬, setLockMeets — snap.ts, 코어 0.19.0 lockEdgeSnap·lockFaceSnap).
+ *   끌어온 점이 있으면 잠근 선이 그 점의 축과 만나는 점("빨강 축에 · 끌어온 점의 녹색 축에 · 잠금" — 교차점 표식에 잠금 고리, 끌어온 점에서 그 축 색 점선)과
+ *   축으로 잠근 선 위에서 그 점과 줄 맞춘 자리("빨강 축에 · 끌어온 점과 줄 맞춤 · 잠금" — 끌어온 점에서 글자 색 점선)에도 모서리보다 먼저 붙는다
+ *   (같은 setLockMeets — 코어 0.21.0 lockTrackSnap. 잠그기 전 줄 맞춘 자리를 Shift로 잠가도 같은 점이다).
  *   각도기 중심을 찍기 전 →·←·↑는 각도기 평면을 그 축에 고정한다(빨강·녹색·파랑 각도기, 다시 누르면 풀기).
  * 다른 점에서 끌어온 축(SketchUp "점에서" 추론 — 기본 켬, setTrack): 마우스·펜 커서나 정밀 조준 십자선이 점 추정(끝점·중간점·중심·교차점·수직 발·안내점) 위에
  *   TRACK_DWELL_MS(0.5초) 동안 머물면(마우스·펜은 2화소, 조준은 손가락 떨림을 받아 AIM_DWELL_PX 안) 그 점을 최근 셋까지 기억한다(코어 0.16.0 MeasureTracker).
@@ -226,7 +229,7 @@ export interface MeasureToolOptions {
   track?: boolean;
   /** 시작점 축이 모서리와 만나는 점, 시작점 축·끌어온 축이 면을 뚫는 점에 붙기(기본 켬, setAxisMeets로 바꾼다) */
   axisMeets?: boolean;
-  /** 잠근 동안 잠근 선이 모서리·안내선과 만나는 점, 면을 뚫는 점에 붙기(기본 켬, setLockMeets로 바꾼다) */
+  /** 잠근 동안 잠근 선이 끌어온 점의 축·모서리·안내선과 만나는 점, 면을 뚫는 점에 붙기(기본 켬, setLockMeets로 바꾼다) */
   lockMeets?: boolean;
 }
 
@@ -421,7 +424,7 @@ export interface GuideMenuItem {
 }
 
 /** 이 도구가 쓰는 뷰어 기능(시험에서 가짜로 바꿀 수 있게) */
-export type MeasureViewer = Pick<Viewer3d, 'canvas' | 'pick' | 'getCamera' | 'onCameraChange' | 'getRenderMode' | 'section'> & Partial<Pick<Viewer3d, 'sections' | 'viewCubeVisible'>>;
+export type MeasureViewer = Pick<Viewer3d, 'canvas' | 'pick' | 'getCamera' | 'onCameraChange' | 'getRenderMode' | 'section'> & Partial<Pick<Viewer3d, 'sections' | 'viewCubeRect'>>;
 /** 이 도구가 쓰는 덧그림 기능 */
 export type MeasureOverlay = Pick<Overlay, 'svg' | 'labels' | 'set' | 'frame' | 'invalidate'>;
 
@@ -690,9 +693,6 @@ export function tooltipPosition(
   }
   return first;
 }
-
-/** 코어가 3D 보기 캔버스 옆(같은 부모)에 두는 뷰 큐브 캔버스 — 앱 덧그림(z-index 1)이 그 위라 결과 글이 큐브를 덮는다 */
-export const CUBE_SELECTOR = 'canvas.v3d-cube';
 
 /** 캔버스 가장자리 바깥 띠의 두께(화소) */
 const EDGE_BAND_PX = 4096;
@@ -2494,15 +2494,20 @@ export class MeasureTool {
 
   /**
    * 3D 보기 위에 떠서 결과 글·툴팁이 비킬 것(캔버스 기준): 앱이 알려 준 요소(측정 띠·측정값 칸·장면 탭 등 — labelAvoid),
-   * 코어 뷰 큐브(보일 때만 — 덧그림이 그 위라 결과 글이 큐브를 덮는다), 잠글 방향 고르기 줄(열렸을 때)
+   * 코어 뷰 큐브(보일 때만 — 덧그림이 그 위라 결과 글이 큐브를 덮는다), 잠글 방향 고르기 줄(열렸을 때). 이 차례로 둔다(비킬 자리 차례가 같게).
+   * 뷰 큐브 자리는 코어가 알려 준다(0.23.0 viewCubeRect — 캔버스 왼쪽 위 기준, 감췄으면 null). 앱은 큐브를 CSS로 옮기지 않는다
    */
   private coverAreas(): MeasureLabelRect[] {
     const els: (Element | null | undefined)[] = [...(this.opts.labelAvoid?.() ?? [])];
     const v = this.viewer;
-    if (v.viewCubeVisible) els.push(v.canvas.parentElement?.querySelector(CUBE_SELECTOR));
-    if (this.lockMenu && !this.lockMenu.hidden) els.push(this.lockMenu);
-    if (!els.some((e) => !!e)) return [];
-    return coverRects(v.canvas.getBoundingClientRect(), els.map((e) => e?.getBoundingClientRect()));
+    const cube = v.viewCubeRect ?? null;
+    const menu = this.lockMenu && !this.lockMenu.hidden ? this.lockMenu : null;
+    if (!cube && !menu && !els.some((e) => !!e)) return [];
+    const box = v.canvas.getBoundingClientRect();
+    const out = coverRects(box, els.map((e) => e?.getBoundingClientRect()));
+    if (cube && cube.width > 0 && cube.height > 0) out.push({ x: cube.x, y: cube.y, width: cube.width, height: cube.height });
+    if (menu) out.push(...coverRects(box, [menu.getBoundingClientRect()]));
+    return out;
   }
 
   /**
@@ -2682,14 +2687,16 @@ export class MeasureTool {
   /**
    * 끌어온 점 표식(작은 +, 흰 테두리)과, 지금 추정이 끌어온 축이면 그 점에서 추정 점까지 점선(SketchUp "점에서" — 끌어온 점을 지나는 축이면 그 축 색,
    * 시작점 축 위 줄 맞춘 자리면 두 점을 잇는 선이 축과 나란할 때만 그 축 색, 아니면 글자 색). 그 축을 끌어온 점의 +는 크게 그 색으로.
-   * 끌어온 축끼리의 교차면 둘째 끌어온 점에서도 그 축 색 점선을 긋고 그 점의 +도 크게 그 색으로
+   * 끌어온 축끼리의 교차면 둘째 끌어온 점에서도 그 축 색 점선을 긋고 그 점의 +도 크게 그 색으로.
+   * 잠근 선이 끌어온 축과 만나는 점(lockTrack)이면 그 끌어온 점에서 그 축 색 점선(축으로 잠근 선 위 줄 맞춘 자리뿐이면 글자 색 — 코어 0.21.0 그리기와 같다)
    */
   private trackMarks(f: ViewFrame, live: Snap | null): void {
-    const from = live?.kind === 'axis' ? live.trackFrom : undefined;
-    const other = from ? live!.trackOther : undefined;
+    const lt = live?.locked ? live.lockTrack : undefined;
+    const from = lt ? lt.from : live?.kind === 'axis' ? live.trackFrom : undefined;
+    const other = from && !lt ? live!.trackOther : undefined;
     let color = 'currentColor';
     if (from && live) {
-      const axis = live.dir ? axisOf(sub(live.point, from), this.axes) : (live.axis ?? null);
+      const axis = lt ? (lt.axis ?? null) : live.dir ? axisOf(sub(live.point, from), this.axes) : (live.axis ?? null);
       if (axis) color = AXIS_COLORS[axis];
       this.segment(f, from, live.point, 'measure-track-line', { stroke: color, 'stroke-width': 1.75, 'stroke-dasharray': '2 3', 'data-axis': axis ?? '' });
       if (other) this.segment(f, other.from, live.point, 'measure-track-line', { stroke: AXIS_COLORS[other.axis], 'stroke-width': 1.75, 'stroke-dasharray': '2 3', 'data-axis': other.axis });
@@ -2729,18 +2736,19 @@ export class MeasureTool {
    * 추정 표식: 끝점 초록 원, 중간점 청록 원, 중심 초록 원과 십자, 교차점 빨강 ×, 수직 자홍 직각 표, 모서리 위 빨강 사각형, 면 위 파랑 마름모, 축 위 축 색 작은 사각형.
    * 축이 다른 선·면과 만나는 점은 글에 맞춰 끌어온 축끼리의 교차면 교차점(빨강 ×), 모서리·안내선과 만나면 모서리 위(빨강 사각형), 면을 뚫으면 면 위(파랑 마름모) —
    * 어느 축인지는 고무줄(시작점 축)·점선(끌어온 축) 색이 보인다. data-meet은 그 종류, 끌어온 축이면 data-track도 같은 값.
-   * 잠근 선이 모서리·안내선과 만나는 점·면을 뚫는 점도 같은 표식(data-meet)에 잠금 고리를 두른다
+   * 잠근 선이 모서리·안내선과 만나는 점·면을 뚫는 점도 같은 표식(data-meet)에 잠금 고리를 두른다. 잠근 선이 끌어온 점의 축과 만나는 점은
+   * 두 선이 만나는 점이라 교차점(빨강 × — data-meet·data-track 'track')이고, 축으로 잠근 선 위 줄 맞춘 자리뿐이면 잠근 선 위 표식 그대로다
    */
   private marker(f: ViewFrame, snap: Snap): void {
     const s = screenPoint(f, snap.point, 20);
     if (!s) return;
     const [x, y] = s;
-    // 잠근 선 위 점은 잠근 선이 모서리·안내선과 만나는 점(lockEdge)·면을 뚫는 점(face)만 — 그 밖의 edge는 나란함·수직 잠금의 기준 모서리다
+    // 잠근 선 위 점은 잠근 선이 모서리·안내선과 만나는 점(lockEdge)·면을 뚫는 점(face)·끌어온 축과 만나는 점(lockTrack.axis)만 — 그 밖의 edge는 나란함·수직 잠금의 기준 모서리다
     const meet = snap.locked
-      ? snap.lockEdge ? 'edge' : snap.face ? 'face' : null
+      ? snap.lockEdge ? 'edge' : snap.face ? 'face' : snap.lockTrack?.axis ? 'track' : null
       : snap.kind === 'axis' ? (snap.trackFrom && snap.trackOther ? 'pair' : snap.edge ? 'edge' : snap.face ? 'face' : null) : null;
-    const track = snap.trackFrom ? meet : null;
-    const kind: SnapKind = meet === 'pair' ? 'intersection' : meet === 'edge' ? 'onEdge' : meet === 'face' ? 'onFace' : snap.kind;
+    const track = snap.trackFrom || snap.lockTrack ? meet : null;
+    const kind: SnapKind = meet === 'pair' || meet === 'track' ? 'intersection' : meet === 'edge' ? 'onEdge' : meet === 'face' ? 'onFace' : snap.kind;
     const color = kind === 'axis' && snap.axis ? AXIS_COLORS[snap.axis] : SNAP_COLORS[kind];
     const base: Record<string, string | number> = { class: `measure-snap measure-snap-${snap.kind}`, 'data-kind': snap.kind, fill: color, stroke: '#ffffff', 'stroke-width': 1.25 };
     if (meet) base['data-meet'] = meet;

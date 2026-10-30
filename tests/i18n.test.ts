@@ -124,6 +124,10 @@ describe('language URLs and UI presentation', () => {
     for (const lock of [...Object.values(AXIS_LABELS), SNAP_LABELS.parallel, SNAP_LABELS.perpendicular, FACE_PERPENDICULAR_LABEL])
       for (const on of [SNAP_LABELS.onEdge, GUIDE_LINE_LABEL, SNAP_LABELS.onFace])
         for (const tail of ['', ' · 55 mm', ' · 30.0°']) texts.add(`${lock} · ${on} · 잠금${tail}`);
+    // 24차(코어 0.21.0): 잠근 선이 끌어온 점의 축과 만나는 점, 축으로 잠근 선 위 끌어온 점과 줄 맞춘 자리(잠금 글 · 끌어온 점의 축/줄 맞춤 · 잠금 · 길이·각도)
+    for (const lock of [...Object.values(AXIS_LABELS), SNAP_LABELS.parallel, SNAP_LABELS.perpendicular, FACE_PERPENDICULAR_LABEL])
+      for (const on of [...Object.values(TRACK_AXIS_LABELS), TRACK_ALIGN_LABEL])
+        for (const tail of ['', ' · 60 mm', ' · 30.0°']) texts.add(`${lock} · ${on} · 잠금${tail}`);
     // 끌어온 축끼리의 교차점(글만 · 길이 · 각도)
     for (const t of Object.values(TRACK_PAIR_LABELS)) for (const tail of ['', ' · 70 mm', ' · 45.0°', ' · 잠금 · 70 mm']) texts.add(`${t}${tail}`);
     for (const n of [1, 2, 3]) {
@@ -146,6 +150,8 @@ describe('language URLs and UI presentation', () => {
     expect(translate(`${AXIS_LABELS.y} · ${SNAP_LABELS.onEdge} · 잠금 · 100 mm`, 'en')).toBe('On green axis · On edge · Locked · 100 mm');
     expect(translate(`${SNAP_LABELS.parallel} · ${SNAP_LABELS.onFace} · 잠금`, 'de')).toBe(`${translate(SNAP_LABELS.parallel, 'de')} · ${translate(SNAP_LABELS.onFace, 'de')} · ${translate('잠금', 'de')}`);
     expect(translate(`${TRACK_AXIS_LABELS.z} · ${SNAP_LABELS.onFace} · 55 mm`, 'en')).toBe('On blue axis from tracked point · On face · 55 mm');
+    expect(translate(`${AXIS_LABELS.y} · ${TRACK_AXIS_LABELS.x} · 잠금 · 60 mm`, 'en')).toBe('On green axis · On red axis from tracked point · Locked · 60 mm');
+    expect(translate(`${AXIS_LABELS.y} · ${TRACK_ALIGN_LABEL} · 잠금`, 'ja')).toBe(`${translate(AXIS_LABELS.y, 'ja')} · ${translate(TRACK_ALIGN_LABEL, 'ja')} · ${translate('잠금', 'ja')}`);
     expect(translate(`Ctrl: 안내 두기 · ${trackHint(2)}`, 'en')).toBe('Ctrl: place guides · Tracked points: 2');
     expect(translate(trackHint(3)!, 'ja')).toBe('追跡点 3個');
     expect(translate('안내 5', 'en')).toBe('Guides 5');

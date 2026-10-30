@@ -819,6 +819,7 @@ describe('추정: 다른 점에서 끌어온 축(코어 0.16.0 trackCrossSnap·t
   it('잠근 동안·점 추정·끌어온 점이 시작점이면 끌어온 축을 보지 않는다', () => {
     const A: V3 = [0, -40, 0];
     const lock = axisInferenceLock('y');
+    // lockMeets를 켜지 않은 잠금(켜면 잠근 선이 끌어온 축과 만나는 점 — 아래 코어 0.21.0 lockTrackSnap 시험)
     const l = at(170.4, 72.7, { from: A, tracks: [P], lock });
     expect(l).toMatchObject({ kind: 'axis', axis: 'y', locked: true });
     expect(l.trackFrom).toBeUndefined();
@@ -1362,5 +1363,113 @@ describe('추정: 잠근 선이 모서리와 만나는 점·면을 뚫는 점(�
     expect(roofAt(cx, cy, { faceAt: () => null })).toEqual(off);
     // 면과 나란한 잠근 선(빨강 축 — 비탈이 X 방향으로는 기울지 않았다)은 뚫지 않는다
     expect(roofAt(cx, cy, { lock: axisInferenceLock('x') }).face).toBeUndefined();
+  });
+});
+
+describe('추정: 잠근 선이 끌어온 축과 만나는 점(코어 0.21.0 lockTrackSnap)', () => {
+  // 넓은 면(z = 0) 위, 시작점 A(0, −40 — 화면 100, 140), 잠근 녹색 축(x = 0). 끌어온 점 P(30, 20, 0 — 화면 130, 80)의 빨강 축(y = 20)이
+  // 잠근 축과 M(0, 20, 0) — 화면 (100, 80)에서 만난다. 비낀 모서리 s((−20, 10) → (80, 60) — y = x/2 + 20)도 M을 지난다(가운데 점·끝점은 커서에서 멀다)
+  const face = quad('f', -95, -95, 95, 95, 0);
+  const S = lines('s', [[-20, 10, 0, 80, 60, 0]]);
+  const A: V3 = [0, -40, 0];
+  const P: V3 = [30, 20, 0];
+  const M: V3 = [0, 20, 0];
+  const Y = axisInferenceLock('y');
+  type Opt = { lock?: InferenceLock | null; lockMeets?: boolean; tracks?: V3[] | null; axisDirs?: AxisDirs | null };
+  const at = (scene: SnapScene, x: number, y: number, o: Opt = {}): Snap => {
+    const pick = picker(scene);
+    const probes = probeOffsets(SNAP_RADIUS_PX).map(([dx, dy]) => pick(x + dx, y + dy));
+    return chooseSnap({
+      frame: topFrame, x, y, pick: pick(x, y), probes, scene, radius: SNAP_RADIUS_PX, from: A, anchor: [0, 0, 0], lock: o.lock === undefined ? Y : o.lock,
+      tracks: o.tracks === undefined ? [P] : o.tracks, axisDirs: o.axisDirs ?? null, axisMeets: true, lockMeets: o.lockMeets ?? true, faceAt: meshPicker(scene),
+    });
+  };
+  const flat: SnapScene = { meshes: [face], lines: [] };
+
+  it('잠근 축이 끌어온 점의 축과 만나는 점(남은 좌표는 시작점 그대로 — 끄면 예전처럼 커서에 가까운 점)', () => {
+    const off = at(flat, 101.3, 80.8, { lockMeets: false });
+    expect(off).toMatchObject({ kind: 'axis', axis: 'y', label: AXIS_LABELS.y, locked: true });
+    expect(off.point[1]).toBeCloseTo(19.2, 9);
+    expect(off.lockTrack).toBeUndefined();
+    const s = at(flat, 101.3, 80.8);
+    expect(s).toMatchObject({ kind: 'axis', axis: 'y', label: `${AXIS_LABELS.y} · ${TRACK_AXIS_LABELS.x}`, dir: [0, 1, 0], locked: true, lockTrack: { from: P, axis: 'x' } });
+    expect(s.point).toEqual(M);
+    // 축 잠금에는 기준 모서리·옮겨 온 점·면·모서리가 없다
+    expect(s.edge).toBeUndefined();
+    expect(s.from).toBeUndefined();
+    expect(s.face).toBeUndefined();
+    expect(s.lockEdge).toBeUndefined();
+    // 끌어온 점이 없거나 추정 반경 밖이면 예전과 같다
+    expect(at(flat, 101.3, 80.8, { tracks: [] })).toEqual(off);
+    expect(at(flat, 101.3, 92.4).lockTrack).toBeUndefined();
+  });
+
+  it('높이가 달라 축이 만나지 않으면 잠근 축 위에서 끌어온 점과 줄 맞춘 자리 — 잠그기 전 시작점 축 위 줄 맞춘 자리와 같은 점·같은 글', () => {
+    const Q: V3 = [30, 20, 15];
+    const s = at(flat, 101.3, 80.8, { tracks: [Q] });
+    expect(s).toMatchObject({ kind: 'axis', axis: 'y', label: `${AXIS_LABELS.y} · ${TRACK_ALIGN_LABEL}`, locked: true, lockTrack: { from: Q } });
+    expect(s.lockTrack!.axis).toBeUndefined();
+    expect(s.point).toEqual(M);
+    // 잠그기 전: 시작점 녹색 축 위 줄 맞춘 자리(코어 0.16.0 trackCrossSnap) — Shift로 그 축에 잠그면 같은 점에 같은 글이 남는다
+    const open = at(flat, 101.3, 80.8, { tracks: [Q], lock: null });
+    expect(open).toMatchObject({ kind: 'axis', axis: 'y', label: `${AXIS_LABELS.y} · ${TRACK_ALIGN_LABEL}`, trackFrom: Q });
+    expect(lockOf(open, A)).toMatchObject({ kind: 'axis', axis: 'y' });
+    expect(s.point).toEqual(open.point);
+    expect(s.label).toBe(open.label);
+  });
+
+  it('같은 점이면 끌어온 축이 모서리보다 먼저(코어 0.21.0 차례), 끌어온 점이 없으면 모서리와 만나는 점', () => {
+    const scene: SnapScene = { meshes: [face], lines: [S] };
+    const edge = at(scene, 101.3, 80.8, { tracks: [] });
+    expect(edge).toMatchObject({ label: `${AXIS_LABELS.y} · ${SNAP_LABELS.onEdge}`, locked: true });
+    close(edge.point, M, 1e-9);
+    const s = at(scene, 101.3, 80.8);
+    expect(s).toMatchObject({ label: `${AXIS_LABELS.y} · ${TRACK_AXIS_LABELS.x}`, lockTrack: { from: P, axis: 'x' } });
+    expect(s.lockEdge).toBeUndefined();
+    expect(s.id).toBeUndefined();
+  });
+
+  it('잠근 선은 잠금 종류와 상관없다(나란함 — 기준 모서리는 edge에 그대로)', () => {
+    // A를 지나 (1, 2, 0) 방향과 나란한 선이 끌어온 점 (50, 20, 0)의 빨강 축과 (30, 20, 0) — 화면 (130, 80)에서 만난다
+    const par = parallelInferenceLock([[0, 0, 0], [1, 2, 0]])!;
+    const R: V3 = [50, 20, 0];
+    const s = at(flat, 131.2, 80.9, { lock: par, tracks: [R] });
+    expect(s).toMatchObject({ kind: 'parallel', label: `${SNAP_LABELS.parallel} · ${TRACK_AXIS_LABELS.x}`, locked: true, lockTrack: { from: R, axis: 'x' } });
+    close(s.point, [30, 20, 0], 1e-9);
+    expect(s.edge).toEqual([[0, 0, 0], [1, 2, 0]]);
+  });
+
+  it('모형의 그리기 축을 옮겼으면 그 축으로 견준다(잠근 빨강 축 위에서 끌어온 점의 녹색 축과 만나는 점)', () => {
+    const c = Math.cos(Math.PI / 6), sn = Math.sin(Math.PI / 6);
+    const axes: AxisDirs = { x: [c, sn, 0], y: [-sn, c, 0], z: [0, 0, 1] };
+    const X = axisInferenceLock('x', axes);
+    // 끌어온 점 = A + 50·(빨강) + 30·(녹색), 잠근 빨강 축과 그 점의 녹색 축은 A + 50·(빨강)에서 만난다
+    const T: V3 = [A[0] + 50 * c - 30 * sn, A[1] + 50 * sn + 30 * c, 0];
+    const m: V3 = [A[0] + 50 * c, A[1] + 50 * sn, 0];
+    const cx = 100 + m[0] + 1.2, cy = 100 - m[1] + 0.9;
+    const s = at(flat, cx, cy, { lock: X, tracks: [T], axisDirs: axes });
+    expect(s).toMatchObject({ kind: 'axis', axis: 'x', label: `${AXIS_LABELS.x} · ${TRACK_AXIS_LABELS.y}`, locked: true, lockTrack: { from: T, axis: 'y' } });
+    close(s.point, m, 1e-9);
+    // 세계 축으로 견주면 같은 자리에서 만나는 축이 없다
+    expect(at(flat, cx, cy, { lock: X, tracks: [T] }).lockTrack).toBeUndefined();
+  });
+
+  it('끄거나 잠그지 않았으면 끌어온 점이 있어도 예전과 같고, 켜도 끌어온 축과 만나는 점이 아닌 곳은 같다', () => {
+    const scene: SnapScene = { meshes: [face], lines: [S] };
+    const par = parallelInferenceLock([[0, 0, 0], [1, 2, 0]]);
+    const tracks: V3[] = [P, [50, 20, 0], [-30, 60, 15]];
+    let meets = 0;
+    for (const lock of [null, Y, axisInferenceLock('x'), par])
+      for (let x = 11.3; x < 200; x += 13.7)
+        for (let y = 8.9; y < 200; y += 11.9) {
+          // 잠그지 않았거나 끈 잠금: 잠근 동안의 끌어온 축은 보지 않는다(잠그지 않았으면 0.16.0~0.18.0 끌어온 축은 그대로)
+          if (!lock) expect(at(scene, x, y, { lock, tracks, lockMeets: false }), `${x},${y}`).toEqual(at(scene, x, y, { lock, tracks }));
+          else expect(at(scene, x, y, { lock, tracks, lockMeets: false }), `${x},${y}`).toEqual(at(scene, x, y, { lock, tracks: null, lockMeets: false }));
+          if (!lock) continue;
+          const on = at(scene, x, y, { lock, tracks });
+          if (on.lockTrack) meets++;
+          else expect(on, `${x},${y}`).toEqual(at(scene, x, y, { lock, tracks: null }));
+        }
+    expect(meets).toBeGreaterThan(0);
   });
 });
