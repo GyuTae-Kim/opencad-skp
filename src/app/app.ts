@@ -1297,8 +1297,10 @@ export class SkpViewerApp implements PanelHost {
       onLock: () => this.refreshStatus(),
       // 안내 두기 켜고 끄기·안내점·안내선 수: 측정 띠 단추·측정값 칸의 안내 수
       onGuides: () => this.refreshStatus(),
-      // 고르기 상자로 안내를 고르면 고른 형상은 푼다(누르기로 고른 것은 onPick이 푼다)
+      // 고르기 상자·모두 고르기(Ctrl+A·⌘A)로 안내를 고르면 고른 형상은 푼다(누르기로 고른 것은 onPick이 푼다)
       onGuidePick: () => this.applySelection(null, false),
+      // 모두 풀기(Ctrl+T·Shift+⌘A): 고른 형상도 푼다(고른 것이 없었으면 키는 브라우저 몫)
+      onSelectNone: () => !!this.doc?.selection && (this.applySelection(null, false), true),
       // 결과 글·툴팁이 3D 보기 위에 뜬 것(측정 띠와 그 위 기록·알림, 측정값 칸, 장면 탭, 카메라 띠, 걷기 조이스틱 — 뷰 큐브는 측정 도구가 찾는다) 밑에 숨지 않게 비켜 둔다
       labelAvoid: () => [this.els.measureBar, this.vcb.el, this.els.sceneTabs, this.els.measureLog, this.els.measureFlash, this.els.camBar, this.stick.el],
       // 결과 글은 먼저 그린 모형 글·치수 라벨(덧그림 층에서 측정 도구보다 앞)과 겹쳐도 비킨다
@@ -3036,7 +3038,7 @@ export class SkpViewerApp implements PanelHost {
         return;
       }
     }
-    // 고르기 도구로 고른 안내(줄자·각도기를 끈 동안): Delete·Backspace로 지우고 Esc로 푼다
+    // 고르기 도구로 고른 안내(줄자·각도기를 끈 동안): Delete·Backspace로 지우고 Esc로 푼다. Ctrl+A·⌘A는 안내 모두 고르기, Ctrl+T·Shift+⌘A는 모두 풀기
     if (tool?.selectKey(ev)) {
       ev.stopPropagation();
       return;

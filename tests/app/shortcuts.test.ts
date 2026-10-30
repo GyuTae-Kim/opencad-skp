@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { keyAction } from '../../src/app/keys';
-import { guideUndoKey } from '../../src/app/measure';
+import { guideUndoKey, selectAllKey } from '../../src/app/measure';
 import { SHORTCUTS, openShortcutsDialog } from '../../src/app/shortcuts';
 
 const press = (el: Element, key: string, shiftKey = false): void => {
@@ -47,6 +47,27 @@ describe('키보드 바로 가기 안내', () => {
     for (const k of redo.keys) expect(guideUndoKey(key(k)), k).toBe('redo');
     // 창 키 규칙(keys.ts)은 이 키들을 뷰어로 보내지 않는다(측정 도구가 먼저 받는다)
     for (const k of [...undo.keys, ...redo.keys]) {
+      const e = key(k);
+      expect(keyAction({ key: e.key, ctrl: e.ctrlKey, meta: e.metaKey, hasDoc: true }), k).toBeNull();
+    }
+  });
+
+  it('안내 모두 고르기·모두 풀기 줄의 키는 측정 도구가 그 판(Windows·Linux는 Ctrl, Mac은 ⌘)에서 받는다(26차)', () => {
+    const items = SHORTCUTS.flatMap((g) => g.items);
+    const all = items.find((it) => it.label.includes('모두 고르기'))!;
+    const none = items.find((it) => it.label.includes('모두 풀기'))!;
+    const key = (s: string): Parameters<typeof selectAllKey>[0] => {
+      const parts = s.split('+');
+      const has = (m: string): boolean => parts.includes(m);
+      return { key: parts.at(-1)!.toLowerCase(), code: '', ctrlKey: has('Ctrl'), metaKey: has('⌘'), altKey: false, shiftKey: has('Shift') };
+    };
+    const mac = (s: string): 'Alt' | 'Control' => (s.includes('⌘') ? 'Alt' : 'Control');
+    expect(all.keys).toEqual(['Ctrl+A', '⌘+A']);
+    for (const k of all.keys) expect(selectAllKey(key(k), mac(k)), k).toBe('all');
+    expect(none.keys).toEqual(['Ctrl+T', '⌘+Shift+A']);
+    for (const k of none.keys) expect(selectAllKey(key(k), mac(k)), k).toBe('none');
+    // 창 키 규칙(keys.ts)은 이 키들을 뷰어로 보내지 않는다(Ctrl+T가 줄자 T가 되지 않는다)
+    for (const k of [...all.keys, ...none.keys]) {
       const e = key(k);
       expect(keyAction({ key: e.key, ctrl: e.ctrlKey, meta: e.metaKey, hasDoc: true }), k).toBeNull();
     }

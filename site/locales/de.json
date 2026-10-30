@@ -1056,5 +1056,7 @@
   "고른 안내 {0}개 지우기 (Delete)": "{0} ausgewählte Hilfselemente löschen (Entf)",
   "고른 안내 숨기기": "Ausgewählte Hilfselemente ausblenden",
   "숨긴 안내 모두 보이기": "Alle ausgeblendeten Hilfselemente anzeigen",
-  "줄자·각도기를 끈 동안 안내를 누르거나 끌기: Ctrl(Mac은 Option)은 더하기, Shift는 넣고 빼기, Shift+Ctrl(Shift+Option)은 빼기 — 끌면 고르기 상자(오른쪽으로 끌면 다 든 것, 왼쪽은 걸친 것까지)": "Hilfselemente anklicken oder ziehen, während Maßband und Winkelmesser aus sind: Strg (am Mac Option) fügt hinzu, Umschalt schaltet um, Umschalt+Strg (Umschalt+Option) entfernt — Ziehen zeichnet ein Auswahlrechteck (nach rechts nur vollständig Enthaltenes, nach links auch Angeschnittenes)"
+  "줄자·각도기를 끈 동안 안내를 누르거나 끌기: Ctrl(Mac은 Option)은 더하기, Shift는 넣고 빼기, Shift+Ctrl(Shift+Option)은 빼기 — 끌면 고르기 상자(오른쪽으로 끌면 다 든 것, 왼쪽은 걸친 것까지)": "Hilfselemente anklicken oder ziehen, während Maßband und Winkelmesser aus sind: Strg (am Mac Option) fügt hinzu, Umschalt schaltet um, Umschalt+Strg (Umschalt+Option) entfernt — Ziehen zeichnet ein Auswahlrechteck (nach rechts nur vollständig Enthaltenes, nach links auch Angeschnittenes)",
+  "줄자·각도기를 끈 동안: 보이는 안내점·안내선 모두 고르기(숨긴 안내는 빼고)": "Während Maßband und Winkelmesser aus sind: alle sichtbaren Hilfspunkte und Hilfslinien auswählen (ausgeblendete Hilfselemente nicht)",
+  "줄자·각도기를 끈 동안: 고른 것 모두 풀기(브라우저가 그 키를 먼저 쓰면 Esc)": "Während Maßband und Winkelmesser aus sind: Auswahl vollständig aufheben (Esc, falls der Browser diese Taste zuerst verwendet)"
 }

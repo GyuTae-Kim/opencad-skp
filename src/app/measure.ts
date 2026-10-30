@@ -49,6 +49,8 @@
  *   수정 키를 누른 채 끌면 코어 궤도 대신 고르기 상자(오른쪽으로 끌면 상자 안에 다 든 것, 왼쪽은 걸친 것까지 — 끝없는 안내선은 왼쪽 상자만, guidesInBox).
  *   고른 안내는 함께 지우고(되돌리기 한 단계), 고른 것 카드의 숨기기 단추로 숨긴다(hideSelectedGuides — "Using guides"의 Edit › Hide). 숨긴 안내는 그리지도
  *   붙지도 고르지도 않고, 보기 설정의 "숨긴 안내 모두 보이기"(unhideGuides — Edit › Unhide)로 다시 보인다. 숨기기도 되돌리기·파일별 안내 기억에 든다.
+ *   끈 동안 Ctrl+A(Mac ⌘A)는 보이는 안내를 모두 고르고(selectAllGuides — 26차 "Selecting Geometry"의 Edit › Select All, 숨긴 안내는 빼고),
+ *   Ctrl+T(Mac Shift+⌘A)는 고른 안내·형상을 모두 푼다(selectNone — Edit › Deselect All). 입력 칸·할 것이 없을 때는 브라우저 몫이다(selectAllKey).
  * 모서리 두 번 누르기(SketchUp 줄자): 줄자로 모서리 위를 두 번 누르면(코어와 같은 두 번 누르기 문턱 — 손가락은 넓게) 그 모서리를 지나는 끝없는 안내선을 둔다
  *   (곡선이면 누른 조각 하나의 직선, 안내 두기를 켜지 않아도). 첫 누르기가 찍은 시작점은 거두고 그 전 결과를 되돌리며, 둔 안내선은 골라 둔다.
  * 추론 잠금(SketchUp "Locking inference"): 방향을 잡는 동안(줄자 끝점·각도기 기준 방향·잴 방향) Shift를 누르고 있으면 지금 커서 밑 방향 추론
@@ -236,10 +238,15 @@ export interface MeasureToolOptions {
   /** 안내 두기를 켜고 끄거나 안내점·안내선이 늘고 줄거나, 되돌리기 목록·안내 보이기가 바뀌면(측정 띠 단추·측정값 칸의 안내 수를 맞춘다) */
   onGuides?: () => void;
   /**
-   * 줄자·각도기를 끈 동안 고르기 상자로 안내를 골랐을 때(앱은 고른 형상을 푼다 — 고른 것은 형상이나 안내 한쪽).
+   * 줄자·각도기를 끈 동안 고르기 상자나 모두 고르기 키(26차 — Ctrl+A·⌘A)로 안내를 골랐을 때(앱은 고른 형상을 푼다 — 고른 것은 형상이나 안내 한쪽).
    * 누르기로 고른 것은 앱이 pickGuide의 값으로 안다
    */
   onGuidePick?: () => void;
+  /**
+   * 줄자·각도기를 끈 동안 모두 풀기 키(26차 — Ctrl+T, Mac은 Shift+⌘A)를 눌렀을 때: 앱은 고른 형상을 풀고, 푼 것이 있었으면 true
+   * (고른 안내는 이 도구가 푼다. 둘 다 없으면 그 키를 받지 않아 브라우저 몫이다)
+   */
+  onSelectNone?: () => boolean;
   /**
    * 결과 글이 비킬 먼저 놓인 글상자(26차 — 앱 덧그림의 모형 글·치수 라벨 배치, 캔버스 왼쪽 위 기준 CSS 화소. crowded — 흐리게 둔 것 — 는 자리를 차지하지 않는다).
    * 덧그림 층이 이 도구보다 먼저 그리는 층의 것이어야 같은 그림 틀의 자리다
@@ -547,6 +554,20 @@ interface GuideBox {
   y1: number;
   op: GuideSelectOp;
   on: boolean;
+}
+
+/**
+ * 모두 고르기·모두 풀기 키(26차 — SketchUp 공개 도움말 "Selecting Geometry": Edit › Select All은 Microsoft Windows Ctrl+A·macOS Command+A,
+ * Edit › Deselect All은 Microsoft Windows Ctrl+T·macOS Shift+Command+A). key는 안내 두기 키라 그 판(Mac이면 'Alt')을 가른다 —
+ * Mac은 ⌘(Ctrl은 아니다), 그 밖은 Ctrl(⌘·Windows 키는 아니다). Alt·Option이 함께면 아니다.
+ * 글자는 key로 보고, 라틴 글자가 아니면(한글 자판 등) 물리 키(code)로 본다. 아니면 null
+ */
+export function selectAllKey(e: Pick<KeyboardEvent, 'key' | 'code' | 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'>, key: GuideKey = 'Control'): 'all' | 'none' | null {
+  const mac = key === 'Alt';
+  if (e.altKey || !(mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey)) return null;
+  const k = /^[a-z]$/i.test(e.key) ? e.key.toLowerCase() : e.code === 'KeyA' ? 'a' : e.code === 'KeyT' ? 't' : '';
+  if (k === 'a') return e.shiftKey ? (mac ? 'none' : null) : 'all';
+  return k === 't' && !mac && !e.shiftKey ? 'none' : null;
 }
 
 /**
@@ -1827,11 +1848,46 @@ export class MeasureTool {
   }
 
   /**
+   * 보이는 안내 모두 고르기(26차 — SketchUp 공개 도움말 "Selecting Geometry": Edit › Select All은 모형의 모든 것을 고른다. 이 뷰어는 형상을 여럿 고르지 않아 안내만).
+   * 숨긴 안내는 고르지 않는다("Softening, Smoothing, and Hiding Geometry": 숨긴 형상은 고를 수 없다). 안내점 → 안내선 차례로 고르고 앱에 알려(onGuidePick) 고른 형상을 풀게 한다.
+   * 줄자·각도기를 켠 동안·안내 보이기를 끈 동안·보이는 안내가 없으면 하지 않는다(false)
+   */
+  selectAllGuides(): boolean {
+    if (this.disposed || this.modeValue || !this.shownValue) return false;
+    const v = this.visible();
+    if (!v.vp.length && !v.vl.length) return false;
+    this.pickGuides([...v.vp, ...v.vl], 'replace');
+    this.opts.onGuidePick?.();
+    return true;
+  }
+
+  /**
+   * 모두 풀기(26차 — "Selecting Geometry": Edit › Deselect All은 아무것도 고르지 않은 상태로): 고른 안내를 풀고 앱에 고른 형상도 풀게 한다(onSelectNone).
+   * 줄자·각도기를 켠 동안은 하지 않는다. 푼 것이 있으면 true
+   */
+  selectNone(): boolean {
+    if (this.disposed || this.modeValue) return false;
+    const had = this.liveSel().length > 0;
+    if (had) this.select(null);
+    const geo = this.opts.onSelectNone?.() ?? false;
+    return had || geo;
+  }
+
+  /**
    * 고르기 도구로 고른 안내의 키(줄자·각도기를 끈 동안, 입력 칸 밖 keydown): Delete·Backspace = 고른 안내 지우기(여럿이면 함께 — 되돌리기 목록에 쌓임), Esc = 풀기.
+   * 26차: Ctrl+A(Mac ⌘A) = 보이는 안내 모두 고르기, Ctrl+T(Mac Shift+⌘A) = 모두 풀기(selectAllKey). 할 것이 없으면(보이는 안내가 없음·고른 것이 없음) 받지 않아
+   * 브라우저 기본 동작(글 모두 고르기 등)이 된다. 입력 칸의 키도 받지 않는다.
    * 고른 안내가 없거나 다른 키면 받지 않는다. 받았으면 true
    */
   selectKey(e: KeyboardEvent): boolean {
-    if (this.disposed || this.modeValue || e.type !== 'keydown' || !this.liveSel().length || e.ctrlKey || e.metaKey || e.altKey || isEditableTarget(e.target)) return false;
+    if (this.disposed || this.modeValue || e.type !== 'keydown' || isEditableTarget(e.target)) return false;
+    const all = selectAllKey(e, this.opts.guideKey);
+    if (all) {
+      if (!(all === 'all' ? this.selectAllGuides() : this.selectNone())) return false;
+      e.preventDefault();
+      return true;
+    }
+    if (!this.liveSel().length || e.ctrlKey || e.metaKey || e.altKey) return false;
     if (e.key === 'Delete' || e.key === 'Backspace') this.deleteSelectedGuide();
     else if (e.key === 'Escape') this.select(null);
     else return false;
