@@ -1030,7 +1030,7 @@
   "안내 두기 켬: 누르면 안내점·안내선을 둡니다": "Hilfslinien setzen an: Drücken setzt Hilfspunkte und Hilfslinien",
   "안내 두기 끔: 재기만 합니다": "Hilfslinien setzen aus: nur messen",
   "줄자·각도기: 안내 두기 켜고 끄기(그 키만 눌렀다 떼기, Mac은 Option) — 줄자 둘째·각도기 셋째 누르기로 안내점·안내선": "Maßband und Winkelmesser: Hilfslinien setzen ein/aus (nur diese Taste drücken und loslassen, am Mac Option) — der zweite Maßband- bzw. dritte Winkelmesser-Klick setzt einen Hilfspunkt oder eine Hilfslinie",
-  "눌러서 고른 안내점·안내선 하나 지우기(줄자·각도기를 끈 동안에도)": "Den per Klick ausgewählten Hilfspunkt bzw. die Hilfslinie löschen (auch wenn Maßband und Winkelmesser aus sind)",
+  "눌러서 고른 안내점·안내선 지우기(여럿이면 함께, 줄자·각도기를 끈 동안에도)": "Die per Klick ausgewählten Hilfspunkte und Hilfslinien löschen (mehrere gemeinsam, auch wenn Maßband und Winkelmesser aus sind)",
   "고른 안내점 지우기": "Ausgewählten Hilfspunkt löschen",
   "고른 안내선 지우기": "Ausgewählte Hilfslinie löschen",
   "고른 안내점 지우기 (Delete)": "Ausgewählten Hilfspunkt löschen (Entf)",
@@ -1048,5 +1048,13 @@
   "이 파일의 안내 모두 지우기": "Alle Hilfselemente dieser Datei löschen",
   "안내선": "Hilfslinie",
   "Delete·Backspace로 지우기": "Mit Entf oder Rücktaste löschen",
-  "지우기": "Löschen"
+  "지우기": "Löschen",
+  "안내점 {0}개": "Hilfspunkte: {0}",
+  "안내선 {0}개": "Hilfslinien: {0}",
+  "안내점 {0}개·안내선 {1}개": "Hilfspunkte: {0}, Hilfslinien: {1}",
+  "고른 안내 {0}개 지우기": "{0} ausgewählte Hilfselemente löschen",
+  "고른 안내 {0}개 지우기 (Delete)": "{0} ausgewählte Hilfselemente löschen (Entf)",
+  "고른 안내 숨기기": "Ausgewählte Hilfselemente ausblenden",
+  "숨긴 안내 모두 보이기": "Alle ausgeblendeten Hilfselemente anzeigen",
+  "줄자·각도기를 끈 동안 안내를 누르거나 끌기: Ctrl(Mac은 Option)은 더하기, Shift는 넣고 빼기, Shift+Ctrl(Shift+Option)은 빼기 — 끌면 고르기 상자(오른쪽으로 끌면 다 든 것, 왼쪽은 걸친 것까지)": "Hilfselemente anklicken oder ziehen, während Maßband und Winkelmesser aus sind: Strg (am Mac Option) fügt hinzu, Umschalt schaltet um, Umschalt+Strg (Umschalt+Option) entfernt — Ziehen zeichnet ein Auswahlrechteck (nach rechts nur vollständig Enthaltenes, nach links auch Angeschnittenes)"
 }

@@ -1695,28 +1695,32 @@ button.scene-card.sel {
   }
 }
 
-/* 고르기 도구로 고른 안내: 넓은 화면에서도 카드를 띄워 지우기 단추를 둔다(자세히는 숨김 — 지우기 단추는 이때만) */
+/* 고르기 도구로 고른 안내: 넓은 화면에서도 카드를 띄워 숨기기·지우기 단추를 둔다(자세히는 숨김 — 숨기기·지우기 단추는 이때만) */
 .measure-bar.sel-bar.is-guide:not([hidden]) {
   display: flex;
 }
 
 .sel-bar .sel-del,
+.sel-bar .sel-hide,
 .sel-bar.is-guide .sel-more {
   display: none;
 }
 
-.sel-bar.is-guide .sel-del {
+.sel-bar.is-guide .sel-del,
+.sel-bar.is-guide .sel-hide {
   display: inline-flex;
 }
 
-/* 좁은 휴대폰: "다시 재기"는 아이콘만(안내 두기 단추와 함께 안내 글 자리를 남긴다 — 이름은 aria-label) */
+/* 좁은 휴대폰: "다시 재기"·고른 안내 숨기기는 아이콘만(안내 글 자리를 남긴다 — 이름은 aria-label) */
 @media (max-width: 429.98px) {
-  .mb-btn.mb-clear {
+  .mb-btn.mb-clear,
+  .mb-btn.sel-hide {
     width: 38px;
     padding: 0;
   }
 
-  .mb-clear-text {
+  .mb-clear-text,
+  .sel-hide span {
     display: none;
   }
 }

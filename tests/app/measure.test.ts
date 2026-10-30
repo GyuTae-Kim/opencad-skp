@@ -65,7 +65,18 @@ import {
 } from '../../src/app/measure';
 import { AXIS_COLORS, AXIS_LABELS, SNAP_COLORS, SNAP_LABELS, TRACK_ALIGN_LABEL, TRACK_AXIS_LABELS, TRACK_PAIR_LABELS } from '../../src/app/snap';
 import { TRACK_DWELL_MS } from 'opencad-viewer3d/track';
-import { GUIDE_STORE_KEY, readGuideFiles } from '../../src/app/guidestore';
+import { GUIDE_STORE_KEY, readGuideFiles, saveGuides } from '../../src/app/guidestore';
+import {
+  AIM_COVER_GAP_PX,
+  GUIDE_HIDE_LABEL,
+  GUIDE_HIDE_TEXT,
+  GUIDE_UNHIDE_LABEL,
+  applyGuideSelect,
+  guideCountText,
+  guideDeleteLabel,
+  guideSelectOp,
+  guidesInBox,
+} from '../../src/app/measure';
 import type { V3 } from 'opencad-viewer3d/math';
 import { Overlay, frameFor } from '../../src/app/overlay';
 import { DRAG_START_PX, TOUCH_DRAG_START_PX } from 'opencad-viewer3d';
@@ -161,6 +172,37 @@ describe('줄자·각도기 계산', () => {
     expect(snapRadius('aim')).toBeGreaterThan(snapRadius('mouse'));
     expect(aimPoint(30, 100)).toEqual({ x: 30, y: 100 - AIM_OFFSET_PX });
     expect(aimPoint(30, 10)).toEqual({ x: 30, y: 0 });
+  });
+
+  it('정밀 조준 십자선은 3D 보기 위에 뜬 것(장면 탭·뷰 큐브·측정 띠) 밑으로 가지 않고 가장 가까운 변 바깥(보기 안)으로 비킨다(25차)', () => {
+    const view = { width: 375, height: 600 };
+    const tabs = { x: 8, y: 8, width: 239, height: 44 };
+    const cube = { x: 291, y: 8, width: 76, height: 76 };
+    const band = { x: 0, y: 520, width: 375, height: 80 };
+    const all = [tabs, cube, band];
+    const g = AIM_COVER_GAP_PX;
+    // 덮개에서 먼 자리는 예전과 같다
+    expect(aimPoint(100.3, 180.6, all, view)).toEqual(aimPoint(100.3, 180.6));
+    expect(aimPoint(320.4, 300.2, all, view)).toEqual(aimPoint(320.4, 300.2));
+    // 장면 탭 밑: 탭 아래 변 바깥(위 틈·왼쪽 화면 끝으로는 밀지 않는다) — 손가락을 더 올려도 그 자리
+    expect(aimPoint(100.3, 100.6, all, view)).toEqual({ x: 100.3, y: 52 + g });
+    expect(aimPoint(100.3, 30.2, all, view)).toEqual({ x: 100.3, y: 52 + g });
+    // 탭 오른쪽 끝 가까이: 오른쪽 변 바깥이 더 가깝다
+    expect(aimPoint(240.2, 90.4, all, view)).toEqual({ x: 247 + g, y: 90.4 - AIM_OFFSET_PX });
+    // 뷰 큐브 밑: 왼쪽 변 바깥(오른쪽은 화면 끝)
+    expect(aimPoint(330.6, 100.2, all, view)).toEqual({ x: 291 - g, y: 100.2 - AIM_OFFSET_PX });
+    // 아래 띠 위: 띠 위 변 바깥
+    expect(aimPoint(200.2, 590.4, all, view)).toEqual({ x: 200.2, y: 520 - g });
+    // 틈 안(덮개에서 GAP 안)도 변 바깥까지
+    expect(aimPoint(100.3, 52 + g - 3.1 + AIM_OFFSET_PX, all, view)).toEqual({ x: 100.3, y: 52 + g });
+    // 맞붙은 덮개(사이 틈이 GAP 둘보다 좁음): 다른 덮개에 드는 변은 건너뛰어 어느 덮개 밑도 아닌 자리로
+    const near = { x: 250, y: 8, width: 37, height: 30 };
+    const free = (q: { x: number; y: number }): boolean => [near, cube].every((r) => !(q.x > r.x - g && q.x < r.x + r.width + g && q.y > r.y - g && q.y < r.y + r.height + g));
+    for (const [fx, fy] of [[270.2, 80.1], [289.1, 75.3], [300.4, 120.2]] as const) {
+      const p = aimPoint(fx, fy, [near, cube], view);
+      expect(free(p), `${fx},${fy} → ${p.x},${p.y}`).toBe(true);
+      expect(p.x >= g && p.y >= g && p.x <= view.width - g && p.y <= view.height - g).toBe(true);
+    }
   });
 });
 
@@ -868,6 +910,38 @@ describe('측정 도구: 정밀 조준(터치 길게 누르기)', () => {
     expect(r.tip()).toBe('끝점 · 50 mm');
     r.ptr('pointerup', 199, 100 + AIM_OFFSET_PX, touch);
     expect(r.results.at(-1)).toMatchObject({ kind: 'tape', a: [50, 0, 0], b: [100, 0, 0], distance: 50 });
+  });
+
+  it('십자선이 장면 탭(앱이 알려 준 3D 보기 위의 것) 밑으로 가면 탭 아래로 비키고, 떼면 비킨 십자선 자리에 찍는다(25차)', () => {
+    vi.useFakeTimers();
+    // 보기 위 왼쪽 위 장면 탭(캔버스 0,0 기준 8~128 × 8~52)
+    const tabs = document.createElement('div');
+    tabs.getBoundingClientRect = () => ({ left: 8, top: 8, width: 120, height: 44, right: 128, bottom: 52, x: 8, y: 8, toJSON: () => ({}) }) as DOMRect;
+    const r = rig(EDGES(), TOP, DEFAULT_UNITS, { labelAvoid: () => [tabs] });
+    const center = (): [number, number] => {
+      const c = r.q('.measure-aim circle');
+      return [Number(c?.getAttribute('cx')), Number(c?.getAttribute('cy'))];
+    };
+    r.tool.setMode('tape');
+    // 탭에서 먼 자리: 예전처럼 손가락 64화소 위
+    down(r, 160.3, 170.4);
+    vi.advanceTimersByTime(AIM_HOLD_MS);
+    r.overlay.paintNow();
+    expect(center()).toEqual([160.3, 170.4 - AIM_OFFSET_PX]);
+    // 손가락을 탭 밑으로(십자선이 탭에 들 자리): 탭 아래 변 바깥에 머물고, 그 자리의 추정(Y 모서리 끝점 — 화면 (100, 50))을 보인다
+    r.ptr('pointermove', 100.4, 90.6, { ...touch, buttons: 1 });
+    r.overlay.paintNow();
+    expect(center()).toEqual([100.4, 52 + AIM_COVER_GAP_PX]);
+    r.ptr('pointermove', 100.4, 70.6, { ...touch, buttons: 1 });
+    r.overlay.paintNow();
+    expect(center()).toEqual([100.4, 52 + AIM_COVER_GAP_PX]);
+    expect(r.tip()).toBe(SNAP_LABELS.endpoint);
+    // 떼면 비킨 십자선 자리의 추정에 찍는다
+    r.ptr('pointerup', 100.4, 70.6, touch);
+    expect(r.tool.pointCount).toBe(1);
+    r.overlay.paintNow();
+    const dot = r.q('circle.measure-point');
+    expect([Number(dot?.getAttribute('cx')), Number(dot?.getAttribute('cy'))].map((v) => Math.round(v * 10) / 10)).toEqual([100, 50]);
   });
 
   it('누르자마자 끌면 조준하지 않고(궤도), 둘째 손가락이 닿으면 조준을 그만둔다', () => {
@@ -1610,7 +1684,9 @@ describe('고르기 도구로 안내 고르고 지우기(줄자·각도기를 �
     acts.append(more, close);
     r.tool.mountGuideDelete(acts);
     const b = acts.querySelector<HTMLButtonElement>('.sel-del')!;
-    expect([...acts.children]).toEqual([more, b, close]);
+    // 25차: 숨기기 단추가 지우기 앞에 함께 붙는다
+    const hide = acts.querySelector<HTMLButtonElement>('.sel-hide')!;
+    expect([...acts.children]).toEqual([more, hide, b, close]);
     expect(b.textContent).toBe(GUIDE_DELETE_TEXT);
     expect(r.tool.pickGuide(40.4, 72.2, 'mouse')).toBe('line');
     expect(b.getAttribute('aria-label')).toBe('고른 안내선 지우기');
@@ -1620,9 +1696,10 @@ describe('고르기 도구로 안내 고르고 지우기(줄자·각도기를 �
     b.click();
     expect(r.tool.guides).toHaveLength(0);
     expect(r.tool.selectedGuide).toBeNull();
-    // 다시 붙여도 단추는 하나
+    // 다시 붙여도 단추는 하나(차례도 그대로)
     r.tool.mountGuideDelete(acts);
     expect(acts.querySelectorAll('.sel-del')).toHaveLength(1);
+    expect([...acts.children]).toEqual([more, hide, b, close]);
   });
 });
 
@@ -3244,5 +3321,314 @@ describe('측정 도구: 잠근 선이 끌어온 점의 축과 만나는 점(코
     expect(res).toMatchObject({ kind: 'tape', a: [0, -40, 0], b: [0, 20, 0] });
     if (res?.kind !== 'tape') return;
     expect(res.distance).toBe(60);
+  });
+});
+
+describe('고르기 도구로 안내 여럿 고르기·숨기기(25차 — SketchUp "Selecting Geometry"·"Using guides")', () => {
+  // 위에서 본 평행 투영: 세계 (X, Y) → 화면 (100 + X, 100 − Y). 누르는 자리·상자 모서리는 표식·선·경계에서 떨어진 곳만 쓴다
+  const F = (): ReturnType<typeof frameFor> => frameFor(TOP, W, W);
+  const flush = (): Promise<void> => new Promise((res) => setTimeout(res, 0));
+  const KEY = 'cd'.repeat(32);
+  const PRINT = (): ArrayBuffer => new Uint8Array(32).fill(0xcd).buffer;
+  // 안내점 P0 (120, 80)·P1 (150, 80)·P2 (60, 130), 안내선 L0 화면 y = 60(가로)·L1 화면 x = 40(세로)
+  const PTS: V3[] = [[20, 20, 0], [50, 20, 0], [-40, -30, 0]];
+  const LNS = [
+    { point: [0, 40, 0] as V3, dir: [1, 0, 0] as V3 },
+    { point: [-60, 0, 0] as V3, dir: [0, 1, 0] as V3 },
+  ];
+  type Store = ReturnType<typeof memStore>;
+  /** 이 브라우저에 기억해 둔 안내를 되살린 도구(줄자·각도기는 끈 채). picks = onGuidePick을 부른 수 */
+  const setup = async (extra: Partial<MeasureToolOptions> = {}, store: Store = memStore()): Promise<{ r: Rig; store: Store; picks: () => number }> => {
+    if (!store.m.size) saveGuides(store, KEY, PTS, LNS, 1);
+    let picks = 0;
+    const r = rig(EDGES(), TOP, DEFAULT_UNITS, { storage: store, onGuidePick: () => void picks++, ...extra });
+    r.tool.openFile(PRINT());
+    await flush();
+    expect(r.tool.guides).toHaveLength(3);
+    expect(r.tool.guideLines).toHaveLength(2);
+    return { r, store, picks: () => picks };
+  };
+  /** 수정 키를 누른 채 캔버스를 끈다(포인터 7): 캔버스까지 간 움직임·코어에 보낸 끌기 거두기 수와 마지막 움직임 뒤 그린 상자 */
+  const drag = (r: Rig, path: [number, number][], mods: { ctrlKey?: boolean; shiftKey?: boolean; altKey?: boolean } = {}, pointerType = 'mouse') => {
+    let moves = 0;
+    let cancels = 0;
+    const onMove = (): void => void moves++;
+    const onCancel = (): void => void cancels++;
+    r.canvas.addEventListener('pointermove', onMove);
+    r.canvas.addEventListener('pointercancel', onCancel);
+    const fire = (type: string, [x, y]: [number, number], buttons: number): void => {
+      const e = new MouseEvent(type, { clientX: x, clientY: y, button: 0, buttons, bubbles: true, ...mods });
+      Object.defineProperty(e, 'pointerId', { value: 7 });
+      Object.defineProperty(e, 'pointerType', { value: pointerType });
+      r.canvas.dispatchEvent(e);
+    };
+    fire('pointerdown', path[0]!, 1);
+    for (const p of path.slice(1)) fire('pointermove', p, 1);
+    r.overlay.paintNow();
+    const el = r.q('rect.measure-box');
+    const box = el ? { cls: el.getAttribute('class'), dash: el.getAttribute('stroke-dasharray'), w: Number(el.getAttribute('width')) } : null;
+    fire('pointerup', path.at(-1)!, 0);
+    r.overlay.paintNow();
+    r.canvas.removeEventListener('pointermove', onMove);
+    r.canvas.removeEventListener('pointercancel', onCancel);
+    return { moves, cancels, box, after: r.q('rect.measure-box') };
+  };
+  const counts = (r: Rig): [number, number] => {
+    r.overlay.paintNow();
+    return [r.qa('.measure-guide.is-selected').length, r.qa('.measure-guide-line.is-selected').length];
+  };
+
+  it('고르기 방식: 수정 키 없음 = 새로, Ctrl(Mac은 Option) = 더하기, Shift = 넣고 빼기, Shift+Ctrl(Shift+Option) = 빼기', () => {
+    expect(guideSelectOp(null)).toBe('replace');
+    expect(guideSelectOp({})).toBe('replace');
+    expect(guideSelectOp({ ctrlKey: true })).toBe('add');
+    expect(guideSelectOp({ shiftKey: true })).toBe('toggle');
+    expect(guideSelectOp({ shiftKey: true, ctrlKey: true })).toBe('subtract');
+    // Windows·Linux의 Alt는 수정 키가 아니다(앱은 Alt+누르기로 가장 안쪽 형상을 고른다)
+    expect(guideSelectOp({ altKey: true })).toBe('replace');
+    expect(guideSelectOp({ altKey: true, shiftKey: true })).toBe('toggle');
+    // Mac: Option이 더하기, Ctrl+누르기는 브라우저의 오른쪽 단추라 쓰지 않는다
+    expect(guideSelectOp({ altKey: true }, 'Alt')).toBe('add');
+    expect(guideSelectOp({ altKey: true, shiftKey: true }, 'Alt')).toBe('subtract');
+    expect(guideSelectOp({ ctrlKey: true }, 'Alt')).toBe('replace');
+    const [a, b, c] = ['a', 'b', 'c'];
+    expect(applyGuideSelect([a, b], [c, c], 'replace')).toEqual([c]);
+    expect(applyGuideSelect([a, b], [b, c], 'add')).toEqual([a, b, c]);
+    expect(applyGuideSelect([a, b], [b, c], 'toggle')).toEqual([a, c]);
+    expect(applyGuideSelect([a, b], [b, c], 'subtract')).toEqual([a]);
+    expect(applyGuideSelect([], [], 'toggle')).toEqual([]);
+    expect(guideCountText(0, 0)).toBeNull();
+    expect(guideCountText(1, 0)).toBe(GUIDE_KIND_NAMES.point);
+    expect(guideCountText(0, 1)).toBe(GUIDE_KIND_NAMES.line);
+    expect(guideCountText(3, 0)).toBe('안내점 3개');
+    expect(guideCountText(0, 2)).toBe('안내선 2개');
+    expect(guideCountText(1, 1)).toBe('안내점 1개·안내선 1개');
+    expect([guideDeleteLabel(1, 0), guideDeleteLabel(0, 1), guideDeleteLabel(0, 0), guideDeleteLabel(2, 1)]).toEqual([
+      '고른 안내점 지우기',
+      '고른 안내선 지우기',
+      '고른 안내선 지우기',
+      '고른 안내 3개 지우기',
+    ]);
+  });
+
+  it('고르기 상자: 오른쪽으로 끌면 상자 안에 다 든 안내점만, 왼쪽은 걸친 안내선까지(끝없는 안내선은 다 들 수 없다)', () => {
+    const f = F();
+    expect(guidesInBox(f, PTS, LNS, 110.3, 50.4, 160.6, 90.3)).toEqual({ points: [0, 1], lines: [] });
+    expect(guidesInBox(f, PTS, LNS, 160.6, 90.3, 110.3, 50.4)).toEqual({ points: [0, 1], lines: [0] });
+    // 위에서 아래로 끌어도 같다(가로 방향만 본다)
+    expect(guidesInBox(f, PTS, LNS, 160.6, 50.4, 110.3, 90.3)).toEqual({ points: [0, 1], lines: [0] });
+    expect(guidesInBox(f, PTS, LNS, 30.2, 120.4, 70.7, 140.1)).toEqual({ points: [2], lines: [] });
+    expect(guidesInBox(f, PTS, LNS, 70.7, 140.1, 30.2, 120.4)).toEqual({ points: [2], lines: [1] });
+    expect(guidesInBox(f, PTS, LNS, 190.4, 190.1, 160.3, 150.2)).toEqual({ points: [], lines: [] });
+  });
+
+  it('Ctrl·Shift·Shift+Ctrl 누르기로 여럿을 넣고 빼고, 수정 키 없이 빈 곳을 누르면 모두 푼다(수정 키를 누른 채면 그대로)', async () => {
+    const { r } = await setup();
+    const calls = r.guideCalls();
+    expect(r.tool.pickGuide(121.3, 81.2, 'mouse')).toBe('point');
+    expect(r.tool.pickGuide(151.2, 79.4, 'mouse', { ctrlKey: true })).toBe('point');
+    expect(r.tool.selectedGuideCount).toBe(2);
+    // 여럿이면 종류 하나(selectedGuide)는 없다
+    expect(r.tool.selectedGuide).toBeNull();
+    expect(r.tool.pickGuide(80.6, 61.3, 'mouse', { shiftKey: true })).toBe('line');
+    expect(r.tool.selectedGuideCount).toBe(3);
+    expect(counts(r)).toEqual([2, 1]);
+    expect(r.tool.guidePickText(false)).toBe(`안내점 2개·안내선 1개 · ${GUIDE_DELETE_KEY_HINT}`);
+    expect(r.tool.guidePickText(true)).toBe('안내점 2개·안내선 1개');
+    expect(r.guideCalls()).toBe(calls + 3);
+    // Shift: 고른 것을 다시 누르면 뺀다. Shift+Ctrl: 뺀다(고르지 않은 것을 눌러도 넣지 않는다)
+    expect(r.tool.pickGuide(119.2, 80.9, 'mouse', { shiftKey: true })).toBe('point');
+    expect(r.tool.selectedGuideCount).toBe(2);
+    expect(r.tool.pickGuide(150.7, 81.1, 'mouse', { shiftKey: true, ctrlKey: true })).toBe('point');
+    expect(r.tool.pickGuide(61.3, 129.4, 'mouse', { shiftKey: true, ctrlKey: true })).toBe('point');
+    expect(r.tool.selectedGuideCount).toBe(1);
+    expect(r.tool.selectedGuide).toBe('line');
+    // Ctrl을 누른 채 이미 고른 것을 누르면 그대로(알리지 않는다)
+    const before = r.guideCalls();
+    expect(r.tool.pickGuide(80.6, 61.3, 'mouse', { ctrlKey: true })).toBe('line');
+    expect(r.guideCalls()).toBe(before);
+    // 빈 곳: 수정 키를 누른 채면 그대로, 없으면 푼다
+    expect(r.tool.pickGuide(30.3, 170.2, 'mouse', { ctrlKey: true })).toBeNull();
+    expect(r.tool.selectedGuideCount).toBe(1);
+    expect(r.tool.pickGuide(30.3, 170.2, 'mouse')).toBeNull();
+    expect(r.tool.selectedGuideCount).toBe(0);
+    // 수정 키 없이 누르면 고른 것 대신 그것 하나
+    r.tool.pickGuide(121.3, 81.2, 'mouse');
+    r.tool.pickGuide(151.2, 79.4, 'mouse', { ctrlKey: true });
+    expect(r.tool.pickGuide(61.3, 129.4, 'mouse')).toBe('point');
+    expect(r.tool.selectedGuideCount).toBe(1);
+    expect(counts(r)).toEqual([1, 0]);
+  });
+
+  it('Mac(안내 두기 키 Option): Option+누르기가 더하기, Ctrl+누르기는 수정 키가 아니다', async () => {
+    const { r } = await setup({ guideKey: 'Alt' });
+    r.tool.pickGuide(121.3, 81.2, 'mouse');
+    expect(r.tool.pickGuide(151.2, 79.4, 'mouse', { altKey: true })).toBe('point');
+    expect(r.tool.selectedGuideCount).toBe(2);
+    expect(r.tool.pickGuide(41.2, 150.3, 'mouse', { altKey: true, shiftKey: true })).toBe('line');
+    expect(r.tool.selectedGuideCount).toBe(2);
+    expect(r.tool.pickGuide(61.3, 129.4, 'mouse', { ctrlKey: true })).toBe('point');
+    expect(r.tool.selectedGuideCount).toBe(1);
+  });
+
+  it('고른 안내를 Delete·카드의 지우기 단추로 함께 지우고, 되돌리기 한 번에 모두 돌아온다', async () => {
+    const { r, store } = await setup();
+    const acts = document.createElement('div');
+    const close = document.createElement('button');
+    acts.append(close);
+    r.tool.mountGuideDelete(acts);
+    const del = acts.querySelector<HTMLButtonElement>('.sel-del')!;
+    r.tool.pickGuide(121.3, 81.2, 'mouse');
+    r.tool.pickGuide(151.2, 79.4, 'mouse', { ctrlKey: true });
+    r.tool.pickGuide(41.2, 150.3, 'mouse', { ctrlKey: true });
+    expect(del.getAttribute('aria-label')).toBe('고른 안내 3개 지우기');
+    expect(del.title).toBe('고른 안내 3개 지우기 (Delete)');
+    expect(r.tool.selectKey(new KeyboardEvent('keydown', { key: 'Delete', cancelable: true }))).toBe(true);
+    expect(r.tool.guides.map((p) => [...p])).toEqual([[-40, -30, 0]]);
+    expect(r.tool.guideLines).toEqual([LNS[0]]);
+    expect(r.tool.selectedGuideCount).toBe(0);
+    expect(readGuideFiles(store)[KEY]!.p).toHaveLength(1);
+    expect(r.tool.undo()).toBe(true);
+    expect(r.tool.guides).toHaveLength(3);
+    expect(r.tool.guideLines).toHaveLength(2);
+    expect(r.tool.canUndo).toBe(false);
+    // 카드 단추도 여럿을 함께
+    r.tool.pickGuide(121.3, 81.2, 'mouse');
+    r.tool.pickGuide(80.6, 61.3, 'mouse', { ctrlKey: true });
+    del.click();
+    expect(r.tool.guides).toHaveLength(2);
+    expect(r.tool.guideLines).toHaveLength(1);
+    expect(r.tool.canUndo).toBe(true);
+  });
+
+  it('수정 키를 누른 채 끌면 코어 궤도 대신 고르기 상자: 오른쪽은 다 든 것, 왼쪽은 걸친 것까지 고르기 방식대로 넣고 빼고, 코어에는 끌기를 거둔다', async () => {
+    const { r, picks } = await setup();
+    // 오른쪽으로(Ctrl — 더하기): 안내점 P0·P1, 안내선 L0은 걸쳤지만 다 들지 않아 빠진다
+    const right = drag(r, [[110.3, 50.4], [130.2, 70.1], [160.6, 90.3]], { ctrlKey: true });
+    expect(right.moves).toBe(0);
+    expect(right.cancels).toBe(1);
+    expect(right.box).toEqual({ cls: 'measure-box', dash: null, w: expect.closeTo(50.3, 6) });
+    expect(right.after).toBeNull();
+    expect(counts(r)).toEqual([2, 0]);
+    expect(picks()).toBe(1);
+    // 왼쪽으로(Shift — 넣고 빼기): P0·P1은 빠지고 걸친 L0은 들어온다
+    const left = drag(r, [[160.6, 90.3], [140.2, 70.4], [110.3, 50.4]], { shiftKey: true });
+    expect(left.box).toMatchObject({ cls: 'measure-box is-crossing', dash: '5 3' });
+    expect(left.cancels).toBe(1);
+    expect(counts(r)).toEqual([0, 1]);
+    expect(r.tool.selectedGuide).toBe('line');
+    expect(picks()).toBe(2);
+    // Shift+Ctrl(빼기)로 다 빼면 고른 것이 없어 앱에 알리지 않는다
+    drag(r, [[160.6, 90.3], [110.3, 50.4]], { shiftKey: true, ctrlKey: true });
+    expect(r.tool.selectedGuideCount).toBe(0);
+    expect(picks()).toBe(2);
+  });
+
+  it('고르기 상자를 그리지 않는 때: 수정 키 없는 끌기(궤도)·끌기 시작 거리 안·손가락·줄자를 켠 동안·안내를 숨긴 동안·걷는 중', async () => {
+    const { r, picks } = await setup();
+    const path: [number, number][] = [[110.3, 50.4], [160.6, 90.3]];
+    const plain = drag(r, path);
+    expect(plain.moves).toBe(1);
+    expect(plain.cancels).toBe(0);
+    expect(plain.box).toBeNull();
+    // 끌기 시작 거리(마우스 4화소) 안: 코어가 누르기로 알리도록 두고(거두지 않음) 상자도 없다
+    const tiny = drag(r, [[120.4, 80.6], [121.9, 81.3]], { ctrlKey: true });
+    expect(tiny.cancels).toBe(0);
+    expect(tiny.box).toBeNull();
+    expect(drag(r, path, { ctrlKey: true }, 'touch')).toMatchObject({ moves: 1, cancels: 0, box: null });
+    r.tool.setMode('tape');
+    expect(drag(r, path, { ctrlKey: true })).toMatchObject({ moves: 1, cancels: 0, box: null });
+    r.tool.setMode(null);
+    r.tool.setGuidesShown(false);
+    expect(drag(r, path, { ctrlKey: true })).toMatchObject({ moves: 1, cancels: 0, box: null });
+    r.tool.setGuidesShown(true);
+    (r.viewer as { navigation?: 'orbit' | 'walk' }).navigation = 'walk';
+    expect(drag(r, path, { ctrlKey: true })).toMatchObject({ moves: 1, cancels: 0, box: null });
+    (r.viewer as { navigation?: 'orbit' | 'walk' }).navigation = 'orbit';
+    expect(drag(r, path, { ctrlKey: true }).cancels).toBe(1);
+    expect(r.tool.selectedGuideCount).toBe(2);
+    expect(picks()).toBe(1);
+  });
+
+  it('고른 안내 숨기기(Edit › Hide): 그리지도 고르지도 붙지도 않고, 되돌리기·파일별 기억에 들며 "숨긴 안내 모두 보이기"로 다시 보인다', async () => {
+    const { r, store } = await setup();
+    const acts = document.createElement('div');
+    acts.append(document.createElement('button'));
+    r.tool.mountGuideDelete(acts);
+    const hide = acts.querySelector<HTMLButtonElement>('.sel-hide')!;
+    expect(hide.getAttribute('aria-label')).toBe(GUIDE_HIDE_LABEL);
+    expect(hide.textContent).toBe(GUIDE_HIDE_TEXT);
+    expect(r.tool.hideSelectedGuides()).toBe(false);
+    r.tool.pickGuide(121.3, 81.2, 'mouse');
+    r.tool.pickGuide(80.6, 61.3, 'mouse', { ctrlKey: true });
+    hide.click();
+    expect(r.tool.hiddenGuideCount).toBe(2);
+    expect(r.tool.selectedGuideCount).toBe(0);
+    // 안내 수는 숨긴 것까지(측정값 칸의 수·모두 지우기)
+    expect(r.tool.guides).toHaveLength(3);
+    r.overlay.paintNow();
+    expect(r.qa('.measure-guide')).toHaveLength(2);
+    expect(r.qa('.measure-guide-line')).toHaveLength(1);
+    // 숨긴 것은 고르지 않는다(앱은 그 자리 형상을 고른다)
+    expect(r.tool.pickGuide(121.3, 81.2, 'mouse')).toBeNull();
+    expect(r.tool.pickGuide(151.2, 79.4, 'mouse')).toBe('point');
+    // 파일별 기억: 숨긴 번호
+    expect(readGuideFiles(store)[KEY]).toMatchObject({ hp: [0], hl: [0] });
+    // 메뉴: 숨긴 안내가 있을 때만 "숨긴 안내 모두 보이기"
+    expect(r.tool.guideMenuItems().map((i) => i.label)).toEqual([GUIDES_SHOWN_LABEL, GUIDE_UNHIDE_LABEL, GUIDE_CLEAR_FILE_LABEL]);
+    // 줄자: 숨긴 안내점에는 붙지 않는다
+    r.tool.setMode('tape');
+    r.move(121.3, 81.2);
+    expect(r.tip()).not.toBe('안내점');
+    r.move(151.2, 79.4);
+    expect(r.tip()).toBe('안내점');
+    expect(r.tool.hideSelectedGuides()).toBe(false);
+    r.tool.setMode(null);
+    // 같은 파일을 다시 열면 숨긴 채
+    const again = await setup({}, store);
+    expect(again.r.tool.hiddenGuideCount).toBe(2);
+    again.r.overlay.paintNow();
+    expect(again.r.qa('.measure-guide')).toHaveLength(2);
+    // 되돌리기·다시 하기
+    expect(r.tool.undo()).toBe(true);
+    expect(r.tool.hiddenGuideCount).toBe(0);
+    expect(r.tool.redo()).toBe(true);
+    expect(r.tool.hiddenGuideCount).toBe(2);
+    // 모두 보이기: 안내 보이기를 꺼 두었으면 켠다, 되돌릴 수 있다
+    r.tool.setGuidesShown(false);
+    r.tool.guideMenuItems()[1]!.run();
+    expect(r.tool.hiddenGuideCount).toBe(0);
+    expect(r.tool.guidesShown).toBe(true);
+    expect(r.tool.guideMenuItems().map((i) => i.label)).toEqual([GUIDES_SHOWN_LABEL, GUIDE_CLEAR_FILE_LABEL]);
+    expect(readGuideFiles(store)[KEY]!.hp).toBeUndefined();
+    expect(r.tool.unhideGuides()).toBe(false);
+    expect(r.tool.undo()).toBe(true);
+    expect(r.tool.hiddenGuideCount).toBe(2);
+    // 모두 지우기는 숨긴 안내도 지운다
+    r.tool.clearGuides();
+    expect(r.tool.hiddenGuideCount).toBe(0);
+    expect(r.tool.guides).toHaveLength(0);
+  });
+
+  it('숨긴 안내와 같은 자리에 줄자로 다시 두면 그 안내를 다시 보인다(겹쳐 두지 않음)', () => {
+    const r = rig({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 100, 0, 0]])] });
+    const place = (): void => {
+      r.tool.setMode('tape');
+      r.click(102, 101);
+      r.move(160, 101);
+      expect(r.tool.applyLength(30)).toBe('ok');
+      r.tool.setMode(null);
+    };
+    place();
+    expect(r.tool.guides).toHaveLength(1);
+    expect(r.tool.pickGuide(131.2, 101.3, 'mouse')).toBe('point');
+    expect(r.tool.hideSelectedGuides()).toBe(true);
+    expect(r.tool.hiddenGuideCount).toBe(1);
+    place();
+    expect(r.tool.guides).toHaveLength(1);
+    expect(r.tool.hiddenGuideCount).toBe(0);
+    // 되돌리면 다시 숨는다
+    expect(r.tool.undo()).toBe(true);
+    expect(r.tool.hiddenGuideCount).toBe(1);
   });
 });

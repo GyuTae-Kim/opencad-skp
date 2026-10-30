@@ -5,6 +5,7 @@
  * - 파일 GUIDE_FILES_MAX개까지 두고, 넘거나 저장 글이 GUIDE_STORE_MAX_CHARS를 넘으면 오래 쓰지 않은(안내를 바꾸거나 되살린 때가 먼) 파일부터 버린다.
  *   한 파일은 안내점·안내선 각 50개(measure.ts 한도)라 많아야 10 KB쯤이다.
  * - 안내를 모두 지우면 그 파일 항목을 뺀다(항목이 하나도 없으면 열쇠도 지운다).
+ * - 숨긴 안내(25차 Edit › Hide)는 그 번호를 함께 두어 숨긴 채 되살린다(숨긴 것이 없으면 꼴이 예전과 같고, 예전 항목은 모두 보이는 것으로 읽는다).
  * - 저장이 막히면(사생활 보호 창·저장 공간 가득) 오래된 파일 절반을 버리고 한 번 더 해 보고, 그래도 안 되면 그만둔다 — 앱은 그대로 돌고 이번 세션만 기억한다.
  * - 읽은 값은 모양을 확인한다(열쇠 꼴, 수가 아닌 좌표, 길이 0 방향은 버린다). 좌표는 자르지 않고 그대로 둔다(되살린 안내에 그대로 붙게).
  *
@@ -24,14 +25,24 @@ export const GUIDE_STORE_MAX_CHARS = 400_000;
 export interface SavedGuides {
   pts: V3[];
   lns: GuideLine[];
+  /** 숨긴 안내(25차 Edit › Hide — pts·lns에 든 객체 그대로, 없으면 빈 목록) */
+  hid: (V3 | GuideLine)[];
 }
 
-/** 저장 꼴: 파일 지문 → { t: 마지막으로 쓴 시각(ms), p: 안내점 [x, y, z], l: 안내선 [점 x, y, z, 방향 x, y, z] } */
+/**
+ * 저장 꼴: 파일 지문 → { t: 마지막으로 쓴 시각(ms), p: 안내점 [x, y, z], l: 안내선 [점 x, y, z, 방향 x, y, z],
+ * hp·hl: 숨긴 안내점·안내선의 p·l 번호(25차 — 숨긴 것이 있을 때만. 앞 판은 이 칸을 모르고 모두 보인다) }
+ */
 interface Entry {
   t: number;
   p: number[][];
   l: number[][];
+  hp?: number[];
+  hl?: number[];
 }
+
+/** 숨긴 번호 칸(0 이상 정수 목록 — 아니면 없는 것으로) */
+const indexList = (a: unknown): number[] | undefined => (Array.isArray(a) && a.every((i) => Number.isInteger(i) && i >= 0) ? a : undefined);
 
 type Files = Record<string, Entry>;
 
@@ -72,24 +83,41 @@ export function readGuideFiles(storage: GuideStorage | null): Files {
   for (const [k, e] of Object.entries(files as Record<string, unknown>)) {
     const x = e as Partial<Entry> | null;
     if (!isGuideKey(k) || !x || typeof x.t !== 'number' || !Number.isFinite(x.t) || !Array.isArray(x.p) || !Array.isArray(x.l)) continue;
-    out[k] = { t: x.t, p: x.p, l: x.l };
+    const entry: Entry = { t: x.t, p: x.p, l: x.l };
+    const hp = indexList(x.hp), hl = indexList(x.hl);
+    if (hp?.length) entry.hp = hp;
+    if (hl?.length) entry.hl = hl;
+    out[k] = entry;
   }
   return out;
 }
 
-/** 기억한 그 파일의 안내(없거나 비었으면 null). 점·선은 maxPoints·maxLines개까지(새것 쪽), 모양이 다른 것은 뺀다 */
+/** 기억한 그 파일의 안내(없거나 비었으면 null). 점·선은 maxPoints·maxLines개까지(새것 쪽), 모양이 다른 것은 뺀다. 숨긴 안내는 숨긴 채(hid) */
 export function loadGuides(storage: GuideStorage | null, key: string, maxPoints = 50, maxLines = 50): SavedGuides | null {
   const e = readGuideFiles(storage)[key];
   if (!e) return null;
-  const pts: V3[] = e.p.filter((p) => finite(p, 3)).map((p) => [p[0]!, p[1]!, p[2]!] as V3).slice(-maxPoints);
-  const lns: GuideLine[] = [];
-  for (const l of e.l) {
-    if (!finite(l, 6)) continue;
+  const hp = new Set(e.hp ?? []), hl = new Set(e.hl ?? []);
+  const hidden = new Set<V3 | GuideLine>();
+  let pts: V3[] = [];
+  e.p.forEach((p, i) => {
+    if (!finite(p, 3)) return;
+    const v: V3 = [p[0]!, p[1]!, p[2]!];
+    pts.push(v);
+    if (hp.has(i)) hidden.add(v);
+  });
+  pts = pts.slice(-maxPoints);
+  let lns: GuideLine[] = [];
+  e.l.forEach((l, i) => {
+    if (!finite(l, 6)) return;
     const d = Math.hypot(l[3]!, l[4]!, l[5]!);
-    if (!(d > 0)) continue;
-    lns.push({ point: [l[0]!, l[1]!, l[2]!], dir: [l[3]! / d, l[4]! / d, l[5]! / d] });
-  }
-  return pts.length || lns.length ? { pts, lns: lns.slice(-maxLines) } : null;
+    if (!(d > 0)) return;
+    const g: GuideLine = { point: [l[0]!, l[1]!, l[2]!], dir: [l[3]! / d, l[4]! / d, l[5]! / d] };
+    lns.push(g);
+    if (hl.has(i)) hidden.add(g);
+  });
+  lns = lns.slice(-maxLines);
+  const hid = [...pts, ...lns].filter((g) => hidden.has(g));
+  return pts.length || lns.length ? { pts, lns, hid } : null;
 }
 
 /** 오래 쓰지 않은 것부터 차례(새것이 앞) */
@@ -113,15 +141,29 @@ function write(storage: GuideStorage, text: string | null): boolean {
 }
 
 /**
- * 그 파일의 안내 기억하기(now = 지금 시각 ms — 오래된 것 버리기에 쓴다). 안내가 없으면 그 항목을 뺀다.
+ * 그 파일의 안내 기억하기(now = 지금 시각 ms — 오래된 것 버리기에 쓴다). 안내가 없으면 그 항목을 뺀다. hidden에 든 안내(pts·lns의 객체)는 숨긴 것으로 둔다.
  * 파일 수·글 길이 한도를 넘으면 오래된 파일부터 버리고, 저장이 막히면 오래된 절반을 버려 한 번 더 해 본다. 저장했으면 true
  */
-export function saveGuides(storage: GuideStorage | null, key: string, pts: readonly (readonly number[])[], lns: readonly GuideLine[], now: number): boolean {
+export function saveGuides(
+  storage: GuideStorage | null,
+  key: string,
+  pts: readonly (readonly number[])[],
+  lns: readonly GuideLine[],
+  now: number,
+  hidden?: ReadonlySet<unknown> | null,
+): boolean {
   if (!storage || !isGuideKey(key)) return false;
   const files = readGuideFiles(storage);
-  if (pts.length || lns.length)
-    files[key] = { t: now, p: pts.map((p) => [p[0]!, p[1]!, p[2]!]), l: lns.map((l) => [l.point[0], l.point[1], l.point[2], l.dir[0], l.dir[1], l.dir[2]]) };
-  else if (files[key]) delete files[key];
+  if (pts.length || lns.length) {
+    const e: Entry = { t: now, p: pts.map((p) => [p[0]!, p[1]!, p[2]!]), l: lns.map((l) => [l.point[0], l.point[1], l.point[2], l.dir[0], l.dir[1], l.dir[2]]) };
+    if (hidden?.size) {
+      const hp = pts.flatMap((p, i) => (hidden.has(p) ? [i] : []));
+      const hl = lns.flatMap((l, i) => (hidden.has(l) ? [i] : []));
+      if (hp.length) e.hp = hp;
+      if (hl.length) e.hl = hl;
+    }
+    files[key] = e;
+  } else if (files[key]) delete files[key];
   else return true;
   const order = byAge(files);
   for (const k of order.slice(GUIDE_FILES_MAX)) if (k !== key) delete files[k];
