@@ -58,6 +58,10 @@ import {
   AIM_DWELL_PX,
   dwellPoint,
   trackHint,
+  guideHit,
+  GUIDE_DELETE_KEY_HINT,
+  GUIDE_DELETE_TEXT,
+  GUIDE_KIND_NAMES,
 } from '../../src/app/measure';
 import { AXIS_COLORS, AXIS_LABELS, SNAP_COLORS, SNAP_LABELS, TRACK_ALIGN_LABEL, TRACK_AXIS_LABELS, TRACK_PAIR_LABELS } from '../../src/app/snap';
 import { TRACK_DWELL_MS } from 'opencad-viewer3d/track';
@@ -1477,6 +1481,148 @@ describe('측정 도구: 안내 하나씩 고르고 지우기', () => {
     r.tool.setMode('tape');
     expect(r.tool.selectedGuide).toBeNull();
     expect(r.tool.guideLines).toHaveLength(2);
+  });
+});
+
+describe('고르기 도구로 안내 고르고 지우기(줄자·각도기를 끈 동안 — SketchUp "Using guides")', () => {
+  // 위에서 본 평행 투영: 세계 (X, Y) → 화면 (100 + X, 100 − Y). 누르는 자리는 허용 거리 경계에서 떨어진 곳만 가리킨다
+  const F = (): ReturnType<typeof frameFor> => frameFor(TOP, W, W);
+  const press = (r: Rig, key: string, target?: EventTarget): { handled: boolean; prevented: boolean } => {
+    const e = new KeyboardEvent('keydown', { key, cancelable: true });
+    if (target) Object.defineProperty(e, 'target', { value: target });
+    const handled = r.tool.selectKey(e);
+    return { handled, prevented: e.defaultPrevented };
+  };
+  /** 줄자로 (30, 0)에 안내점, (70, 30)을 지나 X축과 나란한 안내선(모서리 위에서 시작)을 두고 도구를 끈다 */
+  const withGuides = (): Rig => {
+    const r = rig({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 100, 0, 0], [-60, -80, 0, -60, 80, 0]])] });
+    r.tool.setMode('tape');
+    r.click(102, 101);
+    r.move(160, 101);
+    expect(r.tool.applyLength(30)).toBe('ok');
+    r.tool.clear();
+    r.click(170, 101);
+    r.move(170, 60);
+    expect(r.tool.applyLength(30)).toBe('ok');
+    r.tool.setMode(null);
+    expect(r.tool.guides).toHaveLength(1);
+    expect(r.tool.guideLines).toHaveLength(1);
+    expect(r.tool.selectedGuide).toBeNull();
+    return r;
+  };
+
+  it('guideHit: 허용 거리 안의 가장 가까운 안내점, 없으면 안내선, 둘 다 없으면 null', () => {
+    const pts: V3[] = [
+      [30, 0, 0],
+      [60, 0, 0],
+    ];
+    const lns = [{ point: [0, 30, 0] as V3, dir: [1, 0, 0] as V3 }];
+    // 안내점 (130, 100)·(160, 100), 안내선 y = 70
+    expect(guideHit(F(), pts, lns, 133.2, 102.1, 6)).toEqual({ kind: 'point', index: 0 });
+    expect(guideHit(F(), pts, lns, 157.3, 98.6, 6)).toEqual({ kind: 'point', index: 1 });
+    expect(guideHit(F(), pts, lns, 40.4, 73.3, 6)).toEqual({ kind: 'line', index: 0 });
+    // 안내점이 안내선과 함께 닿으면 안내점(점 표식이 선 위에 그려진다)
+    expect(guideHit(F(), [[30, 27, 0]], lns, 130.2, 71.1, 6)).toEqual({ kind: 'point', index: 0 });
+    expect(guideHit(F(), pts, lns, 140.3, 88.7, 6)).toBeNull();
+    // 손가락 허용 거리(14)면 닿는다
+    expect(guideHit(F(), pts, lns, 140.3, 98.7, 14)).toEqual({ kind: 'point', index: 0 });
+    expect(guideHit(F(), [], lns, 40.4, 81.6, 14)).toEqual({ kind: 'line', index: 0 });
+    expect(guideHit(F(), [], lns, 40.4, 81.6, 6)).toBeNull();
+  });
+
+  it('도구를 끈 동안 안내점을 누르면 고르고 Delete로 지운다(되돌리기 목록에 쌓임), 빈 곳이면 풀고 null', () => {
+    const r = withGuides();
+    const calls = r.guideCalls();
+    expect(r.tool.pickGuide(132.6, 101.9, 'mouse')).toBe('point');
+    expect(r.tool.selectedGuide).toBe('point');
+    expect(r.guideCalls()).toBe(calls + 1);
+    // 도구를 끈 동안에도 고른 안내점은 파랑으로 그린다
+    r.overlay.paintNow();
+    expect(r.q('.measure-guide.is-selected path:last-child')?.getAttribute('stroke')).toBe(GUIDE_SELECTED_COLOR);
+    expect(r.tool.guidePickText(false)).toBe(`${GUIDE_KIND_NAMES.point} · ${GUIDE_DELETE_KEY_HINT}`);
+    expect(r.tool.guidePickText(true)).toBe('안내점');
+    expect(press(r, 'Delete')).toEqual({ handled: true, prevented: true });
+    expect(r.tool.guides).toHaveLength(0);
+    expect(r.tool.guideLines).toHaveLength(1);
+    expect(r.tool.selectedGuide).toBeNull();
+    expect(r.tool.guidePickText(false)).toBeNull();
+    // 되돌리면 안내점이 돌아온다
+    expect(r.tool.undo()).toBe(true);
+    expect(r.tool.guides).toHaveLength(1);
+    // 빈 곳: 고르지 않고 고른 것을 푼다(앱은 그때 형상을 고른다)
+    expect(r.tool.pickGuide(132.6, 101.9, 'mouse')).toBe('point');
+    expect(r.tool.pickGuide(40.6, 150.3, 'mouse')).toBeNull();
+    expect(r.tool.selectedGuide).toBeNull();
+    // 고른 것이 없으면 키를 받지 않는다
+    expect(press(r, 'Delete')).toEqual({ handled: false, prevented: false });
+  });
+
+  it('안내선은 선 둘레를 누르면 고르고 Backspace로 지운다 — 손가락은 허용 거리가 넓다, Esc는 풀기만', () => {
+    const r = withGuides();
+    // 안내선은 y = 70(세계 Y 30)
+    expect(r.tool.pickGuide(40.4, 81.6, 'mouse')).toBeNull();
+    expect(r.tool.pickGuide(40.4, 81.6, 'touch')).toBe('line');
+    expect(r.tool.guidePickText(true)).toBe(GUIDE_KIND_NAMES.line);
+    r.overlay.paintNow();
+    expect(r.q('.measure-guide-line.is-selected line:last-child')?.getAttribute('stroke')).toBe(GUIDE_SELECTED_COLOR);
+    // Esc: 풀기만(안내는 그대로)
+    expect(press(r, 'Escape')).toEqual({ handled: true, prevented: true });
+    expect(r.tool.selectedGuide).toBeNull();
+    expect(r.tool.guideLines).toHaveLength(1);
+    expect(r.tool.pickGuide(70.3, 71.8, 'pen')).toBe('line');
+    // 다른 키·수정 키·입력 칸의 키는 받지 않는다
+    expect(press(r, 'a').handled).toBe(false);
+    expect(press(r, 'Backspace', document.createElement('input')).handled).toBe(false);
+    expect(r.tool.selectKey(new KeyboardEvent('keydown', { key: 'Delete', ctrlKey: true, cancelable: true }))).toBe(false);
+    expect(press(r, 'Backspace')).toEqual({ handled: true, prevented: true });
+    expect(r.tool.guideLines).toHaveLength(0);
+    expect(r.tool.guides).toHaveLength(1);
+  });
+
+  it('줄자·각도기를 켠 동안·안내를 숨긴 동안은 고르지 않는다, 형상을 고르면(deselectGuide) 푼다', () => {
+    const r = withGuides();
+    r.tool.setMode('tape');
+    expect(r.tool.pickGuide(132.6, 101.9, 'mouse')).toBeNull();
+    expect(r.tool.selectedGuide).toBeNull();
+    // 켠 동안의 고르기·Delete는 예전 그대로(측정 도구의 키)
+    r.click(130.4, 100.6);
+    expect(r.tool.selectedGuide).toBe('point');
+    expect(r.tool.selectKey(new KeyboardEvent('keydown', { key: 'Delete', cancelable: true }))).toBe(false);
+    expect(r.tool.guidePickText(false)).toBeNull();
+    r.tool.setMode(null);
+    r.tool.setGuidesShown(false);
+    expect(r.tool.pickGuide(132.6, 101.9, 'mouse')).toBeNull();
+    r.tool.setGuidesShown(true);
+    expect(r.tool.pickGuide(132.6, 101.9, 'mouse')).toBe('point');
+    const calls = r.guideCalls();
+    r.tool.deselectGuide();
+    expect(r.tool.selectedGuide).toBeNull();
+    expect(r.guideCalls()).toBe(calls + 1);
+    r.tool.deselectGuide();
+    expect(r.guideCalls()).toBe(calls + 1);
+  });
+
+  it('고른 것 카드의 지우기 단추: 선택 해제 ✕ 앞에 붙고, 이름은 고른 안내 종류, 누르면 고른 안내를 지운다', () => {
+    const r = withGuides();
+    const acts = document.createElement('div');
+    const more = document.createElement('button');
+    const close = document.createElement('button');
+    acts.append(more, close);
+    r.tool.mountGuideDelete(acts);
+    const b = acts.querySelector<HTMLButtonElement>('.sel-del')!;
+    expect([...acts.children]).toEqual([more, b, close]);
+    expect(b.textContent).toBe(GUIDE_DELETE_TEXT);
+    expect(r.tool.pickGuide(40.4, 72.2, 'mouse')).toBe('line');
+    expect(b.getAttribute('aria-label')).toBe('고른 안내선 지우기');
+    expect(r.tool.pickGuide(132.6, 101.9, 'mouse')).toBe('point');
+    expect(b.getAttribute('aria-label')).toBe('고른 안내점 지우기');
+    expect(b.title).toBe('고른 안내점 지우기 (Delete)');
+    b.click();
+    expect(r.tool.guides).toHaveLength(0);
+    expect(r.tool.selectedGuide).toBeNull();
+    // 다시 붙여도 단추는 하나
+    r.tool.mountGuideDelete(acts);
+    expect(acts.querySelectorAll('.sel-del')).toHaveLength(1);
   });
 });
 

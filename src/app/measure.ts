@@ -42,6 +42,8 @@
  *   끝점·꼭짓점 같은 점에서 시작했으면 둘째 점에 안내점. 각도기는 셋째 누르기가 중심을 지나 잰 방향으로 안내선을 둔다. 결과는 재기만과 같이 남긴다.
  * 안내 고르기·지우기: 안내점·안내선 위를 누르면(측정 점도 그대로 찍는다) 그 안내를 고르고(방금 둔 안내도 고른다), 다른 곳을 누르거나
  *   Esc·다시 재기면 푼다. Delete·Backspace(앱은 측정값 칸의 지우기 단추도)로 고른 안내 하나를 지운다 — 고른 누르기가 시작점도 찍었으면 그 점도 거둔다.
+ *   줄자·각도기를 끈 동안(고르기 도구)에는 앱이 3D 누르기마다 pickGuide로 묻는다: 누른 자리 둘레(코어 고르기 허용 거리)의 안내를 형상보다 먼저 고르고,
+ *   Delete·Backspace·고른 것 카드의 지우기 단추로 지우며 Esc·다른 곳 누르기로 푼다(SketchUp 공개 도움말 "Using guides" — 고르기 도구로 고른 안내를 지움).
  * 모서리 두 번 누르기(SketchUp 줄자): 줄자로 모서리 위를 두 번 누르면(코어와 같은 두 번 누르기 문턱 — 손가락은 넓게) 그 모서리를 지나는 끝없는 안내선을 둔다
  *   (곡선이면 누른 조각 하나의 직선, 안내 두기를 켜지 않아도). 첫 누르기가 찍은 시작점은 거두고 그 전 결과를 되돌리며, 둔 안내선은 골라 둔다.
  * 추론 잠금(SketchUp "Locking inference"): 방향을 잡는 동안(줄자 끝점·각도기 기준 방향·잴 방향) Shift를 누르고 있으면 지금 커서 밑 방향 추론
@@ -64,7 +66,7 @@
  * 그리기는 덧그림 층의 SVG 묶음(g.measure)과 DOM 라벨(div.measure-layer)로 하고, 숫자 글은 모형 단위(units.ts)로 쓴다.
  */
 import type { Viewer3d } from 'opencad-viewer3d';
-import { clickCount, dragStartPx, type LastClick } from 'opencad-viewer3d/pointer';
+import { PICK_TOLERANCE_PX, TOUCH_PICK_TOLERANCE_PX, clickCount, dragStartPx, isTouch, type LastClick } from 'opencad-viewer3d/pointer';
 import type { Scene3d } from 'opencad-viewer3d/types';
 import { projectToScreen, screenRay, viewDepth, worldPerPixel, type ViewFrame } from 'opencad-viewer3d/camera';
 import type { V3 } from 'opencad-viewer3d/math';
@@ -327,6 +329,60 @@ export const GUIDE_REDO_LABEL = '되돌린 안내 다시 하기';
 
 /** 보기 설정 메뉴의 이 파일 안내 모두 지우기 항목 글(측정값 칸의 ✕처럼 되돌릴 수 있다) */
 export const GUIDE_CLEAR_FILE_LABEL = '이 파일의 안내 모두 지우기';
+
+/** 고른 안내의 이름(고르기 도구로 고른 안내 — 상태 줄·고른 것 카드) */
+export const GUIDE_KIND_NAMES: Readonly<Record<'point' | 'line', string>> = Object.freeze({ point: '안내점', line: '안내선' });
+
+/** 고르기 도구로 고른 안내를 지우는 키 안내(키보드 기기의 상태 줄 — 손가락 기기는 고른 것 카드의 지우기 단추) */
+export const GUIDE_DELETE_KEY_HINT = 'Delete·Backspace로 지우기';
+
+/** 고른 것 카드의 고른 안내 지우기 단추 글 */
+export const GUIDE_DELETE_TEXT = '지우기';
+
+/**
+ * 고르기 도구(줄자·각도기를 끈 동안)의 누르기가 고르는 안내(23차 — SketchUp 공개 도움말 "Using guides": 고르기 도구로 안내를 골라 지운다).
+ * 화면 자리 (x, y)에서 tol 화소 안의 안내점(표식 가운데)·안내선(그리는 화면 선분)을 찾는다. 안내점이 있으면 가장 가까운 안내점(점 표식이 선 위에 그려지고
+ * 일부러 겨눈 것이라), 없으면 가장 가까운 안내선, 둘 다 없으면 null. 같은 거리면 먼저 둔 것
+ */
+export function guideHit(
+  f: ViewFrame,
+  pts: readonly (readonly number[])[],
+  lns: readonly GuideLine[],
+  x: number,
+  y: number,
+  tol: number,
+): { kind: 'point' | 'line'; index: number } | null {
+  let point = -1;
+  let bd = tol;
+  for (let i = 0; i < pts.length; i++) {
+    const s = screenPoint(f, pts[i]!, tol);
+    const d = s ? Math.hypot(s[0] - x, s[1] - y) : Infinity;
+    if (d < bd || (d === bd && point < 0)) {
+      point = i;
+      bd = d;
+    }
+  }
+  if (point >= 0) return { kind: 'point', index: point };
+  let line = -1;
+  bd = tol;
+  for (let i = 0; i < lns.length; i++) {
+    const s = guideLineScreen(f, lns[i]!);
+    const d = s ? segDist(x, y, s[0], s[1], s[2], s[3]) : Infinity;
+    if (d < bd || (d === bd && line < 0)) {
+      line = i;
+      bd = d;
+    }
+  }
+  return line >= 0 ? { kind: 'line', index: line } : null;
+}
+
+/** 점 (x, y)에서 화면 선분 (ax, ay)–(bx, by)까지의 거리 */
+function segDist(x: number, y: number, ax: number, ay: number, bx: number, by: number): number {
+  const dx = bx - ax, dy = by - ay;
+  const l2 = dx * dx + dy * dy;
+  const t = l2 > 0 ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / l2)) : 0;
+  return Math.hypot(ax + dx * t - x, ay + dy * t - y);
+}
 
 /** 되돌리기 아이콘(반시계로 도는 화살표 — 다시 재기의 ← 아이콘과 다르게) */
 const UNDO_PATHS = '<path d="M3.5 7.5v5.5H9"/><path d="M20.5 17a8.5 8.5 0 0 0-14.5-6L3.5 13"/>';
@@ -833,6 +889,8 @@ export class MeasureTool {
   private redoBtn: HTMLButtonElement | null = null;
   /** 측정 띠의 잠글 방향 고르기 줄(mountLockMenu로 붙인다 — 22차 한 손 잠금) */
   private lockMenu: HTMLDivElement | null = null;
+  /** 고른 것 카드의 고른 안내 지우기 단추(mountGuideDelete로 붙인다 — 23차 고르기 도구로 고른 안내) */
+  private guideDelBtn: HTMLButtonElement | null = null;
   /** 안내를 기억하는 파일 열쇠(내용 지문 16진 — 지문을 받기 전·기억하지 않으면 null)와 openFile 차례(늦게 온 지문은 버린다) */
   private fileKey: string | null = null;
   private fileTicket = 0;
@@ -1359,6 +1417,7 @@ export class MeasureTool {
     this.syncPainter();
     if (this.undoBtn) this.undoBtn.hidden = !this.canUndo;
     if (this.redoBtn) this.redoBtn.hidden = !this.canRedo;
+    this.syncGuideDelete();
     this.opts.onGuides?.();
   }
 
@@ -1410,6 +1469,73 @@ export class MeasureTool {
     this.overlay.invalidate();
     this.notifyGuides();
     return true;
+  }
+
+  /**
+   * 고르기 도구(줄자·각도기를 끈 동안)의 누르기(23차 — SketchUp 공개 도움말 "Using guides": 고르기 도구로 안내를 골라 Delete로 지운다).
+   * 누른 자리(화면 clientX·clientY) 둘레 코어 고르기 허용 거리(마우스·펜 6화소, 손가락 14화소) 안의 안내를 고르고 그 종류를 준다.
+   * 안내가 없으면 고른 안내를 풀고 null(앱은 그때 형상을 고른다). 줄자·각도기를 켠 동안·안내를 숨긴 동안은 고르지 않는다(null)
+   */
+  pickGuide(clientX: number, clientY: number, pointerType: string): 'point' | 'line' | null {
+    if (this.disposed || this.modeValue) return null;
+    const f = this.shownValue ? this.overlay.frame() : null;
+    const p = this.local({ clientX, clientY });
+    const hit = f ? guideHit(f, this.guidePts, this.guideLns, p.x, p.y, isTouch(pointerType) ? TOUCH_PICK_TOLERANCE_PX : PICK_TOLERANCE_PX) : null;
+    const ref = hit ? ((hit.kind === 'point' ? this.guidePts[hit.index] : this.guideLns[hit.index]) ?? null) : null;
+    this.select(ref);
+    return ref ? hit!.kind : null;
+  }
+
+  /** 고른 안내를 푼다(앱이 형상을 고를 때 — 고른 것은 하나씩) */
+  deselectGuide(): void {
+    if (this.selGuide) this.select(null);
+  }
+
+  /**
+   * 고르기 도구로 고른 안내의 키(줄자·각도기를 끈 동안, 입력 칸 밖 keydown): Delete·Backspace = 그 안내 지우기(되돌리기 목록에 쌓임), Esc = 풀기.
+   * 고른 안내가 없거나 다른 키면 받지 않는다. 받았으면 true
+   */
+  selectKey(e: KeyboardEvent): boolean {
+    if (this.disposed || this.modeValue || e.type !== 'keydown' || !this.selectedGuide || e.ctrlKey || e.metaKey || e.altKey || isEditableTarget(e.target)) return false;
+    if (e.key === 'Delete' || e.key === 'Backspace') this.deleteSelectedGuide();
+    else if (e.key === 'Escape') this.select(null);
+    else return false;
+    e.preventDefault();
+    return true;
+  }
+
+  /** 고르기 도구로 고른 안내의 글(상태 줄): 안내점·안내선, 키보드 기기는 지우는 키도. 고른 안내가 없거나 도구를 켰으면 null */
+  guidePickText(touch: boolean): string | null {
+    const k = this.modeValue ? null : this.selectedGuide;
+    if (!k) return null;
+    return touch ? GUIDE_KIND_NAMES[k] : `${GUIDE_KIND_NAMES[k]} · ${GUIDE_DELETE_KEY_HINT}`;
+  }
+
+  /**
+   * 고른 것 카드(host — 앱 카드의 단추 줄, 맨 끝은 선택 해제 ✕)에 고른 안내 지우기 단추를 붙인다(✕ 앞). 카드가 고른 안내를 보일 때만 보이고(CSS .sel-bar.is-guide),
+   * 누르면 고른 안내 하나를 지운다(휴대폰 — 키보드는 Delete·Backspace)
+   */
+  mountGuideDelete(host: HTMLElement): void {
+    let b = this.guideDelBtn;
+    if (!b) {
+      b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'mb-btn sel-del';
+      b.innerHTML = `${icon('trash', 16)}<span>${GUIDE_DELETE_TEXT}</span>`;
+      b.addEventListener('click', () => this.deleteSelectedGuide());
+      this.guideDelBtn = b;
+    }
+    host.insertBefore(b, host.lastElementChild);
+    this.syncGuideDelete();
+  }
+
+  /** 카드의 지우기 단추 이름을 고른 안내 종류에 맞춘다(측정값 칸의 지우기 단추와 같은 글) */
+  private syncGuideDelete(): void {
+    const b = this.guideDelBtn;
+    if (!b) return;
+    const t = this.selectedGuide === 'point' ? '고른 안내점 지우기' : '고른 안내선 지우기';
+    b.title = `${t} (Delete)`;
+    b.setAttribute('aria-label', t);
   }
 
   /** 안내 고르기·풀기(null). placedStart: 이 누르기가 진행 중 측정의 시작점도 찍었다. changed면 고른 것이 같아도 알린다(안내가 늘었을 때) */
@@ -2288,9 +2414,9 @@ export class MeasureTool {
       const halo = haloFor(typeof getComputedStyle === 'function' ? getComputedStyle(this.g).color : '');
       for (const gl of this.guideLns) this.guideLineMark(f, gl, halo, gl === this.selGuide ? 'is-selected' : '');
     }
-    // 도구를 끈 동안: 안내만(SketchUp처럼 늘 보인다 — 고르기·지우기는 줄자·각도기를 켠 동안)
+    // 도구를 끈 동안: 안내만(SketchUp처럼 늘 보인다 — 고르기 도구로 고른 안내는 파랑)
     if (!mode) {
-      if (shown) for (const g of this.guidePts) this.guideMark(f, g);
+      if (shown) for (const g of this.guidePts) this.guideMark(f, g, g === this.selGuide);
       return;
     }
     const scene = this.opts.getScene();

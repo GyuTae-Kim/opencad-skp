@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
 const { JSDOM } = createRequire(import.meta.url)('jsdom');
 import { installLocalization } from '../src/app/i18n';
-import { GUIDE_CLEAR_FILE_LABEL, GUIDE_REDO_LABEL, GUIDE_UNDO_LABEL, GUIDES_SHOWN_LABEL, LOCK_HINTS, LOCK_MENU_LABEL, guideKeyHint, lockHint, measureHint, trackHint } from '../src/app/measure';
+import { GUIDE_CLEAR_FILE_LABEL, GUIDE_DELETE_KEY_HINT, GUIDE_DELETE_TEXT, GUIDE_KIND_NAMES, GUIDE_REDO_LABEL, GUIDE_UNDO_LABEL, GUIDES_SHOWN_LABEL, LOCK_HINTS, LOCK_MENU_LABEL, guideKeyHint, lockHint, measureHint, trackHint } from '../src/app/measure';
 import { AXIS_LABELS, FACE_PERPENDICULAR_LABEL, GUIDE_LINE_LABEL, SNAP_LABELS, TRACK_ALIGN_LABEL, TRACK_AXIS_LABELS, TRACK_PAIR_LABELS } from '../src/app/snap';
 import { SHORTCUTS } from '../src/app/shortcuts';
 import { chunkFailText } from '../src/app/core';
@@ -157,6 +157,15 @@ describe('language URLs and UI presentation', () => {
     expect(translate(GUIDE_CLEAR_FILE_LABEL, 'en')).toBe('Clear all guides for this file');
     expect(translate(GUIDE_REDO_LABEL, 'de')).toBe('Rückgängig gemachte Änderung an Hilfselementen wiederherstellen');
     expect(translate('안내점·안내선을 두거나 지운 것 되돌리기(100단계)', 'ja')).toBe('ガイド点・ガイド線の配置や消去を元に戻す（100段階まで）');
+  });
+  it('translates the select-tool guide selection (status, card)', () => {
+    const hangul = /[가-힣]/;
+    const texts: string[] = [GUIDE_DELETE_TEXT, '고른 것'];
+    for (const k of ['point', 'line'] as const) texts.push(GUIDE_KIND_NAMES[k], `${GUIDE_KIND_NAMES[k]} · ${GUIDE_DELETE_KEY_HINT}`);
+    for (const {code} of languages.filter(item => item.code !== 'ko'))
+      for (const t of texts) expect(translate(t, code), `${code}: ${t}`).not.toMatch(hangul);
+    expect(translate(`${GUIDE_KIND_NAMES.line} · ${GUIDE_DELETE_KEY_HINT}`, 'en')).toBe('Guide line · Delete or Backspace to delete');
+    expect(translate(GUIDE_KIND_NAMES.point, 'de')).toBe('Hilfspunkt');
   });
   it('translates the split-chunk loading and failure notices (measuring tools, 3D view)', () => {
     const hangul = /[가-힣]/;
