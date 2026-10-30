@@ -44,6 +44,10 @@
  *   Esc·다시 재기면 푼다. Delete·Backspace(앱은 측정값 칸의 지우기 단추도)로 고른 안내 하나를 지운다 — 고른 누르기가 시작점도 찍었으면 그 점도 거둔다.
  *   줄자·각도기를 끈 동안(고르기 도구)에는 앱이 3D 누르기마다 pickGuide로 묻는다: 누른 자리 둘레(코어 고르기 허용 거리)의 안내를 형상보다 먼저 고르고,
  *   Delete·Backspace·고른 것 카드의 지우기 단추로 지우며 Esc·다른 곳 누르기로 푼다(SketchUp 공개 도움말 "Using guides" — 고르기 도구로 고른 안내를 지움).
+ *   끈 동안은 여럿을 고른다(25차 — "Selecting Geometry"의 수정 키): Ctrl(Mac은 Option)+누르기는 더하기, Shift는 넣고 빼기, Shift+Ctrl(Shift+Option)은 빼기,
+ *   수정 키를 누른 채 끌면 코어 궤도 대신 고르기 상자(오른쪽으로 끌면 상자 안에 다 든 것, 왼쪽은 걸친 것까지 — 끝없는 안내선은 왼쪽 상자만, guidesInBox).
+ *   고른 안내는 함께 지우고(되돌리기 한 단계), 고른 것 카드의 숨기기 단추로 숨긴다(hideSelectedGuides — "Using guides"의 Edit › Hide). 숨긴 안내는 그리지도
+ *   붙지도 고르지도 않고, 보기 설정의 "숨긴 안내 모두 보이기"(unhideGuides — Edit › Unhide)로 다시 보인다. 숨기기도 되돌리기·파일별 안내 기억에 든다.
  * 모서리 두 번 누르기(SketchUp 줄자): 줄자로 모서리 위를 두 번 누르면(코어와 같은 두 번 누르기 문턱 — 손가락은 넓게) 그 모서리를 지나는 끝없는 안내선을 둔다
  *   (곡선이면 누른 조각 하나의 직선, 안내 두기를 켜지 않아도). 첫 누르기가 찍은 시작점은 거두고 그 전 결과를 되돌리며, 둔 안내선은 골라 둔다.
  * 추론 잠금(SketchUp "Locking inference"): 방향을 잡는 동안(줄자 끝점·각도기 기준 방향·잴 방향) Shift를 누르고 있으면 지금 커서 밑 방향 추론
@@ -221,6 +225,11 @@ export interface MeasureToolOptions {
   guideKey?: GuideKey;
   /** 안내 두기를 켜고 끄거나 안내점·안내선이 늘고 줄거나, 되돌리기 목록·안내 보이기가 바뀌면(측정 띠 단추·측정값 칸의 안내 수를 맞춘다) */
   onGuides?: () => void;
+  /**
+   * 줄자·각도기를 끈 동안 고르기 상자로 안내를 골랐을 때(앱은 고른 형상을 푼다 — 고른 것은 형상이나 안내 한쪽).
+   * 누르기로 고른 것은 앱이 pickGuide의 값으로 안다
+   */
+  onGuidePick?: () => void;
   /** 안내 보이기와 파일별 안내(guidestore.ts)를 기억하는 곳(없으면 이 브라우저 localStorage, null이면 기억하지 않음) */
   storage?: GuideStorage | null;
   /** 결과 글(길이·각도)이 비켜 갈 앱 요소(3D 보기 위에 뜬 측정 띠·측정값 칸 — 보이지 않는 요소는 넘어간다) */
@@ -342,6 +351,114 @@ export const GUIDE_DELETE_KEY_HINT = 'Delete·Backspace로 지우기';
 /** 고른 것 카드의 고른 안내 지우기 단추 글 */
 export const GUIDE_DELETE_TEXT = '지우기';
 
+/** 고른 것 카드의 고른 안내 숨기기 단추 글과 이름(25차 — SketchUp 공개 도움말 "Using guides": 고른 안내를 Edit › Hide로 숨긴다) */
+export const GUIDE_HIDE_TEXT = '숨기기';
+export const GUIDE_HIDE_LABEL = '고른 안내 숨기기';
+
+/** 보기 설정 메뉴의 숨긴 안내 모두 보이기 항목 글(Edit › Unhide의 모두 보이기처럼 — 숨긴 안내가 있을 때만 메뉴에 든다) */
+export const GUIDE_UNHIDE_LABEL = '숨긴 안내 모두 보이기';
+
+/**
+ * 고른 안내의 이름(상태 줄·고른 것 카드): 하나면 안내점·안내선, 여럿이면 "안내점 2개"·"안내선 3개"·"안내점 2개·안내선 1개". 없으면 null
+ */
+export function guideCountText(points: number, lines: number): string | null {
+  if (points + lines <= 0) return null;
+  if (points + lines === 1) return GUIDE_KIND_NAMES[points ? 'point' : 'line'];
+  if (!lines) return `안내점 ${points}개`;
+  if (!points) return `안내선 ${lines}개`;
+  return `안내점 ${points}개·안내선 ${lines}개`;
+}
+
+/** 고른 안내 지우기 단추 이름(측정값 칸·고른 것 카드): 안내점 하나·안내선 하나, 여럿이면 그 수 */
+export function guideDeleteLabel(points: number, lines: number): string {
+  if (points + lines > 1) return `고른 안내 ${points + lines}개 지우기`;
+  return points ? '고른 안내점 지우기' : '고른 안내선 지우기';
+}
+
+/**
+ * 고르기 방식(25차 — SketchUp 공개 도움말 "Selecting Geometry"의 고르기 도구 수정 키): replace = 수정 키 없음(새로 고른다),
+ * add = Ctrl(Mac은 Option — 고른 것에 더하기), toggle = Shift(고르지 않은 것은 넣고 고른 것은 빼기), subtract = Shift+Ctrl(Mac은 Shift+Option — 빼기)
+ */
+export type GuideSelectOp = 'replace' | 'add' | 'toggle' | 'subtract';
+
+/** 고르기 수정 키(누르기·끌기의 PointerEvent, 코어 PickEvent) */
+export interface GuideSelectMods {
+  ctrlKey?: boolean;
+  shiftKey?: boolean;
+  altKey?: boolean;
+}
+
+/**
+ * 수정 키 → 고르기 방식. key는 안내 두기 키와 같은 판의 더하기 키다(Windows·Linux 'Control', Mac 'Alt' = Option — 도움말이 두 판에
+ * 더하기 키로 든 것과 같다. Mac의 Ctrl+누르기는 브라우저가 오른쪽 단추로 보므로 쓰지 않는다)
+ */
+export function guideSelectOp(m: GuideSelectMods | null | undefined, key: GuideKey = 'Control'): GuideSelectOp {
+  const add = !!m && (key === 'Alt' ? !!m.altKey : !!m.ctrlKey);
+  if (m?.shiftKey) return add ? 'subtract' : 'toggle';
+  return add ? 'add' : 'replace';
+}
+
+/** 고른 것(sel)에 refs를 고르기 방식대로 넣고 뺀 새 목록(고른 차례를 지키고 같은 것은 한 번) */
+export function applyGuideSelect<T>(sel: readonly T[], refs: readonly T[], op: GuideSelectOp): T[] {
+  if (op === 'replace') return [...new Set(refs)];
+  const out = new Set(sel);
+  for (const r of new Set(refs)) {
+    if (op === 'add') out.add(r);
+    else if (op === 'subtract' || out.has(r)) out.delete(r);
+    else out.add(r);
+  }
+  return [...out];
+}
+
+/**
+ * 고르기 상자(화면 (x0, y0)에서 (x1, y1)까지 끈 네모)에 드는 안내 번호(25차 — SketchUp 공개 도움말 "Selecting Geometry": 오른쪽으로 끌면
+ * 상자 안에 다 든 것만, 왼쪽으로 끌면 상자 안에 다 들거나 걸친 것까지). 안내점은 표식 가운데가 상자 안(테두리 포함)이면 든다.
+ * 안내선은 끝없는 직선이라 상자 안에 다 들 수 없어, 왼쪽으로 끌었을 때 그리는 화면 선분이 상자를 지나면 든다. 번호는 pts·lns의 차례
+ */
+export function guidesInBox(
+  f: ViewFrame,
+  pts: readonly (readonly number[])[],
+  lns: readonly GuideLine[],
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+): { points: number[]; lines: number[] } {
+  const l = Math.min(x0, x1), r = Math.max(x0, x1), t = Math.min(y0, y1), b = Math.max(y0, y1);
+  const points: number[] = [];
+  const lines: number[] = [];
+  for (let i = 0; i < pts.length; i++) {
+    const s = screenPoint(f, pts[i]!);
+    if (s && s[0] >= l && s[0] <= r && s[1] >= t && s[1] <= b) points.push(i);
+  }
+  if (x1 < x0)
+    for (let i = 0; i < lns.length; i++) {
+      const s = guideLineScreen(f, lns[i]!);
+      if (s && clipToRect(s, l, t, r, b)) lines.push(i);
+    }
+  return { points, lines };
+}
+
+/** 배열에서 모음에 든 것을 뺀 것(빠진 것이 없으면 그 배열 그대로 — 안내 배열이 같은 객체인지로 바뀜을 본다) */
+function without<T>(a: T[], gone: ReadonlySet<unknown>): T[] {
+  const r = a.filter((x) => !gone.has(x));
+  return r.length === a.length ? a : r;
+}
+
+/** 코어에 그 포인터의 끌기를 거둔 것으로 알린다(고르기 상자를 뗀 자리를 코어가 누르기로 보고 고르지 않게 — 떼기보다 먼저 보낸다) */
+function cancelPointer(target: EventTarget, e: PointerEvent): void {
+  const init = { bubbles: true, pointerId: e.pointerId, pointerType: e.pointerType, clientX: e.clientX, clientY: e.clientY };
+  let c: Event;
+  if (typeof PointerEvent === 'function') c = new PointerEvent('pointercancel', init);
+  else {
+    // PointerEvent가 없는 환경(시험의 jsdom)
+    c = new MouseEvent('pointercancel', init);
+    Object.defineProperty(c, 'pointerId', { value: e.pointerId });
+    Object.defineProperty(c, 'pointerType', { value: e.pointerType });
+  }
+  target.dispatchEvent(c);
+}
+
 /**
  * 고르기 도구(줄자·각도기를 끈 동안)의 누르기가 고르는 안내(23차 — SketchUp 공개 도움말 "Using guides": 고르기 도구로 안내를 골라 지운다).
  * 화면 자리 (x, y)에서 tol 화소 안의 안내점(표식 가운데)·안내선(그리는 화면 선분)을 찾는다. 안내점이 있으면 가장 가까운 안내점(점 표식이 선 위에 그려지고
@@ -395,10 +512,26 @@ const REDO_PATHS = '<path d="M20.5 7.5v5.5H15"/><path d="M3.5 17a8.5 8.5 0 0 1 1
 /** 정밀 조준 십자선(반지름 16에 팔 6과 흰 테)이 차지하는 반지름 — 결과 글이 비켜 간다 */
 const RETICLE_AVOID_R = 24;
 
-/** 되돌리기 목록 한 칸: 그때의 안내점·안내선 배열(배열은 고치지 않고 늘 새로 만들므로 통째로 기억한다) */
+/** 되돌리기 목록 한 칸: 그때의 안내점·안내선 배열과 숨긴 안내(배열·모음은 고치지 않고 늘 새로 만들므로 통째로 기억한다) */
 interface GuideSnapshot {
   pts: V3[];
   lns: GuideLine[];
+  hid: ReadonlySet<GuideRef>;
+}
+
+/** 숨긴 안내가 없을 때의 빈 모음 */
+const NO_GUIDES: ReadonlySet<GuideRef> = new Set();
+
+/** 고르기 상자(줄자·각도기를 끈 동안 고르기 수정 키를 누른 채 끌기): 포인터, 누른 자리와 지금 자리(캔버스 좌표), 고르기 방식, 끌기 시작 거리를 넘었는지 */
+interface GuideBox {
+  id: number;
+  type: string;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  op: GuideSelectOp;
+  on: boolean;
 }
 
 /**
@@ -424,7 +557,8 @@ export interface GuideMenuItem {
 }
 
 /** 이 도구가 쓰는 뷰어 기능(시험에서 가짜로 바꿀 수 있게) */
-export type MeasureViewer = Pick<Viewer3d, 'canvas' | 'pick' | 'getCamera' | 'onCameraChange' | 'getRenderMode' | 'section'> & Partial<Pick<Viewer3d, 'sections' | 'viewCubeRect'>>;
+export type MeasureViewer = Pick<Viewer3d, 'canvas' | 'pick' | 'getCamera' | 'onCameraChange' | 'getRenderMode' | 'section'> &
+  Partial<Pick<Viewer3d, 'sections' | 'viewCubeRect' | 'navigation'>>;
 /** 이 도구가 쓰는 덧그림 기능 */
 export type MeasureOverlay = Pick<Overlay, 'svg' | 'labels' | 'set' | 'frame' | 'invalidate'>;
 
@@ -870,8 +1004,17 @@ export class MeasureTool {
   private guideOn = false;
   /** 안내 두기 키만 눌렀는지(누른 뒤 다른 키·누르기·휠이 없으면 뗄 때 바꾼다) */
   private modTap = false;
-  /** 고른 안내(안내점·안내선 객체 그대로 — 누르기로 고르고 Delete·지우기 단추로 지운다) */
-  private selGuide: GuideRef | null = null;
+  /**
+   * 고른 안내(안내점·안내선 객체 그대로, 고른 차례 — 누르기로 고르고 Delete·지우기 단추로 지운다). 줄자·각도기를 켠 동안은 하나,
+   * 끈 동안(고르기 도구)은 Ctrl·Shift 누르기와 고르기 상자로 여럿(25차). 지우거나 숨긴 것이 남아 있을 수 있어 쓸 때는 liveSel()
+   */
+  private selGuides: GuideRef[] = [];
+  /** 숨긴 안내(25차 Edit › Hide — 그리지도 붙지도 고르지도 않는다. 되돌리기·파일별 안내 기억에 든다, 안내 배열에 있는 것만) */
+  private hidGuides: ReadonlySet<GuideRef> = NO_GUIDES;
+  /** 보이는 안내(숨긴 것을 뺀 배열 — 그 안내 배열·숨긴 모음일 때 한 번 만든다) */
+  private visCache: { pts: V3[]; lns: GuideLine[]; hid: ReadonlySet<GuideRef>; vp: V3[]; vl: GuideLine[] } | null = null;
+  /** 고르기 상자(줄자·각도기를 끈 동안 고르기 수정 키를 누른 채 끄는 중) */
+  private box: GuideBox | null = null;
   /** 고른 누르기가 진행 중 측정의 시작점(각도기 중심)도 찍었는지 — 지우면 그 점도 거둔다 */
   private selPlacedStart = false;
   /** 바로 앞 누르기(두 번 누르기 판정 — 코어 clickCount와 같은 시간·거리 문턱, 손가락은 넓게) */
@@ -889,14 +1032,16 @@ export class MeasureTool {
   private redoBtn: HTMLButtonElement | null = null;
   /** 측정 띠의 잠글 방향 고르기 줄(mountLockMenu로 붙인다 — 22차 한 손 잠금) */
   private lockMenu: HTMLDivElement | null = null;
-  /** 고른 것 카드의 고른 안내 지우기 단추(mountGuideDelete로 붙인다 — 23차 고르기 도구로 고른 안내) */
+  /** 고른 것 카드의 고른 안내 지우기·숨기기 단추(mountGuideDelete로 붙인다 — 23차 고르기 도구로 고른 안내, 숨기기는 25차) */
   private guideDelBtn: HTMLButtonElement | null = null;
+  private guideHideBtn: HTMLButtonElement | null = null;
   /** 안내를 기억하는 파일 열쇠(내용 지문 16진 — 지문을 받기 전·기억하지 않으면 null)와 openFile 차례(늦게 온 지문은 버린다) */
   private fileKey: string | null = null;
   private fileTicket = 0;
   /** 마지막으로 기억한 안내 배열(배열을 늘 새로 만들므로 바뀌었을 때만 쓴다) */
   private savedPts: V3[] | null = null;
   private savedLns: GuideLine[] | null = null;
+  private savedHid: ReadonlySet<GuideRef> | null = null;
   /** 이번 그리기의 결과 글(툴팁을 둔 뒤 피할 자리와 겹치면 옮긴다): 요소, 기준점, 화면 선분, 비킬 점 표식 */
   private labelQueue: { el: HTMLDivElement; x: number; y: number; seg: [number[], number[]] | null; soft: LabelCircle[] }[] = [];
   private readonly painter = (f: ViewFrame): void => this.paint(f);
@@ -945,6 +1090,10 @@ export class MeasureTool {
     this.off.push(capture(trap, 'pointermove', (e) => this.onAimMove(e)));
     this.off.push(capture(trap, 'pointerup', (e) => this.onAimUp(e, false)));
     this.off.push(capture(trap, 'pointercancel', (e) => this.onAimUp(e, true)));
+    // 고르기 상자(줄자·각도기를 끈 동안 수정 키를 누른 채 끌기): 조준처럼 캔버스보다 먼저 받아 코어 궤도로 가지 않게 막는다
+    this.off.push(capture(trap, 'pointermove', (e) => this.onBoxMove(e)));
+    this.off.push(capture(trap, 'pointerup', (e) => this.onBoxUp(e, false)));
+    this.off.push(capture(trap, 'pointercancel', (e) => this.onBoxUp(e, true)));
     // Ctrl·Option을 누른 채 휠(확대)을 돌렸으면 안내 두기 키 누르기가 아니다
     const wheel = (): void => {
       this.modTap = false;
@@ -1227,8 +1376,8 @@ export class MeasureTool {
       if (forget && had) this.notifyGuides();
       return;
     }
-    this.setGuides([], [], !forget);
-    this.selGuide = null;
+    this.setGuides([], [], !forget, NO_GUIDES);
+    this.selGuides = [];
     this.selPlacedStart = false;
     this.hoverDirty = true;
     this.overlay.invalidate();
@@ -1247,6 +1396,7 @@ export class MeasureTool {
     this.clearGuides(true);
     this.savedPts = this.guidePts;
     this.savedLns = this.guideLns;
+    this.savedHid = this.hidGuides;
     void Promise.resolve(print).then(
       (b) => {
         if (ticket === this.fileTicket && b && !this.disposed) this.adoptFile(digestHex(b));
@@ -1263,6 +1413,8 @@ export class MeasureTool {
       if (!g) return;
       this.guidePts = g.pts;
       this.guideLns = g.lns;
+      // 숨겨 둔 안내도 숨긴 채 되살린다(25차)
+      this.hidGuides = g.hid.length ? new Set(g.hid) : NO_GUIDES;
       this.hoverDirty = true;
       this.overlay.invalidate();
     }
@@ -1272,10 +1424,11 @@ export class MeasureTool {
 
   /** 안내가 바뀌었으면(force면 늘) 이 파일 열쇠로 기억한다(막히면 이번 세션만) */
   private persist(force = false): void {
-    if (!this.fileKey || (!force && this.savedPts === this.guidePts && this.savedLns === this.guideLns)) return;
+    if (!this.fileKey || (!force && this.savedPts === this.guidePts && this.savedLns === this.guideLns && this.savedHid === this.hidGuides)) return;
     this.savedPts = this.guidePts;
     this.savedLns = this.guideLns;
-    saveGuides(this.storage, this.fileKey, this.guidePts, this.guideLns, Date.now());
+    this.savedHid = this.hidGuides;
+    saveGuides(this.storage, this.fileKey, this.guidePts, this.guideLns, Date.now(), this.hidGuides);
   }
 
   /** 되돌릴 안내 변경이 있는지 */
@@ -1317,14 +1470,17 @@ export class MeasureTool {
   private step(from: GuideSnapshot[], to: GuideSnapshot[]): boolean {
     const s = from.pop();
     if (!s || this.disposed) return false;
-    to.push({ pts: this.guidePts, lns: this.guideLns });
+    to.push({ pts: this.guidePts, lns: this.guideLns, hid: this.hidGuides });
     this.guidePts = s.pts;
     this.guideLns = s.lns;
-    // 숨긴 안내를 되돌리면 다시 보인다(무엇이 바뀌었는지 보이게)
+    this.hidGuides = s.hid;
+    // 안내 보이기를 끈 채 되돌리면 다시 보인다(무엇이 바뀌었는지 보이게)
     this.reveal();
-    if (!this.selectedGuide) {
-      this.selGuide = null;
-      this.selPlacedStart = false;
+    // 되돌려 없어지거나 숨은 안내는 고른 것에서 뺀다
+    const live = this.liveSel();
+    if (live.length !== this.selGuides.length) {
+      this.selGuides = live;
+      if (!live.length) this.selPlacedStart = false;
     }
     this.hoverDirty = true;
     this.overlay.invalidate();
@@ -1332,16 +1488,72 @@ export class MeasureTool {
     return true;
   }
 
-  /** 안내점·안내선 배열 바꾸기(record면 그 전 상태를 되돌리기 목록에 쌓고 다시 하기 목록은 비운다) */
-  private setGuides(pts: V3[], lns: GuideLine[], record = true): void {
-    if (pts === this.guidePts && lns === this.guideLns) return;
+  /**
+   * 안내점·안내선 배열과 숨긴 안내 바꾸기(record면 그 전 상태를 되돌리기 목록에 쌓고 다시 하기 목록은 비운다).
+   * 숨긴 안내는 새 배열에 남은 것만 둔다(지우거나 오래되어 버린 것은 뺀다)
+   */
+  private setGuides(pts: V3[], lns: GuideLine[], record = true, hid: ReadonlySet<GuideRef> = this.hidGuides): void {
+    if (hid.size) {
+      const kept = [...hid].filter((g) => (Array.isArray(g) ? pts.includes(g) : lns.includes(g as GuideLine)));
+      if (kept.length !== hid.size) hid = kept.length ? new Set(kept) : NO_GUIDES;
+    }
+    if (pts === this.guidePts && lns === this.guideLns && hid === this.hidGuides) return;
     if (record) {
-      this.undoList.push({ pts: this.guidePts, lns: this.guideLns });
+      this.undoList.push({ pts: this.guidePts, lns: this.guideLns, hid: this.hidGuides });
       if (this.undoList.length > MAX_GUIDE_UNDO) this.undoList.shift();
       this.redoList = [];
     }
     this.guidePts = pts;
     this.guideLns = lns;
+    this.hidGuides = hid;
+  }
+
+  /** 보이는 안내 배열(숨긴 안내를 뺀 것 — 숨긴 것이 없으면 안내 배열 그대로). 추정·고르기·그리기가 같은 배열을 쓴다(추정의 안내 번호가 이 배열의 차례) */
+  private visible(): { vp: V3[]; vl: GuideLine[] } {
+    const h = this.hidGuides;
+    if (!h.size) return { vp: this.guidePts, vl: this.guideLns };
+    const c = this.visCache;
+    if (c && c.pts === this.guidePts && c.lns === this.guideLns && c.hid === h) return c;
+    const next = { pts: this.guidePts, lns: this.guideLns, hid: h, vp: this.guidePts.filter((g) => !h.has(g)), vl: this.guideLns.filter((g) => !h.has(g)) };
+    this.visCache = next;
+    return next;
+  }
+
+  /** 숨긴 안내 수(25차 — Edit › Hide로 숨긴 것) */
+  get hiddenGuideCount(): number {
+    return this.hidGuides.size;
+  }
+
+  /**
+   * 고른 안내 숨기기(25차 — SketchUp 공개 도움말 "Using guides": 고르기 도구로 고른 안내를 Edit › Hide로 숨긴다. 고른 것 카드의 숨기기 단추).
+   * 숨긴 안내는 그리지도 붙지도 고르지도 않고("Softening, Smoothing, and Hiding Geometry": 숨긴 형상은 고를 수 없다), 고른 것은 푼다.
+   * 되돌리기 목록에 쌓이고 파일별 안내 기억에 든다. 줄자·각도기를 켠 동안은 하지 않는다. 숨겼으면 true
+   */
+  hideSelectedGuides(): boolean {
+    if (this.disposed || this.modeValue) return false;
+    const s = this.liveSel();
+    if (!s.length) return false;
+    this.selGuides = [];
+    this.selPlacedStart = false;
+    this.setGuides(this.guidePts, this.guideLns, true, new Set([...this.hidGuides, ...s]));
+    this.hoverDirty = true;
+    this.overlay.invalidate();
+    this.notifyGuides();
+    return true;
+  }
+
+  /**
+   * 숨긴 안내 모두 보이기(25차 — "Using guides": 숨긴 안내는 Edit › Unhide로 다시 보인다. 보기 설정 메뉴 항목). 되돌리기 목록에 쌓이고,
+   * 안내 보이기를 꺼 두었으면 켠다. 숨긴 안내가 없으면 false
+   */
+  unhideGuides(): boolean {
+    if (this.disposed || !this.hidGuides.size) return false;
+    this.reveal();
+    this.setGuides(this.guidePts, this.guideLns, true, NO_GUIDES);
+    this.hoverDirty = true;
+    this.overlay.invalidate();
+    this.notifyGuides();
+    return true;
   }
 
   /** 안내 보이기(보기 설정 — 기본 켬, 이 브라우저에 기억) */
@@ -1359,7 +1571,7 @@ export class MeasureTool {
       /* 비공개 창 등 — 이번만 */
     }
     if (!on) {
-      this.selGuide = null;
+      this.selGuides = [];
       this.selPlacedStart = false;
     }
     this.hoverDirty = true;
@@ -1373,11 +1585,16 @@ export class MeasureTool {
   }
 
   /**
-   * 보기 설정 메뉴의 안내 항목: "안내점·안내선 보이기"와 "이 파일의 안내 모두 지우기"(안내가 없으면 끔 — 측정값 칸의 ✕와 같이 되돌릴 수 있고,
-   * 비우면 이 파일의 기억도 지운다. 도구를 끈 동안에도 된다)
+   * 보기 설정 메뉴의 안내 항목: "안내점·안내선 보이기", 숨긴 안내가 있으면 "숨긴 안내 모두 보이기"(25차 — unhideGuides),
+   * "이 파일의 안내 모두 지우기"(안내가 없으면 끔 — 측정값 칸의 ✕와 같이 되돌릴 수 있고, 숨긴 안내도 지우며 이 파일의 기억도 지운다. 도구를 끈 동안에도 된다)
    */
   guideMenuItems(): GuideMenuItem[] {
-    return [this.showGuidesItem(), { label: GUIDE_CLEAR_FILE_LABEL, icon: 'trash', disabled: !this.guidePts.length && !this.guideLns.length, run: () => this.clearGuides() }];
+    const unhide: GuideMenuItem[] = this.hidGuides.size ? [{ label: GUIDE_UNHIDE_LABEL, icon: 'show', run: () => this.unhideGuides() }] : [];
+    return [
+      this.showGuidesItem(),
+      ...unhide,
+      { label: GUIDE_CLEAR_FILE_LABEL, icon: 'trash', disabled: !this.guidePts.length && !this.guideLns.length, run: () => this.clearGuides() },
+    ];
   }
 
   /**
@@ -1423,7 +1640,8 @@ export class MeasureTool {
 
   /** 덧그림 붙이기·떼기: 도구를 켰거나, 끈 동안에도 보이는 안내가 있으면 그린다 */
   private syncPainter(): void {
-    const on = !this.disposed && (!!this.modeValue || (this.shownValue && this.guidePts.length + this.guideLns.length > 0));
+    const v = this.visible();
+    const on = !this.disposed && (!!this.modeValue || (this.shownValue && v.vp.length + v.vl.length > 0));
     if (on) {
       if (!this.g.isConnected) this.overlay.svg.append(this.g);
       if (!this.layer.isConnected) this.overlay.labels.append(this.layer);
@@ -1437,27 +1655,46 @@ export class MeasureTool {
     }
   }
 
-  /** 고른 안내의 종류(안내점·안내선, 없으면 null) — 안내를 누르면 고르고(방금 둔 안내도), 다른 곳을 누르거나 Esc·다시 재기면 푼다 */
-  get selectedGuide(): 'point' | 'line' | null {
-    const s = this.selGuide;
-    if (!s) return null;
-    if (Array.isArray(s)) return this.guidePts.includes(s) ? 'point' : null;
-    return this.guideLns.includes(s as GuideLine) ? 'line' : null;
+  /** 지금 고른 안내(안내 배열에 있고 숨기지 않은 것만, 고른 차례) */
+  private liveSel(): GuideRef[] {
+    if (!this.selGuides.length) return [];
+    const v = this.visible();
+    return this.selGuides.filter((s) => (Array.isArray(s) ? v.vp.includes(s) : v.vl.includes(s as GuideLine)));
+  }
+
+  /** 고른 안내 수: 안내점·안내선(25차 — 줄자·각도기를 끈 동안 여럿 고르기) */
+  private selCounts(): { points: number; lines: number } {
+    let points = 0;
+    for (const s of this.liveSel()) if (Array.isArray(s)) points++;
+    return { points, lines: this.liveSel().length - points };
   }
 
   /**
-   * 고른 안내 하나 지우기(Delete·Backspace, 측정값 칸의 지우기 단추). 고른 누르기가 진행 중 측정의 시작점(각도기 중심)도 찍었으면
-   * 그 점도 거둔다(지우려고 누른 것이므로). 지웠으면 true
+   * 고른 안내가 하나일 때 그 종류(안내점·안내선 — 없거나 여럿이면 null, 여럿은 selectedGuideCount). 안내를 누르면 고르고(방금 둔 안내도),
+   * 다른 곳을 누르거나 Esc·다시 재기면 푼다. 줄자·각도기를 켠 동안은 늘 하나다
+   */
+  get selectedGuide(): 'point' | 'line' | null {
+    const s = this.liveSel();
+    return s.length === 1 ? (Array.isArray(s[0]) ? 'point' : 'line') : null;
+  }
+
+  /** 고른 안내 수(줄자·각도기를 끈 동안 Ctrl·Shift 누르기·고르기 상자로 여럿 — 25차) */
+  get selectedGuideCount(): number {
+    return this.liveSel().length;
+  }
+
+  /**
+   * 고른 안내 지우기(Delete·Backspace, 측정값 칸·고른 것 카드의 지우기 단추 — 여럿이면 함께, 되돌리기 한 단계). 고른 누르기가 진행 중 측정의
+   * 시작점(각도기 중심)도 찍었으면 그 점도 거둔다(지우려고 누른 것이므로). 지웠으면 true
    */
   deleteSelectedGuide(): boolean {
-    const kind = this.selectedGuide;
-    const s = this.selGuide;
+    const s = this.liveSel();
     const cancel = this.selPlacedStart && this.pts.length === 1;
-    this.selGuide = null;
+    this.selGuides = [];
     this.selPlacedStart = false;
-    if (!kind || !s) return false;
-    if (kind === 'point') this.setGuides(this.guidePts.filter((g) => g !== s), this.guideLns);
-    else this.setGuides(this.guidePts, this.guideLns.filter((g) => g !== s));
+    if (!s.length) return false;
+    const gone = new Set(s);
+    this.setGuides(without(this.guidePts, gone), without(this.guideLns, gone));
     if (cancel) {
       this.pts = [];
       this.startEdge = null;
@@ -1473,30 +1710,49 @@ export class MeasureTool {
 
   /**
    * 고르기 도구(줄자·각도기를 끈 동안)의 누르기(23차 — SketchUp 공개 도움말 "Using guides": 고르기 도구로 안내를 골라 Delete로 지운다).
-   * 누른 자리(화면 clientX·clientY) 둘레 코어 고르기 허용 거리(마우스·펜 6화소, 손가락 14화소) 안의 안내를 고르고 그 종류를 준다.
-   * 안내가 없으면 고른 안내를 풀고 null(앱은 그때 형상을 고른다). 줄자·각도기를 켠 동안·안내를 숨긴 동안은 고르지 않는다(null)
+   * 누른 자리(화면 clientX·clientY) 둘레 코어 고르기 허용 거리(마우스·펜 6화소, 손가락 14화소) 안의 보이는 안내를 고르고 그 종류를 준다.
+   * mods(누르기의 수정 키 — 25차 "Selecting Geometry")가 있으면 고른 것에 더하기(Ctrl, Mac은 Option)·넣고 빼기(Shift)·빼기(Shift+Ctrl·Shift+Option).
+   * 안내가 없으면 null(앱은 그때 형상을 고른다) — 수정 키 없이 누른 빈 곳이면 고른 안내를 풀고, 수정 키를 누른 채면 그대로 둔다.
+   * 줄자·각도기를 켠 동안·안내를 숨긴 동안은 고르지 않는다(null)
    */
-  pickGuide(clientX: number, clientY: number, pointerType: string): 'point' | 'line' | null {
+  pickGuide(clientX: number, clientY: number, pointerType: string, mods?: GuideSelectMods | null): 'point' | 'line' | null {
     if (this.disposed || this.modeValue) return null;
     const f = this.shownValue ? this.overlay.frame() : null;
     const p = this.local({ clientX, clientY });
-    const hit = f ? guideHit(f, this.guidePts, this.guideLns, p.x, p.y, isTouch(pointerType) ? TOUCH_PICK_TOLERANCE_PX : PICK_TOLERANCE_PX) : null;
-    const ref = hit ? ((hit.kind === 'point' ? this.guidePts[hit.index] : this.guideLns[hit.index]) ?? null) : null;
-    this.select(ref);
-    return ref ? hit!.kind : null;
+    const v = this.visible();
+    const hit = f ? guideHit(f, v.vp, v.vl, p.x, p.y, isTouch(pointerType) ? TOUCH_PICK_TOLERANCE_PX : PICK_TOLERANCE_PX) : null;
+    const ref = hit ? ((hit.kind === 'point' ? v.vp[hit.index] : v.vl[hit.index]) ?? null) : null;
+    const op = guideSelectOp(mods, this.opts.guideKey);
+    if (!ref) {
+      if (op === 'replace') this.select(null);
+      return null;
+    }
+    this.pickGuides([ref], op);
+    return hit!.kind;
   }
 
-  /** 고른 안내를 푼다(앱이 형상을 고를 때 — 고른 것은 하나씩) */
+  /** 고른 안내를 고르기 방식대로 바꾼다(바뀌면 알린다 — 고르기 도구의 누르기·상자) */
+  private pickGuides(refs: GuideRef[], op: GuideSelectOp): void {
+    const next = applyGuideSelect(this.liveSel(), refs, op);
+    this.selPlacedStart = false;
+    const cur = this.selGuides;
+    if (next.length === cur.length && next.every((g, i) => g === cur[i])) return;
+    this.selGuides = next;
+    this.overlay.invalidate();
+    this.notifyGuides();
+  }
+
+  /** 고른 안내를 푼다(앱이 형상을 고를 때 — 고른 것은 형상이나 안내 한쪽) */
   deselectGuide(): void {
-    if (this.selGuide) this.select(null);
+    if (this.selGuides.length) this.select(null);
   }
 
   /**
-   * 고르기 도구로 고른 안내의 키(줄자·각도기를 끈 동안, 입력 칸 밖 keydown): Delete·Backspace = 그 안내 지우기(되돌리기 목록에 쌓임), Esc = 풀기.
+   * 고르기 도구로 고른 안내의 키(줄자·각도기를 끈 동안, 입력 칸 밖 keydown): Delete·Backspace = 고른 안내 지우기(여럿이면 함께 — 되돌리기 목록에 쌓임), Esc = 풀기.
    * 고른 안내가 없거나 다른 키면 받지 않는다. 받았으면 true
    */
   selectKey(e: KeyboardEvent): boolean {
-    if (this.disposed || this.modeValue || e.type !== 'keydown' || !this.selectedGuide || e.ctrlKey || e.metaKey || e.altKey || isEditableTarget(e.target)) return false;
+    if (this.disposed || this.modeValue || e.type !== 'keydown' || !this.liveSel().length || e.ctrlKey || e.metaKey || e.altKey || isEditableTarget(e.target)) return false;
     if (e.key === 'Delete' || e.key === 'Backspace') this.deleteSelectedGuide();
     else if (e.key === 'Escape') this.select(null);
     else return false;
@@ -1504,18 +1760,31 @@ export class MeasureTool {
     return true;
   }
 
-  /** 고르기 도구로 고른 안내의 글(상태 줄): 안내점·안내선, 키보드 기기는 지우는 키도. 고른 안내가 없거나 도구를 켰으면 null */
+  /** 고르기 도구로 고른 안내의 글(상태 줄·고른 것 카드): 안내점·안내선(여럿이면 그 수), 키보드 기기는 지우는 키도. 고른 안내가 없거나 도구를 켰으면 null */
   guidePickText(touch: boolean): string | null {
-    const k = this.modeValue ? null : this.selectedGuide;
-    if (!k) return null;
-    return touch ? GUIDE_KIND_NAMES[k] : `${GUIDE_KIND_NAMES[k]} · ${GUIDE_DELETE_KEY_HINT}`;
+    if (this.modeValue) return null;
+    const c = this.selCounts();
+    const t = guideCountText(c.points, c.lines);
+    if (!t) return null;
+    return touch ? t : `${t} · ${GUIDE_DELETE_KEY_HINT}`;
   }
 
   /**
-   * 고른 것 카드(host — 앱 카드의 단추 줄, 맨 끝은 선택 해제 ✕)에 고른 안내 지우기 단추를 붙인다(✕ 앞). 카드가 고른 안내를 보일 때만 보이고(CSS .sel-bar.is-guide),
-   * 누르면 고른 안내 하나를 지운다(휴대폰 — 키보드는 Delete·Backspace)
+   * 고른 것 카드(host — 앱 카드의 단추 줄, 맨 끝은 선택 해제 ✕)에 고른 안내 숨기기·지우기 단추를 붙인다(✕ 앞). 카드가 고른 안내를 보일 때만 보이고(CSS .sel-bar.is-guide),
+   * 숨기기는 고른 안내를 숨기고(25차 Edit › Hide — 좁은 휴대폰은 아이콘만), 지우기는 고른 안내를 지운다(여럿이면 함께 — 키보드는 Delete·Backspace)
    */
   mountGuideDelete(host: HTMLElement): void {
+    let h = this.guideHideBtn;
+    if (!h) {
+      h = document.createElement('button');
+      h.type = 'button';
+      h.className = 'mb-btn sel-hide';
+      h.title = GUIDE_HIDE_LABEL;
+      h.setAttribute('aria-label', GUIDE_HIDE_LABEL);
+      h.innerHTML = `${icon('hide', 16)}<span>${GUIDE_HIDE_TEXT}</span>`;
+      h.addEventListener('click', () => this.hideSelectedGuides());
+      this.guideHideBtn = h;
+    }
     let b = this.guideDelBtn;
     if (!b) {
       b = document.createElement('button');
@@ -1525,23 +1794,27 @@ export class MeasureTool {
       b.addEventListener('click', () => this.deleteSelectedGuide());
       this.guideDelBtn = b;
     }
-    host.insertBefore(b, host.lastElementChild);
+    const close = host.lastElementChild;
+    host.insertBefore(h, close === h || close === b ? null : close);
+    host.insertBefore(b, h.nextSibling);
     this.syncGuideDelete();
   }
 
-  /** 카드의 지우기 단추 이름을 고른 안내 종류에 맞춘다(측정값 칸의 지우기 단추와 같은 글) */
+  /** 카드의 지우기 단추 이름을 고른 안내 종류·수에 맞춘다(측정값 칸의 지우기 단추와 같은 글) */
   private syncGuideDelete(): void {
     const b = this.guideDelBtn;
     if (!b) return;
-    const t = this.selectedGuide === 'point' ? '고른 안내점 지우기' : '고른 안내선 지우기';
+    const c = this.selCounts();
+    const t = guideDeleteLabel(c.points, c.lines);
     b.title = `${t} (Delete)`;
     b.setAttribute('aria-label', t);
   }
 
-  /** 안내 고르기·풀기(null). placedStart: 이 누르기가 진행 중 측정의 시작점도 찍었다. changed면 고른 것이 같아도 알린다(안내가 늘었을 때) */
+  /** 안내 하나 고르기·풀기(null — 줄자·각도기의 누르기). placedStart: 이 누르기가 진행 중 측정의 시작점도 찍었다. changed면 고른 것이 같아도 알린다(안내가 늘었을 때) */
   private select(ref: GuideRef | null, placedStart = false, changed = false): void {
-    if (ref !== this.selGuide) {
-      this.selGuide = ref;
+    const cur = this.selGuides;
+    if (ref ? cur.length !== 1 || cur[0] !== ref : cur.length > 0) {
+      this.selGuides = ref ? [ref] : [];
       changed = true;
     }
     this.selPlacedStart = !!ref && placedStart;
@@ -1550,32 +1823,47 @@ export class MeasureTool {
     this.notifyGuides();
   }
 
-  /** 추정이 붙은 안내(안내점·안내선 객체 — 없으면 null, 숨긴 안내는 붙지 않는다) */
+  /** 추정이 붙은 안내(안내점·안내선 객체 — 없으면 null, 숨긴 안내는 붙지 않는다). 추정의 안내 번호는 보이는 안내 배열의 차례다 */
   private guideAt(snap: Snap): GuideRef | null {
     const g = snap.guide;
     if (!g || !this.shownValue) return null;
-    return (g.kind === 'point' ? this.guidePts[g.index] : this.guideLns[g.index]) ?? null;
+    const v = this.visible();
+    return (g.kind === 'point' ? v.vp[g.index] : v.vl[g.index]) ?? null;
   }
 
-  /** 안내점 두기(같은 자리에 이미 있으면 그것) — 오래된 것부터 MAX_GUIDE_POINTS개까지. 숨긴 안내는 다시 보인다 */
+  /** 안내점 두기(같은 자리에 이미 있으면 그것 — 숨겨 두었으면 다시 보인다) — 오래된 것부터 MAX_GUIDE_POINTS개까지. 안내 보이기를 껐으면 켠다 */
   private addGuidePoint(p: V3): V3 {
     this.reveal();
     const same = this.guidePts.find((g) => samePoint(g, p));
-    if (same) return same;
+    if (same) {
+      this.unhideOne(same);
+      return same;
+    }
     const g: V3 = [p[0], p[1], p[2]];
     this.setGuides([...this.guidePts, g].slice(-MAX_GUIDE_POINTS), this.guideLns);
     return g;
   }
 
-  /** 안내선 두기(같은 직선이 이미 있으면 그것) — 오래된 것부터 MAX_GUIDE_LINES개까지. 숨긴 안내는 다시 보인다 */
+  /** 안내선 두기(같은 직선이 이미 있으면 그것 — 숨겨 두었으면 다시 보인다) — 오래된 것부터 MAX_GUIDE_LINES개까지. 안내 보이기를 껐으면 켠다 */
   private addGuideLine(point: V3, dir: V3): GuideLine {
     this.reveal();
     const u = unit(dir);
     const same = this.guideLns.find((g) => sameLine(g, point, u));
-    if (same) return same;
+    if (same) {
+      this.unhideOne(same);
+      return same;
+    }
     const gl: GuideLine = { point: [point[0], point[1], point[2]], dir: u };
     this.setGuides(this.guidePts, [...this.guideLns, gl].slice(-MAX_GUIDE_LINES));
     return gl;
+  }
+
+  /** 같은 자리에 다시 둔 숨긴 안내를 보인다(되돌리기 목록에 쌓인다 — 두는 쪽이 알린다) */
+  private unhideOne(g: GuideRef): void {
+    if (!this.hidGuides.has(g)) return;
+    const h = new Set(this.hidGuides);
+    h.delete(g);
+    this.setGuides(this.guidePts, this.guideLns, true, h.size ? h : NO_GUIDES);
   }
 
   /**
@@ -1903,9 +2191,9 @@ export class MeasureTool {
       curveCenter,
       centers: this.centers,
       axisDirs: this.opts.getAxes?.() ?? null,
-      // 숨긴 안내에는 붙지 않는다
-      guides: this.shownValue ? this.guidePts : [],
-      guideLines: this.shownValue ? this.guideLns : [],
+      // 안내 보이기를 끈 동안과 숨긴 안내(25차 Edit › Hide)에는 붙지 않는다 — 안내 번호는 보이는 안내 배열의 차례(guideAt)
+      guides: this.shownValue ? this.visible().vp : [],
+      guideLines: this.shownValue ? this.visible().vl : [],
       parallelRef: this.parallelRef,
       lock: this.pts.length ? this.lockValue : null,
       tracks: this.trackOn ? this.tracker.view : null,
@@ -2014,7 +2302,7 @@ export class MeasureTool {
   }
 
   private onDown(e: PointerEvent): void {
-    if (!this.modeValue) return;
+    if (!this.modeValue) return this.onBoxDown(e);
     // Ctrl·Option을 누른 채 누르면 안내 두기 키 누르기가 아니다
     this.modTap = false;
     // 누르기·끌기는 머무르기가 아니다
@@ -2147,6 +2435,56 @@ export class MeasureTool {
       this.hoverPoint = null;
     }
     this.overlay.invalidate();
+  }
+
+  /**
+   * 고르기 상자 시작(25차 — 줄자·각도기를 끈 동안의 캔버스 누르기): 마우스·펜 왼쪽 단추를 고르기 수정 키(Ctrl·Shift·Shift+Ctrl — Mac은 Option)와 함께 누르고,
+   * 보이는 안내가 있으면 상자를 준비한다. SketchUp 고르기 도구는 맨 끌기도 상자지만 이 뷰어는 맨 왼쪽 끌기가 궤도라(SketchUp의 고르기·궤도 도구를 한 도구로 씀)
+   * 수정 키를 누른 끌기만 상자로 한다. 걷는 중·손가락은 상자를 그리지 않는다(그대로 코어 몫)
+   */
+  private onBoxDown(e: PointerEvent): void {
+    this.box = null;
+    const type = e.pointerType || 'mouse';
+    if (this.disposed || this.modeValue || e.button !== 0 || isTouch(type) || !this.shownValue || this.viewer.navigation === 'walk') return;
+    const op = guideSelectOp(e, this.opts.guideKey);
+    const v = this.visible();
+    if (op === 'replace' || !(v.vp.length + v.vl.length)) return;
+    const p = this.local(e);
+    this.box = { id: e.pointerId, type, x0: p.x, y0: p.y, x1: p.x, y1: p.y, op, on: false };
+  }
+
+  /** 고르기 상자 끌기: 코어 궤도로 보내지 않고(누르기 몫은 끌기 시작 거리 안이면 코어가 그대로 고르기로 알린다), 끌기 시작 거리를 넘으면 상자를 그린다 */
+  private onBoxMove(e: PointerEvent): void {
+    const b = this.box;
+    if (!b || e.pointerId !== b.id) return;
+    e.stopPropagation();
+    const p = this.local(e);
+    b.x1 = p.x;
+    b.y1 = p.y;
+    if (!b.on && Math.hypot(p.x - b.x0, p.y - b.y0) >= dragStartPx(b.type)) b.on = true;
+    if (b.on) this.overlay.invalidate();
+  }
+
+  /**
+   * 고르기 상자 떼기: 끈 상자면 그 안의 안내를 고르기 방식대로 넣고 빼며(guidesInBox — 오른쪽으로 끌면 다 든 것, 왼쪽은 걸친 것까지),
+   * 코어에는 끌기를 거둔 것으로 알린다(뗀 자리를 누르기로 보고 형상을 고르지 않게). 끌지 않았으면 누르기라 코어·앱이 pickGuide로 고른다
+   */
+  private onBoxUp(e: PointerEvent, cancel: boolean): void {
+    const b = this.box;
+    if (!b || e.pointerId !== b.id) return;
+    this.box = null;
+    if (!b.on) return;
+    this.overlay.invalidate();
+    if (cancel) return;
+    const p = this.local(e);
+    const f = this.overlay.frame();
+    if (f) {
+      const v = this.visible();
+      const hit = guidesInBox(f, v.vp, v.vl, b.x0, b.y0, p.x, p.y);
+      this.pickGuides([...hit.points.map((i) => v.vp[i]!), ...hit.lines.map((i) => v.vl[i]!)], b.op);
+      if (this.liveSel().length) this.opts.onGuidePick?.();
+    }
+    cancelPointer(this.viewer.canvas, e);
   }
 
   /** 둘째 손가락이 닿으면 조준을 그만둔다(점은 찍지 않고, 두 손가락 확대·이동은 코어가 한다) */
@@ -2347,7 +2685,8 @@ export class MeasureTool {
     this.pressedPoint = null;
     this.parallelRef = null;
     this.planeAxisValue = null;
-    this.selGuide = null;
+    this.selGuides = [];
+    this.box = null;
     this.selPlacedStart = false;
     this.lastClick = { t: -Infinity, x: 0, y: 0, n: 0 };
     this.lastTap = null;
@@ -2408,15 +2747,19 @@ export class MeasureTool {
     this.layer.replaceChildren();
     this.labelQueue = [];
     const shown = this.shownValue;
+    // 숨긴 안내(25차)는 그리지 않는다. 고른 안내는 파랑
+    const vis = this.visible();
+    const sel = this.selGuides;
 
     // 안내선은 맨 아래(결과 선·표식이 그 위에 보이게). 테두리는 선 색(글자 색)과 반대 밝기 — 어두운 테마의 흰 점선이 흰 테두리에 묻히지 않게
-    if (shown && this.guideLns.length) {
+    if (shown && vis.vl.length) {
       const halo = haloFor(typeof getComputedStyle === 'function' ? getComputedStyle(this.g).color : '');
-      for (const gl of this.guideLns) this.guideLineMark(f, gl, halo, gl === this.selGuide ? 'is-selected' : '');
+      for (const gl of vis.vl) this.guideLineMark(f, gl, halo, sel.includes(gl) ? 'is-selected' : '');
     }
-    // 도구를 끈 동안: 안내만(SketchUp처럼 늘 보인다 — 고르기 도구로 고른 안내는 파랑)
+    // 도구를 끈 동안: 안내만(SketchUp처럼 늘 보인다 — 고르기 도구로 고른 안내는 파랑)과 고르기 상자
     if (!mode) {
-      if (shown) for (const g of this.guidePts) this.guideMark(f, g, g === this.selGuide);
+      if (shown) for (const g of vis.vp) this.guideMark(f, g, sel.includes(g));
+      this.boxMark();
       return;
     }
     const scene = this.opts.getScene();
@@ -2479,7 +2822,7 @@ export class MeasureTool {
         }
       }
     }
-    if (shown) for (const g of this.guidePts) this.guideMark(f, g, g === this.selGuide);
+    if (shown) for (const g of vis.vp) this.guideMark(f, g, sel.includes(g));
     if (snap && snap.kind !== 'free') this.marker(f, snap);
     if (this.aimId !== null && this.cursor) this.reticle(this.cursor.x, this.cursor.y);
     // 안내 두기: 커서 오른쪽 위에 + (SketchUp 줄자·각도기 커서의 +)
@@ -2606,6 +2949,30 @@ export class MeasureTool {
       svgEl('path', { d, stroke: selected ? GUIDE_SELECTED_COLOR : 'currentColor', 'stroke-width': selected ? 2.25 : 1.5, 'stroke-linecap': 'round' }),
     );
     this.g.append(g);
+  }
+
+  /**
+   * 고르기 상자(끄는 중일 때만): 고른 안내 색 테두리와 옅은 채움. 왼쪽으로 끈 상자(걸친 것까지 고름)는 점선, 오른쪽은 실선으로 다르게 보인다
+   * (이 뷰어의 표시 — 공개 도움말은 상자 모양을 밝히지 않는다)
+   */
+  private boxMark(): void {
+    const b = this.box;
+    if (!b?.on) return;
+    const crossing = b.x1 < b.x0;
+    this.g.append(
+      svgEl('rect', {
+        class: crossing ? 'measure-box is-crossing' : 'measure-box',
+        x: Math.min(b.x0, b.x1),
+        y: Math.min(b.y0, b.y1),
+        width: Math.abs(b.x1 - b.x0),
+        height: Math.abs(b.y1 - b.y0),
+        fill: GUIDE_SELECTED_COLOR,
+        'fill-opacity': 0.08,
+        stroke: GUIDE_SELECTED_COLOR,
+        'stroke-width': 1,
+        ...(crossing ? { 'stroke-dasharray': '5 3' } : {}),
+      }),
+    );
   }
 
   /** 정밀 조준 십자선(가운데는 비워 추정 표식이 보이게, 흰 테두리로 어느 바탕에서도 보이게) */

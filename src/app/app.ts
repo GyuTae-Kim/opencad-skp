@@ -205,8 +205,10 @@ export interface AppSnapshot {
   measureLock: LockName | null;
   /** 안내 두기(누르기로 안내점·안내선)를 켰는지 */
   measureGuideMode: boolean;
-  /** 고른 안내(안내점·안내선, 없으면 null)와 그 지우기 단추가 보이는지 */
+  /** 고른 안내(하나일 때 안내점·안내선, 없거나 여럿이면 null)와 고른 수, 숨긴 안내 수, 측정값 칸의 지우기 단추가 보이는지 */
   measureGuideSelected: 'point' | 'line' | null;
+  measureGuidePicked: number;
+  measureGuidesHidden: number;
   measureGuideDelete: boolean;
   /** 측정값 칸이 보이는지·지금 글·측정 띠 안에 있는지·받는 값(길이·각도) */
   vcb: { shown: boolean; value: string; inBand: boolean; kind: VcbKind };
@@ -1295,6 +1297,8 @@ export class SkpViewerApp implements PanelHost {
       onLock: () => this.refreshStatus(),
       // 안내 두기 켜고 끄기·안내점·안내선 수: 측정 띠 단추·측정값 칸의 안내 수
       onGuides: () => this.refreshStatus(),
+      // 고르기 상자로 안내를 고르면 고른 형상은 푼다(누르기로 고른 것은 onPick이 푼다)
+      onGuidePick: () => this.applySelection(null, false),
       // 결과 글·툴팁이 3D 보기 위에 뜬 것(측정 띠와 그 위 기록·알림, 측정값 칸, 장면 탭, 카메라 띠, 걷기 조이스틱 — 뷰 큐브는 측정 도구가 찾는다) 밑에 숨지 않게 비켜 둔다
       labelAvoid: () => [this.els.measureBar, this.vcb.el, this.els.sceneTabs, this.els.measureLog, this.els.measureFlash, this.els.camBar, this.stick.el],
       guideKey: this.guideKey,
@@ -1393,9 +1397,10 @@ export class SkpViewerApp implements PanelHost {
     if (this.measureTool?.active) return;
     // 걷는 중 누르기는 고르지 않는다(두 번 누르기는 코어가 그 자리에 서는 데 쓰고 두 번째는 알리지 않는다 — 그룹에 들어가지 않게)
     if (this.walking) return;
-    // 안내점·안내선 둘레를 누르면 형상 대신 그 안내를 고른다(SketchUp 고르기 도구 — 측정 도구 조각의 pickGuide, 없으면 고른 안내를 푼다)
+    // 안내점·안내선 둘레를 누르면 형상 대신 그 안내를 고른다(SketchUp 고르기 도구 — 측정 도구 조각의 pickGuide, 없으면 고른 안내를 푼다.
+    // Ctrl·Shift(Mac은 Option·Shift)를 누른 채면 고른 안내에 넣고 뺀다)
     const up = this.lastUp;
-    if (up && performance.now() - up.t < 1000 && this.measureTool?.pickGuide(up.x, up.y, e?.pointerType ?? 'mouse')) {
+    if (up && performance.now() - up.t < 1000 && this.measureTool?.pickGuide(up.x, up.y, e?.pointerType ?? 'mouse', e)) {
       this.applySelection(null, false);
       return;
     }
@@ -3476,6 +3481,8 @@ export class SkpViewerApp implements PanelHost {
       measureLock: this.measureTool?.lockName ?? null,
       measureGuideMode: !!this.measureTool?.guideMode,
       measureGuideSelected: this.measureTool?.selectedGuide ?? null,
+      measureGuidePicked: this.measureTool?.selectedGuideCount ?? 0,
+      measureGuidesHidden: this.measureTool?.hiddenGuideCount ?? 0,
       measureGuideDelete: this.vcb.shown && this.vcb.selectedShown,
       vcb: { shown: this.vcb.shown, value: this.vcb.input.value, inBand: this.vcb.el.parentElement === this.els.measureBar, kind: this.vcb.kind },
       selectionKind: d?.selection?.kind ?? null,

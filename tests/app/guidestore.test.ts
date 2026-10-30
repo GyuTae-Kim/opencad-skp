@@ -43,7 +43,7 @@ describe('파일별 안내 기억(guidestore)', () => {
     const pts: [number, number, number][] = [[1 / 3, -2e7 + 0.1, 5.5], [0, 0, 0]];
     const lns: GuideLine[] = [{ point: [10, 20, 30], dir: [0, 0.6, 0.8] }];
     expect(saveGuides(s, key(1), pts, lns, 1000)).toBe(true);
-    expect(loadGuides(s, key(1))).toEqual({ pts, lns });
+    expect(loadGuides(s, key(1))).toEqual({ pts, lns, hid: [] });
     expect(loadGuides(s, key(2))).toBeNull();
     const text = s.m.get(GUIDE_STORE_KEY)!;
     expect(JSON.parse(text)).toEqual({ v: 1, files: { [key(1)]: { t: 1000, p: pts, l: [[10, 20, 30, 0, 0.6, 0.8]] } } });
@@ -161,6 +161,7 @@ describe('파일별 안내 기억(guidestore)', () => {
         { point: [0, 0, 0], dir: [1, 0, 0] },
         { point: [1, 1, 1], dir: [0, 0, 1] },
       ],
+      hid: [],
     });
     // 남은 것이 없으면 null
     expect(loadGuides(s, key(3))).toBeNull();
@@ -169,5 +170,31 @@ describe('파일별 안내 기억(guidestore)', () => {
     const g = loadGuides(s, key(4), 50, 50)!;
     expect(g.pts).toHaveLength(50);
     expect(g.pts[0]![0]).toBe(20);
+  });
+
+  it('숨긴 안내(25차 Edit › Hide)는 번호로 두어 숨긴 채 되살린다 — 숨긴 것이 없으면 꼴이 예전과 같고, 예전 항목은 모두 보인다', () => {
+    const s = store();
+    const pts: [number, number, number][] = [[1, 0, 0], [2, 0, 0], [3, 0, 0]];
+    const lns: GuideLine[] = [{ point: [0, 0, 0], dir: [1, 0, 0] }, { point: [0, 5, 0], dir: [0, 0, 1] }];
+    expect(saveGuides(s, key(1), pts, lns, 10, new Set<unknown>([pts[1], lns[0], [9, 9, 9]]))).toBe(true);
+    const e = JSON.parse(s.m.get(GUIDE_STORE_KEY)!).files[key(1)];
+    expect(e.hp).toEqual([1]);
+    expect(e.hl).toEqual([0]);
+    const g = loadGuides(s, key(1))!;
+    expect(g.hid).toHaveLength(2);
+    expect(g.hid[0]).toBe(g.pts[1]);
+    expect(g.hid[1]).toBe(g.lns[0]);
+    // 숨긴 것이 없거나 빈 모음이면 hp·hl 칸을 두지 않는다(예전 꼴 그대로)
+    saveGuides(s, key(2), pts, lns, 11, new Set());
+    saveGuides(s, key(3), pts, lns, 12, new Set<unknown>([[1, 0, 0]]));
+    const files = JSON.parse(s.m.get(GUIDE_STORE_KEY)!).files;
+    for (const k of [key(2), key(3)]) expect(Object.keys(files[k]).sort()).toEqual(['l', 'p', 't']);
+    // 예전 항목(hp·hl 없음)·모양이 다른 번호는 모두 보이는 것으로, 한도로 버린 안내의 숨김은 함께 버린다
+    s.m.set(GUIDE_STORE_KEY, JSON.stringify({ v: 1, files: { [key(4)]: { t: 1, p: pts, l: [], hp: ['x'] }, [key(5)]: { t: 2, p: pts, l: [], hp: [0, 2] } } }));
+    expect(loadGuides(s, key(4))!.hid).toEqual([]);
+    const cut = loadGuides(s, key(5), 2, 50)!;
+    expect(cut.pts).toEqual([[2, 0, 0], [3, 0, 0]]);
+    expect(cut.hid).toEqual([[3, 0, 0]]);
+    expect(cut.hid[0]).toBe(cut.pts[1]);
   });
 });

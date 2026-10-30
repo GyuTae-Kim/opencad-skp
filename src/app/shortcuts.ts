@@ -38,7 +38,11 @@ export const SHORTCUTS: readonly ShortcutGroup[] = [
       { keys: ['→', '←', '↑'], label: '줄자 끝점·각도기 방향을 잡는 동안: 빨강·녹색·파랑 축으로 잠금(다시 누르면 풀기), 각도기 중심 전에는 그 축 평면에 고정' },
       { keys: ['↓'], label: '줄자 끝점·각도기 방향을 잡는 동안: 모서리와 나란히·수직으로 잠금(다시 누르면 풀기)' },
       { keys: ['Ctrl', 'Option'], label: '줄자·각도기: 안내 두기 켜고 끄기(그 키만 눌렀다 떼기, Mac은 Option) — 줄자 둘째·각도기 셋째 누르기로 안내점·안내선' },
-      { keys: ['Delete', 'Backspace'], label: '눌러서 고른 안내점·안내선 하나 지우기(줄자·각도기를 끈 동안에도)' },
+      { keys: ['Delete', 'Backspace'], label: '눌러서 고른 안내점·안내선 지우기(여럿이면 함께, 줄자·각도기를 끈 동안에도)' },
+      {
+        keys: ['Ctrl', 'Option', 'Shift'],
+        label: '줄자·각도기를 끈 동안 안내를 누르거나 끌기: Ctrl(Mac은 Option)은 더하기, Shift는 넣고 빼기, Shift+Ctrl(Shift+Option)은 빼기 — 끌면 고르기 상자(오른쪽으로 끌면 다 든 것, 왼쪽은 걸친 것까지)',
+      },
       { keys: ['Ctrl+Z', '⌘+Z'], label: '안내점·안내선을 두거나 지운 것 되돌리기(100단계)' },
       { keys: ['Ctrl+Y', 'Ctrl+Shift+Z', '⌘+Shift+Z'], label: '되돌린 안내 다시 하기' },
       { keys: ['Esc'], label: '여는 중이면 취소 → 측정 점 지우기 → 측정 끄기 → 고른 것 지우기' },
