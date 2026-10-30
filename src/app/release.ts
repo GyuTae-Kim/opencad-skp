@@ -12,6 +12,8 @@
  *   라벨 가림 판정을 다시 한다. 놓은 것이 있으면 같은 파일을 새 해석 워커로 처음 열 때와 같은 선택으로 다시 풀어, 놓은 그물 배열과 색을 바꾼 무늬만
  *   받아 코어에 돌려주고 워커를 끝낸다(restoreMeshArrays·restoreTexture). 그동안 무늬 면은 평균색, 곡면은 각진 음영이다.
  *   다시 읽지 못하면(파일이 바뀌었거나 지워짐) 그대로 그린다고 알린다. 다시 읽는 동안 또 잃으면 받은 것을 쥐었다가 되찾을 때 준다.
+ *   28차: 큰 모형은 워커가 법선·무늬 좌표를 작은 정수 배열로 줄여 넘긴다(worker/pack.ts). 다시 받을 때도 같은 꼴이 되게, 처음에 줄였는지(packed)와
+ *   그물에 남은 무늬 좌표 변환(uvTransform·backUvTransform)을 함께 보낸다 — 워커는 다시 줄여 같은 변환일 때만 준다.
  */
 import type { ContextRestoreNeed, MeshArrays, TextureSource } from 'opencad-viewer3d';
 import type { Scene3d } from 'opencad-viewer3d/types';
@@ -128,12 +130,13 @@ export interface ContextUi {
   refresh(): void;
 }
 
-/** 놓아 올린 문서: 다시 읽을 파일과 처음 열 때의 무늬 한도 */
+/** 놓아 올린 문서: 다시 읽을 파일과 처음 열 때의 무늬 한도, 워커가 법선·무늬 좌표를 줄였는지(28차 — ParseResult.packed) */
 export interface ReleaseSource {
   scene: Scene3d;
   file: Blob;
   name: string;
   textureLimit: number;
+  packed?: boolean;
 }
 
 /** ok: 그대로 · lost: 잃음 · restoring: 되찾고 놓은 것을 다시 읽는 중 · partial: 다시 읽지 못해 위치·색으로 그리는 중 */
@@ -248,14 +251,27 @@ export class ContextWatch {
     this.state = 'restoring';
     this.ui.show('info', RESTORE_TITLE, RESTORE_TEXT);
     const byId = new Map(src.scene.meshes.map((m) => [m.id, m] as const));
-    const meshes: ArraysWant[] = need.meshes.map((m) => ({
-      id: m.id,
-      nv: (byId.get(m.id)?.positions.length ?? 0) / 3,
-      normals: m.normals,
-      uvs: m.uvs,
-      backUvs: m.backUvs,
-    }));
-    const job = arraysJob(this.makeWorker, { name: src.name, file: src.file, meshes, textures: [...need.textures], textureLimit: src.textureLimit });
+    const meshes: ArraysWant[] = need.meshes.map((m) => {
+      const mesh = byId.get(m.id);
+      return {
+        id: m.id,
+        nv: (mesh?.positions.length ?? 0) / 3,
+        normals: m.normals,
+        uvs: m.uvs,
+        backUvs: m.backUvs,
+        // 줄인 무늬 좌표에 맞춘 변환(코어 놓기는 지우지 않는다 — 다시 준 배열을 이것으로 편다)
+        uvT: mesh?.uvTransform ?? null,
+        backUvT: mesh?.backUvTransform ?? null,
+      };
+    });
+    const job = arraysJob(this.makeWorker, {
+      name: src.name,
+      file: src.file,
+      meshes,
+      textures: [...need.textures],
+      textureLimit: src.textureLimit,
+      pack: !!src.packed,
+    });
     this.job = job;
     job.done.then(
       (res) => {

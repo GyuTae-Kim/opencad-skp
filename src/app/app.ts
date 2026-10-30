@@ -1114,7 +1114,8 @@ export class SkpViewerApp implements PanelHost {
         (done, total) => {
           if (seq === this.openSeq) this.setBusy(name, total ? done / total : 1, `화면에 올리는 중 · 묶음 ${fmtCount(done)}/${fmtCount(total)}`);
         },
-        rel ? { m: rel, file } : null,
+        // 워커가 법선·무늬 좌표를 줄였으면(큰 모형 — 28차) 문맥 복구 때도 같은 꼴로 다시 받는다
+        rel ? { m: rel, file, packed: !!res.packed } : null,
       );
       this.noticeDamage(doc);
       await uploaded;
@@ -1140,7 +1141,11 @@ export class SkpViewerApp implements PanelHost {
    * release(큰 모형을 디스크의 파일에서 열었을 때 — 조각과 그 파일)를 주면 법선·무늬 좌표·푼 무늬를 올린 뒤 놓고, 문맥을 되찾으면 그 파일을 다시 읽는다.
    * 놓은 장면 객체는 이 문서에만 쓰고 setScene에 다시 주지 않는다(다시 열면 새 장면)
    */
-  private setDoc(d: SkpDoc, progress?: (done: number, total: number) => void, release?: { m: typeof import('./release'); file: Blob } | null): Promise<void> {
+  private setDoc(
+    d: SkpDoc,
+    progress?: (done: number, total: number) => void,
+    release?: { m: typeof import('./release'); file: Blob; packed?: boolean } | null,
+  ): Promise<void> {
     // 뷰어는 openBlob이 먼저 만든다(ensureViewer — 코어를 나눠 받는다)
     const v = this.viewer;
     if (!v) {
@@ -1195,7 +1200,7 @@ export class SkpViewerApp implements PanelHost {
         ...(rel ? { release: rel.m.RELEASE_OPTIONS } : {}),
       });
     else v.setScene(d.scene);
-    if (rel) this.watchContext(rel.m, v).setSource({ scene: d.scene, file: rel.file, name: d.name, textureLimit: this.texLimits.limit });
+    if (rel) this.watchContext(rel.m, v).setSource({ scene: d.scene, file: rel.file, name: d.name, textureLimit: this.texLimits.limit, packed: !!rel.packed });
     // 장면을 올리면 코어가 겉모습(선 색)을 풀었다 — 끝의 applyTheme에서 다시 건다
     this.lineContrast.reset();
     v.setRenderMode(this.renderMode);

@@ -236,10 +236,12 @@ describe('그래픽 문맥 잃음·되찾음', () => {
     expect(msg.file).toBe(file);
     expect(msg.textureLimit).toBe(1024);
     expect(msg.meshes).toEqual([
-      { id: 'm1', nv: 3, normals: true, uvs: true, backUvs: false },
-      { id: 'm2', nv: 4, normals: true, uvs: false, backUvs: false },
+      { id: 'm1', nv: 3, normals: true, uvs: true, backUvs: false, uvT: null, backUvT: null },
+      { id: 'm2', nv: 4, normals: true, uvs: false, backUvs: false, uvT: null, backUvT: null },
     ]);
     expect(msg.textures).toEqual(['t1']);
+    // 워커가 줄이지 않은 문서(28차 이전 꼴 — 작은 모형은 놓지 않으므로 줄인 뒤 놓은 모형과만 다르다)
+    expect(msg.pack).toBe(false);
     const res = fullResult();
     wk.emit({ id: 1, type: 'arrays', result: res });
     await flush();
@@ -251,6 +253,44 @@ describe('그래픽 문맥 잃음·되찾음', () => {
     expect(w.last).toMatchObject({ meshes: 2, textures: 1, left: 0 });
     expect(wk.terminated).toBe(true);
     expect(ui.refreshed).toBe(2);
+  });
+
+  it('워커가 법선·무늬 좌표를 줄인 문서(28차): 다시 받을 때 줄였다는 것과 그물에 남은 무늬 좌표 변환을 함께 보내고, 받은 작은 배열을 그대로 준다', async () => {
+    const v = new FakeViewer();
+    const ui = new FakeUi();
+    const w = new ContextWatch(v, ui, make);
+    const s = sceneOf();
+    const t = [2, 3, 1, 1.5] as const;
+    s.meshes[0]!.uvTransform = t;
+    s.meshes[1]!.backUvTransform = [4, 4, 0, 0];
+    v.scene = s;
+    w.setSource({ scene: s, file: new Blob([new Uint8Array([1])]), name: 'a.skp', textureLimit: 2048, packed: true });
+    v.missMeshes.set('m1', { normals: true, uvs: true, backUvs: false });
+    v.missMeshes.set('m2', { normals: false, uvs: false, backUvs: true });
+    v.restore();
+    const wk = FakeWorker.all[0]!;
+    const msg = wk.posted[0]!.msg;
+    expect(msg.pack).toBe(true);
+    expect(msg.meshes).toEqual([
+      { id: 'm1', nv: 3, normals: true, uvs: true, backUvs: false, uvT: t, backUvT: null },
+      { id: 'm2', nv: 4, normals: false, uvs: false, backUvs: true, uvT: null, backUvT: [4, 4, 0, 0] },
+    ]);
+    const res: ArraysResult = {
+      meshes: [
+        { id: 'm1', normals: new Int8Array(12), uvs: new Int16Array(6) },
+        { id: 'm2', backUvs: new Int16Array(8) },
+      ],
+      textures: [],
+      ms: 1,
+    };
+    wk.emit({ id: 1, type: 'arrays', result: res });
+    await flush();
+    expect(v.gotMeshes).toEqual([
+      ['m1', res.meshes[0]],
+      ['m2', res.meshes[1]],
+    ]);
+    expect(v.gotMeshes[0]![1].normals).toBe(res.meshes[0]!.normals);
+    expect(w.state).toBe('ok');
   });
 
   it('다시 읽지 못하거나 덜 받으면 위치·색으로 그린다고 알린다', async () => {
