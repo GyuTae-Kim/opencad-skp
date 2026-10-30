@@ -24,7 +24,9 @@
  * - 잠금(SketchUp 추론 잠금 — Shift·화살표, 손가락 기기는 측정 띠 단추): 방향 추론(축·나란함·수직)을 잠그면(lock) 시작점을 지나는
  *   그 선 위에만 찍는다. 시작점을 지나는 모서리에 붙은 점 추정(모서리 끝에서 그 모서리를 따라 가리킬 때)도 그 모서리 방향으로 잠근다
  *   (코어 0.12.0 순수 함수 edgeLineLock). 커서가 끝점·중간점·중심·교차점·수직 같은 점 위면 그 점을 선에 수직으로 내린 자리(다른 점의 높이를 옮겨 잰다),
- *   아니면 커서 광선에 가장 가까운 선 위 점(코어 0.10.0 순수 함수 lockedSnap).
+ *   아니면(부른 쪽이 lockMeets를 켰을 때 — SketchUp처럼 잠근 채 다른 형상을 가리켜 참고하기) 잠근 선이 커서 둘레 모서리·안내선과 3D로 만나는 점
+ *   (코어 0.19.0 lockEdgeSnap — 그 선분 안쪽, "빨강 축에 · 모서리에"), 커서 밑 면을 뚫는 점(lockFaceSnap — 그 자리에서 다시 맞춰 맨 앞 면일 때만, "빨강 축에 · 면에"),
+ *   그것도 없으면 커서 광선에 가장 가까운 선 위 점(코어 0.10.0 순수 함수 lockedSnap). 잠근 선은 잠금 종류와 상관없다(축·나란함·수직·모서리 방향).
  * - 다른 점에서 끌어온 축(SketchUp "점에서" 추론 — 점 위에 잠시 머물면 그 점에서 축 방향 점선): 부른 쪽이 기억한 점(tracks)이 있으면
  *   1. 끌어온 점 후보 가운데 점인 것(결과가 모서리 위·면 위·빈 곳일 때 — 두 선이 만나는 한 점이라 모서리 위보다 구체적이다).
  *      셋 사이는 화면에서 가까운 것이고 뒤 차례는 1화소 넘게 가까워야 이긴다(코어 0.17.0 chooseTrackPoint — 같은 점을 셈 오차로 바꿔 고르지 않게):
@@ -59,6 +61,8 @@ import {
   axisEdgeSnap,
   axisFaceSnap,
   chooseTrackPoint,
+  lockEdgeSnap,
+  lockFaceSnap,
   sameTrackPoint,
   trackAlongFirst,
   trackAxisSnap,
@@ -128,9 +132,15 @@ export interface Snap {
   trackOther?: TrackGuide;
   /**
    * 축이 면을 뚫는 점(kind 'axis'): 그 면(그물 id·삼각형 번호·세계 단위 법선 — 눈 쪽). trackFrom이 없으면 시작점 축(dir이 있다),
-   * 있으면 끌어온 축이다. kind 'axis'에 trackFrom 없이 edge가 있으면 시작점 축이 그 모서리·안내선과 만나는 점이다
+   * 있으면 끌어온 축이다. kind 'axis'에 trackFrom 없이 edge가 있으면 시작점 축이 그 모서리·안내선과 만나는 점이다.
+   * 잠근 선 위 점(locked)에 있으면 잠근 선이 그 면을 뚫는 점이다
    */
   face?: SnapFace;
+  /**
+   * 잠근 선이 모서리·안내선과 만나는 점(locked): 그 선분(세계 — 안내선은 그 점 둘레 토막). 잠근 선 위 점의 edge는 나란함·수직 잠금의 기준 모서리라 따로 둔다.
+   * 잠근 선이 면을 뚫는 점은 face가 있다
+   */
+  lockEdge?: [V3, V3];
 }
 
 /** 축이 뚫는 면: 그물 id, 삼각형 번호(고르기 index와 같은 뜻), 세계 단위 법선(눈 쪽) */
@@ -584,6 +594,11 @@ export interface SnapInput {
    * 부르는 횟수는 한 번 추정에 FACE_HIT_CHECKS까지다
    */
   faceAt?: ((x: number, y: number) => Pick3d | null) | null;
+  /**
+   * 잠근 동안 잠근 선이 커서 둘레 모서리·안내선과 만나는 점, 커서 밑 면을 뚫는 점에 붙을지(기본 끔 — 끄면 예전과 같다. 측정 도구는 켠다).
+   * 커서 밑 점 추정(끝점 등 — 잠근 선에 내린 자리)이 먼저고, 면을 뚫는 점은 faceAt이 있어야 본다
+   */
+  lockMeets?: boolean;
 }
 
 /** 축이 면을 뚫는 점을 다시 맞춰 보는 고르기 수 한도(한 번 추정에 — 축 직선 최대 12개 × 다시 구하기 AXIS_FACE_STEPS번이지만 커서 둘레 점만 맞춰 본다) */
@@ -730,10 +745,12 @@ export function chooseSnap(o: SnapInput): Snap {
   const axes = o.axisDirs ?? AXIS_DIRS;
   const tracks = o.tracks?.length ? o.tracks : null;
   if (o.from && o.lock) {
-    // 잠금: 시작점을 지나는 잠근 선 위에만. 점 추정이면 그 점을 선에 수직으로 내린 자리, 아니면 커서 광선에 가장 가까운 자리
+    // 잠금: 시작점을 지나는 잠근 선 위에만. 점 추정이면 그 점을 선에 수직으로 내린 자리, 아니면(lockMeets) 잠근 선이 모서리·안내선과 만나는 점·
+    // 커서 밑 면을 뚫는 점, 그것도 없으면 커서 광선에 가장 가까운 자리
     const q = snap && POINT_KINDS.has(snap.kind) ? snap : null;
-    const l = lockedSnap(f, o.from, o.lock.dir, o.x, o.y, q ? q.point : null);
-    let s: Snap | null = null;
+    const m = !q && o.lockMeets ? lockMeetSnap(o, f, o.from, o.lock, near, R) : null;
+    const l = m ? null : lockedSnap(f, o.from, o.lock.dir, o.x, o.y, q ? q.point : null);
+    let s: Snap | null = m;
     if (l) {
       s = { kind: o.lock.kind, point: l.p, label: o.lock.label, dir: [o.lock.dir[0], o.lock.dir[1], o.lock.dir[2]], locked: true };
       if (o.lock.axis) s.axis = o.lock.axis;
@@ -844,6 +861,51 @@ function faceHitter(o: SnapInput, f: ViewFrame, under: FaceHit, budget: { n: num
   };
 }
 
+/** 축·잠근 선과 만나는 점을 볼 커서 둘레 선분(코어 TrackSegment 꼴): 모서리는 단면에 잘린 쪽(keep)·가린 점(vis)을 빼고, 안내선은 덧그림이라 보지 않는다(교차점과 같다) */
+type MeetSeg = TrackSegment & { near: NearSeg };
+
+function meetSegments(o: SnapInput, near: readonly NearSeg[]): { segs: MeetSeg[]; vis: ((p: V3, s: MeetSeg) => boolean) | null } {
+  const kept = o.kept;
+  const visible = o.visible;
+  const segs = near.map((n): MeetSeg => {
+    const s: MeetSeg = { a: n.seg[0], b: n.seg[1], wpp: 2 * n.tol, near: n };
+    if (kept && !n.guide) s.keep = (p) => kept([p[0]!, p[1]!, p[2]!]);
+    return s;
+  });
+  return { segs, vis: visible ? (p, s) => !!s.near.guide || visible(p) : null };
+}
+
+/**
+ * 잠근 선이 만나는 점(코어 0.19.0 차례 — 커서 밑 점 추정이 없을 때): 시작점을 지나는 잠근 선(축·나란함·수직·모서리 방향)이 커서 둘레 모서리·안내선과
+ * 3D로 만나는 점(lockEdgeSnap — 그 선분 안쪽), 커서 밑 그물 면을 뚫는 점(lockFaceSnap — 그 점 화면 자리에서 다시 맞춰 맨 앞 면일 때만, axisFaceSnap과 같은 faceHitter).
+ * 둘 사이는 화면에서 가까운 것이고 면은 1화소 넘게 가까워야 이긴다(chooseTrackPoint — 모서리가 면의 테두리라 더 구체적이다). 없으면 null.
+ * 글은 잠금 글 뒤에 " · 모서리에"(안내선이면 "· 안내선에")·" · 면에", 방향·축·기준 모서리는 잠금 그대로다
+ */
+function lockMeetSnap(o: SnapInput, f: ViewFrame, from: readonly number[], lock: InferenceLock, near: readonly NearSeg[], R: number): Snap | null {
+  const { segs, vis } = meetSegments(o, near);
+  const edge = segs.length ? lockEdgeSnap(f, from, lock.dir, segs, o.x, o.y, R, vis) : null;
+  const under = o.faceAt ? faceHitOf(o.scene, o.pick) : null;
+  const face = under ? lockFaceSnap<FaceHit>(f, from, lock.dir, o.x, o.y, R, under, faceHitter(o, f, under, { n: 0 })) : null;
+  const t = chooseTrackPoint<{ distPx: number }>([edge, face]);
+  if (!t) return null;
+  const s: Snap = { kind: lock.kind, point: t === edge ? edge.p : face!.p, label: '', dir: [lock.dir[0], lock.dir[1], lock.dir[2]], locked: true };
+  if (lock.axis) s.axis = lock.axis;
+  if (lock.edge) s.edge = [lock.edge[0], lock.edge[1]];
+  if (t === edge) {
+    const n = edge.seg.near;
+    s.label = `${lock.label} · ${n.guide ? GUIDE_LINE_LABEL : SNAP_LABELS.onEdge}`;
+    s.lockEdge = [n.seg[0], n.seg[1]];
+    s.id = n.id;
+  } else {
+    const h = face!.hit;
+    s.label = `${lock.label} · ${SNAP_LABELS.onFace}`;
+    s.id = h.id;
+    s.normal = [...h.normal] as V3;
+    s.face = { id: h.id, index: h.index, normal: [...h.normal] as V3 };
+  }
+  return s;
+}
+
 /**
  * 끌어온 점 후보와 축이 모서리·면과 만나는 점 가운데 점인 것(코어 0.17.0·0.18.0 차례): 시작점 축 위 줄 맞춘 자리(0.16.0 trackCrossSnap),
  * 끌어온 축끼리의 교차(trackPairSnap), 끌어온 축과 커서 둘레 모서리·안내선의 교차(trackEdgeSnap), meets면 시작점 축과 모서리·안내선의 교차(axisEdgeSnap),
@@ -854,14 +916,7 @@ function trackPointSnap(o: SnapInput, f: ViewFrame, tracks: readonly (readonly n
   const first = o.from ?? null;
   const cross = tracks && first ? trackCrossSnap(f, first, tracks, o.x, o.y, R, axes) : null;
   const pair = tracks ? trackPairSnap(f, tracks, o.x, o.y, R, first, axes) : null;
-  const kept = o.kept;
-  const visible = o.visible;
-  const segs = near.map((n): TrackSegment & { near: NearSeg } => {
-    const s: TrackSegment & { near: NearSeg } = { a: n.seg[0], b: n.seg[1], wpp: 2 * n.tol, near: n };
-    if (kept && !n.guide) s.keep = (p) => kept([p[0]!, p[1]!, p[2]!]);
-    return s;
-  });
-  const vis = visible ? (p: V3, s: { near: NearSeg }): boolean => !!s.near.guide || visible(p) : null;
+  const { segs, vis } = meetSegments(o, near);
   const edge = tracks && segs.length ? trackEdgeSnap(f, tracks, segs, o.x, o.y, R, first, axes, vis) : null;
   const axe = meets && first && segs.length ? axisEdgeSnap(f, first, segs, o.x, o.y, R, axes, vis) : null;
   // 축이 면을 뚫는 점: 커서가 그물 면 위일 때만. 축 직선은 시작점 X·Y·Z, 끌어온 점(새것이 앞) X·Y·Z — 앞 직선과 같은 직선(같은 축이고
