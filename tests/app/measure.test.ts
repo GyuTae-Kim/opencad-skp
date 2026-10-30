@@ -70,6 +70,8 @@ import {
   AIM_COVER_GAP_PX,
   GUIDE_HIDE_LABEL,
   GUIDE_HIDE_TEXT,
+  GUIDE_SELECT_ALL_LABEL,
+  GUIDE_SELECT_ALL_TEXT,
   GUIDE_UNHIDE_LABEL,
   applyGuideSelect,
   guideCountText,
@@ -1686,9 +1688,10 @@ describe('고르기 도구로 안내 고르고 지우기(줄자·각도기를 �
     acts.append(more, close);
     r.tool.mountGuideDelete(acts);
     const b = acts.querySelector<HTMLButtonElement>('.sel-del')!;
-    // 25차: 숨기기 단추가 지우기 앞에 함께 붙는다
+    // 25차: 숨기기 단추가 지우기 앞에 함께 붙는다. 29차: 손가락 기기의 모두 고르기(CSS가 손가락 기기에서만 보인다)는 그 앞
     const hide = acts.querySelector<HTMLButtonElement>('.sel-hide')!;
-    expect([...acts.children]).toEqual([more, hide, b, close]);
+    const all = acts.querySelector<HTMLButtonElement>('.sel-all')!;
+    expect([...acts.children]).toEqual([more, all, hide, b, close]);
     expect(b.textContent).toBe(GUIDE_DELETE_TEXT);
     expect(r.tool.pickGuide(40.4, 72.2, 'mouse')).toBe('line');
     expect(b.getAttribute('aria-label')).toBe('고른 안내선 지우기');
@@ -1701,7 +1704,8 @@ describe('고르기 도구로 안내 고르고 지우기(줄자·각도기를 �
     // 다시 붙여도 단추는 하나(차례도 그대로)
     r.tool.mountGuideDelete(acts);
     expect(acts.querySelectorAll('.sel-del')).toHaveLength(1);
-    expect([...acts.children]).toEqual([more, hide, b, close]);
+    expect(acts.querySelectorAll('.sel-all')).toHaveLength(1);
+    expect([...acts.children]).toEqual([more, all, hide, b, close]);
   });
 });
 
@@ -3862,6 +3866,50 @@ describe('고르기 도구로 안내 모두 고르기·모두 풀기(26차 — S
     expect(s.picks).toBe(2);
     // 키가 아닌 것(Ctrl+Z·Shift+Ctrl+A)은 이 함수가 받지 않는다
     expect(press(r, { key: 'A', ctrlKey: true, shiftKey: true })).toEqual([false, false]);
+  });
+
+  it('손가락 기기(29차 — SketchUp for iPad 바로 가기 막대의 Select All): 고른 것 카드의 "모두"와 보기 설정 메뉴 항목이 보이는 안내를 모두 고른다', async () => {
+    const { r, s } = await setup();
+    const acts = document.createElement('div');
+    const close = document.createElement('button');
+    acts.append(close);
+    r.tool.mountGuideDelete(acts);
+    const all = acts.querySelector<HTMLButtonElement>('.sel-all')!;
+    expect(all.textContent).toBe(GUIDE_SELECT_ALL_TEXT);
+    expect(all.getAttribute('aria-label')).toBe(GUIDE_SELECT_ALL_LABEL);
+    // 더 고를 것이 있을 때만 보인다
+    expect(r.tool.canSelectAllGuides).toBe(true);
+    expect(all.hidden).toBe(false);
+    r.tool.pickGuide(121.3, 81.2, 'touch');
+    expect(r.tool.selectedGuideCount).toBe(1);
+    s.geo = true;
+    all.click();
+    expect(r.tool.selectedGuideCount).toBe(5);
+    expect(counts(r)).toEqual([3, 2]);
+    expect(s.geo).toBe(false);
+    expect(r.tool.canSelectAllGuides).toBe(false);
+    expect(all.hidden).toBe(true);
+    // 모두 풀기(카드의 ✕와 같은 selectNone)면 다시 보인다
+    expect(r.tool.selectNone()).toBe(true);
+    expect(all.hidden).toBe(false);
+    // 보기 설정 메뉴: 손가락 기기만(키보드 기기의 메뉴는 그대로), 다 골랐거나 줄자를 켠 동안은 끔
+    expect(r.tool.guideMenuItems().map((i) => i.label)).not.toContain(GUIDE_SELECT_ALL_LABEL);
+    const item = (): ReturnType<MeasureTool['guideMenuItems']>[number] | undefined => r.tool.guideMenuItems(true).find((i) => i.label === GUIDE_SELECT_ALL_LABEL);
+    expect(r.tool.guideMenuItems(true).map((i) => i.label)).toEqual([GUIDES_SHOWN_LABEL, GUIDE_SELECT_ALL_LABEL, GUIDE_CLEAR_FILE_LABEL]);
+    expect(item()!.disabled).toBe(false);
+    item()!.run();
+    expect(r.tool.selectedGuideCount).toBe(5);
+    expect(item()!.disabled).toBe(true);
+    r.tool.selectNone();
+    r.tool.setMode('tape');
+    expect(r.tool.canSelectAllGuides).toBe(false);
+    expect(item()!.disabled).toBe(true);
+    item()!.run();
+    expect(r.tool.selectedGuideCount).toBe(0);
+    r.tool.setMode(null);
+    // 안내를 숨겨 보이는 것이 없으면 항목이 없다
+    r.tool.setGuidesShown(false);
+    expect(item()).toBeUndefined();
   });
 
   it('Mac(안내 두기 키 Option): ⌘A로 모두 고르고 Shift+⌘A로 모두 풀며, Ctrl+A·⌘T는 받지 않는다', async () => {

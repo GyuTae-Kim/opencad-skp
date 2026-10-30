@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 const { JSDOM } = createRequire(import.meta.url)('jsdom');
 import { installLocalization } from '../src/app/i18n';
 import { GUIDE_CLEAR_FILE_LABEL, GUIDE_DELETE_KEY_HINT, GUIDE_DELETE_TEXT, GUIDE_KIND_NAMES, GUIDE_REDO_LABEL, GUIDE_UNDO_LABEL, GUIDES_SHOWN_LABEL, LOCK_HINTS, LOCK_MENU_LABEL, guideKeyHint, lockHint, measureHint, trackHint } from '../src/app/measure';
-import { GUIDE_HIDE_LABEL, GUIDE_HIDE_TEXT, GUIDE_UNHIDE_LABEL, guideCountText, guideDeleteLabel } from '../src/app/measure';
+import { GUIDE_HIDE_LABEL, GUIDE_HIDE_TEXT, GUIDE_SELECT_ALL_LABEL, GUIDE_SELECT_ALL_TEXT, GUIDE_UNHIDE_LABEL, guideCountText, guideDeleteLabel } from '../src/app/measure';
 import { AXIS_LABELS, FACE_PERPENDICULAR_LABEL, GUIDE_LINE_LABEL, SNAP_LABELS, TRACK_ALIGN_LABEL, TRACK_AXIS_LABELS, TRACK_PAIR_LABELS } from '../src/app/snap';
 import { SHORTCUTS } from '../src/app/shortcuts';
 import { chunkFailText } from '../src/app/core';
@@ -175,9 +175,10 @@ describe('language URLs and UI presentation', () => {
     expect(translate(`${GUIDE_KIND_NAMES.line} · ${GUIDE_DELETE_KEY_HINT}`, 'en')).toBe('Guide line · Delete or Backspace to delete');
     expect(translate(GUIDE_KIND_NAMES.point, 'de')).toBe('Hilfspunkt');
   });
-  it('translates several selected guides, the hide button and the unhide menu item (25th round)', () => {
+  it('translates several selected guides, the hide button, the unhide menu item (25th round) and the touch select-all button (29th)', () => {
     const hangul = /[가-힣]/;
-    const texts: string[] = [GUIDE_HIDE_TEXT, GUIDE_HIDE_LABEL, GUIDE_UNHIDE_LABEL];
+    const texts: string[] = [GUIDE_HIDE_TEXT, GUIDE_HIDE_LABEL, GUIDE_UNHIDE_LABEL, GUIDE_SELECT_ALL_TEXT, GUIDE_SELECT_ALL_LABEL];
+    expect(translate(GUIDE_SELECT_ALL_LABEL, 'en')).toBe('Select all visible guides');
     for (const [p, l] of [[2, 0], [0, 3], [1, 1], [12, 4]] as const) {
       const t = guideCountText(p, l)!;
       const d = guideDeleteLabel(p, l);

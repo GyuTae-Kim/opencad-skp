@@ -2940,8 +2940,8 @@ export class SkpViewerApp implements PanelHost {
       { label: '외곽선(윤곽 굵게)', checked: this.profilesOn, toggle: true, sep: true, run: () => this.setProfiles(!this.profilesOn) },
       { label: '뒤 모서리(숨은 선에서 점선)', checked: this.backEdgesOn, toggle: true, run: () => this.setBackEdges(!this.backEdgesOn) },
       { label: '태그 색으로 칠하기', checked: this.colorByTag, toggle: true, run: () => this.setColorByTag(!this.colorByTag) },
-      // 줄자·각도기로 둔 안내점·안내선 보이기·이 파일의 안내 모두 지우기(측정 도구 조각이 항목을 준다 — 문서를 열 때 받는다)
-      ...(this.measureTool?.guideMenuItems() ?? []),
+      // 줄자·각도기로 둔 안내점·안내선 보이기·이 파일의 안내 모두 지우기(측정 도구 조각이 항목을 준다 — 문서를 열 때 받는다), 손가락 기기는 안내 모두 고르기도
+      ...(this.measureTool?.guideMenuItems(!!this.coarseQuery?.matches) ?? []),
       { label: '그림자(파일의 날짜·시각·위치)', checked: this.shadowsOn, toggle: true, sep: true, run: () => this.setShadows(!this.shadowsOn) },
       { label: '안개', checked: this.fogOn, toggle: true, run: () => this.setFogOn(!this.fogOn) },
       { label: '걷기(1인칭)', icon: 'walk', checked: this.walking, toggle: true, sep: true, run: () => this.setWalk(!this.walking) },
