@@ -14,7 +14,7 @@ import { prepareSceneTextures } from '../src/worker/textures';
 const OPTS = { name: 'x', outline: true, extras: true, smooth: true, images: {} };
 
 const wantOf = (m: Mesh3d): ArraysWant => ({ id: m.id, nv: m.positions.length / 3, normals: !!m.normals, uvs: !!m.uvs, backUvs: !!m.backUvs });
-const list = (a: Float32Array | undefined): number[] | null => (a ? [...a] : null);
+const list = (a: ArrayLike<number> | undefined): number[] | null => (a ? Array.from(a) : null);
 
 describe('문맥 복구 때 다시 줄 그물 배열', () => {
   it('같은 파일을 다시 풀면 놓은 법선·무늬 좌표가 같은 그물 id에 같은 값으로 나온다', async () => {

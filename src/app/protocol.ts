@@ -6,7 +6,7 @@
  * 워커는 결과를 보낸 뒤 파일 내용 지문(SHA-256 — 측정 안내를 파일별로 기억하는 열쇠)을 덩이씩 읽으며 구해 따로 보낸다.
  * 큰 모형을 놓아 올린 뒤 그래픽 문맥을 되찾으면 화면이 같은 파일을 다시 넘겨 놓은 법선·무늬 좌표와 색을 바꾼 무늬만 받는다(arrays — 27차, release.ts).
  */
-import type { Scene3d } from 'opencad-viewer3d/types';
+import type { NormalArray, Scene3d, UvArray } from 'opencad-viewer3d/types';
 import type { SkpImages } from '../images';
 
 export interface ParseRequest {
@@ -41,9 +41,9 @@ export interface ArraysRequest {
   textureLimit?: number;
 }
 
-/** 다시 받은 그물 배열(그물 객체 꼴의 이름)과 무늬(손질한 그림, 손질하지 않은 무늬는 그림 바이트) */
+/** 다시 받은 그물 배열(그물 객체 꼴의 이름 — 코어 0.26.0부터 작은 정수 배열도 받는다)과 무늬(손질한 그림, 손질하지 않은 무늬는 그림 바이트) */
 export interface ArraysResult {
-  meshes: { id: string; normals?: Float32Array; uvs?: Float32Array; backUvs?: Float32Array }[];
+  meshes: { id: string; normals?: NormalArray; uvs?: UvArray; backUvs?: UvArray }[];
   textures: { id: string; bitmap?: ImageBitmap; data?: Uint8Array; mime?: string; width?: number; height?: number }[];
   /** 다시 푼 시간(ms) */
   ms: number;
