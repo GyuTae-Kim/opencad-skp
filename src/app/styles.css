@@ -637,6 +637,25 @@ input[type='checkbox'] {
   transform: translateX(-50%);
 }
 
+/* 장면 탭이 보이면 그 아래에(탭을 가리지 않게 — 손가락 기기는 탭이 높다) */
+.scene-tabs:not([hidden]) ~ .notice {
+  top: 50px;
+}
+
+@media (pointer: coarse) {
+  .scene-tabs:not([hidden]) ~ .notice {
+    top: 60px;
+  }
+}
+
+/* 휴대폰: 알림이 3D 보기 폭을 거의 다 쓰므로 뷰 큐브(76px, 위 8px — app.ts VIEW_CUBE_NARROW)와 장면 탭 아래에 */
+@media (max-width: 759.98px), (pointer: coarse) and (max-height: 499.98px) {
+  .notice,
+  .scene-tabs:not([hidden]) ~ .notice {
+    top: 92px;
+  }
+}
+
 .notice.warn {
   border-color: var(--warn);
   background: var(--warn-bg);
