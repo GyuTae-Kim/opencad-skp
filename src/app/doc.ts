@@ -1252,20 +1252,8 @@ export function boundsSize(s: Scene3d): [number, number, number] | null {
   return [b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]];
 }
 
-/** 나눠 올리기 기준: 삼각형+선분 수 */
-export const INCREMENTAL_PRIMS = 1_000_000;
-/** 나눠 올리기 기준: 그물·선 묶음 수 */
-export const INCREMENTAL_ITEMS = 1500;
-
-/** GPU에 나눠 올릴 만큼 큰 장면인지(작은 모형은 지금처럼 한 번에) */
-export function isBigScene(d: { scene: Scene3d }): boolean {
-  const s = d.scene;
-  if (s.meshes.length + s.lines.length >= INCREMENTAL_ITEMS) return true;
-  let prims = 0;
-  for (const m of s.meshes) prims += (m.indices ? m.indices.length : m.positions.length / 3) / 3;
-  for (const l of s.lines) prims += l.positions.length / 6;
-  return prims >= INCREMENTAL_PRIMS;
-}
+// 큰 모형 기준(나눠 올리기·놓기 — 해석 워커도 같은 기준으로 법선·무늬 좌표를 줄인다, 28차에 protocol.ts로 옮김)
+export { INCREMENTAL_ITEMS, INCREMENTAL_PRIMS, isBigScene } from './protocol';
 
 /** 나무 노드 kind 숫자 → 이름(해석기 SkpTree: 0 그룹, 1 컴포넌트, 2 그림) */
 export function treeKindLabel(kind: number): string {

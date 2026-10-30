@@ -8,6 +8,7 @@
  * 파일은 Blob·File로 받아 통째로 읽지 않는다: 2021+ 꾸러미는 목록과 필요한 항목만 읽고 model.dat는 덩이씩 읽으며 푼다(skpFileToScene, src/range.ts).
  * 결과를 보낸 뒤 파일 내용 지문(SHA-256)을 덩이씩 읽으며 구해 따로 보낸다(측정 안내를 파일별로 기억하는 열쇠 — 화면을 기다리게 하지 않는다).
  * 문맥 복구(arrays — 27차): 같은 파일을 같은 선택으로 다시 풀어, 화면이 바란 그물의 법선·무늬 좌표와 바란 무늬만 손질해 보낸다(restore.ts).
+ * 큰 모형(화면이 나눠 올리는 기준 isBigScene)은 넘기기 전에 법선·무늬 좌표를 작은 정수 배열로 줄인다(pack.ts — 28차, 코어 0.26.0). 문맥 복구도 같은 꼴로 준다.
  */
 /// <reference lib="webworker" />
 import { TEXTURE_LIMIT } from 'opencad-viewer3d/texture';
@@ -23,6 +24,7 @@ import {
 } from '../app/protocol';
 import { prepareSceneTextures } from './textures';
 import { pickRestoreMeshes, pickRestoreTextures } from './restore';
+import { packBigScene } from './pack';
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 
@@ -75,6 +77,9 @@ async function open(req: ParseRequest): Promise<ParseResult> {
         return sw ? { ...m, bytes: sw, mime: 'image/png' } : m;
       });
   }
+  // 큰 모형은 법선(Int8 정점 4값)·무늬 좌표(Int16과 변환 — 오차가 큰 그물은 Float32)를 줄여 넘긴다. 무늬 손질(무늬를 빼면 그 무늬 좌표도 지운다) 뒤에
+  const packed = packBigScene(scene);
+  if (packed) result.packed = packed;
   progress(0.98, '화면으로 넘기는 중');
   result.ms = performance.now() - t0;
   return result;
@@ -91,7 +96,7 @@ async function arrays(req: ArraysRequest): Promise<ArraysResult> {
     await prepareSceneTextures(scene, limit, undefined, new Set(req.textures));
     textures.push(...pickRestoreTextures(scene, req.textures));
   }
-  return { meshes: pickRestoreMeshes(scene, req.meshes), textures, ms: performance.now() - t0 };
+  return { meshes: pickRestoreMeshes(scene, req.meshes, !!req.pack), textures, ms: performance.now() - t0 };
 }
 
 ctx.onmessage = async (ev: MessageEvent<ParseRequest | ArraysRequest>) => {
