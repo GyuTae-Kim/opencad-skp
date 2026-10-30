@@ -43,6 +43,8 @@ export const SHORTCUTS: readonly ShortcutGroup[] = [
         keys: ['Ctrl', 'Option', 'Shift'],
         label: '줄자·각도기를 끈 동안 안내를 누르거나 끌기: Ctrl(Mac은 Option)은 더하기, Shift는 넣고 빼기, Shift+Ctrl(Shift+Option)은 빼기 — 끌면 고르기 상자(오른쪽으로 끌면 다 든 것, 왼쪽은 걸친 것까지)',
       },
+      { keys: ['Ctrl+A', '⌘+A'], label: '줄자·각도기를 끈 동안: 보이는 안내점·안내선 모두 고르기(숨긴 안내는 빼고)' },
+      { keys: ['Ctrl+T', '⌘+Shift+A'], label: '줄자·각도기를 끈 동안: 고른 것 모두 풀기(브라우저가 그 키를 먼저 쓰면 Esc)' },
       { keys: ['Ctrl+Z', '⌘+Z'], label: '안내점·안내선을 두거나 지운 것 되돌리기(100단계)' },
       { keys: ['Ctrl+Y', 'Ctrl+Shift+Z', '⌘+Shift+Z'], label: '되돌린 안내 다시 하기' },
       { keys: ['Esc'], label: '여는 중이면 취소 → 측정 점 지우기 → 측정 끄기 → 고른 것 지우기' },

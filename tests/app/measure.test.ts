@@ -76,6 +76,8 @@ import {
   guideDeleteLabel,
   guideSelectOp,
   guidesInBox,
+  placedRects,
+  selectAllKey,
 } from '../../src/app/measure';
 import type { V3 } from 'opencad-viewer3d/math';
 import { Overlay, frameFor } from '../../src/app/overlay';
@@ -3630,5 +3632,247 @@ describe('고르기 도구로 안내 여럿 고르기·숨기기(25차 — Sketc
     // 되돌리면 다시 숨는다
     expect(r.tool.undo()).toBe(true);
     expect(r.tool.hiddenGuideCount).toBe(1);
+  });
+});
+
+describe('결과 글이 먼저 놓인 글상자(모형 글·치수 라벨)를 비켜 그리기(26차 — 코어 0.24.0 placeLabelAmong)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+  const view = { width: 400, height: 300 };
+  const overlaps = (a: { x: number; y: number }, w: number, h: number, b: { x: number; y: number; width: number; height: number }): boolean =>
+    a.x < b.x + b.width && b.x < a.x + w && a.y < b.y + b.height && b.y < a.y + h;
+
+  it('labelSpot: 먼저 놓인 글상자가 없거나 겹치지 않으면 예전과 같고, 겹치면 그것까지 비키며, 비킬 곳이 없으면 가운데 그대로', () => {
+    const bar = { x: 0, y: 260, width: 400, height: 40 };
+    const seg: [number[], number[]] = [[100, 270], [300, 270]];
+    const far = [{ x: 330.5, y: 20.5, width: 50, height: 16 }];
+    // 겹치지 않는 먼저 놓인 글상자는 자리를 바꾸지 않는다(22차 자리 그대로)
+    expect(labelSpot(200, 100, 60, 18, view, { rects: [] }, null, [], far)).toBeNull();
+    expect(labelSpot(200, 270, 60, 18, view, { rects: [bar] }, seg, [], far)).toEqual(labelSpot(200, 270, 60, 18, view, { rects: [bar] }, seg));
+    // 가운데 자리(170~230, 91~109)가 치수 라벨과 겹치면 코어 차례의 첫 빈자리(기준점 오른쪽 위 귀)
+    const dim = { x: 180.5, y: 95.5, width: 40, height: 14 };
+    expect(labelSpot(200, 100, 60, 18, view, { rects: [] }, null, [], [dim])).toEqual({ x: 210, y: 74 });
+    // 오른쪽 위 귀도 다른 라벨이 차지했으면 그다음(왼쪽 위 귀)
+    const upper = { x: 205.5, y: 70.5, width: 70, height: 20 };
+    expect(labelSpot(200, 100, 60, 18, view, { rects: [] }, null, [], [dim, upper])).toEqual({ x: 130, y: 74 });
+    // 측정 띠를 비킨 22차 자리가 라벨과 겹치면 띠와 라벨을 모두 비킨 자리
+    const old = labelSpot(200, 270, 60, 18, view, { rects: [bar] }, seg)!;
+    const onOld = { x: old.x - 5.5, y: old.y + 2.5, width: 40, height: 12 };
+    const moved = labelSpot(200, 270, 60, 18, view, { rects: [bar] }, seg, [], [onOld])!;
+    expect(moved).not.toEqual(old);
+    expect(overlaps(moved, 60, 18, bar) || overlaps(moved, 60, 18, onOld)).toBe(false);
+    // 비킬 곳이 없을 때: 띠와만 겹치던 글은 22차 자리, 라벨과만 겹치던 글은 가운데 그대로
+    const all = [{ x: -10, y: -10, width: 420, height: 320 }];
+    expect(labelSpot(200, 270, 60, 18, view, { rects: [bar] }, seg, [], all)).toEqual(old);
+    expect(labelSpot(200, 100, 60, 18, view, { rects: [] }, null, [], all)).toBeNull();
+    expect(labelSpot(200, 100, 0, 18, view, { rects: [] }, null, [], [dim])).toBeNull();
+  });
+
+  it('placedRects: 모형 라벨 배치의 상자를 사각형으로(흐리게 둔 것·크기 0은 빼고 차례 그대로)', () => {
+    expect(
+      placedRects([
+        { box: { x: 1, y: 2, w: 30, h: 12 } },
+        { box: { x: 5, y: 6, w: 30, h: 12 }, crowded: true },
+        { box: { x: 7, y: 8, w: 0, h: 12 } },
+        { box: { x: 9, y: 10, w: 20, h: 11 }, crowded: false },
+      ]),
+    ).toEqual([
+      { x: 1, y: 2, width: 30, height: 12 },
+      { x: 9, y: 10, width: 20, height: 11 },
+    ]);
+    expect(placedRects([])).toEqual([]);
+  });
+
+  it('줄자 결과 글이 앱이 알려 준 모형 라벨과 겹치면 비켜 두고, 겹치지 않거나 흐린 라벨이면 가운데 그대로', () => {
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('measure-label') ? 60 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('measure-label') ? 18 : 0;
+    });
+    let list: { box: { x: number; y: number; w: number; h: number }; crowded?: boolean }[] = [{ box: { x: 20.5, y: 20.5, w: 40, h: 12 } }];
+    let asked = 0;
+    const r = rig(EDGES(), TOP, DEFAULT_UNITS, {
+      placedLabels: () => {
+        asked++;
+        return list;
+      },
+    });
+    r.tool.setMode('tape');
+    r.move(30, 20);
+    // 결과 글이 없으면 묻지 않는다
+    expect(asked).toBe(0);
+    r.click(102, 103);
+    r.click(198, 101);
+    r.move(30, 20);
+    const label = (): HTMLElement => r.q('.measure-label-length') as HTMLElement;
+    expect([label().style.left, label().style.top, label().classList.contains('is-moved')]).toEqual(['150px', '100px', false]);
+    expect(asked).toBeGreaterThan(0);
+    // 결과 글 가운데 자리(120~180, 91~109)를 치수 라벨이 차지하면 비킨다
+    const dim = { x: 140.5, y: 96.5, width: 30, height: 12 };
+    list = [{ box: { x: dim.x, y: dim.y, w: dim.width, h: dim.height } }];
+    r.move(31, 20);
+    const l = label();
+    expect(l.classList.contains('is-moved')).toBe(true);
+    expect(l.style.transform).toBe('none');
+    const at = { x: parseFloat(l.style.left), y: parseFloat(l.style.top) };
+    expect(overlaps(at, 60, 18, dim)).toBe(false);
+    expect(at.x >= 0 && at.y >= 0 && at.x + 60 <= W && at.y + 18 <= W).toBe(true);
+    // 흐리게 둔 라벨(자리를 차지하지 않음)은 비키지 않는다
+    list = [{ box: { x: dim.x, y: dim.y, w: dim.width, h: dim.height }, crowded: true }];
+    r.move(30, 20);
+    expect([label().style.left, label().style.top, label().classList.contains('is-moved')]).toEqual(['150px', '100px', false]);
+  });
+});
+
+describe('고르기 도구로 안내 모두 고르기·모두 풀기(26차 — SketchUp "Selecting Geometry"의 Select All·Deselect All)', () => {
+  const flush = (): Promise<void> => new Promise((res) => setTimeout(res, 0));
+  const KEY = 'ab'.repeat(32);
+  const PRINT = (): ArrayBuffer => new Uint8Array(32).fill(0xab).buffer;
+  // 안내점 P0 (120, 80)·P1 (150, 80)·P2 (60, 130), 안내선 L0 화면 y = 60(가로)·L1 화면 x = 40(세로)
+  const PTS: V3[] = [[20, 20, 0], [50, 20, 0], [-40, -30, 0]];
+  const LNS = [
+    { point: [0, 40, 0] as V3, dir: [1, 0, 0] as V3 },
+    { point: [-60, 0, 0] as V3, dir: [0, 1, 0] as V3 },
+  ];
+  /** 기억해 둔 안내를 되살린 도구(줄자·각도기는 끈 채). picks = onGuidePick 수, none = onSelectNone 수, geo = 고른 형상이 있는지(앱 흉내) */
+  const setup = async (extra: Partial<MeasureToolOptions> = {}) => {
+    const store = memStore();
+    saveGuides(store, KEY, PTS, LNS, 1);
+    const s = { picks: 0, none: 0, geo: false };
+    const r = rig(EDGES(), TOP, DEFAULT_UNITS, {
+      storage: store,
+      onGuidePick: () => {
+        s.picks++;
+        s.geo = false;
+      },
+      onSelectNone: () => {
+        s.none++;
+        const had = s.geo;
+        s.geo = false;
+        return had;
+      },
+      ...extra,
+    });
+    r.tool.openFile(PRINT());
+    await flush();
+    expect(r.tool.guides).toHaveLength(3);
+    return { r, s };
+  };
+  /** keydown 하나를 selectKey에 넘긴다: [받았는지, 기본 동작을 막았는지] */
+  const press = (r: Rig, o: KeyboardEventInit, target?: HTMLElement): [boolean, boolean] => {
+    const e = new KeyboardEvent('keydown', { cancelable: true, bubbles: true, ...o });
+    let got = false;
+    if (target) {
+      const h = (ev: Event): void => void (got = r.tool.selectKey(ev as KeyboardEvent));
+      target.addEventListener('keydown', h);
+      target.dispatchEvent(e);
+      target.removeEventListener('keydown', h);
+    } else got = r.tool.selectKey(e);
+    return [got, e.defaultPrevented];
+  };
+  const counts = (r: Rig): [number, number] => {
+    r.overlay.paintNow();
+    return [r.qa('.measure-guide.is-selected').length, r.qa('.measure-guide-line.is-selected').length];
+  };
+
+  it('selectAllKey: Windows·Linux는 Ctrl+A·Ctrl+T, Mac은 ⌘A·Shift+⌘A(⌘T·Ctrl+A는 아니다), 한글 자판은 물리 키로', () => {
+    const k = (o: Partial<Parameters<typeof selectAllKey>[0]> & { key: string }, g?: 'Control' | 'Alt'): ReturnType<typeof selectAllKey> =>
+      selectAllKey({ code: '', ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...o }, g);
+    expect(k({ key: 'a', ctrlKey: true })).toBe('all');
+    expect(k({ key: 'A', ctrlKey: true })).toBe('all');
+    expect(k({ key: 't', ctrlKey: true })).toBe('none');
+    expect(k({ key: 'A', ctrlKey: true, shiftKey: true })).toBeNull();
+    expect(k({ key: 'T', ctrlKey: true, shiftKey: true })).toBeNull();
+    expect(k({ key: 'a', metaKey: true })).toBeNull();
+    expect(k({ key: 'a', ctrlKey: true, metaKey: true })).toBeNull();
+    expect(k({ key: 'a', ctrlKey: true, altKey: true })).toBeNull();
+    expect(k({ key: 'a' })).toBeNull();
+    expect(k({ key: 'z', ctrlKey: true })).toBeNull();
+    expect(k({ key: 'ㅁ', code: 'KeyA', ctrlKey: true })).toBe('all');
+    expect(k({ key: 'ㅅ', code: 'KeyT', ctrlKey: true })).toBe('none');
+    // Mac(안내 두기 키 Option)
+    expect(k({ key: 'a', metaKey: true }, 'Alt')).toBe('all');
+    expect(k({ key: 'A', metaKey: true, shiftKey: true }, 'Alt')).toBe('none');
+    expect(k({ key: 'ㅁ', code: 'KeyA', metaKey: true, shiftKey: true }, 'Alt')).toBe('none');
+    expect(k({ key: 'a', ctrlKey: true }, 'Alt')).toBeNull();
+    expect(k({ key: 't', metaKey: true }, 'Alt')).toBeNull();
+    expect(k({ key: 't', ctrlKey: true }, 'Alt')).toBeNull();
+    expect(k({ key: 'a', metaKey: true, altKey: true }, 'Alt')).toBeNull();
+  });
+
+  it('Ctrl+A는 보이는 안내를 모두 고르고 앱에 고른 형상을 풀게 알리며, Ctrl+T는 고른 안내·형상을 모두 푼다', async () => {
+    const { r, s } = await setup();
+    s.geo = true;
+    expect(press(r, { key: 'a', ctrlKey: true })).toEqual([true, true]);
+    expect(r.tool.selectedGuideCount).toBe(5);
+    expect(counts(r)).toEqual([3, 2]);
+    expect(s.picks).toBe(1);
+    expect(s.geo).toBe(false);
+    expect(r.tool.guidePickText(false)).toBe(`안내점 3개·안내선 2개 · ${GUIDE_DELETE_KEY_HINT}`);
+    // 이미 모두 골랐어도 받는다(브라우저의 글 모두 고르기로 넘기지 않는다)
+    expect(press(r, { key: 'a', ctrlKey: true })).toEqual([true, true]);
+    expect(r.tool.selectedGuideCount).toBe(5);
+    // 모두 고른 뒤 Delete는 함께 지우고, 되돌리기 한 번에 돌아온다
+    expect(r.tool.selectKey(new KeyboardEvent('keydown', { key: 'Delete', cancelable: true }))).toBe(true);
+    expect([r.tool.guides.length, r.tool.guideLines.length]).toEqual([0, 0]);
+    expect(r.tool.undo()).toBe(true);
+    expect([r.tool.guides.length, r.tool.guideLines.length]).toEqual([3, 2]);
+    // Ctrl+T: 모두 푼다
+    press(r, { key: 'a', ctrlKey: true });
+    expect(press(r, { key: 't', ctrlKey: true })).toEqual([true, true]);
+    expect(r.tool.selectedGuideCount).toBe(0);
+    expect(counts(r)).toEqual([0, 0]);
+    expect(s.none).toBe(1);
+    // 고른 것이 없으면 받지 않는다(브라우저 몫), 고른 형상만 있으면 앱이 풀고 받는다
+    expect(press(r, { key: 't', ctrlKey: true })).toEqual([false, false]);
+    s.geo = true;
+    expect(press(r, { key: 't', ctrlKey: true })).toEqual([true, true]);
+    expect(s.geo).toBe(false);
+    // 숨긴 안내는 고르지 않는다
+    r.tool.pickGuide(121.3, 81.2, 'mouse');
+    r.tool.pickGuide(80.6, 61.3, 'mouse', { ctrlKey: true });
+    expect(r.tool.hideSelectedGuides()).toBe(true);
+    expect(press(r, { key: 'a', ctrlKey: true })).toEqual([true, true]);
+    expect(r.tool.selectedGuideCount).toBe(3);
+    expect(counts(r)).toEqual([2, 1]);
+  });
+
+  it('받지 않는 때: 입력 칸·줄자를 켠 동안·안내를 숨긴 동안·보이는 안내가 없을 때(브라우저 기본 동작 그대로)', async () => {
+    const { r, s } = await setup();
+    const input = document.createElement('input');
+    document.body.append(input);
+    expect(press(r, { key: 'a', ctrlKey: true }, input)).toEqual([false, false]);
+    const div = document.createElement('div');
+    document.body.append(div);
+    expect(press(r, { key: 'a', ctrlKey: true }, div)).toEqual([true, true]);
+    press(r, { key: 't', ctrlKey: true });
+    r.tool.setMode('tape');
+    expect(press(r, { key: 'a', ctrlKey: true })).toEqual([false, false]);
+    expect(r.tool.selectedGuideCount).toBe(0);
+    r.tool.setMode(null);
+    r.tool.setGuidesShown(false);
+    expect(press(r, { key: 'a', ctrlKey: true })).toEqual([false, false]);
+    r.tool.setGuidesShown(true);
+    // 모두 숨기면 보이는 안내가 없다
+    press(r, { key: 'a', ctrlKey: true });
+    r.tool.hideSelectedGuides();
+    expect(press(r, { key: 'a', ctrlKey: true })).toEqual([false, false]);
+    expect(s.picks).toBe(2);
+    // 키가 아닌 것(Ctrl+Z·Shift+Ctrl+A)은 이 함수가 받지 않는다
+    expect(press(r, { key: 'A', ctrlKey: true, shiftKey: true })).toEqual([false, false]);
+  });
+
+  it('Mac(안내 두기 키 Option): ⌘A로 모두 고르고 Shift+⌘A로 모두 풀며, Ctrl+A·⌘T는 받지 않는다', async () => {
+    const { r, s } = await setup({ guideKey: 'Alt' });
+    expect(press(r, { key: 'a', ctrlKey: true })).toEqual([false, false]);
+    expect(press(r, { key: 'a', metaKey: true })).toEqual([true, true]);
+    expect(r.tool.selectedGuideCount).toBe(5);
+    expect(press(r, { key: 't', metaKey: true })).toEqual([false, false]);
+    expect(r.tool.selectedGuideCount).toBe(5);
+    expect(press(r, { key: 'A', metaKey: true, shiftKey: true })).toEqual([true, true]);
+    expect(r.tool.selectedGuideCount).toBe(0);
+    expect([s.picks, s.none]).toEqual([1, 1]);
   });
 });

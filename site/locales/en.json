@@ -1056,5 +1056,7 @@
   "고른 안내 {0}개 지우기 (Delete)": "Delete {0} selected guides (Delete)",
   "고른 안내 숨기기": "Hide selected guides",
   "숨긴 안내 모두 보이기": "Show all hidden guides",
-  "줄자·각도기를 끈 동안 안내를 누르거나 끌기: Ctrl(Mac은 Option)은 더하기, Shift는 넣고 빼기, Shift+Ctrl(Shift+Option)은 빼기 — 끌면 고르기 상자(오른쪽으로 끌면 다 든 것, 왼쪽은 걸친 것까지)": "Clicking or dragging guides while Tape Measure and Protractor are off: Ctrl (Option on Mac) adds, Shift toggles, Shift+Ctrl (Shift+Option) removes — dragging draws a selection box (drag right for guides fully inside, left to include guides it touches)"
+  "줄자·각도기를 끈 동안 안내를 누르거나 끌기: Ctrl(Mac은 Option)은 더하기, Shift는 넣고 빼기, Shift+Ctrl(Shift+Option)은 빼기 — 끌면 고르기 상자(오른쪽으로 끌면 다 든 것, 왼쪽은 걸친 것까지)": "Clicking or dragging guides while Tape Measure and Protractor are off: Ctrl (Option on Mac) adds, Shift toggles, Shift+Ctrl (Shift+Option) removes — dragging draws a selection box (drag right for guides fully inside, left to include guides it touches)",
+  "줄자·각도기를 끈 동안: 보이는 안내점·안내선 모두 고르기(숨긴 안내는 빼고)": "While Tape Measure and Protractor are off: select all visible guide points and guide lines (hidden guides are left out)",
+  "줄자·각도기를 끈 동안: 고른 것 모두 풀기(브라우저가 그 키를 먼저 쓰면 Esc)": "While Tape Measure and Protractor are off: deselect everything (Esc if the browser takes that key first)"
 }
