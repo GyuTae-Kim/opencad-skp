@@ -40,6 +40,17 @@ export function resizeTyped<T extends Typed>(a: T, keep: number, size: number, C
   return b;
 }
 
+/**
+ * 다 쓴 배열의 버퍼를 곧바로 놓는다(ArrayBuffer.prototype.transfer(0)으로 떼어 낸다 — GC를 기다리지 않는다). 버퍼를 함께 쓰는 다른 배열도 길이 0이 되므로
+ * 그 버퍼를 혼자 지닌 쪽만 부른다. transfer가 없거나 SharedArrayBuffer·이미 뗀 버퍼면 아무것도 하지 않는다(그때는 예전처럼 GC가 놓는다). 놓았으면 true
+ */
+export function freeTyped(a: Typed | null | undefined): boolean {
+  const buf = a?.buffer;
+  if (!nativeTransfer || !(buf instanceof ArrayBuffer) || !buf.byteLength) return false;
+  nativeTransfer.call(buf, 0);
+  return true;
+}
+
 /** 두 배씩 키우는 쌓기. a[0, n)이 쌓은 값이다(쓰는 쪽이 reserve 뒤 a에 바로 쓰고 n을 옮긴다) */
 class Grow<T extends Typed> {
   a: T;

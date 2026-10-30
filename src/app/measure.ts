@@ -377,6 +377,8 @@ const PROBE_BUDGET_MS = 6;
 const TOUCH_PROBE_BUDGET_MS = 24;
 /** 가림 판정 고르기 최대 횟수(추정 한 번에) */
 const VISIBLE_CHECKS = 4;
+/** 축·잠근 선이 면을 뚫는 점을 다시 맞춰 보는 고르기: 그물 면만(코어 0.20.0 — 선분·점·윤곽선은 고르지도 않고 면을 가리지도 않는다) */
+const FACE_PICK = { meshesOnly: true } as const;
 /** 각도기 원판 반지름·호 반지름(화소) */
 const PROTRACTOR_PX = 44;
 const ARC_PX = 26;
@@ -1628,10 +1630,11 @@ export class MeasureTool {
       parallelRef: this.parallelRef,
       lock: this.pts.length ? this.lockValue : null,
       tracks: this.trackOn ? this.tracker.view : null,
-      // 축·잠근 선이 면을 뚫는 점은 커서와 같은 고르기로 그 자리에서 다시 맞춰 본다(숨긴 항목·단면에서 잘린 쪽은 코어 고르기가 거른다)
+      // 축·잠근 선이 면을 뚫는 점은 그 자리에서 그물 면만 다시 맞춰 본다(코어 0.20.0 meshesOnly — 면 위 선분·점은 면을 가리지 않고,
+      // 숨긴 항목·단면에서 잘린 쪽은 커서 고르기처럼 코어가 거른다)
       axisMeets: this.meetsOn,
       lockMeets: this.lockMeetsOn,
-      faceAt: this.meetsOn || this.lockMeetsOn ? (sx: number, sy: number) => v.pick(sx, sy) : null,
+      faceAt: this.meetsOn || this.lockMeetsOn ? (sx: number, sy: number) => v.pick(sx, sy, FACE_PICK) : null,
     });
   }
 

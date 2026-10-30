@@ -807,8 +807,8 @@ function directionSnap(o: SnapInput, f: ViewFrame, from: readonly number[], snap
   return snap;
 }
 
-/** 축이 면을 뚫는 점이 보는 면 맞음: 고르기가 맞힌 점·단위 법선, 평면 위 점(맞은 삼각형의 첫 꼭짓점), 그물 id·삼각형 번호와 그 삼각형(세계) */
-type FaceHit = TrackFaceHit & { id: string; index: number; tri: [V3, V3, V3] | null };
+/** 축이 면을 뚫는 점이 보는 면 맞음: 고르기가 맞힌 점·단위 법선, 평면 위 점(맞은 삼각형의 첫 꼭짓점), 그물 id·삼각형 번호 */
+type FaceHit = TrackFaceHit & { id: string; index: number };
 
 /**
  * 그물 면 고르기 → 축이 면을 뚫는 점이 보는 면 맞음. 단면 채운 면·법선이 없는 것·그물이 아니면 null.
@@ -819,46 +819,21 @@ function faceHitOf(scene: SnapScene | null, pick: Pick3d | null | undefined): Fa
   const n = pick.normal;
   const l = Math.hypot(n[0], n[1], n[2]);
   if (!(l > 0)) return null;
+  const h: FaceHit = { point: pick.point, normal: [n[0] / l, n[1] / l, n[2] / l], id: pick.id, index: pick.index };
   const tri = scene ? triangleOfPick(scene, pick) : null;
-  const h: FaceHit = { point: pick.point, normal: [n[0] / l, n[1] / l, n[2] / l], id: pick.id, index: pick.index, tri };
   if (tri) h.origin = tri[0];
   return h;
 }
 
-/** 점 p가 삼각형 안(변 위 포함 — 무게중심 좌표가 모두 −eps 이상)인지. 넓이가 0이면 false */
-function inTriangle(p: readonly number[], t: readonly [V3, V3, V3], eps = 1e-9): boolean {
-  const u = sub(t[1], t[0]), v = sub(t[2], t[0]), w = sub(p, t[0]);
-  const uu = dot(u, u), uv = dot(u, v), vv = dot(v, v), wu = dot(w, u), wv = dot(w, v);
-  const den = uu * vv - uv * uv;
-  if (!(den > 0)) return false;
-  const b = (vv * wu - uv * wv) / den, c = (uu * wv - uv * wu) / den;
-  return b >= -eps && c >= -eps && b + c <= 1 + eps;
-}
-
 /**
- * 축이 면을 뚫는 점을 그 화면 자리에서 다시 맞춰 볼 고르기(axisFaceSnap의 hitAt): 맨 앞에 보이는 그물 면.
- * 코어 고르기는 허용 거리(6화소) 안의 선을 면보다 앞세우므로, 그 자리에서 선이 맞으면 면 위에 그린 선(면의 테두리 모서리·면 위 선)인지 본다 —
- * 그 선의 맞은 점이 앞서 맞춰 본 면(처음은 커서 밑 면 — 축 직선 하나마다 새 hitter)의 평면 위(그 깊이 1.5화소 안)이고 그 화면 자리 광선이
- * 그 삼각형 안을 지나면 그 면이 맞은 것으로 본다(코어 0.18.0이 면 위에 그린 선분·점은 면을 가리지 않게 그물만 다시 고르는 것과 같은 뜻).
- * 단면에서 잘린 쪽이면 맞지 않는다. 고르기는 한 번 추정에 FACE_HIT_CHECKS번까지(budget을 함께 센다) 하고 그 뒤는 null
+ * 축이 면을 뚫는 점을 그 화면 자리에서 다시 맞춰 볼 고르기(axisFaceSnap·lockFaceSnap의 hitAt): 맨 앞에 보이는 그물 면.
+ * 부른 쪽 faceAt이 그물 면만 고른다(코어 0.20.0 meshesOnly — 코어 0.18.0이 축과 면의 교차를 다시 맞춰 볼 때 쓰는 고르기와 같다).
+ * 그래서 면 위에 그린 선(면의 테두리 모서리·면 위 선)도, 면 앞에 떠 있는 선도 그 밑 면을 가리지 않는다. 그물이 아닌 것이 오면 맞지 않은 것으로 본다.
+ * 고르기는 한 번 추정에 FACE_HIT_CHECKS번까지(budget을 함께 센다) 하고 그 뒤는 null
  */
-function faceHitter(o: SnapInput, f: ViewFrame, under: FaceHit, budget: { n: number }): (sx: number, sy: number) => FaceHit | null {
+function faceHitter(o: SnapInput, budget: { n: number }): (sx: number, sy: number) => FaceHit | null {
   const at = o.faceAt!;
-  let last = under;
-  return (sx, sy) => {
-    if (++budget.n > FACE_HIT_CHECKS) return null;
-    const k = at(sx, sy);
-    const h = faceHitOf(o.scene, k);
-    if (h) return (last = h);
-    if (!k || k.kind === 'mesh' || !last.tri) return null;
-    const ray = screenRay(f, sx, sy);
-    const q = rayPlane(ray, last.origin ?? last.point, last.normal);
-    if (!q || !inTriangle(q, last.tri) || (o.kept && !o.kept(q))) return null;
-    const dq = viewDepth(f, q);
-    const off = Math.abs(dot(sub(k.point, q), last.normal));
-    if (!(off <= worldPerPixel(f, Math.max(dq, 0)) * 1.5 + 1e-9 * (1 + Math.max(...q.map(Math.abs))))) return null;
-    return { ...last, point: q };
-  };
+  return (sx, sy) => (++budget.n > FACE_HIT_CHECKS ? null : faceHitOf(o.scene, at(sx, sy)));
 }
 
 /** 축·잠근 선과 만나는 점을 볼 커서 둘레 선분(코어 TrackSegment 꼴): 모서리는 단면에 잘린 쪽(keep)·가린 점(vis)을 빼고, 안내선은 덧그림이라 보지 않는다(교차점과 같다) */
@@ -885,7 +860,7 @@ function lockMeetSnap(o: SnapInput, f: ViewFrame, from: readonly number[], lock:
   const { segs, vis } = meetSegments(o, near);
   const edge = segs.length ? lockEdgeSnap(f, from, lock.dir, segs, o.x, o.y, R, vis) : null;
   const under = o.faceAt ? faceHitOf(o.scene, o.pick) : null;
-  const face = under ? lockFaceSnap<FaceHit>(f, from, lock.dir, o.x, o.y, R, under, faceHitter(o, f, under, { n: 0 })) : null;
+  const face = under ? lockFaceSnap<FaceHit>(f, from, lock.dir, o.x, o.y, R, under, faceHitter(o, { n: 0 })) : null;
   const t = chooseTrackPoint<{ distPx: number }>([edge, face]);
   if (!t) return null;
   const s: Snap = { kind: lock.kind, point: t === edge ? edge.p : face!.p, label: '', dir: [lock.dir[0], lock.dir[1], lock.dir[2]], locked: true };
@@ -934,7 +909,7 @@ function trackPointSnap(o: SnapInput, f: ViewFrame, tracks: readonly (readonly n
     for (const P of tracks ?? []) add(P);
     const budget = { n: 0 };
     for (let i = 0; i < lines.length; i++) {
-      const r = axisFaceSnap<FaceHit>(f, [lines[i]!], o.x, o.y, R, under, faceHitter(o, f, under, budget), axes);
+      const r = axisFaceSnap<FaceHit>(f, [lines[i]!], o.x, o.y, R, under, faceHitter(o, budget), axes);
       if (r && (!face || r.distPx < face.distPx)) {
         face = r;
         faceLine = i;

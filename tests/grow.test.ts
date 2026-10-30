@@ -3,7 +3,7 @@
  * 끝낸 배열은 꼭 맞는 길이이며 쌓던 큰 버퍼를 붙들지 않는다.
  */
 import { describe, expect, it } from 'vitest';
-import { CAN_TRANSFER, F32, I32, U32, resizeTyped } from '../src/grow';
+import { CAN_TRANSFER, F32, I32, U32, freeTyped, resizeTyped } from '../src/grow';
 
 describe('장면 배열 쌓기', () => {
   it('resizeTyped: 옮기든 복사하든 앞 keep개와 0으로 채운 뒤가 같다', () => {
@@ -54,5 +54,28 @@ describe('장면 배열 쌓기', () => {
     expect(Array.from(c.done())).toEqual(new Array(10).fill(-1));
     // 빈 쌓기는 길이 0
     expect(new F32().done().length).toBe(0);
+  });
+
+  it('freeTyped: 다 쓴 배열의 버퍼를 곧바로 떼어 놓는다(같은 버퍼의 다른 배열도 길이 0), 뗀 버퍼·빈 배열·없음은 그대로', () => {
+    const a = Float64Array.from([1, 2, 3]);
+    const view = new Uint8Array(a.buffer, 8, 8);
+    if (CAN_TRANSFER) {
+      expect(freeTyped(a)).toBe(true);
+      expect(a.length).toBe(0);
+      expect(a.buffer.byteLength).toBe(0);
+      expect(view.length).toBe(0);
+      expect(freeTyped(a)).toBe(false);
+    } else {
+      expect(freeTyped(a)).toBe(false);
+      expect(a.length).toBe(3);
+    }
+    expect(freeTyped(new Float32Array(0))).toBe(false);
+    expect(freeTyped(null)).toBe(false);
+    expect(freeTyped(undefined)).toBe(false);
+    if (typeof SharedArrayBuffer === 'function') {
+      const sh = new Int32Array(new SharedArrayBuffer(16));
+      expect(freeTyped(sh)).toBe(false);
+      expect(sh.length).toBe(4);
+    }
   });
 });
