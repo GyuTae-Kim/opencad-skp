@@ -38,6 +38,7 @@
  *   되돌리기 목록은 기억하지 않는다(되살린 안내가 처음 상태). 모두 지우면 그 파일의 기억도 지운다(되돌리면 다시 기억한다).
  * 결과 글(길이·각도)은 정밀 조준 십자선·손가락·툴팁·앱이 알려 준 측정 띠와 겹치면 코어 placeMeasureLabel 차례로 비켜 둔다(labelSpot).
  *   먼저 놓인 글상자(앱이 알려 준 모형 글·치수 라벨 — placedLabels, 앞서 놓은 결과 글)와 겹쳐도 코어 0.24.0 placeLabelAmong 차례로 비킨다(26차).
+ *   30차부터 둘 다 코어 0.28.0 placeLabelAmong 한 번(기본 자리 가운데, 막히면 0.25.0 차례 — fallback 'topRight')으로 고른다(같은 자리).
  * 안내 두기(SketchUp 줄자·각도기의 "+" — 이 뷰어는 재기만이 기본): 켜면(setGuideMode, 키보드는 Ctrl — Mac은 Option — 만 눌렀다 떼기)
  *   줄자 둘째 누르기가 안내를 둔다 — 모서리 위에서 시작했으면 그 모서리와 나란히 둘째 점을 지나는 안내선(결과는 모서리에 수직인 거리),
  *   끝점·꼭짓점 같은 점에서 시작했으면 둘째 점에 안내점. 각도기는 셋째 누르기가 중심을 지나 잰 방향으로 안내선을 둔다. 결과는 재기만과 같이 남긴다.
@@ -84,8 +85,6 @@ import {
   LABEL_POINT_R,
   hitsAvoid,
   placeLabelAmong,
-  placeMeasureLabel,
-  rectsOverlap,
   type LabelAvoidAreas,
   type LabelCircle,
   type MeasureLabelRect,
@@ -960,13 +959,15 @@ export function placedRects(list: readonly { box: { x: number; y: number; w: num
 }
 
 /**
- * 결과 글(줄자 길이·각도기 각도) 자리: 기본은 기준점(x, y) 가운데. 그 자리가 피할 자리(정밀 조준 십자선·손가락, 툴팁, 측정 띠)와 겹치면
- * 코어 0.13.0 순수 함수 placeMeasureLabel의 차례(기준점 오른쪽 위 → 왼쪽 위 → 오른쪽 아래 → 왼쪽 아래 → 화면 선분 seg를 따라 → 피할 자리 위·아래)로
- * 겹치지 않는 첫 자리의 왼쪽 위 좌표(soft — 측정 점 표식 — 까지 비키는 자리를 먼저). 겹치지 않거나, 옮겨도 겹치거나, 크기를 모르면 null(기본 자리 그대로).
- * 코어 거리 글상자를 비키는 setMeasureLabelAvoid와 같은 규칙이다(이 도구는 코어 측정을 쓰지 않아 그 글상자가 없다).
- * placed(26차 — 먼저 놓인 글상자: 모형의 글·치수 라벨, 앞서 놓은 결과 글)가 있으면 코어 0.24.0 placeLabelAmong으로 그것도 비킨다:
- * 위 자리가 먼저 놓인 글상자와 겹치지 않으면 그 자리 그대로이고(그래서 placed가 비었거나 겹치지 않으면 예전과 같다), 겹치면 먼저 놓인 것까지 비키는 자리.
- * 피할 자리와는 겹치지 않던 가운데 자리가 먼저 놓인 글상자와만 겹치는데 비킬 곳이 없으면 가운데 그대로(null)
+ * 결과 글(줄자 길이·각도기 각도) 자리: 기본은 기준점(x, y) 가운데. 그 자리가 피할 자리(정밀 조준 십자선·손가락, 툴팁, 측정 띠)나
+ * 먼저 놓인 글상자(26차 — placed: 모형의 글·치수 라벨, 앞서 놓은 결과 글)와 겹치면 옮긴 자리의 왼쪽 위 좌표, 옮기지 않으면 null(기본 자리 그대로).
+ * 30차부터 코어 0.28.0 placeLabelAmong 한 번으로 고른다(기본 자리 first = 당기지 않은 가운데, fallback 'topRight'):
+ * 가운데가 막히면 기본 자리를 주지 않은 고르기(코어 0.25.0 차례 — 기준점 오른쪽 위 → 왼쪽 위 → 오른쪽 아래 → 왼쪽 아래 → 화면 선분 seg를 따라 →
+ * 피할 자리 위·아래, 먼저 놓인 글상자와 겹치면 그것까지 비켜 다시)의 자리를 받고, 그 자리도 막혔으면 가운데 그대로다
+ * (가운데가 피할 자리와 겹쳤으면 옮긴 자리가 피할 자리만 비키면 되고, 먼저 놓인 글상자와만 겹쳤으면 둘 다 비켜야 한다).
+ * 측정 점 표식(soft)은 옮길 때 될 수 있으면 가리지 않을 것(avoid.soft)으로 준다. 29차까지 앱이 두 번 고르던 계산과
+ * 같은 자리다(tests/app/labelspot.test.ts — 무작위 4,000가지). 코어 거리 글상자를 비키는 setMeasureLabelAvoid와 같은 차례다
+ * (이 도구는 코어 측정을 쓰지 않아 그 글상자가 없다). 크기를 모르면 null
  */
 export function labelSpot(
   x: number,
@@ -980,13 +981,10 @@ export function labelSpot(
   placed: readonly MeasureLabelRect[] = [],
 ): { x: number; y: number } | null {
   if (!(width > 0 && height > 0)) return null;
-  const c = { x: x - width / 2, y: y - height / 2, width, height };
-  const hit = hitsAvoid(c, avoid);
-  if (!hit && !placed.some((p) => rectsOverlap(c, p))) return null;
+  const first = { x: x - width / 2, y: y - height / 2 };
   const a = soft?.length ? { ...avoid, soft } : avoid;
-  const r = placed.length ? placeLabelAmong([x, y], { width, height }, view, a, placed, seg) : placeMeasureLabel([x, y], { width, height }, view, a, seg);
-  if (hitsAvoid(r, avoid) || (!hit && placed.some((p) => rectsOverlap(r, p)))) return null;
-  return { x: r.x, y: r.y };
+  const r = placeLabelAmong([x, y], { width, height }, view, a, placed, seg, null, { first, fallback: 'topRight' });
+  return r.x === first.x && r.y === first.y ? null : { x: r.x, y: r.y };
 }
 
 /** 툴팁 글: "끝점 · 1200 mm" */
@@ -3037,7 +3035,7 @@ export class MeasureTool {
 
   /**
    * 결과 글이 정밀 조준 십자선·손가락, 커서 옆 툴팁, 3D 보기 위에 뜬 것(coverAreas — 측정 띠·측정값 칸·장면 탭·뷰 큐브)과 겹치거나
-   * 보기에 걸친 글이 보기 밖으로 잘리면(edgeBands — 휴대폰은 위 도구 띠·아래 상태 줄·화면 끝) 비켜 둔다(labelSpot — 코어 placeMeasureLabel 차례).
+   * 보기에 걸친 글이 보기 밖으로 잘리면(edgeBands — 휴대폰은 위 도구 띠·아래 상태 줄·화면 끝) 비켜 둔다(labelSpot — 코어 placeLabelAmong 한 번, 0.25.0 차례).
    * 겹치지 않으면 가운데 자리 그대로라 그림이 예전과 같다. 글이 모두 보기 밖이면(결과 가운데가 멀리 밖) 가장자리에 붙여 두지 않는다.
    * 26차: 보기 안의 결과 글은 먼저 놓인 글상자(모형 글·치수 라벨 — placedLabels, 앞서 놓은 결과 글)와 겹쳐도 코어 0.24.0 placeLabelAmong 차례로 비킨다
    * (모형 라벨을 먼저 놓고 결과 글을 뒤에 놓는다 — 코어가 덧그림 글상자 뒤에 측정 거리 글상자를 놓는 것과 같다)
