@@ -245,7 +245,7 @@ export interface AppSnapshot {
   backEdges: boolean;
   colorByTag: boolean;
   /**
-   * 그래픽 문맥(ok·lost·restoring 쥐어 둔 색 바꾼 무늬를 다시 손질하는 중·partial 다시 손질하지 못함), 지금 문서를 놓아 올렸는지(큰 모형 — 푼 무늬 그림),
+   * 그래픽 문맥(ok·lost·restoring 되찾고 다시 올리는 중 — 코어 끝 알림까지·partial 다시 손질하지 못함), 지금 문서를 놓아 올렸는지(큰 모형 — 푼 무늬 그림),
    * 마지막으로 놓은 것을 다시 준 기록(release.ts)
    */
   graphics: GraphicsState;
@@ -1314,8 +1314,9 @@ export class SkpViewerApp implements PanelHost {
   }
 
   /**
-   * 그래픽 문맥 잃음·되찾음 지켜보기를 한 번 만든다(release.ts ContextWatch): 잃으면 짧은 안내, 되찾으면 거두고 라벨·치수 끝 표시의 가림 판정을 다시 하며,
-   * 놓아 올린 큰 모형이면 쥐어 둔 색 바꾼 무늬를 다시 손질해 준다. 안내를 거둘 때는 그 안내가 아직 떠 있을 때만(다른 알림으로 바뀌었거나 닫았으면 그대로)
+   * 그래픽 문맥 잃음·되찾음 지켜보기를 한 번 만든다(release.ts ContextWatch): 잃으면 짧은 안내, 되찾으면 라벨·치수 끝 표시의 가림 판정을 다시 하며,
+   * 놓아 올린 큰 모형이면 쥐어 둔 색 바꾼 무늬를 다시 손질해 준다. 안내는 코어가 무늬까지 다 올렸다고 알릴 때(0.29.0 onContextRestoreDone) 거두고,
+   * 그 안내가 아직 떠 있을 때만 거둔다(다른 알림으로 바뀌었거나 닫았으면 그대로)
    */
   private watchContext(m: typeof import('./release'), v: Viewer3d): ContextWatch {
     if (this.ctxWatch) return this.ctxWatch;

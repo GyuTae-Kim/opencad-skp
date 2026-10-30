@@ -1,8 +1,9 @@
 /**
  * 큰 모형 놓기와 그래픽 문맥 잃음·되찾음(src/app/release.ts — 27차, 코어 0.25.0, 29차에 되찾기를 바꿈): 놓기는 푼 무늬 그림만,
  * 색을 바꾼 무늬의 바이트는 장면에서 빼 Blob으로 쥐기, 손질 워커 한 번 쓰고 끝내기, 잃으면 안내·되찾으면 거두고 가림 판정 다시 하기,
- * 쥐어 둔 무늬만 다시 손질해 코어에 주기(파일을 읽지 않음 — 실패·또 잃음·여러 번 잃음·새 문서·새 파일 여는 동안 멈춤).
- * 가짜 뷰어(코어 Viewer3d의 일부)와 가짜 Worker로 차례를 본다.
+ * 쥐어 둔 무늬만 다시 손질해 코어에 주기(파일을 읽지 않음 — 실패·또 잃음·여러 번 잃음·새 문서·새 파일 여는 동안 멈춤),
+ * 30차부터 안내는 코어 끝 알림(0.29.0 onContextRestoreDone — 코어가 무늬까지 다 풀어 올림)에 거두기.
+ * 가짜 뷰어(코어 Viewer3d의 일부 — 끝 알림은 코어처럼 되찾음 알림들 뒤, 앱이 다 주고 코어가 풀 무늬가 없을 때)와 가짜 Worker로 차례를 본다.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ContextRestoreNeed, TextureSource } from 'opencad-viewer3d';
@@ -42,17 +43,26 @@ class FakeWorker {
 }
 const make = (): Worker => new FakeWorker() as unknown as Worker;
 
-/** 가짜 뷰어: 기다리는 무늬(코어가 원본을 놓았고 장면에 바이트가 없는 무늬)를 들고, 받은 것을 지운다. meshes는 놓은 배열(이 앱은 놓지 않는다) */
+/**
+ * 가짜 뷰어: 기다리는 무늬(코어가 원본을 놓았고 장면에 바이트가 없는 무늬)를 들고, 받은 것을 지운다. meshes는 놓은 배열(이 앱은 놓지 않는다).
+ * decoding은 코어가 장면의 그림 바이트를 다시 푸는 무늬 수(0.29.0 — 다 풀고 앱이 다 줘야 끝 알림)
+ */
 class FakeViewer implements WatchViewer {
   scene: Scene3d | null = null;
   missMeshes: string[] = [];
   missTex = new Set<string>();
   gotTex: [string, TextureSource][] = [];
+  decoding = 0;
+  pending = false;
   private lostCb: (() => void) | null = null;
   private restoreCb: ((need: ContextRestoreNeed) => unknown) | null = null;
+  private doneCb: (() => void) | null = null;
   get restoreNeed(): ContextRestoreNeed | null {
     const n = this.need();
     return n.meshes.length || n.textures.length ? n : null;
+  }
+  get restorePending(): boolean {
+    return this.pending;
   }
   need(): ContextRestoreNeed {
     return { meshes: this.missMeshes.map((id) => ({ id, normals: true, uvs: false, backUvs: false })), textures: [...this.missTex] };
@@ -65,18 +75,44 @@ class FakeViewer implements WatchViewer {
     this.restoreCb = cb;
     return () => (this.restoreCb = null);
   }
+  onContextRestoreDone(cb: () => void): () => void {
+    this.doneCb = cb;
+    return () => (this.doneCb = null);
+  }
+  /** 코어처럼 받은 무늬를 올린 뒤(약속이 풀리기 전) 끝인지 본다 */
   restoreTexture(id: string, src: TextureSource): Promise<boolean> {
     if (!this.missTex.delete(id)) return Promise.resolve(false);
     this.gotTex.push([id, src]);
-    return Promise.resolve(true);
+    return Promise.resolve().then(() => {
+      this.checkDone();
+      return true;
+    });
   }
   lose(): void {
+    this.pending = true;
     this.lostCb?.();
   }
-  /** 되찾음: 코어는 장면 바이트가 없는 무늬(쥐어 둔 것)를 다시 기다린다 */
-  restore(wait: string[] = []): void {
+  /** 되찾음: 코어는 장면 바이트가 없는 무늬(쥐어 둔 것)를 다시 기다리고, decode장은 장면의 그림 바이트로 다시 푼다. 알림들 뒤에 끝인지 본다 */
+  restore(wait: string[] = [], decode = 0): void {
+    this.pending = true;
     for (const id of wait) this.missTex.add(id);
+    this.decoding = decode;
     void this.restoreCb?.(this.need());
+    this.checkDone();
+  }
+  /** 코어가 그림 바이트로 다시 풀던 무늬를 다 올렸다 */
+  decoded(): void {
+    this.decoding = 0;
+    this.checkDone();
+  }
+  /** 끝 알림만 부른다(차례와 무관하게 — 받는 쪽이 거르는지 볼 때) */
+  emitDone(): void {
+    this.doneCb?.();
+  }
+  private checkDone(): void {
+    if (!this.pending || this.decoding || this.restoreNeed) return;
+    this.pending = false;
+    this.doneCb?.();
   }
 }
 
@@ -204,17 +240,86 @@ describe('손질 워커', () => {
 });
 
 describe('그래픽 문맥 잃음·되찾음', () => {
-  it('잃으면 안내, 다시 받을 것 없이 되찾으면(빈 need — 코어가 장면 배열·바이트로 다시 올림) 거두고 가림 판정을 다시 한다 — 워커는 쓰지 않는다', () => {
+  it('잃으면 안내, 다시 받을 것 없이 되찾고(빈 need — 코어가 장면 배열·바이트로 다시 올림) 코어가 다 올렸다고 알리면 거둔다 — 가림 판정을 다시 하고 워커는 쓰지 않는다', () => {
     const { v, ui, w } = setup();
     expect(w.released).toBe(true);
     v.lose();
     expect(w.state).toBe('lost');
     expect(ui.open).toBe(CONTEXT_LOST_TITLE);
+    // 풀 무늬가 없으면 끝 알림이 되찾음 알림 바로 뒤에 온다
     v.restore();
     expect(w.state).toBe('ok');
     expect(ui.open).toBeNull();
     expect(ui.refreshed).toBe(1);
     expect(FakeWorker.all).toHaveLength(0);
+  });
+
+  it('놓아 올린 문서: 코어가 놓은 무늬를 그림 바이트로 다시 푸는 동안은 무늬를 다시 준비한다고 알리고, 끝 알림에 거둔다(30차 — 29차는 되찾음 알림에 거둠)', () => {
+    const { v, ui, w } = setup();
+    v.lose();
+    v.restore([], 3);
+    expect(v.restorePending).toBe(true);
+    expect(w.state).toBe('restoring');
+    expect(ui.open).toBe(RESTORE_TITLE);
+    expect(ui.refreshed).toBe(1);
+    v.decoded();
+    expect(w.state).toBe('ok');
+    expect(ui.open).toBeNull();
+    expect(FakeWorker.all).toHaveLength(0);
+  });
+
+  it('앱이 색 바꾼 무늬를 다 준 뒤에도 코어가 무늬를 푸는 중이면 끝 알림까지 안내를 둔다(앱 몫의 기록은 그때 남긴다)', async () => {
+    const { v, ui, w } = setup();
+    v.lose();
+    v.restore(['t1'], 2);
+    FakeWorker.all[0]!.emit({ id: 1, type: 'recolored', result: result('t1') });
+    await flush();
+    expect(v.gotTex.map(([id]) => id)).toEqual(['t1']);
+    expect(v.restoreNeed).toBeNull();
+    expect(w.last).toMatchObject({ textures: 1, left: 0 });
+    expect(w.state).toBe('restoring');
+    expect(ui.open).toBe(RESTORE_TITLE);
+    v.decoded();
+    expect(w.state).toBe('ok');
+    expect(ui.open).toBeNull();
+  });
+
+  it('놓아 올리지 않은 문서(작은 모형): 코어가 쥔 그림을 다시 올리는 동안 잃음 안내를 그대로 두고 끝 알림에 거둔다', () => {
+    const v = new FakeViewer();
+    const ui = new FakeUi();
+    const w = new ContextWatch(v, ui, make);
+    v.scene = sceneOf();
+    w.setSource(null);
+    v.lose();
+    v.restore([], 1);
+    expect(w.state).toBe('restoring');
+    expect(ui.open).toBe(CONTEXT_LOST_TITLE);
+    expect(ui.shown).toEqual([`info:${CONTEXT_LOST_TITLE}`]);
+    v.decoded();
+    expect(w.state).toBe('ok');
+    expect(ui.open).toBeNull();
+  });
+
+  it('끝 알림은 다시 올리는 중일 때만 안내를 거둔다(잃은 동안·손질하는 동안·평균색 안내·새 문서는 그대로)', async () => {
+    const { v, ui, w } = setup();
+    v.lose();
+    v.emitDone();
+    expect(w.state).toBe('lost');
+    expect(ui.open).toBe(CONTEXT_LOST_TITLE);
+    v.restore(['t1']);
+    v.emitDone();
+    expect(w.state).toBe('restoring');
+    expect(ui.open).toBe(RESTORE_TITLE);
+    FakeWorker.all[0]!.emit({ id: 1, type: 'error', message: '풀지 못함' });
+    await flush();
+    expect(w.state).toBe('partial');
+    v.emitDone();
+    expect(w.state).toBe('partial');
+    expect(ui.open).toBe(RESTORE_FAIL_TITLE);
+    w.setSource(null);
+    v.emitDone();
+    expect(w.state).toBe('ok');
+    expect(ui.open).toBe(RESTORE_FAIL_TITLE);
   });
 
   it('놓아 올린 문서: 되찾으면 코어가 바라는 쥐어 둔 무늬만 다시 손질해 주고 안내를 거둔다(파일은 읽지 않는다)', async () => {
