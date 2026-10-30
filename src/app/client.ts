@@ -70,7 +70,7 @@ export class ParseClient {
       if (m.type === 'done') return p.resolve({ ...m.result, print: new Promise((r) => (p.print = r)) });
       this.pending.delete(m.id);
       if (m.type === 'print') p.print?.(m.digest);
-      else p.reject(new Error(m.message));
+      else if (m.type === 'error') p.reject(new Error(m.message));
     };
     w.onerror = (ev: ErrorEvent) => {
       ev.preventDefault();

@@ -12,7 +12,9 @@
 // 코어 입구(Viewer3d — 그리기·고르기)는 문서를 열 때 나눠 받는다(core.ts). 여기서는 타입과 작은 모듈만 가져온다
 import type { Pick3d, IndexRange, PickEvent, Projection, RenderMode, SectionAxis, ViewName, Viewer3d } from 'opencad-viewer3d';
 import { VIEW_LABELS, lerpCamera, type CameraState, type ViewFrame } from 'opencad-viewer3d/camera';
-import { FirstUse, chunkFailText, isChunkLoadError, loadMeasure, loadViewerCore } from './core';
+import { FirstUse, chunkFailText, isChunkLoadError, loadMeasure, loadRelease, loadViewerCore } from './core';
+// 큰 모형 놓기·문맥 잃음과 되찾음(release.ts)도 문서를 열 때 나눠 받는다 — 여기서는 형만
+import type { ContextWatch, GraphicsState, RestoreRecord } from './release';
 import { dragStartPx } from 'opencad-viewer3d/pointer';
 import { ParseClient } from './client';
 import { AnnotationLabels, occludedBy } from './annotations';
@@ -242,6 +244,13 @@ export interface AppSnapshot {
   /** 뒤 모서리(숨은 선 방식의 점선) */
   backEdges: boolean;
   colorByTag: boolean;
+  /**
+   * 그래픽 문맥(ok·lost·restoring 놓은 것을 다시 읽는 중·partial 다시 읽지 못함), 지금 문서를 놓아 올렸는지(큰 모형 — 법선·무늬 좌표·푼 무늬),
+   * 마지막으로 놓은 것을 다시 준 기록(release.ts)
+   */
+  graphics: GraphicsState;
+  released: boolean;
+  restore: RestoreRecord | null;
 }
 
 interface Els {
@@ -394,6 +403,9 @@ export class SkpViewerApp implements PanelHost {
   private measureTool: MeasureTool | null = null;
   /** 지금 문서의 파일 내용 지문(SHA-256 — 측정 도구가 그 파일의 안내를 기억·되살리는 열쇠, openBlob) */
   private docPrint: Promise<ArrayBuffer | null> | null = null;
+  /** 그래픽 문맥 잃음·되찾음 안내와 놓은 것 다시 주기(release.ts — 조각을 받으면 뷰어마다 하나), 그 안내로 띄운 알림 */
+  private ctxWatch: ContextWatch | null = null;
+  private ctxNotice: AppSnapshot['notice'] = null;
   /** 측정 도구를 받기 전에 켰을 때: 받는 동안 마지막으로 누른 도구를 받은 뒤에 켠다(다시 누르면 거둔다, 받지 못하면 알린다) */
   private readonly measureFirstUse = new FirstUse<MeasureMode>(
     () => this.ensureMeasureTool(),
@@ -1054,6 +1066,10 @@ export class SkpViewerApp implements PanelHost {
     if (!this.viewer) void loadViewerCore().catch(() => undefined);
     // 측정 도구 조각도 함께(처음 켤 때 기다리지 않게 — 실패는 처음 켤 때 알린다)
     if (!this.measureTool) void loadMeasure().catch(() => undefined);
+    // 큰 모형 놓기·문맥 복구 조각도(받지 못하면 놓지 않는다). 열려 있던 큰 모형의 다시 읽기는 이 열기가 끝날 때까지 멈춘다
+    void loadRelease().catch(() => undefined);
+    const before = this.doc;
+    this.ctxWatch?.pause();
     try {
       const res = await this.client.open(
         name,
@@ -1086,12 +1102,20 @@ export class SkpViewerApp implements PanelHost {
       if (seq !== this.openSeq) return false;
       // 코어를 아직 못 받았으면 기다린다(받지 못하면 '3D 보기를 열 수 없습니다' 알림, 열려 있던 문서는 그대로)
       if (!(await this.ensureViewer()) || seq !== this.openSeq) return false;
+      // 큰 모형을 디스크의 파일(File)에서 열었으면 법선·무늬 좌표·푼 무늬를 올린 뒤 놓는다(문맥을 되찾으면 그 파일을 다시 읽는다 — release.ts).
+      // 주소로 받은 파일처럼 메모리에 있는 파일은 다시 읽으려면 쥐고 있어야 해서 놓지 않는다
+      const rel = isBigScene(res) && typeof File !== 'undefined' && file instanceof File ? await loadRelease().catch(() => null) : null;
+      if (seq !== this.openSeq) return false;
       const doc = createDoc(name, size, res, { makeUrl: (b, mime) => URL.createObjectURL(new Blob([b as BlobPart], { type: mime })) });
       // 파일 내용 지문(SHA-256 — 안내를 파일별로 기억하는 열쇠): 워커가 결과를 보낸 뒤 파일을 덩이씩 읽으며 구해 보낸다(못 구하면 null)
       this.docPrint = res.print ?? null;
-      const uploaded = this.setDoc(doc, (done, total) => {
-        if (seq === this.openSeq) this.setBusy(name, total ? done / total : 1, `화면에 올리는 중 · 묶음 ${fmtCount(done)}/${fmtCount(total)}`);
-      });
+      const uploaded = this.setDoc(
+        doc,
+        (done, total) => {
+          if (seq === this.openSeq) this.setBusy(name, total ? done / total : 1, `화면에 올리는 중 · 묶음 ${fmtCount(done)}/${fmtCount(total)}`);
+        },
+        rel ? { m: rel, file } : null,
+      );
       this.noticeDamage(doc);
       await uploaded;
       if (seq !== this.openSeq || this.doc !== doc) return false;
@@ -1105,14 +1129,18 @@ export class SkpViewerApp implements PanelHost {
     } finally {
       if (this.parsingSeq === seq) this.parsingSeq = 0;
       if (seq === this.openSeq) this.setBusy(null);
+      // 열지 못해 앞 문서가 그대로면 멈춘 다시 읽기를 잇는다
+      if (seq === this.openSeq && this.doc === before) this.ctxWatch?.resume();
     }
   }
 
   /**
    * 문서를 뷰어에 올린다. 큰 장면(삼각형+선분 INCREMENTAL_PRIMS 이상 또는 묶음 INCREMENTAL_ITEMS 이상)은
-   * 코어의 나눠 올리기(프레임마다 8 ms)로 올리고 progress(올린 묶음, 전체)를 알린다. 올리기가 끝나면 풀리는 약속을 돌려준다
+   * 코어의 나눠 올리기(프레임마다 8 ms)로 올리고 progress(올린 묶음, 전체)를 알린다. 올리기가 끝나면 풀리는 약속을 돌려준다.
+   * release(큰 모형을 디스크의 파일에서 열었을 때 — 조각과 그 파일)를 주면 법선·무늬 좌표·푼 무늬를 올린 뒤 놓고, 문맥을 되찾으면 그 파일을 다시 읽는다.
+   * 놓은 장면 객체는 이 문서에만 쓰고 setScene에 다시 주지 않는다(다시 열면 새 장면)
    */
-  private setDoc(d: SkpDoc, progress?: (done: number, total: number) => void): Promise<void> {
+  private setDoc(d: SkpDoc, progress?: (done: number, total: number) => void, release?: { m: typeof import('./release'); file: Blob } | null): Promise<void> {
     // 뷰어는 openBlob이 먼저 만든다(ensureViewer — 코어를 나눠 받는다)
     const v = this.viewer;
     if (!v) {
@@ -1149,6 +1177,11 @@ export class SkpViewerApp implements PanelHost {
       }
       this.uploadDone = resolve;
     });
+    // 큰 모형 놓기: 색을 바꾼 무늬는 그림 바이트를 빼 두어 되찾을 때 다시 받는다(release.ts prepareRelease)
+    const rel = big && release ? release : null;
+    if (rel) rel.m.prepareRelease(d.scene);
+    // 앞 문서의 다시 읽기는 거둔다(놓아 올렸으면 아래에서 이 문서의 파일을 준다)
+    this.ctxWatch?.setSource(null);
     if (big)
       v.setScene(d.scene, {
         incremental: true,
@@ -1159,8 +1192,10 @@ export class SkpViewerApp implements PanelHost {
             this.uploadDone = null;
           }
         },
+        ...(rel ? { release: rel.m.RELEASE_OPTIONS } : {}),
       });
     else v.setScene(d.scene);
+    if (rel) this.watchContext(rel.m, v).setSource({ scene: d.scene, file: rel.file, name: d.name, textureLimit: this.texLimits.limit });
     // 장면을 올리면 코어가 겉모습(선 색)을 풀었다 — 끝의 applyTheme에서 다시 건다
     this.lineContrast.reset();
     v.setRenderMode(this.renderMode);
@@ -1267,11 +1302,39 @@ export class SkpViewerApp implements PanelHost {
       this.marks.setOcclusion((p, x, y, f) => this.labelOccluded(p, x, y, f));
       // 측정 도구는 조각을 받는 대로 만든다(문서를 열 때 받기 시작했다 — 받지 못했으면 처음 켤 때 다시 받고 알린다)
       void this.ensureMeasureTool().catch(() => undefined);
+      // 그래픽 문맥 잃음·되찾음 안내도 조각을 받는 대로(받지 못하면 안내 없이 코어가 스스로 다시 그린다)
+      void loadRelease().then(
+        (m) => this.watchContext(m, v),
+        () => undefined,
+      );
       return true;
     } catch (e) {
       this.showNotice('error', '3D 보기를 열 수 없습니다', isChunkLoadError(e) ? chunkFailText('viewer', navigator.onLine !== false) : errorText(e));
       return false;
     }
+  }
+
+  /**
+   * 그래픽 문맥 잃음·되찾음 지켜보기를 한 번 만든다(release.ts ContextWatch): 잃으면 짧은 안내, 되찾으면 거두고 라벨·치수 끝 표시의 가림 판정을 다시 하며,
+   * 놓아 올린 큰 모형이면 그 파일을 다시 읽어 놓은 것을 준다. 안내를 거둘 때는 그 안내가 아직 떠 있을 때만(다른 알림으로 바뀌었거나 닫았으면 그대로)
+   */
+  private watchContext(m: typeof import('./release'), v: Viewer3d): ContextWatch {
+    if (this.ctxWatch) return this.ctxWatch;
+    this.ctxWatch = new m.ContextWatch(v, {
+      show: (kind, title, text) => {
+        this.showNotice(kind, title, text);
+        this.ctxNotice = this.notice;
+      },
+      hide: () => {
+        if (this.ctxNotice && this.notice === this.ctxNotice) this.closeNotice();
+        this.ctxNotice = null;
+      },
+      refresh: () => {
+        this.labels?.resetOcclusion();
+        this.marks?.resetOcclusion();
+      },
+    });
+    return this.ctxWatch;
   }
 
   /**
@@ -3512,6 +3575,9 @@ export class SkpViewerApp implements PanelHost {
       profiles: this.profilesOn,
       backEdges: this.backEdgesOn,
       colorByTag: this.colorByTag,
+      graphics: this.ctxWatch?.state ?? 'ok',
+      released: !!this.ctxWatch?.released,
+      restore: this.ctxWatch?.last ? { ...this.ctxWatch.last } : null,
     };
   }
 

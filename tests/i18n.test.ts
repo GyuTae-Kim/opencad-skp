@@ -8,6 +8,7 @@ import { GUIDE_HIDE_LABEL, GUIDE_HIDE_TEXT, GUIDE_UNHIDE_LABEL, guideCountText, 
 import { AXIS_LABELS, FACE_PERPENDICULAR_LABEL, GUIDE_LINE_LABEL, SNAP_LABELS, TRACK_ALIGN_LABEL, TRACK_AXIS_LABELS, TRACK_PAIR_LABELS } from '../src/app/snap';
 import { SHORTCUTS } from '../src/app/shortcuts';
 import { chunkFailText } from '../src/app/core';
+import { CONTEXT_LOST_TEXT, CONTEXT_LOST_TITLE, RESTORE_FAIL_TEXT, RESTORE_FAIL_TITLE, RESTORE_TEXT, RESTORE_TITLE } from '../src/app/release';
 import { catalogs, currentLanguage, languageUrl, languages, translate } from '../site/i18n.mjs';
 
 let dispose: (() => void) | undefined;
@@ -188,6 +189,13 @@ describe('language URLs and UI presentation', () => {
     expect(translate(guideCountText(3, 0)!, 'ja')).toBe('ガイド点 3 個');
     expect(translate(guideCountText(0, 2)!, 'de')).toBe('Hilfslinien: 2');
     expect(translate(`${guideDeleteLabel(2, 1)} (Delete)`, 'zh-CN')).toBe('删除选中的 3 个参考对象 (Delete)');
+  });
+  it('translates the graphics context lost and restore notices (large models reload released data)', () => {
+    const texts = [CONTEXT_LOST_TITLE, CONTEXT_LOST_TEXT, RESTORE_TITLE, RESTORE_TEXT, RESTORE_FAIL_TITLE, RESTORE_FAIL_TEXT];
+    for (const {code} of languages.filter(item => item.code !== 'ko'))
+      for (const t of texts) expect(translate(t, code), `${code}: ${t}`).not.toMatch(/[가-힣]/);
+    expect(translate(CONTEXT_LOST_TITLE, 'en')).toBe('Restoring 3D graphics');
+    expect(translate(RESTORE_FAIL_TITLE, 'de')).toBe('Texturen und Schattierung gekrümmter Flächen konnten nicht neu geladen werden');
   });
   it('translates the split-chunk loading and failure notices (measuring tools, 3D view)', () => {
     const hangul = /[가-힣]/;

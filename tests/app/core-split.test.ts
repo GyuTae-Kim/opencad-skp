@@ -15,8 +15,8 @@ const ROOT = resolve(__dirname, '../..');
 const CORE = join(ROOT, 'node_modules/opencad-viewer3d/src');
 /** 첫 화면에서 바로 가져와도 되는 코어 모듈(작고 다른 코어 모듈을 거의 끌어오지 않는다 — inference는 측정 도구 조각과 함께 받는다) */
 const SMALL = new Set(['camera', 'pointer', 'viewcube', 'theme', 'section', 'types', 'math', 'bounds']);
-/** 문서를 열 때 나눠 받는 앱 모듈(첫 화면 그래프에 없어야 한다) */
-const SPLIT_APP = ['src/app/measure.ts', 'src/app/snap.ts'];
+/** 문서를 열 때 나눠 받는 앱 모듈(첫 화면 그래프에 없어야 한다 — release.ts는 큰 모형 놓기·문맥 잃음과 되찾음) */
+const SPLIT_APP = ['src/app/measure.ts', 'src/app/snap.ts', 'src/app/release.ts'];
 
 /** 주석을 뺀 글(주석 속 예시를 가져오기로 세지 않게) */
 const stripComments = (t: string): string => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"\\])\/\/.*$/gm, '$1');
@@ -102,6 +102,10 @@ describe('코어 나눠 받기', () => {
     const measureDyn: string[] = [];
     for (const f of files) if (!f.startsWith(CORE) && dynamicSpecs(readFileSync(f, 'utf8')).includes('./measure')) measureDyn.push(relative(ROOT, f));
     expect(measureDyn).toEqual(['src/app/core.ts']);
+    // 큰 모형 놓기·문맥 복구 조각도 core.ts의 import() 하나로만
+    const releaseDyn: string[] = [];
+    for (const f of files) if (!f.startsWith(CORE) && dynamicSpecs(readFileSync(f, 'utf8')).includes('./release')) releaseDyn.push(relative(ROOT, f));
+    expect(releaseDyn).toEqual(['src/app/core.ts']);
   });
 
   it('훑기는 인라인 type만 쓴 가져오기와 다시 내보내기도 값 가져오기로 잡는다', () => {
