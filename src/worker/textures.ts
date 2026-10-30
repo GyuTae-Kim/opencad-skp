@@ -6,12 +6,15 @@
  *   - 나머지(JPEG·알파 없는 PNG)는 바이트 그대로 둔다(뷰어 코어가 풀면서 줄인다).
  * 푸는 그림은 긴 변 limit 안으로 줄인다. OffscreenCanvas가 없는 곳에서는 알파는 끈 채로 두고,
  * 색을 바꾼 무늬는 그림 대신 재질 색(평균색)으로 칠하게 무늬를 뺀다(원래 색 그림이 보이면 틀리므로).
- * 브라우저 API에만 기대므로 순수 부분(dropTexture·needsDecode·usesAlpha)만 Node 시험에서 확인한다.
+ * 브라우저 API에만 기대므로 Node 시험은 순수 부분(dropTexture·needsDecode·usesAlpha)과 가짜 그림 풀기로 차례를 본다.
+ * 29차: 큰 모형의 문맥 복구는 화면이 쥐어 둔 색 바꾼 무늬의 원래 그림 바이트만 받아(recolor.worker.ts) 처음 열 때와 같은 손질로 다시 그림을 만든다
+ * (recolorTextures — 그림 크기는 해석기처럼 그림 머리에서 읽는다. 처음 손질이 장면 무늬의 크기를 올린 그림 크기로 바꿔 두므로).
  */
 import type { Scene3d, Texture3d } from 'opencad-viewer3d/types';
-import { fitSize } from 'opencad-viewer3d/texture';
+import { fitSize, imageInfo } from 'opencad-viewer3d/texture';
 import { colorizeRgba } from '../colorize';
 import type { SkpTextureInfo } from '../index';
+import type { HeldTexture, RecolorResult } from '../app/protocol';
 
 /** 이 알파 아래 화소가 있으면 투명 화소를 쓰는 그림으로 본다 */
 const ALPHA_CUT = 250;
@@ -68,8 +71,13 @@ export function usesAlpha(data: ArrayLike<number>): boolean {
 
 const canDecode = (): boolean => typeof createImageBitmap === 'function' && typeof OffscreenCanvas === 'function';
 
-/** 무늬 하나 풀기 → 손질한 ImageBitmap(보통 방향) 또는 null(손질할 것이 없음) */
-async function prepOne(t: Texture3d, info: SkpTextureInfo, limit: number): Promise<{ bitmap: ImageBitmap | null; alpha: boolean; colorized: boolean; swatch?: Uint8Array }> {
+/** 무늬 하나 풀기 → 손질한 ImageBitmap(보통 방향) 또는 null(손질할 것이 없음). swatches가 false면 견본 그림을 만들지 않는다 */
+async function prepOne(
+  t: Texture3d,
+  info: SkpTextureInfo,
+  limit: number,
+  swatches: boolean,
+): Promise<{ bitmap: ImageBitmap | null; alpha: boolean; colorized: boolean; swatch?: Uint8Array }> {
   const blob = new Blob([t.data as Uint8Array<ArrayBuffer>], { type: t.mime ?? 'application/octet-stream' });
   const base: ImageBitmapOptions = { premultiplyAlpha: 'none', colorSpaceConversion: 'none' };
   const fit = t.width && t.height ? fitSize(t.width, t.height, limit) : null;
@@ -95,14 +103,15 @@ async function prepOne(t: Texture3d, info: SkpTextureInfo, limit: number): Promi
   if (info.colorize) {
     colorizeRgba(img.data, info.colorize);
     ctx.putImageData(img, 0, 0);
-    try {
-      const k = Math.min(1, SWATCH_SIDE / Math.max(w, h));
-      const sc = new OffscreenCanvas(Math.max(1, Math.round(w * k)), Math.max(1, Math.round(h * k)));
-      sc.getContext('2d')?.drawImage(canvas, 0, 0, sc.width, sc.height);
-      swatch = new Uint8Array(await (await sc.convertToBlob({ type: 'image/png' })).arrayBuffer());
-    } catch {
-      /* 견본은 원래 그림 그대로 */
-    }
+    if (swatches)
+      try {
+        const k = Math.min(1, SWATCH_SIDE / Math.max(w, h));
+        const sc = new OffscreenCanvas(Math.max(1, Math.round(w * k)), Math.max(1, Math.round(h * k)));
+        sc.getContext('2d')?.drawImage(canvas, 0, 0, sc.width, sc.height);
+        swatch = new Uint8Array(await (await sc.convertToBlob({ type: 'image/png' })).arrayBuffer());
+      } catch {
+        /* 견본은 원래 그림 그대로 */
+      }
   }
   if (!alpha && !info.colorize) return { bitmap: null, alpha: false, colorized: false };
   const out: { bitmap: ImageBitmap; alpha: boolean; colorized: boolean; swatch?: Uint8Array } = { bitmap: canvas.transferToImageBitmap(), alpha, colorized: !!info.colorize };
@@ -112,17 +121,18 @@ async function prepOne(t: Texture3d, info: SkpTextureInfo, limit: number): Promi
 
 /**
  * 장면의 무늬 손질(위 설명). 손질한 무늬는 bitmap·크기·alpha를 채운다(바이트 data는 견본용 그림과 같은 배열이라 그대로 둔다).
- * onEach는 무늬 하나를 마칠 때마다(진행 표시용). only를 주면 그 id의 무늬만 손질한다(문맥 복구 때 다시 받을 무늬만 — 27차).
+ * onEach는 무늬 하나를 마칠 때마다(진행 표시용). swatches: false면 색 바꾼 무늬의 견본 그림을 만들지 않는다(문맥 복구 — 29차).
  */
 export async function prepareSceneTextures(
   scene: Scene3d,
   limit: number,
   onEach?: (done: number, total: number) => void,
-  only?: ReadonlySet<string>,
+  opts: { swatches?: boolean } = {},
 ): Promise<TexturePrepResult> {
   const res: TexturePrepResult = { decoded: 0, colorized: 0, alpha: 0, dropped: 0, swatches: new Map() };
   const infos = new Map(((scene.meta?.textures ?? []) as SkpTextureInfo[]).map((t) => [t.id, t] as const));
-  const list = [...(scene.textures ?? [])].filter((t) => needsDecode(infos.get(t.id)) && (!only || only.has(t.id)));
+  const list = [...(scene.textures ?? [])].filter((t) => needsDecode(infos.get(t.id)));
+  const swatches = opts.swatches !== false;
   const ok = canDecode();
   let done = 0;
   for (const t of list) {
@@ -134,7 +144,7 @@ export async function prepareSceneTextures(
       }
     } else
       try {
-        const r = await prepOne(t, info, limit);
+        const r = await prepOne(t, info, limit, swatches);
         res.decoded++;
         if (r.bitmap) {
           t.bitmap = r.bitmap;
@@ -155,4 +165,36 @@ export async function prepareSceneTextures(
   }
   if (res.dropped) (scene.warnings ??= []).push(`무늬 그림 ${res.dropped}개는 풀거나 색을 바꾸지 못해 평균색으로 그렸습니다`);
   return res;
+}
+
+/**
+ * 쥐어 둔 무늬 하나를 해석기가 장면에 넣은 꼴로(그림 바이트·꼴, 그림 머리의 크기 — src/index.ts와 같은 imageInfo).
+ * 처음 손질은 이 꼴에서 시작했으므로 같은 한도로 손질하면 같은 그림이 나온다
+ */
+export async function heldAsTexture(h: Pick<HeldTexture, 'id' | 'blob'>): Promise<Texture3d> {
+  const data = new Uint8Array(await h.blob.arrayBuffer());
+  const t: Texture3d = { id: h.id, data };
+  if (h.blob.type) t.mime = h.blob.type;
+  const head = imageInfo(data);
+  if (head?.width && head.height) {
+    t.width = head.width;
+    t.height = head.height;
+  }
+  return t;
+}
+
+/**
+ * 문맥 복구(29차): 쥐어 둔 색 바꾼 무늬를 처음 열 때와 같은 손질(prepareSceneTextures — 견본은 빼고)로 다시 그림을 만든다.
+ * 하나씩 풀어 워커가 그림 바이트를 한 장씩만 든다. 풀지 못한 무늬는 빠진다(화면은 그 무늬를 평균색으로 둔다)
+ */
+export async function recolorTextures(list: readonly HeldTexture[], limit: number): Promise<RecolorResult> {
+  const t0 = performance.now();
+  const out: RecolorResult['textures'] = [];
+  for (const h of list) {
+    const scene: Scene3d = { name: '', units: 'unknown', meshes: [], lines: [], textures: [await heldAsTexture(h)], meta: { textures: [h.info] } };
+    await prepareSceneTextures(scene, limit, undefined, { swatches: false });
+    const t = scene.textures?.[0];
+    if (t?.bitmap) out.push({ id: h.id, bitmap: t.bitmap, width: t.bitmap.width, height: t.bitmap.height });
+  }
+  return { textures: out, ms: performance.now() - t0 };
 }

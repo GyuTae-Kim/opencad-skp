@@ -10,12 +10,11 @@
  * 그래서 줄인 값을 다시 펴서(코어 셰이더와 같은 계산) 원래 값과 견주고, 가장 큰 차가 그 무늬를 올리는 크기(긴 변 TEXTURE_LIMIT 안 — 기기 한도로 더
  * 줄면 오차 화소는 더 작다)의 화소로 UV_PACK_MAX_TEXEL을 넘으면 Float32 그대로 둔다(그 그물에는 uvTransform을 달지 않는다).
  *
- * 문맥 복구(restore.ts)는 같은 파일을 다시 풀어 같은 함수로 줄인다 — 같은 입력이면 같은 배열·같은 변환이다. 화면은 장면에 남은 변환(코어 놓기는 변환을
- * 지우지 않는다)을 함께 보내고, 워커는 다시 줄인 변환이 그것과 다르면 그 배열을 주지 않는다(파일이 바뀐 것 — 다른 변환에 맞춘 배열은 무늬가 어긋난다).
+ * 29차: 화면은 줄인 배열을 놓지 않고 장면에 둔다(app/release.ts — 그래픽 문맥을 되찾으면 코어가 그대로 다시 올린다. 27·28차는 놓았다가 파일을 다시 풀어 같은 꼴로 줬다).
  */
 import { packNormals, packUvs, unpackValue } from 'opencad-viewer3d/attribs';
 import { TEXTURE_LIMIT, fitSize } from 'opencad-viewer3d/texture';
-import type { Mesh3d, Scene3d, Texture3d, UvArray, UvTransform } from 'opencad-viewer3d/types';
+import type { Mesh3d, Scene3d, Texture3d, UvTransform } from 'opencad-viewer3d/types';
 import { isBigScene } from '../app/protocol';
 
 /** 무늬 좌표를 Int16으로 줄였을 때 다시 편 값의 가장 큰 차(무늬 화소)가 이보다 크면 Float32로 둔다 */
@@ -83,25 +82,7 @@ export function packMeshNormals(n: ArrayLike<number>): Int8Array {
   return packNormals(n, 'int8', 4) as Int8Array;
 }
 
-/** 두 변환이 같은지(값 넷이 모두 같다 — 같은 입력을 같은 함수로 줄이면 같다) */
-export function sameUvTransform(a: ArrayLike<number> | null | undefined, b: ArrayLike<number> | null | undefined): boolean {
-  if (!a || !b || a.length < 4 || b.length < 4) return false;
-  for (let i = 0; i < 4; i++) if (a[i] !== b[i]) return false;
-  return true;
-}
-
 const isFloat = (a: unknown): a is Float32Array => a instanceof Float32Array || Object.prototype.toString.call(a) === '[object Float32Array]';
-
-/**
- * 문맥 복구 때 다시 줄 무늬 좌표: 화면이 가진 변환(want — 처음 열 때 단 uvTransform·backUvTransform, 없으면 Float32로 두었던 것)에 맞춘다.
- * 변환이 없으면 다시 푼 배열 그대로, 있으면 다시 푼 Float32를 다시 줄여 변환이 같을 때만 줄인 배열(다르거나 Float32가 아니면 null — 주지 않는다)
- */
-export function restoreUvs(uvs: UvArray, nv: number, want: ArrayLike<number> | null | undefined): UvArray | null {
-  if (!want) return uvs;
-  if (!isFloat(uvs)) return null;
-  const p = packUvs(uvs, nv, 'int16');
-  return sameUvTransform(p.transform, want) ? p.uvs : null;
-}
 
 /**
  * 장면의 그물 법선·무늬 좌표를 줄인다(제자리 — 그물 객체의 배열을 바꾸고 줄인 무늬 좌표에는 uvTransform·backUvTransform을 단다).

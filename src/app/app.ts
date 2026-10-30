@@ -245,7 +245,7 @@ export interface AppSnapshot {
   backEdges: boolean;
   colorByTag: boolean;
   /**
-   * 그래픽 문맥(ok·lost·restoring 놓은 것을 다시 읽는 중·partial 다시 읽지 못함), 지금 문서를 놓아 올렸는지(큰 모형 — 법선·무늬 좌표·푼 무늬),
+   * 그래픽 문맥(ok·lost·restoring 쥐어 둔 색 바꾼 무늬를 다시 손질하는 중·partial 다시 손질하지 못함), 지금 문서를 놓아 올렸는지(큰 모형 — 푼 무늬 그림),
    * 마지막으로 놓은 것을 다시 준 기록(release.ts)
    */
   graphics: GraphicsState;
@@ -1066,7 +1066,7 @@ export class SkpViewerApp implements PanelHost {
     if (!this.viewer) void loadViewerCore().catch(() => undefined);
     // 측정 도구 조각도 함께(처음 켤 때 기다리지 않게 — 실패는 처음 켤 때 알린다)
     if (!this.measureTool) void loadMeasure().catch(() => undefined);
-    // 큰 모형 놓기·문맥 복구 조각도(받지 못하면 놓지 않는다). 열려 있던 큰 모형의 다시 읽기는 이 열기가 끝날 때까지 멈춘다
+    // 큰 모형 놓기·문맥 복구 조각도(받지 못하면 놓지 않는다). 열려 있던 큰 모형의 무늬 다시 손질은 이 열기가 끝날 때까지 멈춘다
     void loadRelease().catch(() => undefined);
     const before = this.doc;
     this.ctxWatch?.pause();
@@ -1102,9 +1102,8 @@ export class SkpViewerApp implements PanelHost {
       if (seq !== this.openSeq) return false;
       // 코어를 아직 못 받았으면 기다린다(받지 못하면 '3D 보기를 열 수 없습니다' 알림, 열려 있던 문서는 그대로)
       if (!(await this.ensureViewer()) || seq !== this.openSeq) return false;
-      // 큰 모형을 디스크의 파일(File)에서 열었으면 법선·무늬 좌표·푼 무늬를 올린 뒤 놓는다(문맥을 되찾으면 그 파일을 다시 읽는다 — release.ts).
-      // 주소로 받은 파일처럼 메모리에 있는 파일은 다시 읽으려면 쥐고 있어야 해서 놓지 않는다
-      const rel = isBigScene(res) && typeof File !== 'undefined' && file instanceof File ? await loadRelease().catch(() => null) : null;
+      // 큰 모형은 푼 무늬 그림을 올린 뒤 놓는다(색 바꾼 무늬는 원래 바이트를 쥐었다가 문맥을 되찾으면 다시 손질한다 — release.ts, 29차부터 파일을 다시 읽지 않아 주소로 받은 파일도)
+      const rel = isBigScene(res) ? await loadRelease().catch(() => null) : null;
       if (seq !== this.openSeq) return false;
       const doc = createDoc(name, size, res, { makeUrl: (b, mime) => URL.createObjectURL(new Blob([b as BlobPart], { type: mime })) });
       // 파일 내용 지문(SHA-256 — 안내를 파일별로 기억하는 열쇠): 워커가 결과를 보낸 뒤 파일을 덩이씩 읽으며 구해 보낸다(못 구하면 null)
@@ -1114,8 +1113,7 @@ export class SkpViewerApp implements PanelHost {
         (done, total) => {
           if (seq === this.openSeq) this.setBusy(name, total ? done / total : 1, `화면에 올리는 중 · 묶음 ${fmtCount(done)}/${fmtCount(total)}`);
         },
-        // 워커가 법선·무늬 좌표를 줄였으면(큰 모형 — 28차) 문맥 복구 때도 같은 꼴로 다시 받는다
-        rel ? { m: rel, file, packed: !!res.packed } : null,
+        rel,
       );
       this.noticeDamage(doc);
       await uploaded;
@@ -1130,7 +1128,7 @@ export class SkpViewerApp implements PanelHost {
     } finally {
       if (this.parsingSeq === seq) this.parsingSeq = 0;
       if (seq === this.openSeq) this.setBusy(null);
-      // 열지 못해 앞 문서가 그대로면 멈춘 다시 읽기를 잇는다
+      // 열지 못해 앞 문서가 그대로면 멈춘 다시 손질을 잇는다
       if (seq === this.openSeq && this.doc === before) this.ctxWatch?.resume();
     }
   }
@@ -1138,14 +1136,10 @@ export class SkpViewerApp implements PanelHost {
   /**
    * 문서를 뷰어에 올린다. 큰 장면(삼각형+선분 INCREMENTAL_PRIMS 이상 또는 묶음 INCREMENTAL_ITEMS 이상)은
    * 코어의 나눠 올리기(프레임마다 8 ms)로 올리고 progress(올린 묶음, 전체)를 알린다. 올리기가 끝나면 풀리는 약속을 돌려준다.
-   * release(큰 모형을 디스크의 파일에서 열었을 때 — 조각과 그 파일)를 주면 법선·무늬 좌표·푼 무늬를 올린 뒤 놓고, 문맥을 되찾으면 그 파일을 다시 읽는다.
+   * release(큰 모형 놓기·문맥 복구 조각)를 주면 큰 모형의 푼 무늬 그림을 올린 뒤 놓고, 색 바꾼 무늬의 원래 바이트를 쥐었다가 문맥을 되찾으면 다시 손질한다.
    * 놓은 장면 객체는 이 문서에만 쓰고 setScene에 다시 주지 않는다(다시 열면 새 장면)
    */
-  private setDoc(
-    d: SkpDoc,
-    progress?: (done: number, total: number) => void,
-    release?: { m: typeof import('./release'); file: Blob; packed?: boolean } | null,
-  ): Promise<void> {
+  private setDoc(d: SkpDoc, progress?: (done: number, total: number) => void, release?: typeof import('./release') | null): Promise<void> {
     // 뷰어는 openBlob이 먼저 만든다(ensureViewer — 코어를 나눠 받는다)
     const v = this.viewer;
     if (!v) {
@@ -1182,10 +1176,10 @@ export class SkpViewerApp implements PanelHost {
       }
       this.uploadDone = resolve;
     });
-    // 큰 모형 놓기: 색을 바꾼 무늬는 그림 바이트를 빼 두어 되찾을 때 다시 받는다(release.ts prepareRelease)
+    // 큰 모형 놓기: 색을 바꾼 무늬는 그림 바이트를 장면에서 빼 쥐어 두고 되찾을 때 다시 손질한다(release.ts prepareRelease)
     const rel = big && release ? release : null;
-    if (rel) rel.m.prepareRelease(d.scene);
-    // 앞 문서의 다시 읽기는 거둔다(놓아 올렸으면 아래에서 이 문서의 파일을 준다)
+    const held = rel ? rel.prepareRelease(d.scene) : [];
+    // 앞 문서의 다시 손질은 거둔다(놓아 올렸으면 아래에서 이 문서의 것을 준다)
     this.ctxWatch?.setSource(null);
     if (big)
       v.setScene(d.scene, {
@@ -1197,10 +1191,10 @@ export class SkpViewerApp implements PanelHost {
             this.uploadDone = null;
           }
         },
-        ...(rel ? { release: rel.m.RELEASE_OPTIONS } : {}),
+        ...(rel ? { release: rel.RELEASE_OPTIONS } : {}),
       });
     else v.setScene(d.scene);
-    if (rel) this.watchContext(rel.m, v).setSource({ scene: d.scene, file: rel.file, name: d.name, textureLimit: this.texLimits.limit, packed: !!rel.packed });
+    if (rel) this.watchContext(rel, v).setSource({ scene: d.scene, textures: held, textureLimit: this.texLimits.limit });
     // 장면을 올리면 코어가 겉모습(선 색)을 풀었다 — 끝의 applyTheme에서 다시 건다
     this.lineContrast.reset();
     v.setRenderMode(this.renderMode);
@@ -1321,7 +1315,7 @@ export class SkpViewerApp implements PanelHost {
 
   /**
    * 그래픽 문맥 잃음·되찾음 지켜보기를 한 번 만든다(release.ts ContextWatch): 잃으면 짧은 안내, 되찾으면 거두고 라벨·치수 끝 표시의 가림 판정을 다시 하며,
-   * 놓아 올린 큰 모형이면 그 파일을 다시 읽어 놓은 것을 준다. 안내를 거둘 때는 그 안내가 아직 떠 있을 때만(다른 알림으로 바뀌었거나 닫았으면 그대로)
+   * 놓아 올린 큰 모형이면 쥐어 둔 색 바꾼 무늬를 다시 손질해 준다. 안내를 거둘 때는 그 안내가 아직 떠 있을 때만(다른 알림으로 바뀌었거나 닫았으면 그대로)
    */
   private watchContext(m: typeof import('./release'), v: Viewer3d): ContextWatch {
     if (this.ctxWatch) return this.ctxWatch;

@@ -1,112 +1,171 @@
 /**
- * 문맥 복구 때 다시 줄 것 고르기(src/worker/restore.ts — 해석 워커의 arrays 요청, 27차): 같은 파일을 처음 열 때와 같은 선택으로 다시 풀면
- * 그물 id·정점 수·법선·무늬 좌표가 같아 코어가 놓은 배열을 그대로 다시 줄 수 있고, 바란 것만 고르며, 정점 수가 다른 그물(파일이 바뀜)은 주지 않는다.
- * 손질할 무늬를 고르는 only(prepareSceneTextures)도 본다.
+ * 문맥 복구 때 쥐어 둔 색 바꾼 무늬 다시 손질하기(src/worker/textures.ts recolorTextures — 29차, recolor.worker.ts가 부른다):
+ * 화면이 장면에서 뺀 원래 그림 바이트(Blob)를 해석기가 넣은 꼴(그림 머리의 크기)로 되돌려 처음 열 때와 같은 손질을 한다.
+ * Node에는 그림 풀기가 없어 가짜 createImageBitmap·OffscreenCanvas로 차례(줄이는 크기·색 바꾸기·견본 없음)와 결과 화소를 견준다.
  */
-import { describe, expect, it } from 'vitest';
-import type { Mesh3d, Scene3d } from 'opencad-viewer3d/types';
-import { skpFileToScene, type SkpTextureInfo } from '../src/index';
-import type { ArraysWant } from '../src/app/protocol';
-import { pickRestoreMeshes, pickRestoreTextures } from '../src/worker/restore';
-import { prepareSceneTextures } from '../src/worker/textures';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { Scene3d } from 'opencad-viewer3d/types';
+import type { SkpTextureInfo } from '../src/index';
+import { prepareRelease } from '../src/app/release';
+import { heldAsTexture, prepareSceneTextures, recolorTextures } from '../src/worker/textures';
 
-/** 워커와 같은 선택(parse.worker.ts readScene) */
-const OPTS = { name: 'x', outline: true, extras: true, smooth: true, images: {} };
+/** 그림 머리만 있는 PNG(가로·세로·색 형식) — 해석기·코어 imageInfo가 읽는 자리 */
+function pngHead(w: number, h: number, colorType = 2): Uint8Array<ArrayBuffer> {
+  const b = new Uint8Array(33);
+  b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+  new DataView(b.buffer).setUint32(16, w);
+  new DataView(b.buffer).setUint32(20, h);
+  b[24] = 8;
+  b[25] = colorType;
+  return b;
+}
 
-const wantOf = (m: Mesh3d): ArraysWant => ({ id: m.id, nv: m.positions.length / 3, normals: !!m.normals, uvs: !!m.uvs, backUvs: !!m.backUvs });
-const list = (a: ArrayLike<number> | undefined): number[] | null => (a ? Array.from(a) : null);
+const info = (id: string, colorize = true): SkpTextureInfo => ({
+  id,
+  material: id,
+  folder: id,
+  path: `${id}.png`,
+  tile: [1, 1],
+  alphaPossible: false,
+  ...(colorize ? { colorize: { type: 'tint' as const, color: [200, 100, 50] as [number, number, number] } } : {}),
+});
 
-describe('문맥 복구 때 다시 줄 그물 배열', () => {
-  it('같은 파일을 다시 풀면 놓은 법선·무늬 좌표가 같은 그물 id에 같은 값으로 나온다', async () => {
-    const { sampleSkpBytes } = await import('../src/app/sample');
-    const file = new Blob([sampleSkpBytes() as BlobPart]);
-    const a = (await skpFileToScene(file, OPTS)).scene;
-    const b = (await skpFileToScene(file, OPTS)).scene;
-    const want = a.meshes.filter((m) => m.normals || m.uvs || m.backUvs).map(wantOf);
-    expect(want.some((w) => w.uvs)).toBe(true);
-    expect(want.some((w) => w.normals)).toBe(true);
-    const got = pickRestoreMeshes(b, want);
-    expect(got.map((g) => g.id)).toEqual(want.map((w) => w.id));
-    for (const g of got) {
-      const m = a.meshes.find((x) => x.id === g.id)!;
-      expect(list(g.normals)).toEqual(list(m.normals));
-      expect(list(g.uvs)).toEqual(list(m.uvs));
-      expect(list(g.backUvs)).toEqual(list(m.backUvs));
+interface FakeBitmap {
+  width: number;
+  height: number;
+  px: Uint8ClampedArray | null;
+  close(): void;
+}
+
+/**
+ * 가짜 그림 풀기: 그림 머리의 크기로 풀고(바이트 첫 값으로 화소를 채운다), 주면 그 크기로 줄인다. 부른 선택을 적어 둔다.
+ * OffscreenCanvas는 그린 그림의 화소를 들고, transferToImageBitmap은 그 화소를 담은 그림을 준다
+ */
+function fakeDecode(): { calls: { w: number; h: number; opts: ImageBitmapOptions | undefined }[]; pngs: number } {
+  const log = { calls: [] as { w: number; h: number; opts: ImageBitmapOptions | undefined }[], pngs: 0 };
+  const bitmap = (width: number, height: number, px: Uint8ClampedArray | null): FakeBitmap => ({ width, height, px, close: () => undefined });
+  vi.stubGlobal('createImageBitmap', async (src: Blob | FakeBitmap, opts?: ImageBitmapOptions) => {
+    let w: number, h: number, fill: number;
+    if (src instanceof Blob) {
+      const b = new Uint8Array(await src.arrayBuffer());
+      const dv = new DataView(b.buffer);
+      w = dv.getUint32(16);
+      h = dv.getUint32(20);
+      fill = b[30]!;
+    } else {
+      w = src.width;
+      h = src.height;
+      fill = src.px?.[0] ?? 0;
     }
+    log.calls.push({ w, h, opts });
+    const ow = opts?.resizeWidth ?? w, oh = opts?.resizeHeight ?? h;
+    return bitmap(ow, oh, new Uint8ClampedArray(ow * oh * 4).fill(fill));
   });
+  class Canvas {
+    px: Uint8ClampedArray;
+    constructor(
+      public width: number,
+      public height: number,
+    ) {
+      this.px = new Uint8ClampedArray(width * height * 4);
+    }
+    getContext(): unknown {
+      return {
+        drawImage: (b: FakeBitmap) => {
+          if (b.px && b.px.length === this.px.length) this.px.set(b.px);
+        },
+        getImageData: () => ({ data: this.px.slice(), width: this.width, height: this.height }),
+        putImageData: (img: { data: Uint8ClampedArray }) => this.px.set(img.data),
+      };
+    }
+    transferToImageBitmap(): FakeBitmap {
+      return bitmap(this.width, this.height, this.px.slice());
+    }
+    async convertToBlob(): Promise<Blob> {
+      log.pngs++;
+      return new Blob([new Uint8Array([1])]);
+    }
+  }
+  vi.stubGlobal('OffscreenCanvas', Canvas);
+  return log;
+}
 
-  it('바란 배열만 주고, 정점 수가 다르거나 없는 그물·줄 배열이 없는 그물은 뺀다', () => {
-    const f = (n: number): Float32Array => new Float32Array(n);
-    const scene: Pick<Scene3d, 'meshes'> = {
-      meshes: [
-        { id: 'a', positions: f(9), normals: f(9), uvs: f(6), color: [1, 1, 1, 1] },
-        { id: 'b', positions: f(9), normals: f(9), color: [1, 1, 1, 1] },
-        { id: 'c', positions: f(18), uvs: f(12), backUvs: f(12), color: [1, 1, 1, 1] },
-      ],
-    };
-    const got = pickRestoreMeshes(scene, [
-      { id: 'a', nv: 3, normals: false, uvs: true, backUvs: false },
-      { id: 'b', nv: 4, normals: true, uvs: false, backUvs: false },
-      { id: 'c', nv: 6, normals: true, uvs: false, backUvs: true },
-      { id: 'z', nv: 3, normals: true, uvs: true, backUvs: true },
-    ]);
-    expect(got.map((g) => [g.id, !!g.normals, !!g.uvs, !!g.backUvs])).toEqual([
-      ['a', false, true, false],
-      ['c', false, false, true],
-    ]);
-    expect(got[0]!.uvs).toBe(scene.meshes[0]!.uvs);
-    // 바란 것이 그물에 하나도 없으면 뺀다
-    expect(pickRestoreMeshes(scene, [{ id: 'b', nv: 3, normals: false, uvs: true, backUvs: false }])).toEqual([]);
+/** 처음 열 때의 장면(해석기 꼴 — 원래 그림 크기와 바이트) */
+function openedScene(): Scene3d {
+  const big = pngHead(4096, 1024);
+  big[30] = 90;
+  const small = pngHead(300, 200);
+  small[30] = 40;
+  return {
+    name: 's',
+    units: 'mm',
+    meshes: [],
+    lines: [],
+    textures: [
+      { id: 'a', data: big, mime: 'image/png', width: 4096, height: 1024 },
+      { id: 'b', data: small, mime: 'image/png', width: 300, height: 200 },
+    ],
+    meta: { textures: [info('a'), info('b')] },
+  };
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe('쥐어 둔 무늬를 해석기 꼴로', () => {
+  it('바이트·꼴과 그림 머리의 크기(처음 손질이 장면 무늬의 크기를 올린 그림 크기로 바꿔 두므로)', async () => {
+    const data = pngHead(4096, 1024);
+    const t = await heldAsTexture({ id: 'x', blob: new Blob([data], { type: 'image/png' }) });
+    expect(t).toMatchObject({ id: 'x', mime: 'image/png', width: 4096, height: 1024 });
+    expect([...t.data!]).toEqual([...data]);
+    const odd = await heldAsTexture({ id: 'y', blob: new Blob([new Uint8Array([1, 2, 3])]) });
+    expect(odd).toEqual({ id: 'y', data: new Uint8Array([1, 2, 3]) });
   });
 });
 
-describe('문맥 복구 때 다시 줄 무늬', () => {
-  it('바란 무늬만: 손질한 그림이면 그림과 크기, 아니면 그림 바이트', () => {
-    const bmp = { width: 4, height: 2, close: () => undefined } as unknown as ImageBitmap;
-    const data = new Uint8Array([1, 2, 3]);
-    const got = pickRestoreTextures(
-      {
-        textures: [
-          { id: 't1', bitmap: bmp, data: new Uint8Array([9]) },
-          { id: 't2', data, mime: 'image/png', width: 8, height: 8 },
-          { id: 't3', data: new Uint8Array([7]) },
-        ],
-      },
-      ['t1', 't2', 'zz'],
-    );
-    expect(got).toEqual([
-      { id: 't1', bitmap: bmp, width: 4, height: 2 },
-      { id: 't2', data, mime: 'image/png', width: 8, height: 8 },
+describe('되찾을 때 다시 손질하기', () => {
+  it('처음 열 때와 같은 크기로 줄이고 같은 색으로 바꾼다(견본 그림은 만들지 않는다)', async () => {
+    const log = fakeDecode();
+    const scene = openedScene();
+    const prep = await prepareSceneTextures(scene, 2048);
+    expect(prep).toMatchObject({ decoded: 2, colorized: 2, dropped: 0 });
+    expect(log.pngs).toBe(2);
+    const first = log.calls.map((c) => c.opts?.resizeWidth ?? null);
+    const opened = (scene.textures ?? []).map((t) => ({ id: t.id, w: t.bitmap!.width, h: t.bitmap!.height, px: [...(t.bitmap as unknown as FakeBitmap).px!.slice(0, 8)] }));
+    expect(opened.map((o) => [o.w, o.h])).toEqual([
+      [2048, 512],
+      [300, 200],
     ]);
+    // 장면 무늬의 크기는 올린 그림 크기로 바뀌었다 — 이것으로 풀면 크기를 모르고 풀어 차례가 달라진다
+    expect(scene.textures![0]).toMatchObject({ width: 2048, height: 512 });
+    const held = prepareRelease(scene);
+    expect(held.map((h) => h.id)).toEqual(['a', 'b']);
+    log.calls.length = 0;
+    const res = await recolorTextures(held, 2048);
+    expect(log.calls.map((c) => c.opts?.resizeWidth ?? null)).toEqual(first);
+    expect(log.pngs).toBe(2);
+    expect(res.textures.map((t) => ({ id: t.id, w: t.width, h: t.height, px: [...(t.bitmap as unknown as FakeBitmap).px!.slice(0, 8)] }))).toEqual(opened);
+    // 색을 바꾼 화소(원래 90·40 그대로가 아니다)
+    expect(opened[0]!.px.slice(0, 3)).not.toEqual([90, 90, 90]);
   });
 
-  it('prepareSceneTextures의 only: 고른 무늬만 손질한다(고르지 않은 색 바꾼 무늬는 풀 수 없는 곳에서도 그대로)', async () => {
-    const info = (id: string, colorize: boolean): SkpTextureInfo => ({
-      id,
-      material: id,
-      folder: id,
-      path: `${id}.png`,
-      tile: [1, 1],
-      alphaPossible: false,
-      ...(colorize ? { colorize: { type: 'shift' as const, color: [1, 2, 3] as [number, number, number] } } : {}),
+  it('풀지 못한 무늬는 빼고 나머지만 준다', async () => {
+    fakeDecode();
+    const scene = openedScene();
+    await prepareSceneTextures(scene, 2048);
+    const held = prepareRelease(scene);
+    const bad = { ...held[0]!, blob: new Blob([new Uint8Array([9])], { type: 'image/png' }) };
+    vi.stubGlobal('createImageBitmap', async (src: Blob) => {
+      if ((await src.arrayBuffer()).byteLength < 8) throw new Error('풀지 못함');
+      return { width: 4, height: 4, close: () => undefined };
     });
-    const scene = (): Scene3d => ({
-      name: 's',
-      units: 'mm',
-      meshes: [],
-      lines: [],
-      textures: [
-        { id: 'c1', data: new Uint8Array([1]) },
-        { id: 'c2', data: new Uint8Array([2]) },
-      ],
-      meta: { textures: [info('c1', true), info('c2', true)] },
-    });
-    // Node에는 그림 풀기가 없어 손질하려던 색 바꾼 무늬는 평균색으로 뺀다 — only에 든 것만
-    const s = scene();
-    const r = await prepareSceneTextures(s, 1024, undefined, new Set(['c2']));
-    expect(r.dropped).toBe(1);
-    expect(s.textures!.map((t) => t.id)).toEqual(['c1']);
-    const all = scene();
-    expect((await prepareSceneTextures(all, 1024)).dropped).toBe(2);
+    const res = await recolorTextures([bad, held[1]!], 2048);
+    expect(res.textures.map((t) => t.id)).toEqual(['b']);
+  });
+
+  it('그림을 풀 수 없는 곳에서는 아무것도 주지 않는다(화면은 그 무늬를 평균색으로 둔다)', async () => {
+    const h = { id: 'a', blob: new Blob([pngHead(8, 8)], { type: 'image/png' }), info: info('a') };
+    expect((await recolorTextures([h], 1024)).textures).toEqual([]);
   });
 });

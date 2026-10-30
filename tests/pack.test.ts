@@ -1,26 +1,14 @@
 /**
- * 큰 모형의 법선·무늬 좌표 줄이기(src/worker/pack.ts — 28차, 코어 0.26.0)와 문맥 복구 때 같은 꼴로 다시 주기(src/worker/restore.ts):
- * 큰 모형만 줄이고, 법선은 Int8 정점 4값, 무늬 좌표는 Int16과 변환(다시 편 오차가 무늬 화소로 한도를 넘으면 Float32), 같은 배열은 한 번만,
- * 다시 푼 같은 파일을 같은 꼴·같은 변환으로 다시 줄이고 변환이 다르면 주지 않는다.
+ * 큰 모형의 법선·무늬 좌표 줄이기(src/worker/pack.ts — 28차, 코어 0.26.0):
+ * 큰 모형만 줄이고, 법선은 Int8 정점 4값, 무늬 좌표는 Int16과 변환(다시 편 오차가 무늬 화소로 한도를 넘으면 Float32), 같은 배열은 한 번만.
  */
 import { describe, expect, it } from 'vitest';
 import { unpackValue } from 'opencad-viewer3d/attribs';
 import { TEXTURE_LIMIT } from 'opencad-viewer3d/texture';
 import type { Mesh3d, Scene3d } from 'opencad-viewer3d/types';
 import { skpFileToScene } from '../src/index';
-import { INCREMENTAL_ITEMS, type ArraysWant } from '../src/app/protocol';
-import {
-  UV_PACK_MAX_TEXEL,
-  packBigScene,
-  packMeshNormals,
-  packMeshUvs,
-  packSceneAttribs,
-  packUvsChecked,
-  restoreUvs,
-  sameUvTransform,
-  textureTexels,
-} from '../src/worker/pack';
-import { pickRestoreMeshes } from '../src/worker/restore';
+import { INCREMENTAL_ITEMS } from '../src/app/protocol';
+import { UV_PACK_MAX_TEXEL, packBigScene, packMeshNormals, packMeshUvs, packSceneAttribs, packUvsChecked, textureTexels } from '../src/worker/pack';
 
 /** 정점 n개 격자(u·v 범위 0~span) — 위치·법선·무늬 좌표 */
 function grid(id: string, n: number, span: number, extra: Partial<Mesh3d> = {}): Mesh3d {
@@ -149,49 +137,27 @@ describe('법선·무늬 좌표 줄이기(pack.ts)', () => {
   });
 });
 
-describe('문맥 복구 때 같은 꼴로 다시 주기(restore.ts)', () => {
-  it('무늬 좌표: 변환이 없으면 Float32 그대로, 같으면 다시 줄인 배열, 다르면 주지 않는다', () => {
-    const uvs = grid('a', 40, 3).uvs as Float32Array;
-    expect(restoreUvs(uvs, 40, null)).toBe(uvs);
-    const p = packMeshUvs(uvs, 40, [512, 512])!;
-    const again = restoreUvs(uvs.slice(), 40, p.transform);
-    expect(again).toBeInstanceOf(Int16Array);
-    expect([...(again as Int16Array)]).toEqual([...p.uvs]);
-    expect(restoreUvs(uvs, 40, [p.transform[0] * 2, p.transform[1], p.transform[2], p.transform[3]])).toBeNull();
-    expect(restoreUvs(p.uvs, 40, p.transform)).toBeNull();
-    expect(sameUvTransform(p.transform, [...p.transform])).toBe(true);
-    expect(sameUvTransform(p.transform, null)).toBe(false);
-  });
-
-  it('예제 파일을 다시 풀어 같은 꼴로 줄이면 처음 줄인 법선·무늬 좌표·변환과 같다(Float32로 둔 그물은 Float32)', async () => {
+describe('예제 파일 줄이기', () => {
+  it('예제 파일을 두 번 풀어 줄이면 같은 꼴·값·변환이다(되찾을 때 코어가 다시 올리는 장면 배열 — 29차부터 놓지 않는다)', async () => {
     const { sampleSkpBytes } = await import('../src/app/sample');
     const file = new Blob([sampleSkpBytes() as BlobPart]);
     const opts = { name: 'x', outline: true, extras: true, smooth: true, images: {} };
     const a = (await skpFileToScene(file, opts)).scene;
     const b = (await skpFileToScene(file, opts)).scene;
-    // 처음 열 때 줄인 장면(무늬 한 그물은 한도를 아주 작게 해 Float32로 둔 것처럼)
-    const orig = new Map(a.meshes.map((m) => [m.id, { normals: m.normals, uvs: m.uvs }] as const));
     const st = packSceneAttribs(a);
     expect(st.normals).toBeGreaterThan(0);
     expect(st.uvs).toBeGreaterThan(0);
-    const floatOne = a.meshes.find((m) => m.uvTransform)!;
-    floatOne.uvs = orig.get(floatOne.id)!.uvs;
-    delete floatOne.uvTransform;
-    const want: ArraysWant[] = a.meshes
-      .filter((m) => m.normals || m.uvs || m.backUvs)
-      .map((m) => ({ id: m.id, nv: m.positions.length / 3, normals: !!m.normals, uvs: !!m.uvs, backUvs: !!m.backUvs, uvT: m.uvTransform ?? null, backUvT: m.backUvTransform ?? null }));
-    const got = pickRestoreMeshes(b, want, true);
-    expect(got.map((g) => g.id)).toEqual(want.map((w) => w.id));
-    for (const g of got) {
-      const m = a.meshes.find((x) => x.id === g.id)!;
-      expect(g.normals ? Object.prototype.toString.call(g.normals) : null).toBe(m.normals ? '[object Int8Array]' : null);
-      expect(g.normals ? [...g.normals] : null).toEqual(m.normals ? [...m.normals] : null);
-      expect(g.uvs ? Object.prototype.toString.call(g.uvs) : null).toBe(m.uvs ? Object.prototype.toString.call(m.uvs) : null);
-      expect(g.uvs ? [...g.uvs] : null).toEqual(m.uvs ? [...m.uvs] : null);
-      expect(g.backUvs ? [...g.backUvs] : null).toEqual(m.backUvs ? [...m.backUvs] : null);
+    packSceneAttribs(b);
+    const kind = (x: unknown): string | null => (x ? Object.prototype.toString.call(x) : null);
+    const vals = (x: ArrayLike<number> | undefined): number[] | null => (x ? Array.from(x) : null);
+    expect(b.meshes.map((m) => m.id)).toEqual(a.meshes.map((m) => m.id));
+    for (const [i, m] of a.meshes.entries()) {
+      const n = b.meshes[i]!;
+      expect(kind(n.normals)).toBe(kind(m.normals));
+      expect(vals(n.normals)).toEqual(vals(m.normals));
+      expect(kind(n.uvs)).toBe(kind(m.uvs));
+      expect(vals(n.uvs)).toEqual(vals(m.uvs));
+      expect(n.uvTransform ?? null).toEqual(m.uvTransform ?? null);
     }
-    // 줄이지 않은 모형(pack 없음)은 다시 푼 Float32 그대로(27차와 같다)
-    const plain = pickRestoreMeshes(b, want.map((w) => ({ ...w, uvT: null, backUvT: null })), false);
-    expect(plain.every((g) => (!g.normals || g.normals instanceof Float32Array) && (!g.uvs || g.uvs instanceof Float32Array))).toBe(true);
   });
 });
