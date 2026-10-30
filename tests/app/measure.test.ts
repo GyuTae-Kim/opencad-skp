@@ -3184,3 +3184,61 @@ describe('측정 도구: 잠근 선이 모서리·면과 만나는 점(코어 0.
     expect(res.b[2]).toBeCloseTo(35, 9);
   });
 });
+
+describe('측정 도구: 잠근 선이 끌어온 점의 축과 만나는 점(코어 0.21.0)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+  });
+
+  // 넓은 면 위: 끝점 A(0, −40 — 화면 100, 140)에서 −X로 30인 모서리, 끝점 P(30, 20 — 화면 130, 80)에서 위로 40인 모서리.
+  // 잠근 녹색 축(x = 0)과 P의 빨강 축(y = 20)이 M(0, 20) — 화면 (100, 80)에서 만난다
+  const SCENE = (): Pick<Scene3d, 'meshes' | 'lines' | 'units'> => ({
+    units: 'mm',
+    meshes: [quad('f', -95, -95, 95, 95, 0)],
+    lines: [lines('e', [[0, -40, 0, -30, -40, 0], [30, 20, 0, 30, 60, 0]])],
+  });
+
+  it('줄자: P에 머물러 끌어온 뒤 녹색 축을 잠그고 M 둘레를 가리키면 교차점 표식에 잠금 고리, P에서 빨강 점선, 그 점에서 잰다(끄면 예전처럼)', () => {
+    const r = rig(SCENE());
+    r.tool.setMode('tape');
+    r.click(100.6, 140.4);
+    r.move(130.6, 80.4);
+    vi.advanceTimersByTime(TRACK_DWELL_MS);
+    expect(r.tool.trackPoints).toEqual([[30, 20, 0]]);
+    r.key('ArrowLeft');
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'y', source: 'key' });
+    r.move(101.3, 80.8);
+    expect(r.tip()).toBe(`${AXIS_LABELS.y} · ${TRACK_AXIS_LABELS.x} · 잠금 · 60 mm`);
+    const mark = r.q('[data-meet="track"]')!;
+    expect(mark.tagName.toLowerCase()).toBe('g');
+    expect(mark.getAttribute('data-track')).toBe('track');
+    expect(mark.getAttribute('data-kind')).toBe('axis');
+    expect(mark.querySelectorAll('path')[1]!.getAttribute('stroke')).toBe(SNAP_COLORS.intersection);
+    expect(r.q('.measure-lock-ring')).not.toBeNull();
+    const tl = r.q('line.measure-track-line')!;
+    expect(tl.getAttribute('stroke')).toBe(AXIS_COLORS.x);
+    expect(tl.getAttribute('data-axis')).toBe('x');
+    expect(Number(tl.getAttribute('x1'))).toBeCloseTo(130, 6);
+    expect(Number(tl.getAttribute('y1'))).toBeCloseTo(80, 6);
+    expect(r.q('.measure-track.is-from')).not.toBeNull();
+    expect(r.q('line.measure-rubber')!.getAttribute('data-locked')).toBe('axis');
+    // 끄면 같은 자리는 예전처럼 잠근 선 위 커서에 가까운 점(만나는 점 표식·끌어온 점선 없음)
+    r.tool.setLockMeets(false);
+    r.move(101.4, 80.8);
+    expect(r.tip()?.startsWith(`${AXIS_LABELS.y} · 잠금 · `)).toBe(true);
+    expect(r.q('[data-meet]')).toBeNull();
+    expect(r.q('line.measure-track-line')).toBeNull();
+    r.tool.setLockMeets(true);
+    r.move(101.3, 80.8);
+    r.click(101.3, 80.8);
+    const res = r.results.at(-1);
+    expect(res).toMatchObject({ kind: 'tape', a: [0, -40, 0], b: [0, 20, 0] });
+    if (res?.kind !== 'tape') return;
+    expect(res.distance).toBe(60);
+  });
+});
