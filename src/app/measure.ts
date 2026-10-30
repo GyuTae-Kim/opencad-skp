@@ -424,7 +424,7 @@ export interface GuideMenuItem {
 }
 
 /** 이 도구가 쓰는 뷰어 기능(시험에서 가짜로 바꿀 수 있게) */
-export type MeasureViewer = Pick<Viewer3d, 'canvas' | 'pick' | 'getCamera' | 'onCameraChange' | 'getRenderMode' | 'section'> & Partial<Pick<Viewer3d, 'sections' | 'viewCubeVisible'>>;
+export type MeasureViewer = Pick<Viewer3d, 'canvas' | 'pick' | 'getCamera' | 'onCameraChange' | 'getRenderMode' | 'section'> & Partial<Pick<Viewer3d, 'sections' | 'viewCubeRect'>>;
 /** 이 도구가 쓰는 덧그림 기능 */
 export type MeasureOverlay = Pick<Overlay, 'svg' | 'labels' | 'set' | 'frame' | 'invalidate'>;
 
@@ -693,9 +693,6 @@ export function tooltipPosition(
   }
   return first;
 }
-
-/** 코어가 3D 보기 캔버스 옆(같은 부모)에 두는 뷰 큐브 캔버스 — 앱 덧그림(z-index 1)이 그 위라 결과 글이 큐브를 덮는다 */
-export const CUBE_SELECTOR = 'canvas.v3d-cube';
 
 /** 캔버스 가장자리 바깥 띠의 두께(화소) */
 const EDGE_BAND_PX = 4096;
@@ -2497,15 +2494,20 @@ export class MeasureTool {
 
   /**
    * 3D 보기 위에 떠서 결과 글·툴팁이 비킬 것(캔버스 기준): 앱이 알려 준 요소(측정 띠·측정값 칸·장면 탭 등 — labelAvoid),
-   * 코어 뷰 큐브(보일 때만 — 덧그림이 그 위라 결과 글이 큐브를 덮는다), 잠글 방향 고르기 줄(열렸을 때)
+   * 코어 뷰 큐브(보일 때만 — 덧그림이 그 위라 결과 글이 큐브를 덮는다), 잠글 방향 고르기 줄(열렸을 때). 이 차례로 둔다(비킬 자리 차례가 같게).
+   * 뷰 큐브 자리는 코어가 알려 준다(0.23.0 viewCubeRect — 캔버스 왼쪽 위 기준, 감췄으면 null). 앱은 큐브를 CSS로 옮기지 않는다
    */
   private coverAreas(): MeasureLabelRect[] {
     const els: (Element | null | undefined)[] = [...(this.opts.labelAvoid?.() ?? [])];
     const v = this.viewer;
-    if (v.viewCubeVisible) els.push(v.canvas.parentElement?.querySelector(CUBE_SELECTOR));
-    if (this.lockMenu && !this.lockMenu.hidden) els.push(this.lockMenu);
-    if (!els.some((e) => !!e)) return [];
-    return coverRects(v.canvas.getBoundingClientRect(), els.map((e) => e?.getBoundingClientRect()));
+    const cube = v.viewCubeRect ?? null;
+    const menu = this.lockMenu && !this.lockMenu.hidden ? this.lockMenu : null;
+    if (!cube && !menu && !els.some((e) => !!e)) return [];
+    const box = v.canvas.getBoundingClientRect();
+    const out = coverRects(box, els.map((e) => e?.getBoundingClientRect()));
+    if (cube && cube.width > 0 && cube.height > 0) out.push({ x: cube.x, y: cube.y, width: cube.width, height: cube.height });
+    if (menu) out.push(...coverRects(box, [menu.getBoundingClientRect()]));
+    return out;
   }
 
   /**

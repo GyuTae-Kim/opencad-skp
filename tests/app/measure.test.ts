@@ -181,7 +181,7 @@ const quad = (id: string, x0: number, y0: number, x1: number, y1: number, z: num
 
 interface Rig {
   tool: MeasureTool;
-  /** 가짜 뷰어(시험이 viewCubeVisible 같은 것을 바꾼다) */
+  /** 가짜 뷰어(시험이 viewCubeRect 같은 것을 바꾼다) */
   viewer: MeasureViewer;
   overlay: Overlay;
   canvas: HTMLCanvasElement;
@@ -2502,7 +2502,8 @@ describe('측정 도구: 결과 글이 십자선·툴팁·측정 띠를 비켜 �
     r.setCamera({ ...TOP, target: [-200, 0, 0] });
     r.overlay.paintNow();
     expect([label().style.left, label().classList.contains('is-moved')]).toEqual(['350px', false]);
-    // 뷰 큐브(코어가 캔버스 옆에 두는 canvas.v3d-cube)가 결과 글 자리를 덮으면 비킨다 — 보일 때만
+    // 뷰 큐브가 결과 글 자리를 덮으면 비킨다 — 자리는 코어가 알려 준다(0.23.0 viewCubeRect — 캔버스 기준, 감췄으면 null).
+    // 코어 내부 요소(canvas.v3d-cube)는 더 찾지 않는다: 그 요소가 있어도 viewCubeRect가 null이면 비키지 않는다
     const cube = document.createElement('canvas');
     cube.className = 'v3d-cube';
     cube.getBoundingClientRect = () => ({ left: 120, top: 80, width: 60, height: 40, right: 180, bottom: 120, x: 120, y: 80, toJSON: () => ({}) }) as DOMRect;
@@ -2510,16 +2511,19 @@ describe('측정 도구: 결과 글이 십자선·툴팁·측정 띠를 비켜 �
     r.setCamera(TOP);
     r.overlay.paintNow();
     expect(label().classList.contains('is-moved')).toBe(false);
-    const fake = r.viewer as { viewCubeVisible?: boolean };
-    fake.viewCubeVisible = true;
+    const fake = r.viewer as { viewCubeRect?: { x: number; y: number; width: number; height: number } | null };
+    fake.viewCubeRect = null;
     r.move(31, 20);
+    expect([label().style.left, label().style.top, label().classList.contains('is-moved')]).toEqual(['150px', '100px', false]);
+    fake.viewCubeRect = { x: 120, y: 80, width: 60, height: 40 };
+    r.move(30, 20);
     const l = label();
     expect(l.classList.contains('is-moved')).toBe(true);
     const [x, y] = [parseFloat(l.style.left), parseFloat(l.style.top)];
     expect(x + 60 <= 120 || x >= 180 || y + 18 <= 80 || y >= 120).toBe(true);
     expect(x >= 0 && y >= 0 && x + 60 <= W && y + 18 <= W).toBe(true);
-    fake.viewCubeVisible = false;
-    r.move(30, 20);
+    fake.viewCubeRect = null;
+    r.move(31, 20);
     expect([label().style.left, label().style.top, label().classList.contains('is-moved')]).toEqual(['150px', '100px', false]);
   });
 });
