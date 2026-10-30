@@ -346,6 +346,19 @@ function freePrepared(p: Prepared): void {
   }
 }
 
+/**
+ * 다 놓은 정의의 중간 모형 표(정점·면·모서리와 면 무늬 투영) 배열 버퍼를 곧바로 놓는다(freeTyped — GC를 기다리지 않는다).
+ * 표의 배열은 모형을 읽을 때 표마다 꼭 맞게 낸 것이라(grow.ts done·Float64Array.from) 다른 표·삼각화·장면과 버퍼를 함께 쓰지 않는다.
+ * 놓은 뒤에는 그 표를 쓰지 않는다(releaseModel이 곧바로 빈 표로 바꾼다)
+ */
+function freeTables(e: SkpEntities): void {
+  freeTyped(e.points);
+  const f = e.faces;
+  for (const a of [f.loopStart, f.cornerStart, f.vertex, f.edge, f.normal, f.flags, f.front, f.back, f.layer, f.pid, f.frontMaps?.at, f.frontMaps?.data, f.backMaps?.at, f.backMaps?.data]) freeTyped(a);
+  const g = e.edges;
+  for (const a of [g.a, g.b, g.flags, g.layer, g.material, g.pid, g.curve]) freeTyped(a);
+}
+
 /** 면 표의 면 k를 삼각화해 (위치, 삼각형)을 쌓기에 더한다. 실패하면 false(쌓기는 그대로) */
 export function triangulateFace(points: Float64Array, faces: SkpFaces, k: number, pos: F64, idx: U32): boolean {
   const N = faces.normal;
@@ -2340,6 +2353,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       // (지금 안쪽 묶음은 이 배치 아래 놓을 것이 남아 아직 표가 있다)
       localBounds(e);
       emptied.add(e);
+      // 22차: 비운 표의 배열도 GC를 기다리지 않고 곧바로 놓는다(큰 모형에서 펼치는 동안 놓은 표 180 MB 남짓이 쓰레기로 쌓였다)
+      freeTables(e);
       e.points = new Float64Array(0);
       e.faces = emptyFaces();
       e.edges = emptyEdges();

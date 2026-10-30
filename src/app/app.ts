@@ -127,8 +127,6 @@ export const VIEW_CUBE_WIDE = 112;
 export const VIEW_CUBE_NARROW = 76;
 /** 정의의 인스턴스 모두에 맞춰 볼 때 범위를 셀 노드 수 한도 */
 const MAX_FIT_NODES = 5000;
-/** 측정 띠 알림 종류: 잠금 단추를 눌렀는데 잠글 방향이 없음(잠금이 걸리면 거둔다) */
-const NO_LOCK_FLASH = 'no-lock';
 
 const RENDER_MODES: [RenderMode, string, string][] = [
   ['shaded', '음영', 'shaded'],
@@ -1288,15 +1286,12 @@ export class SkpViewerApp implements PanelHost {
         this.refreshStatus();
         this.panel.refreshSelection();
       },
-      // 추론 잠금·화살표로 고정한 각도기 평면: 상태 줄·측정 띠의 잠금 안내와 잠금 단추(잠그면 잠글 방향이 없다는 알림은 거둔다)
-      onLock: () => {
-        if (this.measureTool?.inferenceLock) this.measureNote?.drop(NO_LOCK_FLASH);
-        this.refreshStatus();
-      },
+      // 추론 잠금·화살표로 고정한 각도기 평면: 상태 줄·측정 띠의 잠금 안내와 잠금 단추
+      onLock: () => this.refreshStatus(),
       // 안내 두기 켜고 끄기·안내점·안내선 수: 측정 띠 단추·측정값 칸의 안내 수
       onGuides: () => this.refreshStatus(),
-      // 결과 글이 3D 보기 위에 뜬 측정 띠·측정값 칸 밑에 숨지 않게 비켜 둔다
-      labelAvoid: () => [this.els.measureBar, this.vcb.el],
+      // 결과 글·툴팁이 3D 보기 위에 뜬 것(측정 띠와 그 위 기록·알림, 측정값 칸, 장면 탭, 카메라 띠, 걷기 조이스틱 — 뷰 큐브는 측정 도구가 찾는다) 밑에 숨지 않게 비켜 둔다
+      labelAvoid: () => [this.els.measureBar, this.vcb.el, this.els.sceneTabs, this.els.measureLog, this.els.measureFlash, this.els.camBar, this.stick.el],
       guideKey: this.guideKey,
       touch: () => !!this.coarseQuery?.matches,
       curveCenter: (id, seg) => this.curveCenter(id, seg),
@@ -1315,6 +1310,8 @@ export class SkpViewerApp implements PanelHost {
     this.measureTool = tool;
     // 측정 띠의 안내 되돌리기·다시 하기 단추(측정값 칸 줄)
     tool.mountUndo(this.vcb.el);
+    // 측정 띠 위의 잠글 방향 고르기 줄(한 손 잠금 — 잠금 단추를 눌렀는데 맞춘 방향이 없을 때)
+    tool.mountLockMenu(this.els.measureBar);
     // 문서를 연 뒤에 받았으면 그 파일의 안내를 되살린다
     if (this.doc) tool.openFile(this.docPrint);
     return tool;
@@ -1461,13 +1458,15 @@ export class SkpViewerApp implements PanelHost {
     (this.measureNote ??= new FlashNote(this.els.measureFlash)).show(text, ms, kind);
   }
 
-  /** 측정 띠 잠금 단추: 잠겼으면 풀고, 아니면 지금 방향 추론을 잠근다(잠글 것이 없으면 맞추는 법을 알린다 — 잠그면 거둔다) */
+  /**
+   * 측정 띠 잠금 단추: 잠겼으면 풀고, 아니면 지금 방향 추론을 잠근다. 맞춘 방향이 없으면(한 손으로 시작점을 탭한 뒤 등) 띠 위에
+   * 잠글 방향 고르기 줄(빨강·녹색·파랑 축, 지나간 모서리와 나란히 — 측정 도구 조각)을 열고, 열려 있으면 닫는다
+   */
   private toggleMeasureLock(): void {
     const t = this.measureTool;
     if (!t?.directing) return;
     if (t.inferenceLock) t.setInferenceLock(false);
-    else if (!t.setInferenceLock(true))
-      this.flashMeasure(this.coarseQuery?.matches ? '잠글 방향이 없습니다: 길게 눌러 조준하며 축·나란한 방향에 맞춘 뒤 누르세요' : '잠글 방향이 없습니다: 커서를 축·나란한 방향에 맞춘 뒤 누르세요', 3200, NO_LOCK_FLASH);
+    else if (t.lockMenuOpen || !t.setInferenceLock(true)) t.toggleLockMenu();
     this.refreshStatus();
   }
 

@@ -69,6 +69,30 @@ describe('장면을 만들며 다 놓은 정의를 놓기', () => {
     expect(freed.root.instances).toHaveLength(6);
   });
 
+  it('비운 표의 배열 버퍼는 GC를 기다리지 않고 곧바로 놓는다(22차 — transfer(0)로 떼어 길이 0), 놓지 않으면 그대로', () => {
+    const tables = (m: SkpModel) => {
+      const e = m.definitions.get(50)!.entities;
+      return { points: e.points, vertex: e.faces.vertex, normal: e.faces.normal, a: e.edges.a, root: m.root.points };
+    };
+    const keep = readModelDat(shared());
+    const freed = readModelDat(shared());
+    const k = tables(keep);
+    const f = tables(freed);
+    const lengths = (t: ReturnType<typeof tables>) => Object.values(t).map((a) => a.byteLength);
+    const before = lengths(f);
+    expect(before.every((n) => n > 0)).toBe(true);
+    expect(plain(build(freed, true))).toBe(plain(build(keep, false)));
+    expect(lengths(k)).toEqual(before);
+    // 이 Node(21+)는 ArrayBuffer.prototype.transfer가 있어 놓은 표의 버퍼가 떼어졌다
+    expect(lengths(f).every((n) => n === 0)).toBe(true);
+    // 장면이 다시 그리는 숨김 인스턴스 안쪽은 놓지 않아 버퍼도 그대로
+    const pinned = readModelDat(shared({ reveal: true }));
+    const p = pinned.definitions.get(70)!.entities.faces.vertex;
+    build(pinned, true);
+    expect(p.byteLength).toBeGreaterThan(0);
+    expect(pinned.definitions.get(70)!.entities.faces.vertex).toBe(p);
+  });
+
   it('extras를 끄면 숨긴 인스턴스만 가리키는 정의는 펼치지 않아 놓지 않는다', () => {
     const m = readModelDat(shared());
     buildSceneParts(m, new Map(), 1, { releaseModel: true });
