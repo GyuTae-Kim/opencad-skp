@@ -112,12 +112,17 @@ async function prepOne(t: Texture3d, info: SkpTextureInfo, limit: number): Promi
 
 /**
  * 장면의 무늬 손질(위 설명). 손질한 무늬는 bitmap·크기·alpha를 채운다(바이트 data는 견본용 그림과 같은 배열이라 그대로 둔다).
- * onEach는 무늬 하나를 마칠 때마다(진행 표시용).
+ * onEach는 무늬 하나를 마칠 때마다(진행 표시용). only를 주면 그 id의 무늬만 손질한다(문맥 복구 때 다시 받을 무늬만 — 27차).
  */
-export async function prepareSceneTextures(scene: Scene3d, limit: number, onEach?: (done: number, total: number) => void): Promise<TexturePrepResult> {
+export async function prepareSceneTextures(
+  scene: Scene3d,
+  limit: number,
+  onEach?: (done: number, total: number) => void,
+  only?: ReadonlySet<string>,
+): Promise<TexturePrepResult> {
   const res: TexturePrepResult = { decoded: 0, colorized: 0, alpha: 0, dropped: 0, swatches: new Map() };
   const infos = new Map(((scene.meta?.textures ?? []) as SkpTextureInfo[]).map((t) => [t.id, t] as const));
-  const list = [...(scene.textures ?? [])].filter((t) => needsDecode(infos.get(t.id)));
+  const list = [...(scene.textures ?? [])].filter((t) => needsDecode(infos.get(t.id)) && (!only || only.has(t.id)));
   const ok = canDecode();
   let done = 0;
   for (const t of list) {
