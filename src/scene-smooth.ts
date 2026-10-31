@@ -7,7 +7,7 @@
  * 꼭짓점 = 면 고리 안의 정점 자리. 차례는 면마다 고리를 이어 붙인 차례(scene.ts triangulateFace가 위치를 쌓는 차례와 같다).
  * 큰 모형을 생각해 이어 칠하는 면만 꼭짓점 배열을 잡는다.
  */
-import { faceCorners, loopEdgesKnown } from './entities';
+import { loopEdgesKnown } from './entities';
 import { FLAG_SMOOTH, type SkpEntities } from './model';
 
 export const SMOOTH_MIN_DOT = 0.02;
@@ -111,18 +111,22 @@ export function cornerNormals(ents: SkpEntities): CornerNormals | null {
     const b = f1[e]!;
     if (dotF(a, b) < SMOOTH_MIN_DOT) continue;
     joins.push(e);
-    for (const f of [a, b])
-      if (faceIndex[f]! < 0) {
-        faceIndex[f] = picked.length;
-        picked.push(f);
-      }
+    // 두 면 차례로(모서리마다 작은 배열을 만들지 않는다 — 33차)
+    if (faceIndex[a]! < 0) {
+      faceIndex[a] = picked.length;
+      picked.push(a);
+    }
+    if (faceIndex[b]! < 0) {
+      faceIndex[b] = picked.length;
+      picked.push(b);
+    }
   }
   if (!joins.length) return null;
-  // 고른 면의 꼭짓점 수 = 면의 꼭짓점 구간 길이(고리를 이어 붙인 차례)
+  // 고른 면의 꼭짓점 수 = 면의 꼭짓점 구간 길이(고리를 이어 붙인 차례 — faceCorners와 같은 자리)
   const start = new Uint32Array(picked.length + 1);
   for (let i = 0; i < picked.length; i++) {
-    const [s, e] = faceCorners(faces, picked[i]!);
-    start[i + 1] = start[i]! + (e - s);
+    const f = picked[i]!;
+    start[i + 1] = start[i]! + (CS[LS[f + 1]!]! - CS[LS[f]!]!);
   }
   const C = start[picked.length]!;
   const parent = new Int32Array(C);
@@ -136,19 +140,23 @@ export function cornerNormals(ents: SkpEntities): CornerNormals | null {
   };
   /** 고른 면 f(전체 차례)에서 정점 v의 첫 꼭짓점(고른 면 꼭짓점 차례), 없으면 -1 */
   const cornerOf = (f: number, v: number): number => {
-    const [s, e] = faceCorners(faces, f);
+    const s = CS[LS[f]!]!;
+    const e = CS[LS[f + 1]!]!;
     for (let c = s; c < e; c++) if (VX[c] === v) return start[faceIndex[f]!]! + (c - s);
     return -1;
   };
+  /** 모서리 e의 두 면에서 정점 v의 꼭짓점을 한 무리로 */
+  const join = (e: number, v: number): void => {
+    const c0 = cornerOf(f0[e]!, v);
+    const c1 = cornerOf(f1[e]!, v);
+    if (c0 < 0 || c1 < 0) return;
+    const r0 = find(c0);
+    const r1 = find(c1);
+    if (r0 !== r1) parent[r0] = r1;
+  };
   for (const e of joins) {
-    for (const v of [edges.a[e]!, edges.b[e]!]) {
-      const c0 = cornerOf(f0[e]!, v);
-      const c1 = cornerOf(f1[e]!, v);
-      if (c0 < 0 || c1 < 0) continue;
-      const r0 = find(c0);
-      const r1 = find(c1);
-      if (r0 !== r1) parent[r0] = r1;
-    }
+    join(e, edges.a[e]!);
+    join(e, edges.b[e]!);
   }
   // 무리 뿌리에 면 법선을 모아 정규화하고, 나머지 꼭짓점은 뿌리 값을 옮겨 적는다
   const normals = new Float32Array(C * 3);

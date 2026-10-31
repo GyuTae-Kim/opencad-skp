@@ -21,18 +21,47 @@ export interface BaseInfo {
   header?: TlvNode;
 }
 
-/** n의 첫 자식 바탕(07d0): 번호·재질·태그·깃발 */
+/**
+ * n의 첫 자식 바탕(07d0): 번호·재질·태그·깃발.
+ * 바탕의 자식은 한 번만 돈다(33차 — 모서리·면마다 부른다): 깃발·머리·재질·태그의 첫 자식을 모으고, 길이가 넘친 자식을 만나면 거기서 멈춘다.
+ * 그 앞에서 찾지 못한 꼬리표는 r.first처럼 같은 글로 던지고, 꼬리표마다 찾던 차례(깃발 → 머리 → 번호 → 재질 → 태그)도 같다
+ */
 export function readBase(r: TlvReader, n: TlvNode): BaseInfo {
   const base = r.first(n, TAG.BASE);
   if (!base) return { flags: 0 };
-  const out: BaseInfo = { flags: r.u8(r.first(base, TAG.FLAGS)) ?? 0 };
-  const header = r.first(base, TAG.ID_BOX);
-  if (header) out.header = header;
-  const id = header && r.uint(r.first(header, TAG.ID));
+  let flags: TlvNode | undefined;
+  let header: TlvNode | undefined;
+  let material: TlvNode | undefined;
+  let layer: TlvNode | undefined;
+  let broken: Error | undefined;
+  const dv = r.dv;
+  let p = base.start;
+  while (p + 6 <= base.end) {
+    const t = dv.getUint16(p, true);
+    const e = p + 6 + dv.getUint32(p + 2, true);
+    if (e > base.end) {
+      broken = new Error(`TLV 길이가 범위를 넘습니다(꼬리표 0x${t.toString(16)} @${p})`);
+      break;
+    }
+    if (t === TAG.FLAGS) flags ??= { tag: t, start: p + 6, end: e };
+    else if (t === TAG.ID_BOX) header ??= { tag: t, start: p + 6, end: e };
+    else if (t === TAG.MATERIAL) material ??= { tag: t, start: p + 6, end: e };
+    else if (t === TAG.LAYER) layer ??= { tag: t, start: p + 6, end: e };
+    p = e;
+  }
+  /** r.first(base, 꼬리표)와 같은 값: 찾았으면 그 자식, 넘친 자식 앞에서 찾지 못했으면 던진다 */
+  const found = (x: TlvNode | undefined): TlvNode | undefined => {
+    if (!x && broken) throw broken;
+    return x;
+  };
+  const out: BaseInfo = { flags: r.u8(found(flags)) ?? 0 };
+  const h = found(header);
+  if (h) out.header = h;
+  const id = h && r.uint(r.first(h, TAG.ID));
   if (id !== undefined) out.id = id;
-  const m = r.uint(r.first(base, TAG.MATERIAL));
+  const m = r.uint(found(material));
   if (m !== undefined) out.material = m;
-  const l = r.uint(r.first(base, TAG.LAYER));
+  const l = r.uint(found(layer));
   if (l !== undefined) out.layer = l;
   return out;
 }

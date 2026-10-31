@@ -61,9 +61,9 @@ import type {
 import * as A from './scene-annotations';
 import { AttrPool, PAGE_USE_HIDDEN_OBJECTS } from './scene-meta';
 import { cornerNormals, faceUnitNormal } from './scene-smooth';
-import { emptyEdges, emptyFaces, opt, textureMapAt, type SkpFaces } from './entities';
+import { emptyEdges, emptyFaces, MAP_STRIDE, opt, type SkpFaces } from './entities';
 import { F32, F64, I32, U32, freeTyped } from './grow';
-import { applyFaceUvq, faceUvq, planeAxes } from './projection';
+import { applyFaceUvq, faceUvqInto, planeAxesInto } from './projection';
 import { solidInfo } from './solid';
 
 export const DEFAULT_FACE_COLOR: Rgba = [0.82, 0.82, 0.8, 1];
@@ -453,6 +453,10 @@ function loopArea(points: Float64Array, V: Int32Array, s: number, e: number, n: 
   return Math.abs(n[0] || n[1] || n[2] ? d : Math.hypot(sx, sy, sz)) / 2;
 }
 
+/** 면마다 다시 쓰는 투영 행렬(3×4)과 평면 틀(x 3, y 3) 자리(prepare — 받는 함수는 붙들지 않는다) */
+const uvMatrix = new Float64Array(12);
+const planeAt = [0, 0, 0, 0, 0, 0];
+
 /** 면 하나의 무늬 좌표(u, v, q)를 쌓기에 더한다(applyFaceUvq를 면마다 다시 쓰는 작은 배열에 적고 옮긴다). 원근 없이 칠하면 true */
 const uvScratch: number[] = [];
 function applyUv(m: ArrayLike<number>, points: ArrayLike<number>, start: number, count: number, out: F64): boolean {
@@ -506,7 +510,8 @@ export function faceArea(points: Float64Array, faces: SkpFaces, k: number, n: Ar
   return Math.max(0, a);
 }
 
-function prepare(
+/** 정의 하나 삼각화(면 묶음·모서리 묶음 — buildSceneParts가 정의마다 부른다. 내보내는 것은 시험용) */
+export function prepare(
   ents: SkpEntities,
   defaultLayer: number | undefined,
   counter: { failed: number },
@@ -526,6 +531,12 @@ function prepare(
   const normal: [number, number, number] = [0, 0, 0];
   let k = 0;
   let failedHere = 0;
+  // 바로 앞 면과 재질·뒷면·태그·숨김이 같으면 그 묶음을 그대로 쓴다(면마다 열쇠 글을 만들지 않는다 — 같은 묶음)
+  let last: FaceGroup | undefined;
+  let lastHidden = false;
+  let lastMat = NaN;
+  let lastBack = NaN;
+  let lastLayer = NaN;
   for (let fi = 0; fi < F.length; fi++) {
     if (onFaces && ++k % 2048 === 0) onFaces(2048);
     const isHidden = (F.flags[fi]! & FLAG_HIDDEN) !== 0;
@@ -538,32 +549,41 @@ function prepare(
     normal[0] = F.normal[3 * fi]!;
     normal[1] = F.normal[3 * fi + 1]!;
     normal[2] = F.normal[3 * fi + 2]!;
-    const key = `${mat}|${back}|${layer}`;
-    const map = isHidden ? hidden : groups;
-    let g = map.get(key);
-    if (!g) {
-      const own = tex && mat >= 0 ? tex.tile(mat) : undefined;
-      const ownBack = tex && back >= 0 ? tex.tile(back) : undefined;
-      map.set(
-        key,
-        (g = {
-          mat,
-          back,
-          layer,
-          pos: new F64(),
-          idx: new U32(),
-          faces: 0,
-          area: 0,
-          fa: new F64(64),
-          fn: new F32(192),
-          nrm: smooth ? new F32() : null,
-          smoothed: false,
-          uv: own ? new F64() : null,
-          buv: ownBack ? new F64() : null,
-          plane: tex?.plane && (mat < 0 || back < 0) ? new F32() : null,
-          ft: new U32(64),
-        }),
-      );
+    let g: FaceGroup | undefined;
+    if (last && isHidden === lastHidden && mat === lastMat && back === lastBack && layer === lastLayer) g = last;
+    else {
+      const key = `${mat}|${back}|${layer}`;
+      const map = isHidden ? hidden : groups;
+      g = map.get(key);
+      if (!g) {
+        const own = tex && mat >= 0 ? tex.tile(mat) : undefined;
+        const ownBack = tex && back >= 0 ? tex.tile(back) : undefined;
+        map.set(
+          key,
+          (g = {
+            mat,
+            back,
+            layer,
+            pos: new F64(),
+            idx: new U32(),
+            faces: 0,
+            area: 0,
+            fa: new F64(64),
+            fn: new F32(192),
+            nrm: smooth ? new F32() : null,
+            smoothed: false,
+            uv: own ? new F64() : null,
+            buv: ownBack ? new F64() : null,
+            plane: tex?.plane && (mat < 0 || back < 0) ? new F32() : null,
+            ft: new U32(64),
+          }),
+        );
+      }
+      last = g;
+      lastHidden = isHidden;
+      lastMat = mat;
+      lastBack = back;
+      lastLayer = layer;
     }
     const before = g.pos.n;
     const tri0 = g.idx.n;
@@ -615,20 +635,25 @@ function prepare(
     // 무늬 좌표: 자기 무늬 재질이면 저장된 투영(없으면 기본), 물려받을 수 있으면 기본 투영 평면 좌표(인치)
     const v0 = before / 3;
     const nv = corners;
+    // 투영 행렬·평면 틀은 면마다 다시 쓰는 자리에(faceUvqInto·planeAxesInto — faceUvq·planeAxes와 같은 값, 면마다 배열을 잡지 않는다)
     if (g.uv) {
       const t = tex!.tile(mat)!;
-      const r = faceUvq(normal, textureMapAt(F.frontMaps, fi), t.w, t.h);
-      if (r.singular) tex!.singular++;
-      if (applyUv(r.m, g.pos.a, v0, nv, g.uv)) tex!.flat++;
+      const fm = F.frontMaps;
+      const mi = fm ? fm.at[fi]! : -1;
+      if (faceUvqInto(normal, fm?.data, mi >= 0 ? mi * MAP_STRIDE : -1, t.w, t.h, uvMatrix)) tex!.singular++;
+      if (applyUv(uvMatrix, g.pos.a, v0, nv, g.uv)) tex!.flat++;
     }
     if (g.buv) {
       const t = tex!.tile(back)!;
-      const r = faceUvq(normal, textureMapAt(F.backMaps, fi), t.w, t.h);
-      if (r.singular) tex!.singular++;
-      if (applyUv(r.m, g.pos.a, v0, nv, g.buv)) tex!.flat++;
+      const bm = F.backMaps;
+      const mi = bm ? bm.at[fi]! : -1;
+      if (faceUvqInto(normal, bm?.data, mi >= 0 ? mi * MAP_STRIDE : -1, t.w, t.h, uvMatrix)) tex!.singular++;
+      if (applyUv(uvMatrix, g.pos.a, v0, nv, g.buv)) tex!.flat++;
     }
     if (g.plane) {
-      const [x, y] = planeAxes(normal);
+      planeAxesInto(normal, 0, planeAt);
+      const x0 = planeAt[0]!, x1 = planeAt[1]!, x2 = planeAt[2]!;
+      const y0 = planeAt[3]!, y1 = planeAt[4]!, y2 = planeAt[5]!;
       const P = g.pos.a;
       const pl = g.plane;
       pl.reserve(2 * corners);
@@ -636,8 +661,8 @@ function prepare(
       let n = pl.n;
       for (let i = before; i < g.pos.n; i += 3) {
         const px = P[i]!, py = P[i + 1]!, pz = P[i + 2]!;
-        A[n++] = px * x[0] + py * x[1] + pz * x[2];
-        A[n++] = px * y[0] + py * y[1] + pz * y[2];
+        A[n++] = px * x0 + py * x1 + pz * x2;
+        A[n++] = px * y0 + py * y1 + pz * y2;
       }
       pl.n = n;
     }
@@ -749,6 +774,107 @@ function prepare(
   const out: Prepared = { batches: toBatches(groups), lines, hiddenBatches: toBatches(hidden), extraLines, closed: solid.closed && !failedHere };
   if (solid.volume !== undefined) out.volume = solid.volume;
   return out;
+}
+
+/** 정의를 삼각화한 묶음 열쇠(나눌 단계 정하기 — buildSceneParts ownOf): 묶음 수와 열쇠(면 f재질|태그[c], 숨긴 면 h재질|태그, 모서리 l태그, 그 밖 모서리 x갈래|태그) */
+export interface PreparedKeys {
+  n: number;
+  keys: string[];
+}
+
+/** Prepared의 묶음 열쇠(prepareKeys와 같은 차례) */
+export function preparedKeys(p: Prepared): PreparedKeys {
+  const keys: string[] = [];
+  for (const b of p.batches) keys.push(`f${b.mat}|${b.layer}${p.closed ? 'c' : ''}`);
+  for (const b of p.hiddenBatches) keys.push(`h${b.mat}|${b.layer}`);
+  for (const l of p.lines) keys.push(`l${l.layer}`);
+  for (const l of p.extraLines) keys.push(`x${l.cls}|${l.layer}`);
+  return { n: p.batches.length + p.lines.length + p.hiddenBatches.length + p.extraLines.length, keys };
+}
+
+/**
+ * prepare(같은 선택)를 한 뒤 preparedKeys로 낸 것과 같은 열쇠를 배열 없이 낸다(33차): 면은 prepare처럼 묶음(재질·뒷면·태그·숨김)을 처음 나온 차례로 세고
+ * 삼각화가 되는지만 본다(삼각화한 위치·색인은 면마다 다시 쓰는 자리에 — 법선·넓이·무늬 좌표는 셈하지 않는다). 모서리는 태그·갈래만, 닫힌 입체는 solidInfo.
+ * 큰 모형에서 나눌 단계를 정할 때 들고 있을 수 없는 정의를 통째로 삼각화했다가 놓고, 장면에 옮길 때 다시 통째로 삼각화하던 것을 줄인다
+ * (165 MB 표본에서 정의 1,143개 가운데 623개, 면 39만 개를 두 번 — prepare 시간의 3분의 1)
+ */
+export function prepareKeys(ents: SkpEntities, defaultLayer: number | undefined, extras: boolean): PreparedKeys {
+  const layerKey = (l: number | undefined): number => (l === undefined || l === defaultLayer ? -1 : l);
+  interface KeyGroup {
+    mat: MatKey;
+    layer: number;
+    ok: boolean;
+  }
+  const groups = new Map<string, KeyGroup>();
+  const hidden = new Map<string, KeyGroup>();
+  const F = ents.faces;
+  const pos = new F64();
+  const idx = new U32();
+  let failedHere = 0;
+  for (let fi = 0; fi < F.length; fi++) {
+    const isHidden = (F.flags[fi]! & FLAG_HIDDEN) !== 0;
+    if (isHidden && !extras) continue;
+    const fr = F.front[fi]!;
+    const bk = F.back[fi]!;
+    const mat: MatKey = fr === fr ? fr : -1;
+    const back: MatKey = bk === bk ? bk : -1;
+    const layer = layerKey(opt(F.layer[fi]!));
+    const key = `${mat}|${back}|${layer}`;
+    const map = isHidden ? hidden : groups;
+    let g = map.get(key);
+    if (!g) map.set(key, (g = { mat, layer, ok: false }));
+    pos.n = 0;
+    idx.n = 0;
+    if (!triangulateFace(ents.points, F, fi, pos, idx)) {
+      failedHere++;
+      continue;
+    }
+    g.ok = true;
+  }
+  const solid = solidInfo(ents);
+  const closed = solid.closed && !failedHere;
+  const keys: string[] = [];
+  let n = 0;
+  for (const g of groups.values())
+    if (g.ok) {
+      keys.push(`f${g.mat}|${g.layer}${closed ? 'c' : ''}`);
+      n++;
+    }
+  const hiddenKeys: string[] = [];
+  for (const g of hidden.values())
+    if (g.ok) {
+      hiddenKeys.push(`h${g.mat}|${g.layer}`);
+      n++;
+    }
+  const lineLayers = new Set<number>();
+  const softLayers = new Set<number>();
+  const hiddenLayers = new Set<number>();
+  const E = ents.edges;
+  for (let ei = 0; ei < E.length; ei++) {
+    const flags = E.flags[ei]!;
+    let set: Set<number>;
+    if (flags & FLAG_HIDDEN) {
+      if (!extras) continue;
+      set = hiddenLayers;
+    } else if (flags & FLAG_SOFT_SMOOTH) {
+      if (!extras) continue;
+      set = softLayers;
+    } else set = lineLayers;
+    set.add(layerKey(opt(E.layer[ei]!)));
+  }
+  keys.push(...hiddenKeys);
+  for (const l of lineLayers) keys.push(`l${l}`);
+  for (const l of softLayers) keys.push(`x1|${l}`);
+  for (const l of hiddenLayers) keys.push(`x2|${l}`);
+  n += lineLayers.size + softLayers.size + hiddenLayers.size;
+  freeTyped(pos.a);
+  freeTyped(idx.a);
+  return { n, keys };
+}
+
+/** prepare가 낼 Prepared 바이트의 위 한도(꼭짓점·면·모서리 수로 — preparedBytes보다 작지 않다): 위치 24·삼각형 색인 20(삼각형 ≤ 꼭짓점 5/3)·법선 12·무늬 좌표 12+12·평면 8 바이트/꼭짓점, 넓이·법선·삼각형 수 24 바이트/면, 선분 48+곡선 4+재질 8 바이트/모서리 */
+export function preparedBound(ents: SkpEntities): number {
+  return 88 * ents.faces.vertex.length + 24 * ents.faces.length + 60 * ents.edges.length;
 }
 
 /** 열 우선 4×4 곱 a·b */
@@ -1140,6 +1266,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   const quietTex: PrepTex | null = prepTex && { tile: prepTex.tile, plane: prepTex.plane, flat: 0, singular: 0 };
   /** releaseModel로 표를 비운 묶음(다시 준비할 수 없다 — 남은 배치 어림이 맞으면 일어나지 않는다) */
   const emptied = new Set<SkpEntities>();
+  /** 나눌 단계를 정할 때 묶음 열쇠만 셈하고(prepareKeys) 아직 삼각화하지 않은 묶음 — 끝까지 옮기지 않으면 끝에 한 번 삼각화해 경고 수를 센다 */
+  const keysOnly = new Set<SkpEntities>();
   const prep = (e: SkpEntities): Prepared => {
     let p = cache.get(e);
     if (!p) {
@@ -1150,6 +1278,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       if (!again) {
         preparedOnce.add(e);
         volumes.set(e, p.volume);
+        keysOnly.delete(e);
       }
     }
     return p;
@@ -1278,29 +1407,31 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       const budget = opts.maxSplitItems ?? MAX_SPLIT_ITEMS;
       // 정의 자기 형상의 묶음 수와 묶음 열쇠: 나누기만 정하려고 정의마다 삼각화한다. 그 삼각화는 모두 합쳐 SPLIT_PREP_BUDGET_BYTES까지만 들고
       // 넘는 것은 곧바로 놓는다(장면에 옮길 때 다시 삼각화한다 — 큰 모형에서 모든 정의의 삼각화를 함께 들고 펼치기를 시작하던 몫이 장면 만들기
-      // 최고치였다. 작은 모형은 예전처럼 한 번만 삼각화한다). 앞서 준비해 둔 것은 그대로 둔다
+      // 최고치였다. 작은 모형은 예전처럼 한 번만 삼각화한다). 앞서 준비해 둔 것은 그대로 둔다.
+      // 33차: 한도를 넘을 정의(위 한도 preparedBound로 어림)는 통째로 삼각화했다 놓지 않고 열쇠만 센다(prepareKeys — 삼각화가 되는지만 본다)
       const prepBudget = opts.splitPrepBudget ?? SPLIT_PREP_BUDGET_BYTES;
       let held = 0;
-      const ownMemo = new Map<SkpEntities, { n: number; keys: string[] }>();
-      const ownOf = (e: SkpEntities): { n: number; keys: string[] } => {
+      const ownMemo = new Map<SkpEntities, PreparedKeys>();
+      const ownOf = (e: SkpEntities): PreparedKeys => {
         let r = ownMemo.get(e);
         if (!r) {
           const had = cache.has(e);
-          const p = prep(e);
-          const keys: string[] = [];
-          for (const b of p.batches) keys.push(`f${b.mat}|${b.layer}${p.closed ? 'c' : ''}`);
-          for (const b of p.hiddenBatches) keys.push(`h${b.mat}|${b.layer}`);
-          for (const l of p.lines) keys.push(`l${l.layer}`);
-          for (const l of p.extraLines) keys.push(`x${l.cls}|${l.layer}`);
-          r = { n: p.batches.length + p.lines.length + p.hiddenBatches.length + p.extraLines.length, keys };
-          ownMemo.set(e, r);
-          if (!had) {
-            const bytes = preparedBytes(p);
-            if (held + bytes > prepBudget) {
-              cache.delete(e);
-              freePrepared(p);
-            } else held += bytes;
+          // 33차: 들고 있을 몫(위 한도 preparedBound)이 남지 않은 정의는 묶음 열쇠만 셈한다(prepareKeys — 같은 열쇠, 장면에 옮길 때 한 번만 삼각화)
+          if (!had && held + preparedBound(e) > prepBudget) {
+            r = prepareKeys(e, model.defaultLayer, extras);
+            if (!preparedOnce.has(e)) keysOnly.add(e);
+          } else {
+            const p = prep(e);
+            r = preparedKeys(p);
+            if (!had) {
+              const bytes = preparedBytes(p);
+              if (held + bytes > prepBudget) {
+                cache.delete(e);
+                freePrepared(p);
+              } else held += bytes;
+            }
           }
+          ownMemo.set(e, r);
         }
         return r;
       };
@@ -2940,6 +3071,13 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   if (annLimited.sections) warnings.push(`단면 평면이 너무 많아 ${MAX_SECTION_PLANES.toLocaleString('en-US')}개까지만 담았습니다`);
   if (annLimited.segments) warnings.push(`주석 선분이 너무 많아(${MAX_ANNOTATION_SEGMENTS.toLocaleString('en-US')}개 한도) 일부 주석은 선을 그리지 않았습니다`);
 
+  // 나눌 단계를 정할 때 열쇠만 셈하고 끝내 옮기지 않은 묶음(너무 깊은 배치 등): 예전처럼 처음 삼각화하는 몫의 경고 수(삼각화 실패·무늬 투영)를 센다
+  for (const e of keysOnly) {
+    if (emptied.has(e)) continue;
+    const p = prep(e);
+    cache.delete(e);
+    freePrepared(p);
+  }
   if (counter.failed) warnings.push(`삼각형으로 나누지 못한 면 ${counter.failed}개를 건너뛰었습니다(면적이 0인 면 등)`);
   if (missingDefs) warnings.push(`정의를 찾지 못한 인스턴스 ${missingDefs}개를 건너뛰었습니다`);
   if (cycles) warnings.push(`자기 자신을 품거나 너무 깊은 인스턴스 ${cycles}개를 건너뛰었습니다`);

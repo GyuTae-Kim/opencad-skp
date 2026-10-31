@@ -57,7 +57,20 @@ export function averageRgb(data: ArrayLike<number>): [number, number, number] {
   return w > 0 ? [r / w, g / w, b / w] : [0, 0, 0];
 }
 
-/** RGBA 화소(Uint8ClampedArray 등)의 색을 그 자리에서 바꾼다 */
+/**
+ * 바이트 화소의 색 바꾸기를 기억하는 칸 수(2의 거듭제곱 지수). 바꾼 색은 그 화소의 RGB로만 정해지고 무늬 그림은 같은 색 화소가 많아
+ * (33차 — 실제 큰 모형에서 색 바꾼 무늬 3,700만 화소에 고유 색 15만) 한 번 바꾼 색을 다시 쓴다. 칸은 32K개(256 KB, 부를 때마다 새로)
+ */
+const MEMO_BITS = 15;
+
+/** 이 실행 환경의 형식 배열이 리틀 엔디언인지(화소를 32비트 낱말로 볼 때 RGB가 아래 24비트) */
+const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
+
+/**
+ * RGBA 화소(Uint8ClampedArray 등)의 색을 그 자리에서 바꾼다.
+ * 바이트 배열(Uint8ClampedArray·Uint8Array, 4바이트 자리에서 시작)은 RGB → 바꾼 RGB를 기억해 같은 색 화소는 계산하지 않는다(처음 바꾼 화소를
+ * 배열에 적고 다시 읽은 값을 기억하므로 결과는 화소마다 계산한 것과 바이트까지 같다). 다른 배열은 화소마다 계산한다
+ */
 export function colorizeRgba<T extends { length: number; [i: number]: number }>(data: T, spec: ColorizeSpec): T {
   if (!data.length) return data;
   const avg = spec.average ?? averageRgb(data);
@@ -68,7 +81,7 @@ export function colorizeRgba<T extends { length: number; [i: number]: number }>(
   const scaleS = sc < sa;
   const kS = scaleS ? sc / sa : 1;
   // 화소가 수백만 개라 rgbToHls·hlsToRgb를 배열 없이 풀어 쓴다(같은 식)
-  for (let i = 0; i + 3 < data.length; i += 4) {
+  const pixel = (i: number): void => {
     const R = data[i]! / 255, G = data[i + 1]! / 255, B = data[i + 2]! / 255;
     const max = R > G ? (R > B ? R : B) : G > B ? G : B;
     const min = R < G ? (R < B ? R : B) : G < B ? G : B;
@@ -98,6 +111,36 @@ export function colorizeRgba<T extends { length: number; [i: number]: number }>(
     data[i] = Math.round((r + m) * 255);
     data[i + 1] = Math.round((g + m) * 255);
     data[i + 2] = Math.round((b + m) * 255);
+  };
+  const n = data.length;
+  if (!(data instanceof Uint8ClampedArray || data instanceof Uint8Array) || !LITTLE_ENDIAN || data.byteOffset % 4 !== 0) {
+    for (let i = 0; i + 3 < n; i += 4) pixel(i);
+    return data;
+  }
+  // 바이트 화소: 화소 하나를 32비트 낱말로 보고(리틀 엔디언 — 아래 24비트가 RGB, 위 8비트가 알파) RGB → 바꾼 RGB를 기억한다.
+  // 칸은 열쇠의 곱셈 해시, 같은 색이 이어지면 바로 앞 것을 쓴다. 알파는 그 화소 것 그대로
+  const words = new Uint32Array(data.buffer, data.byteOffset, n >> 2);
+  const size = 1 << MEMO_BITS;
+  const keys = new Int32Array(size).fill(-1);
+  const vals = new Int32Array(size);
+  let lastKey = -1;
+  let lastVal = 0;
+  for (let p = 0; p < words.length; p++) {
+    const word = words[p]!;
+    const key = word & 0xffffff;
+    if (key !== lastKey) {
+      const slot = Math.imul(key, 0x9e3779b1) >>> (32 - MEMO_BITS);
+      lastKey = key;
+      if (keys[slot] === key) lastVal = vals[slot]!;
+      else {
+        pixel(p * 4);
+        lastVal = words[p]! & 0xffffff;
+        keys[slot] = key;
+        vals[slot] = lastVal;
+        continue;
+      }
+    }
+    words[p] = (word & 0xff000000) | lastVal;
   }
   return data;
 }

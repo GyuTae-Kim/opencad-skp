@@ -9,6 +9,8 @@
  * 브라우저 API에만 기대므로 Node 시험은 순수 부분(dropTexture·needsDecode·usesAlpha)과 가짜 그림 풀기로 차례를 본다.
  * 29차: 큰 모형의 문맥 복구는 화면이 쥐어 둔 색 바꾼 무늬의 원래 그림 바이트만 받아(recolor.worker.ts) 처음 열 때와 같은 손질로 다시 그림을 만든다
  * (recolorTextures — 그림 크기는 해석기처럼 그림 머리에서 읽는다. 처음 손질이 장면 무늬의 크기를 올린 그림 크기로 바꿔 두므로).
+ * 33차: 처음 열 때 이 손질이 해석 끝의 큰 몫이었다(165 MB 표본 1.7초 — 색 바꾸기 계산과 그림 풀기를 기다리는 동안). 색 바꾸기는 같은 색 화소를
+ * 기억해 다시 쓰고(colorize.ts), 무늬를 손질하는 동안 다음 무늬를 미리 하나 풀며, 견본 PNG 굳히기는 끝에 모아 기다린다(결과 그림·견본은 같다).
  */
 import type { Scene3d, Texture3d } from 'opencad-viewer3d/types';
 import { fitSize, imageInfo } from 'opencad-viewer3d/texture';
@@ -71,13 +73,8 @@ export function usesAlpha(data: ArrayLike<number>): boolean {
 
 const canDecode = (): boolean => typeof createImageBitmap === 'function' && typeof OffscreenCanvas === 'function';
 
-/** 무늬 하나 풀기 → 손질한 ImageBitmap(보통 방향) 또는 null(손질할 것이 없음). swatches가 false면 견본 그림을 만들지 않는다 */
-async function prepOne(
-  t: Texture3d,
-  info: SkpTextureInfo,
-  limit: number,
-  swatches: boolean,
-): Promise<{ bitmap: ImageBitmap | null; alpha: boolean; colorized: boolean; swatch?: Uint8Array }> {
+/** 무늬 하나 풀기(긴 변 limit 안으로 줄여). 그림 풀기는 브라우저가 다른 스레드에서 하므로 앞 무늬를 손질하는 동안 미리 풀어 둔다 */
+async function decodeTexture(t: Texture3d, limit: number): Promise<ImageBitmap> {
   const blob = new Blob([t.data as Uint8Array<ArrayBuffer>], { type: t.mime ?? 'application/octet-stream' });
   const base: ImageBitmapOptions = { premultiplyAlpha: 'none', colorSpaceConversion: 'none' };
   const fit = t.width && t.height ? fitSize(t.width, t.height, limit) : null;
@@ -88,6 +85,18 @@ async function prepOne(
     bmp.close();
     bmp = small;
   }
+  return bmp;
+}
+
+/**
+ * 푼 무늬 하나 손질 → 손질한 ImageBitmap(보통 방향) 또는 null(손질할 것이 없음). swatches가 false면 견본 그림을 만들지 않는다.
+ * 견본 PNG는 굳히기(convertToBlob)를 기다리지 않고 약속으로 준다(못 만들면 undefined — 견본은 원래 그림 그대로)
+ */
+function prepDecoded(
+  bmp: ImageBitmap,
+  info: SkpTextureInfo,
+  swatches: boolean,
+): { bitmap: ImageBitmap | null; alpha: boolean; colorized: boolean; swatch?: Promise<Uint8Array | undefined> } {
   const w = bmp.width, h = bmp.height;
   const canvas = new OffscreenCanvas(w, h);
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -99,7 +108,7 @@ async function prepOne(
   bmp.close();
   const img = ctx.getImageData(0, 0, w, h);
   const alpha = info.alphaPossible && usesAlpha(img.data);
-  let swatch: Uint8Array | undefined;
+  let swatch: Promise<Uint8Array | undefined> | undefined;
   if (info.colorize) {
     colorizeRgba(img.data, info.colorize);
     ctx.putImageData(img, 0, 0);
@@ -108,13 +117,16 @@ async function prepOne(
         const k = Math.min(1, SWATCH_SIDE / Math.max(w, h));
         const sc = new OffscreenCanvas(Math.max(1, Math.round(w * k)), Math.max(1, Math.round(h * k)));
         sc.getContext('2d')?.drawImage(canvas, 0, 0, sc.width, sc.height);
-        swatch = new Uint8Array(await (await sc.convertToBlob({ type: 'image/png' })).arrayBuffer());
+        swatch = sc
+          .convertToBlob({ type: 'image/png' })
+          .then(async (b) => new Uint8Array(await b.arrayBuffer()))
+          .catch(() => undefined);
       } catch {
         /* 견본은 원래 그림 그대로 */
       }
   }
   if (!alpha && !info.colorize) return { bitmap: null, alpha: false, colorized: false };
-  const out: { bitmap: ImageBitmap; alpha: boolean; colorized: boolean; swatch?: Uint8Array } = { bitmap: canvas.transferToImageBitmap(), alpha, colorized: !!info.colorize };
+  const out: { bitmap: ImageBitmap; alpha: boolean; colorized: boolean; swatch?: Promise<Uint8Array | undefined> } = { bitmap: canvas.transferToImageBitmap(), alpha, colorized: !!info.colorize };
   if (swatch) out.swatch = swatch;
   return out;
 }
@@ -134,17 +146,30 @@ export async function prepareSceneTextures(
   const list = [...(scene.textures ?? [])].filter((t) => needsDecode(infos.get(t.id)));
   const swatches = opts.swatches !== false;
   const ok = canDecode();
+  // 33차: 무늬를 손질하는 동안 다음 무늬를 미리 하나 풀어 두고(그림 풀기는 다른 스레드), 견본 PNG는 끝에 모아 기다린다 — 무늬마다 하는 일·결과는 같다
+  const decode = (t: Texture3d | undefined): Promise<ImageBitmap> | null => {
+    if (!ok || !t?.data) return null;
+    const p = decodeTexture(t, limit);
+    // 기다릴 때 다시 던진다(처리되지 않은 거부로 남지 않게)
+    p.catch(() => undefined);
+    return p;
+  };
+  const swatchOf: { folder: string; png: Promise<Uint8Array | undefined> }[] = [];
+  let next = decode(list[0]);
   let done = 0;
-  for (const t of list) {
+  for (let i = 0; i < list.length; i++) {
+    const t = list[i]!;
     const info = infos.get(t.id)!;
-    if (!ok || !t.data) {
+    const cur = next;
+    next = decode(list[i + 1]);
+    if (!cur) {
       if (info.colorize) {
         dropTexture(scene, t.id);
         res.dropped++;
       }
     } else
       try {
-        const r = await prepOne(t, info, limit, swatches);
+        const r = prepDecoded(await cur, info, swatches);
         res.decoded++;
         if (r.bitmap) {
           t.bitmap = r.bitmap;
@@ -156,13 +181,19 @@ export async function prepareSceneTextures(
           res.alpha++;
         }
         if (r.colorized) res.colorized++;
-        if (r.swatch) res.swatches.set(info.folder, r.swatch);
+        if (r.swatch) swatchOf.push({ folder: info.folder, png: r.swatch });
       } catch {
         dropTexture(scene, t.id);
         res.dropped++;
       }
     onEach?.(++done, list.length);
   }
+  // 견본은 무늬 차례대로 넣는다(굳히기가 끝난 차례와 상관없이)
+  const pngs = await Promise.all(swatchOf.map((s) => s.png));
+  swatchOf.forEach((s, k) => {
+    const png = pngs[k];
+    if (png) res.swatches.set(s.folder, png);
+  });
   if (res.dropped) (scene.warnings ??= []).push(`무늬 그림 ${res.dropped}개는 풀거나 색을 바꾸지 못해 평균색으로 그렸습니다`);
   return res;
 }
