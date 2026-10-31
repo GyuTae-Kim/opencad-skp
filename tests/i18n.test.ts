@@ -214,6 +214,35 @@ describe('language URLs and UI presentation', () => {
       expect(catalogs['zh-CN'][key], key).not.toMatch(/译员|解释/);
     }
   });
+  it('translates CAD homonyms by their CAD meaning and keeps no machine-translation leftovers (31st round)', () => {
+    // 같은 소리 다른 뜻: 면(face — 솜·얼굴 아님), 모서리(edge — 구석 아님), 판(version — 판자 아님), 분수(fraction — 분수대 아님),
+    // 소수(decimal — 소수점 아래, 적은 수·소수(素數) 아님), 카메라 기록(history — 녹화 아님)
+    const rules: [RegExp, Record<string, RegExp>][] = [
+      [/(^|[\s·(:])면($|[\s·):0-9{]|에|을|이|의|은)/, { en: /cotton|noodle/i, de: /Baumwoll|Gesicht/, ja: /綿|麺/, 'zh-CN': /棉|面部|面条/ }],
+      [/모서리/, { en: /corner/i, de: /Ecke/, ja: /コーナー|角(?!度)/, 'zh-CN': /角落/ }],
+      [/판입니다|^판$/, { en: /section|plate|board|panel/i, de: /Platte|Ref\./, ja: /プレート|パネル|板/, 'zh-CN': /板|参考/ }],
+      [/분수/, { en: /fountain/i, de: /Brunnen/, ja: /噴水/, 'zh-CN': /喷泉/ }],
+      [/소수/, { en: /prime|minority/i, de: /Primzahl|Minderheit/, ja: /素数|少数/, 'zh-CN': /素数|少数/ }],
+      [/카메라 기록/, { en: /recording/i, de: /Aufnahme/, ja: /録画|録音/, 'zh-CN': /录制/ }],
+    ];
+    for (const [key, bad] of rules)
+      for (const k of Object.keys(catalogs.en).filter(x => key.test(x) && !x.includes('구석')))
+        for (const [code, re] of Object.entries(bad)) expect(catalogs[code][k], `${code}: ${k}`).not.toMatch(re);
+    // 기계 번역이 다음 문장 머리를 줄바꿈 뒤에 덧붙인 것(원문에 없는 줄)
+    for (const {code} of languages.filter(item => item.code !== 'ko'))
+      for (const [k, v] of Object.entries(catalogs[code])) expect((v.match(/\n/g) ?? []).length, `${code}: ${k}`).toBe((k.match(/\n/g) ?? []).length);
+    // 측정 툴팁의 "중심"(호·원의 중심)과 "중간점"을 다른 낱말로(독일어가 Mittelpunkt 하나로 겹쳤다)
+    for (const {code} of languages.filter(item => item.code !== 'ko')) expect(translate('중심', code), code).not.toBe(translate('중간점', code));
+    expect(translate('건축(피트·인치·분수)', 'ja')).toBe('建築（フィート・インチ・分数）');
+    expect(translate('건축(피트·인치·분수)', 'zh-CN')).toBe('建筑（英尺·英寸·分数）');
+    expect(translate('mm · 소수 2자리', 'ja')).toBe('mm・小数点以下2桁');
+    expect(translate('다음 보기', 'en')).toBe('Next view');
+    // 측정 기록 줄(30차까지는 번역에서 빼 한국어로 남았다): "거리·각도"를 옮기고 값·축 이름은 그대로
+    for (const {code} of languages.filter(item => item.code !== 'ko'))
+      for (const line of ['거리 4,061 mm (dx 1,234 mm · dy -2 mm · dz 3 mm)', `거리 13' 4 1/2" (dx 1' · dy 2' · dz 0")`, '각도 45.0°'])
+        expect(translate(line, code), `${code}: ${line}`).not.toMatch(/[가-힣]/);
+    expect(translate('거리 4,061 mm (dx 1,234 mm · dy -2 mm · dz 3 mm)', 'en')).toBe('Distance 4,061 mm (dx 1,234 mm · dy -2 mm · dz 3 mm)');
+  });
   it('updates dynamic UI and switches languages without changing document data or listeners', async () => {
     const dom = new JSDOM('<!doctype html><html><head><title>OpenCAD</title></head><body><div id="app"><header class="titlebar"><button>열기</button><span class="docname">열기</span></header><canvas></canvas><div class="anno-layer">열기</div><input value="열기" placeholder="열기"><div contenteditable="true">열기</div><div translate="no">열기</div><p id="status">열기</p></div></body></html>', {url:'https://gyutae-kim.github.io/opencad-skp/en/?sample#view'});
     for (const name of ['window','document','Node','Element','HTMLAnchorElement','MutationObserver','location','history','localStorage','CustomEvent']) vi.stubGlobal(name,(dom.window as unknown as Record<string,unknown>)[name]);
