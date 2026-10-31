@@ -14,9 +14,12 @@ type V3 = [number, number, number];
 /** 거의 수평으로 보는 법선 기준(SketchUp: 8.5e-4 기운 법선은 Y, 1.1e-3은 Z를 썼다) */
 export const NEAR_Z = 1e-3;
 
-/** 면 평면 틀의 (x 축, y 축) */
-export function planeAxes(normal: readonly number[]): [V3, V3] {
-  let nx = normal[0]!, ny = normal[1]!, nz = normal[2]!;
+/**
+ * 면 평면 틀(planeAxes와 같은 값)을 out[0, 6)에 적는다: x 축 3값, y 축 3값. 법선은 n[k, k + 3).
+ * 큰 모형의 장면 만들기가 면마다 부르므로 배열을 새로 잡지 않는다(33차 — 165 MB 표본에서 무늬 투영 계산이 장면 만들기의 4분의 1이었다)
+ */
+export function planeAxesInto(n: ArrayLike<number>, k: number, out: number[]): void {
+  let nx = n[k]!, ny = n[k + 1]!, nz = n[k + 2]!;
   const l = Math.hypot(nx, ny, nz);
   if (l > 0) {
     nx /= l;
@@ -24,23 +27,45 @@ export function planeAxes(normal: readonly number[]): [V3, V3] {
     nz /= l;
   }
   // ref × n: Z × n = (−ny, nx, 0), Y × n = (nz, 0, −nx)
-  let x: V3 = Math.abs(nx) < NEAR_Z && Math.abs(ny) < NEAR_Z ? [nz, 0, -nx] : [-ny, nx, 0];
-  const xl = Math.hypot(x[0], x[1], x[2]);
-  if (xl > 0) x = [x[0] / xl, x[1] / xl, x[2] / xl];
-  const y: V3 = [ny * x[2] - nz * x[1], nz * x[0] - nx * x[2], nx * x[1] - ny * x[0]];
+  let x0: number, x1: number, x2: number;
+  if (Math.abs(nx) < NEAR_Z && Math.abs(ny) < NEAR_Z) (x0 = nz), (x1 = 0), (x2 = -nx);
+  else (x0 = -ny), (x1 = nx), (x2 = 0);
+  const xl = Math.hypot(x0, x1, x2);
+  if (xl > 0) (x0 = x0 / xl), (x1 = x1 / xl), (x2 = x2 / xl);
+  const y0 = ny * x2 - nz * x1, y1 = nz * x0 - nx * x2, y2 = nx * x1 - ny * x0;
   // −0을 0으로(값은 같다 — 비교·출력을 깔끔하게)
-  return [[x[0] + 0, x[1] + 0, x[2] + 0], [y[0] + 0, y[1] + 0, y[2] + 0]];
+  out[0] = x0 + 0;
+  out[1] = x1 + 0;
+  out[2] = x2 + 0;
+  out[3] = y0 + 0;
+  out[4] = y1 + 0;
+  out[5] = y2 + 0;
 }
 
-/** 3×3 역행렬(행 우선 a[r * 3 + c]). 뒤집을 수 없거나 유한하지 않으면 null */
-function inv3(a: ArrayLike<number>): number[] | null {
-  const [a0, a1, a2, a3, a4, a5, a6, a7, a8] = [a[0]!, a[1]!, a[2]!, a[3]!, a[4]!, a[5]!, a[6]!, a[7]!, a[8]!];
+/** 면 평면 틀의 (x 축, y 축) */
+export function planeAxes(normal: readonly number[]): [V3, V3] {
+  const a = [0, 0, 0, 0, 0, 0];
+  planeAxesInto(normal, 0, a);
+  return [[a[0]!, a[1]!, a[2]!], [a[3]!, a[4]!, a[5]!]];
+}
+
+/** 3×3 역행렬(행 우선 a0…a8)을 out[0, 9)에. 뒤집을 수 없거나 유한하지 않으면 false */
+function inv3Into(a0: number, a1: number, a2: number, a3: number, a4: number, a5: number, a6: number, a7: number, a8: number, out: number[]): boolean {
   const c0 = a4 * a8 - a5 * a7, c1 = a5 * a6 - a3 * a8, c2 = a3 * a7 - a4 * a6;
   const det = a0 * c0 + a1 * c1 + a2 * c2;
-  if (!Number.isFinite(det) || Math.abs(det) < 1e-300) return null;
+  if (!Number.isFinite(det) || Math.abs(det) < 1e-300) return false;
   const k = 1 / det;
-  const out = [c0, a2 * a7 - a1 * a8, a1 * a5 - a2 * a4, c1, a0 * a8 - a2 * a6, a2 * a3 - a0 * a5, c2, a1 * a6 - a0 * a7, a0 * a4 - a1 * a3].map((v) => v * k);
-  return out.every(Number.isFinite) ? out : null;
+  out[0] = c0 * k;
+  out[1] = (a2 * a7 - a1 * a8) * k;
+  out[2] = (a1 * a5 - a2 * a4) * k;
+  out[3] = c1 * k;
+  out[4] = (a0 * a8 - a2 * a6) * k;
+  out[5] = (a2 * a3 - a0 * a5) * k;
+  out[6] = c2 * k;
+  out[7] = (a1 * a6 - a0 * a7) * k;
+  out[8] = (a0 * a4 - a1 * a3) * k;
+  for (let i = 0; i < 9; i++) if (!Number.isFinite(out[i]!)) return false;
+  return true;
 }
 
 export interface FaceUvq {
@@ -50,36 +75,60 @@ export interface FaceUvq {
   singular: boolean;
 }
 
+/** faceUvqInto가 면마다 다시 쓰는 자리: 평면 틀, P(평면 틀 투영 3×4 = [x 0; y 0; 0 0 0 1] — 0·1 칸은 그대로 둔다), 역행렬 */
+const axesAt = [0, 0, 0, 0, 0, 0];
+const planeP = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+const invAt = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+/**
+ * 면 한쪽의 투영 행렬을 out(12칸, 3×4 행 우선)에 적는다(faceUvq와 같은 값 — 배열을 새로 잡지 않는다). 뒤집지 못한 투영이면 true.
+ * 저장된 투영은 t[o, o + 14)(entities.ts 무늬 투영 표 꼴: 종류, 방향이 있는지, 행렬 9칸 열 우선, 방향 3칸) — t가 없거나 o < 0이면 기본 투영.
+ * 법선은 normal[0, 3), w·h는 무늬 한 장 가로·세로(인치)
+ */
+export function faceUvqInto(normal: ArrayLike<number>, t: ArrayLike<number> | undefined, o: number, w: number, h: number, out: Float64Array): boolean {
+  const stored = !!t && o >= 0;
+  let dirAt = -1;
+  if (stored && (t[o] === 2 || t[o] === 3) && t[o + 1]) {
+    const l = Math.hypot(t[o + 11]!, t[o + 12]!, t[o + 13]!);
+    if (l > 1e-12 && Number.isFinite(l)) dirAt = o + 11;
+  }
+  if (dirAt >= 0) planeAxesInto(t!, dirAt, axesAt);
+  else planeAxesInto(normal, 0, axesAt);
+  const P = planeP;
+  P[0] = axesAt[0]!;
+  P[1] = axesAt[1]!;
+  P[2] = axesAt[2]!;
+  P[4] = axesAt[3]!;
+  P[5] = axesAt[4]!;
+  P[6] = axesAt[5]!;
+  let inv = false;
+  if (stored) {
+    // 열 우선 저장 → 행 우선 M[r][c] = s[c * 3 + r]
+    const s = o + 2;
+    inv = inv3Into(t[s]!, t[s + 3]!, t[s + 6]!, t[s + 1]!, t[s + 4]!, t[s + 7]!, t[s + 2]!, t[s + 5]!, t[s + 8]!, invAt);
+  }
+  const I = invAt;
+  for (let r = 0; r < 3; r++)
+    for (let c = 0; c < 4; c++) {
+      let v: number;
+      if (inv) v = I[r * 3]! * P[c]! + I[r * 3 + 1]! * P[4 + c]! + I[r * 3 + 2]! * P[8 + c]!;
+      else v = P[r * 4 + c]!;
+      out[r * 4 + c] = r === 0 ? v / w : r === 1 ? v / h : v;
+    }
+  return stored && !inv;
+}
+
 /**
  * 면 한쪽의 투영 행렬. map이 없으면 기본 투영. w·h는 무늬 한 장 가로·세로(인치).
  * matrix는 저장한 그대로 열 우선(matrix[c * 3 + r]).
  */
 export function faceUvq(normal: readonly number[], map: { kind: number; matrix: ArrayLike<number>; dir?: readonly number[] } | undefined, w: number, h: number): FaceUvq {
-  let n = normal;
-  if (map && (map.kind === 2 || map.kind === 3) && map.dir) {
-    const l = Math.hypot(map.dir[0]!, map.dir[1]!, map.dir[2]!);
-    if (l > 1e-12 && Number.isFinite(l)) n = map.dir;
-  }
-  const [x, y] = planeAxes(n);
-  // P: 평면 틀 투영(3×4) = [x 0; y 0; 0 0 0 1]
-  const P = [x[0], x[1], x[2], 0, y[0], y[1], y[2], 0, 0, 0, 0, 1];
-  let I: number[] | null = null;
-  let singular = false;
-  if (map) {
-    const s = map.matrix;
-    // 열 우선 저장 → 행 우선 M[r][c] = s[c * 3 + r]
-    I = inv3([s[0]!, s[3]!, s[6]!, s[1]!, s[4]!, s[7]!, s[2]!, s[5]!, s[8]!]);
-    if (!I) singular = true;
-  }
   const m = new Float64Array(12);
-  for (let r = 0; r < 3; r++)
-    for (let c = 0; c < 4; c++) {
-      let v: number;
-      if (I) v = I[r * 3]! * P[c]! + I[r * 3 + 1]! * P[4 + c]! + I[r * 3 + 2]! * P[8 + c]!;
-      else v = P[r * 4 + c]!;
-      m[r * 4 + c] = r === 0 ? v / w : r === 1 ? v / h : v;
-    }
-  return { m, singular };
+  if (!map) return { m, singular: faceUvqInto(normal, undefined, -1, w, h, m) };
+  const t = [map.kind, map.dir ? 1 : 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NaN, NaN, NaN];
+  for (let i = 0; i < 9; i++) t[2 + i] = map.matrix[i]!;
+  if (map.dir) for (let i = 0; i < 3; i++) t[11 + i] = map.dir[i]!;
+  return { m, singular: faceUvqInto(normal, t, 0, w, h, m) };
 }
 
 /** 원근 무늬로 칠할 만큼 Q가 바뀌는 상대 크기 */
