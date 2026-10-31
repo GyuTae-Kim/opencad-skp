@@ -3,7 +3,8 @@
  *
  * 파일은 Blob·File 그대로 화면 → 워커로 넘기고(바이트를 복사하지 않는다 — 워커가 필요한 자리만 읽는다), 결과 장면의 형식 배열·무늬 ImageBitmap은
  * 워커 → 화면으로 이전한다(복사 없이). 한 메시지 안에서 같은 버퍼를 여러 곳이 가리킬 수 있으므로 이전 목록은 버퍼마다 한 번만 넣는다.
- * 워커는 결과를 보낸 뒤 파일 내용 지문(SHA-256 — 측정 안내를 파일별로 기억하는 열쇠)을 덩이씩 읽으며 구해 따로 보낸다.
+ * 워커는 결과를 보낸 뒤 파일 내용 지문(SHA-256 — 측정 안내를 파일별로 기억하는 열쇠)을 덩이씩 읽으며 구해 따로 보낸다
+ * (큰 모형은 화면이 해석 워커를 결과 뒤 곧바로 끝내고 지문 워커 worker/print.worker.ts에 따로 묻는다 — 34차, PrintRequest).
  * 큰 모형은 워커가 법선·무늬 좌표를 작은 정수 배열로 줄여 넘긴다(packed — 28차, worker/pack.ts).
  * 큰 모형을 올린 뒤 그래픽 문맥을 되찾으면 화면이 쥐고 있던 색을 바꾼 무늬의 원래 그림 바이트만 작은 손질 워커(worker/recolor.worker.ts)에 넘겨
  * 다시 손질한 그림을 받는다(recolor — 29차, release.ts. 27·28차는 같은 파일을 해석 워커로 다시 풀었다).
@@ -52,9 +53,20 @@ export interface RecolorResult {
 
 export type RecolorResponse = { id: number; type: 'recolored'; result: RecolorResult } | { id: number; type: 'error'; message: string };
 
+/**
+ * 파일 내용 지문만 구하기(34차 — 지문 워커 worker/print.worker.ts). 큰 모형은 화면이 결과를 받자마자 해석 워커를 끝내고(그 heap과 해석하며 남긴
+ * 쓰레기를 한꺼번에 놓으려고) 지문은 이 요청으로 따로 묻는다. 답은 ParseResponse의 print
+ */
+export interface PrintRequest {
+  id: number;
+  type: 'print';
+  file: Blob;
+}
+
 export type ParseResponse =
   | { id: number; type: 'progress'; fraction: number; stage: string }
-  | { id: number; type: 'done'; result: ParseResult }
+  /** separatePrint: 이 결과의 지문은 해석 워커가 보내지 않는다(큰 모형 — 화면이 해석 워커를 끝내고 지문 워커에 묻는다, 34차) */
+  | { id: number; type: 'done'; result: ParseResult; separatePrint?: boolean }
   | { id: number; type: 'error'; message: string }
   /** 결과(done) 뒤: 파일 내용 SHA-256 32바이트(못 구하면 null) */
   | { id: number; type: 'print'; digest: ArrayBuffer | null };

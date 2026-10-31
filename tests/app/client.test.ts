@@ -99,4 +99,66 @@ describe('ParseClient', () => {
     w2.onerror?.({ message: '메모리', preventDefault: () => undefined } as unknown as ErrorEvent);
     expect(await rn.print).toBeNull();
   });
+
+  it('큰 모형(separatePrint)은 결과를 받자마자 해석 워커를 끝내고 지문은 지문 워커가 구한다(34차)', async () => {
+    const c = new ParseClient();
+    const file = new Blob([new Uint8Array([9])]);
+    const a = c.open('big.skp', file);
+    const w = FakeWorker.all[0]!;
+    const id = w.posted[0]!.msg.id;
+    w.emit({ id, type: 'done', result: result(), separatePrint: true });
+    const ra = await a;
+    // 해석 워커는 끝나고 지문 워커가 같은 파일로 지문만 묻는다
+    expect(w.terminated).toBe(true);
+    const pw = FakeWorker.all[1]!;
+    expect(pw.posted).toHaveLength(1);
+    expect(pw.posted[0]!.msg).toEqual({ id, type: 'print', file });
+    // 지문을 기다리는 동안 멈추기는 아무것도 끝내지 않는다
+    c.cancel();
+    expect(pw.terminated).toBe(false);
+    // 다음 열기는 새 해석 워커(지문 워커가 아니라)
+    const b = c.open('small.skp', new Blob([]));
+    const w3 = FakeWorker.all[2]!;
+    expect(w3.posted[0]!.msg.type).toBe('open');
+    // 해석 워커가 죽어도 지문 워커가 구하던 지문은 그대로 받는다
+    w3.onerror?.({ message: '메모리', preventDefault: () => undefined } as unknown as ErrorEvent);
+    await expect(b).rejects.toThrow('메모리');
+    const d = new Uint8Array(32).fill(3).buffer;
+    pw.emit({ id, type: 'print', digest: d });
+    expect(await ra.print).toBe(d);
+    expect(pw.terminated).toBe(true);
+  });
+
+  it('큰 모형이라도 앞 파일의 지문을 기다리는 중이면 해석 워커는 두고, 지문 워커가 죽으면 지문은 null', async () => {
+    const c = new ParseClient();
+    const a = c.open('a.skp', new Blob([]));
+    const w = FakeWorker.all[0]!;
+    w.emit({ id: w.posted[0]!.msg.id, type: 'done', result: result() });
+    const ra = await a;
+    const b = c.open('big.skp', new Blob([]));
+    const idB = w.posted[1]!.msg.id;
+    w.emit({ id: idB, type: 'done', result: result(), separatePrint: true });
+    const rb = await b;
+    expect(w.terminated).toBe(false);
+    const pw = FakeWorker.all[1]!;
+    pw.onerror?.({ message: '죽음', preventDefault: () => undefined } as unknown as ErrorEvent);
+    expect(await rb.print).toBeNull();
+    expect(pw.terminated).toBe(true);
+    // 앞 파일 지문은 해석 워커가 그대로 보낸다
+    const d = new Uint8Array(32).fill(1).buffer;
+    w.emit({ id: w.posted[0]!.msg.id, type: 'print', digest: d });
+    expect(await ra.print).toBe(d);
+  });
+
+  it('지문 워커가 지문을 구하는 동안 dispose하면 지문은 null이고 지문 워커도 끝난다', async () => {
+    const c = new ParseClient();
+    const a = c.open('big.skp', new Blob([]));
+    const w = FakeWorker.all[0]!;
+    w.emit({ id: w.posted[0]!.msg.id, type: 'done', result: result(), separatePrint: true });
+    const ra = await a;
+    const pw = FakeWorker.all[1]!;
+    c.dispose();
+    expect(await ra.print).toBeNull();
+    expect(pw.terminated).toBe(true);
+  });
 });
