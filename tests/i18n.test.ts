@@ -2,7 +2,7 @@ import { metadataForLanguage } from '../site/i18n.mjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
 const { JSDOM } = createRequire(import.meta.url)('jsdom');
-import { installLocalization } from '../src/app/i18n';
+import { installLocalization, uiText } from '../src/app/i18n';
 import { GUIDE_CLEAR_FILE_LABEL, GUIDE_DELETE_KEY_HINT, GUIDE_DELETE_TEXT, GUIDE_KIND_NAMES, GUIDE_REDO_LABEL, GUIDE_UNDO_LABEL, GUIDES_SHOWN_LABEL, LOCK_HINTS, LOCK_MENU_LABEL, guideKeyHint, lockHint, measureHint, trackHint } from '../src/app/measure';
 import { GUIDE_HIDE_LABEL, GUIDE_HIDE_TEXT, GUIDE_SELECT_ALL_LABEL, GUIDE_SELECT_ALL_TEXT, GUIDE_UNHIDE_LABEL, guideCountText, guideDeleteLabel } from '../src/app/measure';
 import { AXIS_LABELS, FACE_PERPENDICULAR_LABEL, GUIDE_LINE_LABEL, SNAP_LABELS, TRACK_ALIGN_LABEL, TRACK_AXIS_LABELS, TRACK_PAIR_LABELS } from '../src/app/snap';
@@ -242,6 +242,29 @@ describe('language URLs and UI presentation', () => {
       for (const line of ['거리 4,061 mm (dx 1,234 mm · dy -2 mm · dz 3 mm)', `거리 13' 4 1/2" (dx 1' · dy 2' · dz 0")`, '각도 45.0°'])
         expect(translate(line, code), `${code}: ${line}`).not.toMatch(/[가-힣]/);
     expect(translate('거리 4,061 mm (dx 1,234 mm · dy -2 mm · dz 3 mm)', 'en')).toBe('Distance 4,061 mm (dx 1,234 mm · dy -2 mm · dz 3 mm)');
+  });
+  it('uiText follows the active language, and the localization layer leaves data-i18n-skip text alone (measuring tooltip, toolbar menus — 31st round)', async () => {
+    const dom = new JSDOM('<!doctype html><html><head><title>OpenCAD</title></head><body><div id="app"><header class="titlebar"></header></div></body></html>', {url:languageUrl(metadataForLanguage('ko').url,'de')});
+    for (const name of ['window','document','Node','Element','HTMLAnchorElement','MutationObserver','location','history','localStorage','CustomEvent']) vi.stubGlobal(name,(dom.window as unknown as Record<string,unknown>)[name]);
+    const root = document.getElementById('app')!;
+    // 번역층을 붙이기 전(그리고 닫은 뒤)은 한국어 그대로
+    expect(uiText('끝점 · 1,200 mm')).toBe('끝점 · 1,200 mm');
+    dispose = await installLocalization(root);
+    expect(uiText('끝점 · 1,200 mm')).toBe(`${translate('끝점','de')} · 1,200 mm`);
+    expect(uiText('보기 설정')).toBe(translate('보기 설정','de'));
+    // 앱이 옮겨 넣은 글(data-i18n-skip)은 번역층이 원문으로 되찾아 다시 옮기지 않는다
+    const tip = document.createElement('div'); tip.setAttribute('data-i18n-skip',''); tip.textContent = uiText('중심'); root.append(tip);
+    const plain = document.createElement('div'); plain.textContent = '중심'; root.append(plain);
+    await new Promise(resolve=>setTimeout(resolve,0));
+    expect(tip.textContent).toBe('Zentrum'); expect(plain.textContent).toBe('Zentrum');
+    (document.querySelector('.language-list [data-language="ja"]') as HTMLButtonElement).click();
+    for (let i=0;i<4;i++) await new Promise(resolve=>setTimeout(resolve,0));
+    expect(uiText('끝점')).toBe(translate('끝점','ja'));
+    // 건너뛴 요소는 앱이 다시 그릴 때 새 언어로(측정 도구는 languagechange에 다시 그린다)
+    expect(tip.textContent).toBe('Zentrum'); expect(plain.textContent).toBe(translate('중심','ja'));
+    dispose(); dispose=undefined;
+    expect(uiText('끝점')).toBe('끝점');
+    dom.window.close();
   });
   it('updates dynamic UI and switches languages without changing document data or listeners', async () => {
     const dom = new JSDOM('<!doctype html><html><head><title>OpenCAD</title></head><body><div id="app"><header class="titlebar"><button>열기</button><span class="docname">열기</span></header><canvas></canvas><div class="anno-layer">열기</div><input value="열기" placeholder="열기"><div contenteditable="true">열기</div><div translate="no">열기</div><p id="status">열기</p></div></body></html>', {url:'https://gyutae-kim.github.io/opencad-skp/en/?sample#view'});
