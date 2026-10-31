@@ -949,7 +949,8 @@ export class Panel {
       const rows = log.map((m, i) => {
         const b = h('button', { class: 'mini-btn ml-copy-btn', type: 'button', title: '이 결과 글 복사', 'aria-label': '이 결과 글 복사', html: icon('copy', 13) });
         b.addEventListener('click', () => this.host.copyMeasure(i));
-        return h('div', { class: 'ml-line' }, h('span', { 'data-i18n-skip': '' }, measureLine(m, d.units, mm)), b);
+        // "거리·각도"도 번역층이 옮긴다(값과 축 이름은 사전 틀이 그대로 끼운다 — 31차 전에는 다른 언어에서도 한국어로 남았다)
+        return h('div', { class: 'ml-line' }, h('span', {}, measureLine(m, d.units, mm)), b);
       });
       const all = h('button', { class: 'mini-btn', type: 'button' }, '모두 복사');
       all.addEventListener('click', () => this.host.copyMeasure('all'));

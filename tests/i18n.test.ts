@@ -1,6 +1,8 @@
 import { metadataForLanguage } from '../site/i18n.mjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 const { JSDOM } = createRequire(import.meta.url)('jsdom');
 import { installLocalization, uiText } from '../src/app/i18n';
 import { GUIDE_CLEAR_FILE_LABEL, GUIDE_DELETE_KEY_HINT, GUIDE_DELETE_TEXT, GUIDE_KIND_NAMES, GUIDE_REDO_LABEL, GUIDE_UNDO_LABEL, GUIDES_SHOWN_LABEL, LOCK_HINTS, LOCK_MENU_LABEL, guideKeyHint, lockHint, measureHint, trackHint } from '../src/app/measure';
@@ -242,6 +244,14 @@ describe('language URLs and UI presentation', () => {
       for (const line of ['거리 4,061 mm (dx 1,234 mm · dy -2 mm · dz 3 mm)', `거리 13' 4 1/2" (dx 1' · dy 2' · dz 0")`, '각도 45.0°'])
         expect(translate(line, code), `${code}: ${line}`).not.toMatch(/[가-힣]/);
     expect(translate('거리 4,061 mm (dx 1,234 mm · dy -2 mm · dz 3 mm)', 'en')).toBe('Distance 4,061 mm (dx 1,234 mm · dy -2 mm · dz 3 mm)');
+  });
+  it('lets the localization layer translate the recent-measurement rows (no data-i18n-skip around measureLine — 31st round) and copies them in the UI language', () => {
+    for (const file of ['src/app/app.ts', 'src/app/panel.ts']) {
+      const src = readFileSync(resolve(__dirname, '..', file), 'utf8');
+      expect(src, file).toMatch(/measureLine\(m, d\.units, mm\)/);
+      expect(src, file).not.toMatch(/'data-i18n-skip': '' \}, measureLine\(/);
+    }
+    expect(readFileSync(resolve(__dirname, '../src/app/app.ts'), 'utf8')).toMatch(/uiText\(measureLine\(m, d\.units, mm\)\)/);
   });
   it('uiText follows the active language, and the localization layer leaves data-i18n-skip text alone (measuring tooltip, toolbar menus — 31st round)', async () => {
     const dom = new JSDOM('<!doctype html><html><head><title>OpenCAD</title></head><body><div id="app"><header class="titlebar"></header></div></body></html>', {url:languageUrl(metadataForLanguage('ko').url,'de')});

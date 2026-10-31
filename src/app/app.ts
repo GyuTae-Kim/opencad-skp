@@ -1530,14 +1530,14 @@ export class SkpViewerApp implements PanelHost {
     return this.measureLog;
   }
 
-  /** 측정 결과 글 복사: 차례(기록 안), 'all'(기록 전부, 한 줄씩), 'current'(지금 결과) */
+  /** 측정 결과 글 복사: 차례(기록 안), 'all'(기록 전부, 한 줄씩), 'current'(지금 결과). 글은 화면에 보이는 기록 줄처럼 지금 화면 언어로(31차) */
   copyMeasure(which: number | 'all' | 'current'): void {
     const d = this.doc;
     if (!d) return;
     const mm = mmPerSceneUnit(d.scene.units);
     const list = which === 'all' ? this.measureLog : which === 'current' ? (d.measure ? [d.measure] : []) : this.measureLog.slice(which, which + 1);
     if (!list.length) return;
-    const text = list.map((m) => measureLine(m, d.units, mm)).join('\n');
+    const text = list.map((m) => uiText(measureLine(m, d.units, mm))).join('\n');
     void copyText(text).then((ok) => this.flashMeasure(ok ? '복사했습니다' : '복사하지 못했습니다'));
   }
 
@@ -1588,7 +1588,8 @@ export class SkpViewerApp implements PanelHost {
     if (!d || el.hidden) return;
     const mm = mmPerSceneUnit(d.scene.units);
     const rows = this.measureLog.map((m, i) => {
-      const b = h('button', { class: 'ml-row', type: 'button', title: '눌러서 이 결과 복사' }, h('span', { 'data-i18n-skip': '' }, measureLine(m, d.units, mm)), h('span', { class: 'ml-copy', html: icon('copy', 14) }));
+      // 기록 줄의 "거리·각도"도 번역층이 옮긴다(30차까지는 번역에서 빼 다른 언어에서도 한국어로 남았다 — 값과 축 이름은 사전 틀이 그대로 끼운다)
+      const b = h('button', { class: 'ml-row', type: 'button', title: '눌러서 이 결과 복사' }, h('span', {}, measureLine(m, d.units, mm)), h('span', { class: 'ml-copy', html: icon('copy', 14) }));
       b.addEventListener('click', () => this.copyMeasure(i));
       return b;
     });
