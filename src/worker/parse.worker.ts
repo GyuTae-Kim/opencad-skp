@@ -7,15 +7,18 @@
  * 결과의 형식 배열·ImageBitmap은 복사 없이 넘긴다(app/protocol.ts collectTransfers).
  * 파일은 Blob·File로 받아 통째로 읽지 않는다: 2021+ 꾸러미는 목록과 필요한 항목만 읽고 model.dat는 덩이씩 읽으며 푼다(skpFileToScene, src/range.ts).
  * 결과를 보낸 뒤 파일 내용 지문(SHA-256)을 덩이씩 읽으며 구해 따로 보낸다(측정 안내를 파일별로 기억하는 열쇠 — 화면을 기다리게 하지 않는다).
+ * 34차: 큰 모형(isBigScene)은 지문을 여기서 구하지 않고 결과에 separatePrint를 단다 — 화면이 이 워커를 곧바로 끝내(heap과 해석하며 남긴 쓰레기를
+ * 한꺼번에 놓는다) 지문 워커(print.worker.ts)에 묻는다.
  * 큰 모형(화면이 나눠 올리는 기준 isBigScene)은 넘기기 전에 법선·무늬 좌표를 작은 정수 배열로 줄인다(pack.ts — 28차, 코어 0.26.0).
  * 그래픽 문맥 복구 때 이 워커로 파일을 다시 풀지 않는다(29차 — 화면이 쥔 것을 코어가 다시 올리고, 색 바꾼 무늬만 작은 recolor.worker.ts가 다시 손질한다).
  */
 /// <reference lib="webworker" />
 import { TEXTURE_LIMIT } from 'opencad-viewer3d/texture';
-import { blobSource, skpFileToScene, sourceSha256, STREAM_MIN_BYTES, type SkpFileResult, type SkpImages } from '../index';
-import { collectTransfers, errorText, type ParseRequest, type ParseResponse, type ParseResult } from '../app/protocol';
+import { skpFileToScene, STREAM_MIN_BYTES, type SkpFileResult, type SkpImages } from '../index';
+import { collectTransfers, errorText, isBigScene, type ParseRequest, type ParseResponse, type ParseResult } from '../app/protocol';
 import { prepareSceneTextures } from './textures';
 import { packBigScene } from './pack';
+import { filePrint } from './print';
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 
@@ -85,19 +88,16 @@ ctx.onmessage = async (ev: MessageEvent<ParseRequest>) => {
     post({ id: req.id, type: 'error', message: errorText(e) });
     return;
   }
+  // 큰 모형은 지문을 지문 워커가 구한다(넘기면 배열이 비므로 넘기기 전에 가른다)
+  const done: ParseResponse = isBigScene(result) ? { id: req.id, type: 'done', result, separatePrint: true } : { id: req.id, type: 'done', result };
   try {
-    post({ id: req.id, type: 'done', result }, collectTransfers(result));
+    post(done, collectTransfers(result));
   } catch {
     // 이전이 막히면(드문 경우) 복사로 보낸다
-    post({ id: req.id, type: 'done', result });
+    post(done);
   }
+  if ('separatePrint' in done) return;
   // 파일 내용 지문: 결과를 보낸 뒤 덩이씩 읽으며(파일 전체를 들지 않는다). 못 구하면 null(그 파일은 안내를 기억하지 않는다)
-  let digest: ArrayBuffer | null = null;
-  try {
-    const d = await sourceSha256(blobSource(req.file));
-    digest = d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength) as ArrayBuffer;
-  } catch {
-    /* 지문 없이 */
-  }
+  const digest = await filePrint(req.file);
   post({ id: req.id, type: 'print', digest }, digest ? [digest] : []);
 };

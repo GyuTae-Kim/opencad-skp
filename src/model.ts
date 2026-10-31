@@ -25,7 +25,7 @@
 import { EdgeTableBuilder, emptyEdges, emptyFaces, FaceTableBuilder, type SkpEdges, type SkpFaces } from './entities';
 import { F64, I32 } from './grow';
 import type { SkpUnitsMeta } from './meta';
-import { TlvReader, type TlvNode } from './tlv';
+import { firstFound, TlvReader, type TlvNode } from './tlv';
 import { readCurves, readGuideLine, readGuidePoint, readLinearDim, readRadialDim, readSection, readText, resolveLink, type AnnotEnv, type DimLink, type PointLookups } from './vffannot';
 import {
   animationFromOptions,
@@ -34,6 +34,7 @@ import {
   lengthUnitCode,
   readBase,
   readBaseAttrs,
+  readBaseNode,
   readHeaderAttrs,
   readOptions,
   unitsFromOptions,
@@ -596,8 +597,19 @@ function iga(word: string): string {
   return word + (c >= 0 && c < 11172 && c % 28 !== 0 ? '이' : '가');
 }
 
-/** 면 바탕의 무늬 투영(앞·뒤). 없거나 깨졌으면 빈 결과 */
-function readTextureMaps(r: TlvReader, face: TlvNode): { front?: SkpTextureMap; back?: SkpTextureMap } {
+/**
+ * 면마다 다시 쓰는 무늬 투영 행렬 자리(앞·뒤 — 34차). Float64Array(9)는 72바이트라 heap 밖에 버퍼를 잡아(작은 형식 배열만 heap 안),
+ * 큰 무늬 모형에서 면마다 하나씩 잡았다가 곧바로 버리던 것이 모서리·면 읽기의 큰 몫이었다. 읽은 투영은 면 표(FaceTableBuilder.push)가
+ * 곧바로 표에 옮겨 적고 붙들지 않으므로, readTextureMaps가 낸 행렬은 다음 면을 읽기 전까지만 쓴다
+ */
+const frontMatrixAt = new Float64Array(9);
+const backMatrixAt = new Float64Array(9);
+
+/**
+ * 면 바탕의 무늬 투영(앞·뒤). 없거나 깨졌으면 빈 결과. 낸 투영의 행렬은 다음 면을 읽으면 바뀐다(위 자리 — 받는 쪽은 곧바로 옮겨 적는다).
+ * 같은 쪽 투영이 또 나오면 처음 것을 쓰고(뒤 것의 행렬은 적지 않는다), 꼬리표를 찾는 차례·던지는 곳은 예전과 같다(내보내는 것은 시험용)
+ */
+export function readTextureMaps(r: TlvReader, face: TlvNode): { front?: SkpTextureMap; back?: SkpTextureMap } {
   const out: { front?: SkpTextureMap; back?: SkpTextureMap } = {};
   const items = r.path(face, TAG.BASE, TAG.ID_BOX, TAG.ATTRS, TAG.ATTR_LIST, TAG.ATTR_ITEMS);
   if (!items) return out;
@@ -610,17 +622,151 @@ function readTextureMaps(r: TlvReader, face: TlvNode): { front?: SkpTextureMap; 
       // 행렬 앞 9칸은 바이트에서 바로 형식 배열로(33차 — 큰 무늬 모형에서 면마다 수 배열 둘을 거쳐 만들지 않는다. 값과 읽는 차례는 같다)
       const mn = r.first(side, TAG.TEX_MATRIX);
       if (!mn || mn.end - mn.start < 72) return;
-      const matrix = new Float64Array(9);
-      for (let i = 0; i < 9; i++) matrix[i] = r.f64(mn, i);
+      const front = st === TAG.TEX_FRONT;
+      const taken = front ? out.front !== undefined : out.back !== undefined;
+      const matrix = front ? frontMatrixAt : backMatrixAt;
+      if (!taken) for (let i = 0; i < 9; i++) matrix[i] = r.f64(mn, i);
       const kn = r.first(side, TAG.TEX_KIND);
+      // 방향은 앞 세 칸만 쓴다(f64s의 앞 세 칸과 같다 — 24바이트 이상일 때)
+      const dn = r.first(side, TAG.TEX_DIR);
+      if (taken) return;
       const map: SkpTextureMap = { kind: r.i32(kn) ?? r.u8(kn) ?? 0, matrix };
-      const d = r.f64s(r.first(side, TAG.TEX_DIR));
-      if (d && d.length >= 3) map.dir = [d[0]!, d[1]!, d[2]!];
-      if (st === TAG.TEX_FRONT) out.front ??= map;
-      else out.back ??= map;
+      if (dn && dn.end - dn.start >= 24) map.dir = [r.f64(dn, 0), r.f64(dn, 1), r.f64(dn, 2)];
+      if (front) out.front = map;
+      else out.back = map;
     });
   });
   return out;
+}
+
+/** 요소 묶음 하나를 읽는 동안 모서리·면 읽기가 함께 쓰는 것(readEntities가 만든다 — 시험은 옛 식과 같은 상태로 견준다) */
+export interface ItemReadState {
+  /** 정점 영구 번호 → 정점 차례 */
+  vIndex: Map<number, number>;
+  /** 모서리 영구 번호 → 모서리 차례(처음 것) */
+  eIndex: Map<number, number>;
+  edgeTable: EdgeTableBuilder;
+  /** 모서리 차례 → 곡선 영구 번호 */
+  edgeCurve: Map<number, number>;
+  warn: Warn;
+  /** 무늬 투영을 읽을 재질 번호 */
+  texturedIds: ReadonlySet<number>;
+}
+
+/** 모서리(0bb8)에서 찾는 자식과 그 자리(면마다·모서리마다 다시 쓴다 — 읽기는 다시 들어오지 않는다) */
+const EDGE_TAGS: readonly number[] = [TAG.BASE, TAG.EDGE_START, TAG.EDGE_END, TAG.EDGE_CURVE];
+const edgeKids: (TlvNode | undefined)[] = [];
+/** 면(0dac)에서 찾는 자식: 바탕, 평면, 고리, 뒷면 재질 */
+const FACE_TAGS: readonly number[] = [TAG.BASE, TAG.FACE_PLANE, TAG.FACE_LOOPS, TAG.FACE_BACK];
+const faceKids: (TlvNode | undefined)[] = [];
+/** 모서리 쓰임(0fa0)에서 찾는 자식: 모서리, 뒤집힘 */
+const USE_TAGS: readonly number[] = [TAG.USE_EDGE, TAG.USE_REVERSED];
+const useKids: (TlvNode | undefined)[] = [];
+
+/**
+ * 모서리 하나(0bb8 내용 [start, end))를 표에 더한다. 34차: 자식을 한 번만 돌아(firstEach) 바탕·시작·끝·곡선을 모으고, 모서리 객체 없이 표에 적는다.
+ * 꼬리표마다 r.first를 부르던 33차와 같은 값·같은 경고이고, 길이가 넘친 자식 앞에서 찾지 못한 꼬리표는 그때 찾던 자리
+ * (바탕 → 시작 → 끝 → [번호를 적은 뒤] 곡선)에서 같은 글로 던진다(내보내는 것은 시험용)
+ */
+export function readEdgeItem(r: TlvReader, start: number, end: number, s: ItemReadState): void {
+  const broken = r.firstEach(start, end, EDGE_TAGS, edgeKids);
+  const baseN = edgeKids[0], startN = edgeKids[1], endN = edgeKids[2], curveN = edgeKids[3];
+  const b = readBaseNode(r, firstFound(baseN, broken));
+  const a = s.vIndex.get(r.uint(firstFound(startN, broken)) ?? -1);
+  const z = s.vIndex.get(r.uint(firstFound(endN, broken)) ?? -1);
+  if (a === undefined || z === undefined) {
+    s.warn('정점을 찾지 못한 모서리를 건너뛰었습니다');
+    return;
+  }
+  const at = s.edgeTable.length;
+  if (b.id !== undefined && !s.eIndex.has(b.id)) s.eIndex.set(b.id, at);
+  const curve = r.uint(firstFound(curveN, broken));
+  if (curve !== undefined) s.edgeCurve.set(at, curve);
+  const attrs = readHeaderAttrs(r, b.header, s.warn);
+  s.edgeTable.add(a, z, b.flags, b.layer, b.material, b.id, -1, attrs);
+}
+
+/**
+ * 면 하나(0dac 내용 [start, end))를 표에 더한다(고리를 다 모은 뒤 한 번에). edges는 이 묶음의 모서리 표.
+ * 34차: 면·모서리 쓰임의 자식을 한 번만 돌고(firstEach), 고리·쓰임 목록은 r.each와 같은 검사로 그 자리에서 돌며(면마다 함수를 만들지 않는다),
+ * 면 객체 없이 표에 적는다. 33차와 같은 값·같은 경고이고, 던지는 자리(바탕 → 평면 → 고리 → 고리 목록 → [경고 뒤] 뒷면 재질)와 글도 같다(내보내는 것은 시험용)
+ */
+export function readFaceItem(r: TlvReader, start: number, end: number, s: ItemReadState, edges: SkpEdges, faceTable: FaceTableBuilder): void {
+  const broken = r.firstEach(start, end, FACE_TAGS, faceKids);
+  const baseN = faceKids[0], planeN0 = faceKids[1], loopsN0 = faceKids[2], backN = faceKids[3];
+  const b = readBaseNode(r, firstFound(baseN, broken));
+  // 평면은 f64 앞 세 칸(r.f64s의 앞 세 칸과 같다 — 24바이트 이상일 때)
+  const planeN = firstFound(planeN0, broken);
+  const loopsN = firstFound(loopsN0, broken);
+  if (!planeN || planeN.end - planeN.start < 24 || !loopsN) {
+    s.warn('평면·고리가 없는 면을 건너뛰었습니다');
+    return;
+  }
+  const dv = r.dv;
+  const loops: number[][] = [];
+  const loopEdges: number[][] = [];
+  let missing = 0;
+  // 고리 목록(r.each와 같다: 머리가 잘렸거나 길이가 넘친 자식에서 같은 글로 던진다)
+  const le0 = loopsN.end;
+  let lp = loopsN.start;
+  while (lp < le0) {
+    if (lp + 6 > le0) throw new Error(`TLV 머리가 잘렸습니다(@${lp})`);
+    const lt = dv.getUint16(lp, true);
+    const ls = lp + 6;
+    const le = ls + dv.getUint32(lp + 2, true);
+    if (le > le0) throw new Error(`TLV 길이가 범위를 넘습니다(꼬리표 0x${lt.toString(16)} @${lp})`);
+    lp = le;
+    if (lt !== TAG.LOOP) continue;
+    const uses = r.firstIn(ls, le, TAG.LOOP_USES);
+    if (!uses) continue;
+    const loop: number[] = [];
+    const via: number[] = [];
+    const ue0 = uses.end;
+    let up = uses.start;
+    while (up < ue0) {
+      if (up + 6 > ue0) throw new Error(`TLV 머리가 잘렸습니다(@${up})`);
+      const ut = dv.getUint16(up, true);
+      const us = up + 6;
+      const ue = us + dv.getUint32(up + 2, true);
+      if (ue > ue0) throw new Error(`TLV 길이가 범위를 넘습니다(꼬리표 0x${ut.toString(16)} @${up})`);
+      up = ue;
+      if (ut !== TAG.EDGE_USE) continue;
+      const ub = r.firstEach(us, ue, USE_TAGS, useKids);
+      const revN = useKids[1];
+      const ei = s.eIndex.get(r.uint(firstFound(useKids[0], ub)) ?? -1);
+      if (ei === undefined) {
+        missing++;
+        continue;
+      }
+      if (!(ei >= 0 && ei < edges.length)) throw new RangeError('모서리 번호가 표 밖입니다');
+      // 뒤집힘이면 모서리 끝 정점에서 시작한다(모든 표본에서 고리가 이어지는 것으로 확인)
+      loop.push(r.u8(firstFound(revN, ub)) ? edges.b[ei]! : edges.a[ei]!);
+      via.push(ei);
+    }
+    if (loop.length >= 3) {
+      loops.push(loop);
+      loopEdges.push(via);
+    }
+  }
+  if (missing > 0) s.warn('모서리를 찾지 못한 면 고리가 있습니다');
+  if (loops.length === 0) return;
+  const back = r.uint(firstFound(backN, broken));
+  const attrs = readHeaderAttrs(r, b.header, s.warn);
+  // 무늬 투영은 그쪽 재질이 무늬 재질인 면만 읽는다(무늬를 지운 재질의 면에도 남아 있다)
+  const tf = b.material !== undefined && s.texturedIds.has(b.material);
+  const tb = back !== undefined && s.texturedIds.has(back);
+  let frontMap: SkpTextureMap | undefined;
+  let backMap: SkpTextureMap | undefined;
+  if (tf || tb) {
+    try {
+      const maps = readTextureMaps(r, { tag: TAG.FACE, start, end });
+      if (tf && maps.front) frontMap = maps.front;
+      if (tb && maps.back) backMap = maps.back;
+    } catch {
+      s.warn('깨진 무늬 투영을 건너뛰었습니다(기본 투영으로 칠합니다)');
+    }
+  }
+  faceTable.add(loops, loopEdges, r.f64(planeN, 0), r.f64(planeN, 1), r.f64(planeN, 2), b.flags, b.material, back, b.layer, b.id, attrs, frontMap, backMap);
 }
 
 /** 13개 f64(3×3 행 우선, 이동 3, 나눔수 1) → 4×4 열 우선 */
@@ -749,33 +895,12 @@ function readEntities(ctx: Ctx, r: TlvReader, n: TlvNode, tolerant: boolean): Sk
   ctx.counts.vertices += pts.length / 3;
 
   // 모서리(곡선 번호는 곡선을 읽은 뒤 곡선 차례로 바꾼다). 표로 쌓는다(큰 모형에서 객체 백만 개를 만들지 않게)
-  const eIndex = new Map<number, number>();
-  const edgeTable = new EdgeTableBuilder();
-  const edgeCurve = new Map<number, number>();
+  const items: ItemReadState = { vIndex, eIndex: new Map<number, number>(), edgeTable: new EdgeTableBuilder(), edgeCurve: new Map<number, number>(), warn, texturedIds: ctx.texturedIds };
+  const { eIndex, edgeCurve } = items;
   list(part(TAG.EDGES), '모서리 목록', '모서리', (tag, start, end) => {
-    if (tag !== TAG.EDGE) return;
-    const node = { tag, start, end };
-    const b = readBase(r, node);
-    const a = vIndex.get(r.uint(r.first(node, TAG.EDGE_START)) ?? -1);
-    const z = vIndex.get(r.uint(r.first(node, TAG.EDGE_END)) ?? -1);
-    if (a === undefined || z === undefined) {
-      note(ctx, '정점을 찾지 못한 모서리를 건너뛰었습니다');
-      return;
-    }
-    const e: SkpEdge = { a, b: z, flags: b.flags };
-    if (b.layer !== undefined) e.layer = b.layer;
-    if (b.material !== undefined) e.material = b.material;
-    if (b.id !== undefined) {
-      e.pid = b.id;
-      if (!eIndex.has(b.id)) eIndex.set(b.id, edgeTable.length);
-    }
-    const curve = r.uint(r.first(node, TAG.EDGE_CURVE));
-    if (curve !== undefined) edgeCurve.set(edgeTable.length, curve);
-    const attrs = readHeaderAttrs(r, b.header, warn);
-    if (attrs) e.attrs = attrs;
-    edgeTable.push(e);
+    if (tag === TAG.EDGE) readEdgeItem(r, start, end, items);
   });
-  const edges = edgeTable.done();
+  const edges = items.edgeTable.done();
   ctx.counts.edges += edges.length;
   /** 모서리 차례가 표 안인지(깨진 모서리를 건너뛴 자리를 가리키면 그 면·곡선은 깨진 것으로 본다 — 객체 목록일 때와 같게) */
   const edgeIn = (i: number): number => {
@@ -786,65 +911,7 @@ function readEntities(ctx: Ctx, r: TlvReader, n: TlvNode, tolerant: boolean): Sk
   // 면(고리를 다 모은 뒤 표에 한 번에 더한다)
   const faceTable = new FaceTableBuilder();
   list(part(TAG.FACES), '면 목록', '면', (tag, start, end) => {
-    if (tag !== TAG.FACE) return;
-    const node = { tag, start, end };
-    const b = readBase(r, node);
-    const plane = r.f64s(r.first(node, TAG.FACE_PLANE));
-    const loopsN = r.first(node, TAG.FACE_LOOPS);
-    if (!plane || plane.length < 3 || !loopsN) {
-      note(ctx, '평면·고리가 없는 면을 건너뛰었습니다');
-      return;
-    }
-    const loops: number[][] = [];
-    const loopEdges: number[][] = [];
-    const missing = { n: 0 };
-    r.each(loopsN.start, loopsN.end, (lt, ls, le) => {
-      if (lt !== TAG.LOOP) return;
-      const uses = r.first({ tag: lt, start: ls, end: le }, TAG.LOOP_USES);
-      if (!uses) return;
-      const loop: number[] = [];
-      const via: number[] = [];
-      r.each(uses.start, uses.end, (ut, us, ue) => {
-        if (ut !== TAG.EDGE_USE) return;
-        const u = { tag: ut, start: us, end: ue };
-        const ei = eIndex.get(r.uint(r.first(u, TAG.USE_EDGE)) ?? -1);
-        if (ei === undefined) {
-          missing.n++;
-          return;
-        }
-        edgeIn(ei);
-        // 뒤집힘이면 모서리 끝 정점에서 시작한다(모든 표본에서 고리가 이어지는 것으로 확인)
-        loop.push(r.u8(r.first(u, TAG.USE_REVERSED)) ? edges.b[ei]! : edges.a[ei]!);
-        via.push(ei);
-      });
-      if (loop.length >= 3) {
-        loops.push(loop);
-        loopEdges.push(via);
-      }
-    });
-    if (missing.n > 0) note(ctx, '모서리를 찾지 못한 면 고리가 있습니다');
-    if (loops.length === 0) return;
-    const f: SkpFace = { loops, normal: [plane[0]!, plane[1]!, plane[2]!], flags: b.flags, loopEdges };
-    if (b.material !== undefined) f.front = b.material;
-    const back = r.uint(r.first(node, TAG.FACE_BACK));
-    if (back !== undefined) f.back = back;
-    if (b.layer !== undefined) f.layer = b.layer;
-    if (b.id !== undefined) f.pid = b.id;
-    const attrs = readHeaderAttrs(r, b.header, warn);
-    if (attrs) f.attrs = attrs;
-    // 무늬 투영은 그쪽 재질이 무늬 재질인 면만 읽는다(무늬를 지운 재질의 면에도 남아 있다)
-    const tf = f.front !== undefined && ctx.texturedIds.has(f.front);
-    const tb = back !== undefined && ctx.texturedIds.has(back);
-    if (tf || tb) {
-      try {
-        const maps = readTextureMaps(r, node);
-        if (tf && maps.front) f.frontMap = maps.front;
-        if (tb && maps.back) f.backMap = maps.back;
-      } catch {
-        note(ctx, '깨진 무늬 투영을 건너뛰었습니다(기본 투영으로 칠합니다)');
-      }
-    }
-    faceTable.push(f);
+    if (tag === TAG.FACE) readFaceItem(r, start, end, items, edges, faceTable);
   });
   const faces = faceTable.done();
   ctx.counts.faces += faces.length;

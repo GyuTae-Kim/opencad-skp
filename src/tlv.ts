@@ -14,6 +14,12 @@ export interface TlvNode {
 
 const utf8 = new TextDecoder('utf-8');
 
+/** firstEach가 찾은 자식을 first처럼 쓴다: 찾았으면 그 자식, 길이가 넘친 자식(broken) 앞에서 찾지 못했으면 그 Error를 던진다 */
+export function firstFound(x: TlvNode | undefined, broken: Error | undefined): TlvNode | undefined {
+  if (!x && broken) throw broken;
+  return x;
+}
+
 export class TlvReader {
   readonly b: Uint8Array;
   readonly dv: DataView;
@@ -98,6 +104,34 @@ export class TlvReader {
       const e = p + 6 + len;
       if (e > end) throw new Error(`TLV 길이가 범위를 넘습니다(꼬리표 0x${t.toString(16)} @${p})`);
       if (t === tag) return { tag: t, start: p + 6, end: e };
+      p = e;
+    }
+    return undefined;
+  }
+
+  /**
+   * [start, end) 자식을 한 번만 돌아 tags[i]의 첫 자식을 out[i]에 적는다(없으면 undefined — 34차: 모서리·면·정점처럼 자식 몇을 찾는 항목마다
+   * first를 여러 번 부르며 같은 자식을 다시 돌지 않게). 찾는 꼬리표를 다 찾으면 멈추고, 길이가 넘친 자식을 만나면 거기서 멈춰
+   * first가 던졌을 Error(같은 글)를 낸다 — 던지지 않는다. 부르는 쪽은 찾지 못한 꼬리표를 쓸 자리에서 firstFound로 그 Error를 던진다 —
+   * 그러면 꼬리표마다 그 자리에서 first를 부른 것과 같은 값, 같은 곳에서 같은 글로 던진다
+   */
+  firstEach(start: number, end: number, tags: readonly number[], out: (TlvNode | undefined)[]): Error | undefined {
+    const k = tags.length;
+    for (let i = 0; i < k; i++) out[i] = undefined;
+    let left = k;
+    let p = start;
+    while (p + 6 <= end) {
+      const t = this.dv.getUint16(p, true);
+      const e = p + 6 + this.dv.getUint32(p + 2, true);
+      if (e > end) return new Error(`TLV 길이가 범위를 넘습니다(꼬리표 0x${t.toString(16)} @${p})`);
+      for (let i = 0; i < k; i++)
+        if (t === tags[i]) {
+          if (out[i] === undefined) {
+            out[i] = { tag: t, start: p + 6, end: e };
+            if (--left === 0) return undefined;
+          }
+          break;
+        }
       p = e;
     }
     return undefined;
