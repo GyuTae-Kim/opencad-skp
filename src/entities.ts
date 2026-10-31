@@ -136,15 +136,22 @@ export class EdgeTableBuilder {
 
   /** 모서리 하나를 더하고 그 차례를 돌려준다 */
   push(e: Readonly<SkpEdge>): number {
+    return this.add(e.a, e.b, e.flags, e.layer, e.material, e.pid, e.curve ?? -1, e.attrs);
+  }
+
+  /**
+   * 모서리 하나를 칸 값으로 더한다(push와 같다 — 34차: 2021+ 해석기가 모서리마다 객체를 만들지 않게. 없는 번호는 undefined, 곡선 아님은 -1)
+   */
+  add(a: number, b: number, flags: number, layer: number | undefined, material: number | undefined, pid: number | undefined, curve: number, attrs: SkpAttrDicts | undefined): number {
     const i = this.a.n;
-    this.a.push(e.a);
-    this.b.push(e.b);
-    this.flags.push(e.flags);
-    this.layer.push(num(e.layer));
-    this.material.push(num(e.material));
-    this.pid.push(num(e.pid));
-    this.curve.push(e.curve ?? -1);
-    if (e.attrs) (this.attrs ??= new Map()).set(i, e.attrs);
+    this.a.push(a);
+    this.b.push(b);
+    this.flags.push(flags);
+    this.layer.push(num(layer));
+    this.material.push(num(material));
+    this.pid.push(num(pid));
+    this.curve.push(curve);
+    if (attrs) (this.attrs ??= new Map()).set(i, attrs);
     return i;
   }
 
@@ -196,10 +203,32 @@ export class FaceTableBuilder {
    * 아니면 그 고리는 EDGE_UNKNOWN
    */
   push(f: Readonly<SkpFace>): number {
+    return this.add(f.loops, f.loopEdges, f.normal[0], f.normal[1], f.normal[2], f.flags, f.front, f.back, f.layer, f.pid, f.attrs, f.frontMap, f.backMap);
+  }
+
+  /**
+   * 면 하나를 칸 값으로 더한다(push와 같다 — 34차: 2021+ 해석기가 면마다 객체를 만들지 않게). 무늬 투영은 곧바로 표에 옮겨 적는다
+   * (받은 투영의 행렬을 붙들지 않는다 — 해석기는 면마다 같은 자리에 다시 적은 행렬을 준다)
+   */
+  add(
+    loops: readonly (readonly number[])[],
+    loopEdges: readonly (readonly number[])[] | undefined,
+    nx: number,
+    ny: number,
+    nz: number,
+    flags: number,
+    front: number | undefined,
+    back: number | undefined,
+    layer: number | undefined,
+    pid: number | undefined,
+    attrs: SkpAttrDicts | undefined,
+    frontMap: Readonly<SkpTextureMap> | undefined,
+    backMap: Readonly<SkpTextureMap> | undefined,
+  ): number {
     const k = this.flags.n;
-    for (let li = 0; li < f.loops.length; li++) {
-      const loop = f.loops[li]!;
-      const via = f.loopEdges?.[li];
+    for (let li = 0; li < loops.length; li++) {
+      const loop = loops[li]!;
+      const via = loopEdges?.[li];
       const known = !!via && via.length === loop.length;
       if (known) this.anyEdge = true;
       this.vertex.reserve(loop.length);
@@ -212,17 +241,19 @@ export class FaceTableBuilder {
     }
     this.loopStart.push(this.cornerStart.n - 1);
     this.normal.reserve(3);
-    for (let i = 0; i < 3; i++) this.normal.a[this.normal.n++] = f.normal[i]!;
-    this.flags.push(f.flags);
-    this.front.push(num(f.front));
-    this.back.push(num(f.back));
-    this.layer.push(num(f.layer));
-    this.pid.push(num(f.pid));
-    if (f.attrs) (this.attrs ??= new Map()).set(k, f.attrs);
-    if (f.frontMap) this.frontMaps ??= new MapTableBuilder(k);
-    this.frontMaps?.add(f.frontMap);
-    if (f.backMap) this.backMaps ??= new MapTableBuilder(k);
-    this.backMaps?.add(f.backMap);
+    this.normal.a[this.normal.n++] = nx;
+    this.normal.a[this.normal.n++] = ny;
+    this.normal.a[this.normal.n++] = nz;
+    this.flags.push(flags);
+    this.front.push(num(front));
+    this.back.push(num(back));
+    this.layer.push(num(layer));
+    this.pid.push(num(pid));
+    if (attrs) (this.attrs ??= new Map()).set(k, attrs);
+    if (frontMap) this.frontMaps ??= new MapTableBuilder(k);
+    this.frontMaps?.add(frontMap);
+    if (backMap) this.backMaps ??= new MapTableBuilder(k);
+    this.backMaps?.add(backMap);
     return k;
   }
 

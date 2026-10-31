@@ -27,7 +27,11 @@ export interface BaseInfo {
  * 그 앞에서 찾지 못한 꼬리표는 r.first처럼 같은 글로 던지고, 꼬리표마다 찾던 차례(깃발 → 머리 → 번호 → 재질 → 태그)도 같다
  */
 export function readBase(r: TlvReader, n: TlvNode): BaseInfo {
-  const base = r.first(n, TAG.BASE);
+  return readBaseNode(r, r.first(n, TAG.BASE));
+}
+
+/** 이미 찾은 바탕(07d0) 노드의 번호·재질·태그·깃발(readBase와 같다 — 34차: 요소의 자식을 한 번만 도는 쪽이 바탕을 함께 찾을 때). 바탕이 없으면 깃발 0 */
+export function readBaseNode(r: TlvReader, base: TlvNode | undefined): BaseInfo {
   if (!base) return { flags: 0 };
   let flags: TlvNode | undefined;
   let header: TlvNode | undefined;
