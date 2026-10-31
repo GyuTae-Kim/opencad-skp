@@ -605,11 +605,15 @@ function readTextureMaps(r: TlvReader, face: TlvNode): { front?: SkpTextureMap; 
     if (tag !== TAG.TEX_MAP) return;
     r.each(start, end, (st, ss, se) => {
       if (st !== TAG.TEX_FRONT && st !== TAG.TEX_BACK) return;
-      const side = r.first({ tag: st, start: ss, end: se }, TAG.TEX_SIDE);
+      const side = r.firstIn(ss, se, TAG.TEX_SIDE);
       if (!side) return;
-      const m = r.f64s(r.first(side, TAG.TEX_MATRIX));
-      if (!m || m.length < 9) return;
-      const map: SkpTextureMap = { kind: r.i32(r.first(side, TAG.TEX_KIND)) ?? r.u8(r.first(side, TAG.TEX_KIND)) ?? 0, matrix: Float64Array.from(m.slice(0, 9)) };
+      // 행렬 앞 9칸은 바이트에서 바로 형식 배열로(33차 — 큰 무늬 모형에서 면마다 수 배열 둘을 거쳐 만들지 않는다. 값과 읽는 차례는 같다)
+      const mn = r.first(side, TAG.TEX_MATRIX);
+      if (!mn || mn.end - mn.start < 72) return;
+      const matrix = new Float64Array(9);
+      for (let i = 0; i < 9; i++) matrix[i] = r.f64(mn, i);
+      const kn = r.first(side, TAG.TEX_KIND);
+      const map: SkpTextureMap = { kind: r.i32(kn) ?? r.u8(kn) ?? 0, matrix };
       const d = r.f64s(r.first(side, TAG.TEX_DIR));
       if (d && d.length >= 3) map.dir = [d[0]!, d[1]!, d[2]!];
       if (st === TAG.TEX_FRONT) out.front ??= map;

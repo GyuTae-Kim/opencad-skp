@@ -86,12 +86,17 @@ export class TlvReader {
 
   /** 첫 자식 중 꼬리표가 같은 것 */
   first(n: TlvNode, tag: number): TlvNode | undefined {
-    let p = n.start;
-    while (p + 6 <= n.end) {
+    return this.firstIn(n.start, n.end, tag);
+  }
+
+  /** [start, end) 안 첫 자식 중 꼬리표가 같은 것(first와 같다 — 노드 객체 없이 범위로) */
+  firstIn(start: number, end: number, tag: number): TlvNode | undefined {
+    let p = start;
+    while (p + 6 <= end) {
       const t = this.dv.getUint16(p, true);
       const len = this.dv.getUint32(p + 2, true);
       const e = p + 6 + len;
-      if (e > n.end) throw new Error(`TLV 길이가 범위를 넘습니다(꼬리표 0x${t.toString(16)} @${p})`);
+      if (e > end) throw new Error(`TLV 길이가 범위를 넘습니다(꼬리표 0x${t.toString(16)} @${p})`);
       if (t === tag) return { tag: t, start: p + 6, end: e };
       p = e;
     }
