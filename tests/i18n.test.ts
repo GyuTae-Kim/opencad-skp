@@ -196,7 +196,9 @@ describe('language URLs and UI presentation', () => {
     for (const {code} of languages.filter(item => item.code !== 'ko'))
       for (const t of texts) expect(translate(t, code), `${code}: ${t}`).not.toMatch(/[가-힣]/);
     expect(translate(CONTEXT_LOST_TITLE, 'en')).toBe('Restoring 3D graphics');
-    expect(translate(RESTORE_TITLE, 'en')).toBe('Preparing recolored textures again');
+    // 30차: 놓아 올린 문서는 코어가 놓은 무늬를 다시 푸는 동안에도 이 안내라 색 바꾼 무늬에 한정하지 않는다
+    expect(translate(RESTORE_TITLE, 'en')).toBe('Preparing textures again');
+    expect(translate(RESTORE_TITLE, 'ja')).toBe('テクスチャを準備し直しています');
     expect(translate(RESTORE_FAIL_TITLE, 'de')).toBe('Einige Texturen konnten nicht neu vorbereitet werden');
   });
   it('translates the split-chunk loading and failure notices (measuring tools, 3D view)', () => {

@@ -12,9 +12,13 @@
  *   앱은 장면의 무늬 원본(푼 그림·색 바꾼 무늬의 바이트)을 읽지 않는다(고르기·측정·안내·단면·그림 저장은 위치·색인만 — 27차에 찾아 봄).
  *
  * 문맥 잃음·되찾음(ContextWatch — 놓기와 무관하게 모든 문서): 잃으면 짧은 안내를 보이고, 되찾으면(코어가 위치·색·법선·무늬 좌표로 다시 올리기 시작한 뒤)
- *   안내를 거두고 라벨 가림 판정을 다시 한다. 코어가 다시 달라는 무늬(쥐어 둔 색 바꾼 무늬)는 작은 손질 워커(worker/recolor.worker.ts)가
+ *   라벨 가림 판정을 다시 한다. 코어가 다시 달라는 무늬(쥐어 둔 색 바꾼 무늬)는 작은 손질 워커(worker/recolor.worker.ts)가
  *   처음 열 때와 같은 손질로 다시 그림을 만들어 restoreTexture로 주고 워커를 끝낸다. 그동안 그 무늬 면은 평균색이다.
  *   손질하지 못하면 평균색으로 그린다고 알린다. 손질하는 동안 또 잃으면 받은 그림을 쥐었다가 되찾을 때 준다.
+ *   안내는 코어가 다시 올리기를 다 마쳤다고 알릴 때(코어 0.29.0 onContextRestoreDone — 나눠 올리기, 앱이 다시 줄 것, 코어가 장면의 그림 바이트를
+ *   다시 풀어 올리기까지 모두) 거둔다(30차). 29차까지는 되찾음 알림(또는 앱이 다 준 때)에 거둬, 놓아 올린 큰 모형은 코어가 남은 무늬를 다시 푸는 동안에도
+ *   안내 없이 무늬 면이 평균색이었다. 놓아 올린 문서는 그동안 무늬를 다시 준비한다고 알리고(RESTORE_TITLE), 그 밖의 문서는 잃음 안내를 그대로 둔다
+ *   (코어가 쥔 그림으로 곧 끝난다 — 무늬가 없으면 되찾음 알림 바로 뒤에 끝 알림이 온다).
  */
 import type { ContextRestoreNeed, TextureSource } from 'opencad-viewer3d';
 import type { Scene3d } from 'opencad-viewer3d/types';
@@ -27,8 +31,8 @@ export const RELEASE_OPTIONS = { textures: 'bitmap' } as const;
 /** 문맥을 잃었을 때 */
 export const CONTEXT_LOST_TITLE = '3D 그래픽을 다시 준비하는 중입니다';
 export const CONTEXT_LOST_TEXT = '브라우저가 그래픽 장치를 잠시 놓았습니다. 되찾는 대로 모형을 다시 그립니다.';
-/** 되찾은 뒤 쥐어 둔 색 바꾼 무늬를 다시 손질하는 동안 */
-export const RESTORE_TITLE = '색을 바꾼 무늬를 다시 준비하는 중입니다';
+/** 놓아 올린 문서: 되찾은 뒤 무늬를 다 올릴 때까지(앱이 쥐어 둔 색 바꾼 무늬를 다시 손질하고 코어가 놓은 그림을 다시 푸는 동안 — 30차부터 코어 끝 알림까지) */
+export const RESTORE_TITLE = '무늬를 다시 준비하는 중입니다';
 export const RESTORE_TEXT = '메모리를 아끼려고 놓아 둔 무늬 그림을 다시 만듭니다. 그동안 그 무늬 면은 평균색으로 보입니다.';
 /** 다시 손질하지 못했을 때 */
 export const RESTORE_FAIL_TITLE = '무늬 일부를 다시 준비하지 못했습니다';
@@ -120,8 +124,12 @@ function dropResult(res: RecolorResult | null): void {
 export interface WatchViewer {
   readonly scene: Scene3d | null;
   readonly restoreNeed: ContextRestoreNeed | null;
+  /** 코어 0.29.0: 잃은 뒤 다시 올리기가 아직 끝나지 않았는지(잃는 순간 true, 끝 알림 직전 false) */
+  readonly restorePending: boolean;
   onContextLost(cb: () => void): () => void;
   onContextRestore(cb: (need: ContextRestoreNeed) => void | Promise<unknown>): () => void;
+  /** 코어 0.29.0: 되찾은 뒤 다시 올리기를 다 마쳤을 때(나눠 올리기·앱이 다시 줄 것·무늬 다시 풀기 — 앱이 주지 않은 것이 남으면 오지 않는다) */
+  onContextRestoreDone(cb: () => void): () => void;
   restoreTexture(id: string, src: TextureSource): Promise<boolean>;
 }
 
@@ -139,7 +147,10 @@ export interface ReleaseSource {
   textureLimit: number;
 }
 
-/** ok: 그대로 · lost: 잃음 · restoring: 되찾고 쥐어 둔 무늬를 다시 손질하는 중 · partial: 다시 손질하지 못해 그 무늬를 평균색으로 그리는 중 */
+/**
+ * ok: 그대로 · lost: 잃음 · restoring: 되찾고 다시 올리는 중(쥐어 둔 무늬를 다시 손질하거나 코어가 무늬를 다시 풀어 올리는 중 — 코어 끝 알림까지) ·
+ * partial: 다시 손질하지 못해 그 무늬를 평균색으로 그리는 중
+ */
 export type GraphicsState = 'ok' | 'lost' | 'restoring' | 'partial';
 
 /** 마지막으로 놓은 것을 다시 준 기록(되찾은 때부터 다 준 때까지 ms, 받은 무늬 수, 남은 것 수) */
@@ -167,7 +178,7 @@ export class ContextWatch {
     private readonly ui: ContextUi,
     private readonly makeWorker: WorkerFactory = newRecolorWorker,
   ) {
-    this.offs = [v.onContextLost(() => this.lost()), v.onContextRestore((need) => this.restored(need))];
+    this.offs = [v.onContextLost(() => this.lost()), v.onContextRestore((need) => this.restored(need)), v.onContextRestoreDone(() => this.done())];
   }
 
   /** 새 문서마다: 놓아 올렸으면 그 장면과 쥐어 둔 무늬(아니면 null). 앞 문서의 다시 손질은 거둔다 */
@@ -214,9 +225,12 @@ export class ContextWatch {
 
   private restored(need: ContextRestoreNeed): void {
     this.ui.refresh();
+    // 안내는 코어 끝 알림(done)에 거둔다 — 그때까지 다시 올리는 중
+    this.state = 'restoring';
     if (!need.meshes.length && !need.textures.length) {
-      this.state = 'ok';
-      this.ui.hide();
+      // 앱이 줄 것이 없다. 놓아 올린 문서는 코어가 놓은 그림을 다시 푸는 동안 무늬를 다시 준비한다고 알리고, 그 밖의 문서는 잃음 안내를 그대로 둔다
+      // (무늬가 없으면 이 알림 바로 뒤에 끝 알림이 와 곧 거둔다)
+      if (this.released) this.ui.show('info', RESTORE_TITLE, RESTORE_TEXT);
       return;
     }
     const st = this.stash;
@@ -224,7 +238,7 @@ export class ContextWatch {
       this.stash = null;
       if (st.src === this.src && this.v.scene === st.src.scene) {
         // 앞서 다시 손질해 쥐고 있던 것을 바로 준다
-        this.state = 'restoring';
+        this.ui.show('info', RESTORE_TITLE, RESTORE_TEXT);
         void this.apply(st.src, st.res, st.t0);
         return;
       }
@@ -232,11 +246,20 @@ export class ContextWatch {
     }
     if (this.job) {
       // 앞서 잃기 전에 시작한 다시 손질이 아직 돈다 — 끝나면 준다
-      this.state = 'restoring';
       this.ui.show('info', RESTORE_TITLE, RESTORE_TEXT);
       return;
     }
     this.start(need);
+  }
+
+  /**
+   * 코어가 되찾은 뒤 다시 올리기를 다 마쳤다(0.29.0 onContextRestoreDone — 앱이 다 줬고 코어가 무늬까지 다 풀어 올림): 안내를 거둔다.
+   * 다시 올리는 중이 아니면(새 문서·평균색 안내·다시 잃음) 그대로
+   */
+  private done(): void {
+    if (this.state !== 'restoring' || this.job) return;
+    this.state = 'ok';
+    this.ui.hide();
   }
 
   /** 쥐어 둔 무늬 가운데 코어가 바라는 것을 다시 손질하기 시작한다(바라는 것을 쥐지 않았으면 바로 알린다) */
@@ -276,18 +299,18 @@ export class ContextWatch {
     this.finish(src, t0, textures);
   }
 
-  /** 다 주었으면 안내를 거두고, 남았으면 평균색으로 그린다고 알린다 */
+  /**
+   * 앱 몫이 끝났다: 남았으면 평균색으로 그린다고 알린다. 다 주었으면 코어가 아직 무늬를 다시 푸는 동안(restorePending) 끝 알림까지 안내를 두고,
+   * 이미 끝났으면(마지막 무늬를 올리며 끝 알림이 먼저 왔으면) 여기서 거둔다
+   */
   private finish(src: ReleaseSource | null, t0: number, textures: number): void {
     if (src !== this.src || this.state === 'lost') return;
     const left = this.v.restoreNeed;
     this.last = { ms: Math.round(now() - t0), textures, left: left ? left.meshes.length + left.textures.length : 0 };
     this.ui.refresh();
-    if (!left) {
-      this.state = 'ok';
-      this.ui.hide();
-    } else {
+    if (left) {
       this.state = 'partial';
       this.ui.show('warn', RESTORE_FAIL_TITLE, RESTORE_FAIL_TEXT);
-    }
+    } else if (!this.v.restorePending) this.done();
   }
 }
