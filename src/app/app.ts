@@ -55,7 +55,7 @@ import {
 import { DEFAULT_UNITS, formatAngle, formatLength, mmPerSceneUnit } from './units';
 import { Overlay } from './overlay';
 import { cardName, cardRows, entityInfo } from './entity';
-import { h, icon } from './dom';
+import { h, icon, reopenMenu } from './dom';
 import {
   canHideNode,
   createDoc,
@@ -448,10 +448,19 @@ export class SkpViewerApp implements PanelHost {
   // ───────────────────────── 틀 ─────────────────────────
 
   mount(): void {
-    // 언어를 바꾸면 뷰 큐브 글을 다시 그리고, 측정 툴팁(측정 도구가 옮겨 넣어 번역층이 건너뜀 — uiText)도 새 언어로 다시 그린다
+    // 언어를 바꾸면 뷰 큐브 글을 다시 그리고, 측정 툴팁(측정 도구가 옮겨 넣어 번역층이 건너뜀 — uiText)도 새 언어로 다시 그린다.
+    // 열린 도구 막대 메뉴(같은 까닭으로 번역층이 건너뜀)는 그 단추로 다시 열어 새 언어로(32차 — 닫을 때까지 앞 언어였다)
     this.root.addEventListener('languagechange', () => {
       if (this.viewer) this.viewer.setViewCubeSize(this.viewer.viewCubeSize);
       this.overlay?.invalidate();
+      const menu = this.menu;
+      const btn = this.menuBtn;
+      if (menu && btn)
+        reopenMenu(menu, () => {
+          this.closeMenu();
+          btn.click();
+          return this.menu;
+        });
     });
     this.root.innerHTML = '';
     this.root.className = 'app';
@@ -1398,6 +1407,9 @@ export class SkpViewerApp implements PanelHost {
     // 고른 것 카드의 고른 안내 지우기 단추(고르기 도구로 고른 안내 — 선택 해제 ✕ 앞)
     const selActs = this.els.selBar.querySelector<HTMLElement>('.mb-acts');
     if (selActs) tool.mountGuideDelete(selActs);
+    // 손가락 기기의 휴대폰 도구 막대: 패널 단추 앞 빈자리에 안내 모두 고르기(32차 — 자리가 없으면 숨기고 보기 설정 메뉴 항목으로)
+    const gap = this.els.toolbar.querySelector<HTMLElement>(':scope > .spacer');
+    if (gap) tool.mountToolbarSelectAll(gap);
     // 문서를 연 뒤에 받았으면 그 파일의 안내를 되살린다
     if (this.doc) tool.openFile(this.docPrint);
     return tool;

@@ -398,6 +398,17 @@ const SELECT_ALL_PATHS =
   '<rect x="3.5" y="3.5" width="17" height="17" rx="2" stroke-dasharray="3 2.4"/><circle cx="9" cy="9" r="1.6" fill="currentColor"/><circle cx="15" cy="9" r="1.6" fill="currentColor"/><circle cx="9" cy="15" r="1.6" fill="currentColor"/><circle cx="15" cy="15" r="1.6" fill="currentColor"/>';
 
 /**
+ * 도구 막대가 한 줄인지(32차 — 휴대폰 도구 막대는 넘치면 다음 줄로 감싼다): 크기가 있는 자식 모두가 가장 먼저 끝나는 자식의 아래쪽보다 위에서 시작한다
+ * (다음 줄의 자식은 앞 줄 아래쪽 밑에서 시작한다 — 높이가 다른 단추 묶음·위로 붙인 단추도 한 줄로 본다)
+ */
+export function toolbarOneRow(bar: Element): boolean {
+  const rs = [...bar.children].map((e) => e.getBoundingClientRect()).filter((r) => r.width > 0 && r.height > 0);
+  if (rs.length < 2) return true;
+  const bottom = Math.min(...rs.map((r) => r.bottom));
+  return rs.every((r) => r.top < bottom - 0.5);
+}
+
+/**
  * 고른 안내의 이름(상태 줄·고른 것 카드): 하나면 안내점·안내선, 여럿이면 "안내점 2개"·"안내선 3개"·"안내점 2개·안내선 1개". 없으면 null
  */
 export function guideCountText(points: number, lines: number): string | null {
@@ -1152,6 +1163,13 @@ export class MeasureTool {
   private guideDelBtn: HTMLButtonElement | null = null;
   private guideHideBtn: HTMLButtonElement | null = null;
   private guideAllBtn: HTMLButtonElement | null = null;
+  /**
+   * 휴대폰 도구 막대의 안내 모두 고르기 단추(mountToolbarSelectAll로 붙인다 — 32차), 자리를 다시 볼 ResizeObserver,
+   * 보였더니 두 줄이 되어 숨긴 때의 도구 막대 폭·빈자리 폭(같은 자리에서는 다시 보이지 않는다 — 보였다 숨겼다 되풀이하지 않게)
+   */
+  private barAllBtn: HTMLButtonElement | null = null;
+  private barFit: ResizeObserver | null = null;
+  private barBlocked = '';
   /** 안내를 기억하는 파일 열쇠(내용 지문 16진 — 지문을 받기 전·기억하지 않으면 null)와 openFile 차례(늦게 온 지문은 버린다) */
   private fileKey: string | null = null;
   private fileTicket = 0;
@@ -1980,8 +1998,75 @@ export class MeasureTool {
     this.syncGuideDelete();
   }
 
+  /**
+   * 휴대폰 도구 막대(gap 앞 — 앱은 오른쪽 패널 단추 앞의 늘고 주는 빈자리 .spacer)에 보이는 안내 모두 고르기 단추를 둔다(32차 — SketchUp for iPad 바로 가기 막대의
+   * Select All처럼 안내를 하나 고르기 전에도 손 닿는 곳). 손가락 기기의 휴대폰 도구 막대에서만 보이고(CSS), 보이는 안내가 있고 줄자·각도기를 끈 동안에만 나오며,
+   * 다 골랐으면 끈다(보기 설정 메뉴 항목과 같은 규칙). 도구 막대가 한 줄에 들지 않으면(320px 휴대폰, 단면 위치 막대를 연 동안 등) 숨긴다 — 그때는 보기 설정 메뉴 항목으로
+   */
+  mountToolbarSelectAll(gap: HTMLElement): void {
+    const bar = gap.parentElement;
+    if (!bar || this.disposed) return;
+    let b = this.barAllBtn;
+    if (!b) {
+      b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'tbtn icon-only tb-selall';
+      b.hidden = true;
+      b.title = GUIDE_SELECT_ALL_LABEL;
+      b.setAttribute('aria-label', GUIDE_SELECT_ALL_LABEL);
+      b.innerHTML = `${icon('').replace('</svg>', `${SELECT_ALL_PATHS}</svg>`)}<span class="lbl">${GUIDE_SELECT_ALL_TEXT}</span>`;
+      b.addEventListener('click', () => this.selectAllGuides());
+      this.barAllBtn = b;
+    }
+    bar.insertBefore(b, gap);
+    this.barFit?.disconnect();
+    // 빈자리 폭(단면 위치 막대·화면 돌림·글꼴)과 도구 막대 크기(두 줄이 됨)가 바뀔 때 다시 본다
+    this.barFit = typeof ResizeObserver === 'function' ? new ResizeObserver(() => this.fitToolbarSelectAll()) : null;
+    this.barFit?.observe(gap);
+    this.barFit?.observe(bar);
+    this.syncGuideDelete();
+  }
+
+  /**
+   * 도구 막대 단추를 보일지와 자리(위 설명): 숨긴 동안 빈자리가 단추 하나(옆 단추 폭)와 사이(column-gap)보다 넓고 도구 막대가 한 줄이면 보이고,
+   * 보인 뒤 도구 막대가 두 줄이 되면 숨긴다. CSS가 숨기는 곳(넓은 화면·마우스 기기)에서는 자리를 따지지 않는다
+   */
+  fitToolbarSelectAll(): void {
+    const b = this.barAllBtn;
+    const bar = b?.parentElement;
+    const gap = b?.nextElementSibling;
+    if (!b || !bar || !gap) return;
+    b.disabled = !this.canSelectAllGuides;
+    const v = this.disposed || this.modeValue || !this.shownValue ? null : this.visible();
+    if (!v || !(v.vp.length + v.vl.length)) {
+      b.hidden = true;
+      return;
+    }
+    const key = (): string => `${Math.round(bar.clientWidth)}:${Math.round(gap.getBoundingClientRect().width)}`;
+    if (b.hidden) {
+      b.hidden = false;
+      const css = b.getClientRects().length > 0;
+      if (!css) return;
+      b.hidden = true;
+      const k = key();
+      if (k === this.barBlocked || !toolbarOneRow(bar)) return;
+      const ref = bar.querySelector('.tbtn:not(.tb-selall)')?.getBoundingClientRect().width || 40;
+      if (gap.getBoundingClientRect().width < ref + (parseFloat(getComputedStyle(bar).columnGap) || 0) + 1) return;
+      b.hidden = false;
+      if (toolbarOneRow(bar)) return;
+      b.hidden = true;
+      this.barBlocked = k;
+      return;
+    }
+    if (b.getClientRects().length && !toolbarOneRow(bar)) {
+      b.hidden = true;
+      this.barBlocked = key();
+    }
+  }
+
   /** 카드의 지우기 단추 이름을 고른 안내 종류·수에 맞추고(측정값 칸의 지우기 단추와 같은 글), 모두 고르기는 더 고를 것이 있을 때만 */
   private syncGuideDelete(): void {
+    this.fitToolbarSelectAll();
     if (this.guideAllBtn) this.guideAllBtn.hidden = !this.canSelectAllGuides;
     const b = this.guideDelBtn;
     if (!b) return;
@@ -2163,6 +2248,8 @@ export class MeasureTool {
       this.notifyLive(null);
     }
     this.refreshHint();
+    // 휴대폰 도구 막대의 모두 고르기는 줄자·각도기를 끈 동안만(32차)
+    this.fitToolbarSelectAll();
   }
 
   /** 진행 중 점과 결과 지우기(도구는 켜 둔다 — 고른 안내도 푼다) */
@@ -2471,6 +2558,9 @@ export class MeasureTool {
     this.undoBtn?.remove();
     this.redoBtn?.remove();
     this.lockMenu?.remove();
+    this.barFit?.disconnect();
+    this.barFit = null;
+    this.barAllBtn?.remove();
     for (const f of this.off.splice(0)) f();
     this.presses.clear();
   }
