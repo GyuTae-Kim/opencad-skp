@@ -13,8 +13,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 const ROOT = resolve(__dirname, '../..');
 const CORE = join(ROOT, 'node_modules/opencad-viewer3d/src');
-/** 첫 화면에서 바로 가져와도 되는 코어 모듈(작고 다른 코어 모듈을 거의 끌어오지 않는다 — inference는 측정 도구 조각과 함께 받는다) */
-const SMALL = new Set(['camera', 'pointer', 'viewcube', 'theme', 'section', 'types', 'math', 'bounds']);
+/**
+ * 첫 화면에서 바로 가져와도 되는 코어 모듈(작고 다른 코어 모듈을 거의 끌어오지 않는다 — inference는 측정 도구 조각과 함께 받는다).
+ * extent는 코어 0.31.0에서 bounds의 itemExtent·itemsExtent를 옮긴 작은 모듈이다(bounds가 같은 이름으로 다시 내보내 그래프에 닿는다 — bounds·math만 가져오고,
+ * 앱은 그 함수를 쓰지 않아 첫 화면 JS는 같다)
+ */
+const SMALL = new Set(['camera', 'pointer', 'viewcube', 'theme', 'section', 'types', 'math', 'bounds', 'extent']);
 /** 문서를 열 때 나눠 받는 앱 모듈(첫 화면 그래프에 없어야 한다 — release.ts는 큰 모형 놓기·문맥 잃음과 되찾음) */
 const SPLIT_APP = ['src/app/measure.ts', 'src/app/snap.ts', 'src/app/release.ts'];
 

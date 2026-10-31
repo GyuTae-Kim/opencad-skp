@@ -522,7 +522,7 @@ npm run preview
 시험은 표본 파일 없이 `tests/build.ts`(본체는 `src/app/skpwrite.ts`)와 `tests/mfcwrite.ts`(2020 이하 꼴)로 만든 작은 바이트로 돌립니다. 표본 파일은 저장소에 넣지 않습니다.
 확인용 표본·임시 파일은 `.runtime/`(git 무시)에만 둡니다.
 `SKP_BIG=1 npx vitest run tests/large.test.ts`는 수십만 면 합성 모형으로 해석 시간을 재고 `.runtime/tmp/`에 파일을 씁니다(확인 뒤 지우세요).
-3D 뷰어 코어는 v0.30.0(단면 보기·묶음 원점·무늬, 터치 끌기 문턱 10화소·터치 고르기 허용 14화소, 0.7.0의 여러 단면·잘린 면 묶음 채우기·숨은 선·단색·해 조명·그림자·안개·하늘 바탕·걷기·마주 보는 그물·뒷면 재질·렌즈 이동, 0.7.1의 삼각형 변 끄기 `triangleEdges`·선분 묶음 뒤 모서리 점선 `hiddenEdges`, 0.8.0의 음영 방식 뒤 모서리 점선·선 색 선택 `edgeColor`·외곽선 색·걷기 중력과 부딪힘, 0.9.0의 교차점 계산 `segmentIntersection`·캔버스 키보드 초점 테두리·큰 배열 나눠 올리기, 0.9.1의 누른 뒤 초점 테두리 감추기, 0.10.0의 작은 `camera` 모듈의 표준 뷰 키 표 `VIEW_KEYS`·잠근 선 위 점 `lockedSnap`, 0.12.0의 모서리 끝 방향 잠금 판정 `edgeLineLock`, 0.13.0의 측정 글 자리 고르기 `placeMeasureLabel`, 0.20.0의 그물 면만 고르기 `pick(x, y, { meshesOnly: true })`, 0.21.0의 잠근 선과 끌어온 축의 교차 `lockTrackSnap`, 0.23.0의 뷰 큐브 자리 `viewCubeRect`, 0.24.0의 먼저 놓인 글상자 비키기 `placeLabelAmong`, 0.25.0의 올린 뒤 놓기 `setScene(…, { release })`와 문맥 잃음·되찾음 알림 `onContextLost`·`onContextRestore`, 0.26.0의 작은 법선·무늬 좌표 배열과 줄이기 도우미 `packNormals`·`packUvs`, 0.28.0의 글상자 자리가 막히면 예전 차례 `placeLabelAmong(…, { first, fallback: 'topRight' })`, 0.29.0의 되찾은 뒤 다시 올리기 끝 알림 `onContextRestoreDone`·`restorePending`, 0.30.0의 처음 올릴 때 무늬 다시 그리기 모으기 — 0.27.0의 새 선택 `setItemPickThrough`·`inference.trackDirs`·`setMeasureLabelSpot`, 0.28.0의 `trackDirs: { edge }`, 0.29.0의 `trackDirs: { meets }`·`inference.parallelEdge`·`setMeasureLabelSpot`의 `fallback`, 0.30.0의 `trackDirs: { meets: { guides } }`·`itemExtent`·`itemsExtent`는 쓰지 않음)으로 받습니다.
+3D 뷰어 코어는 0.35.0(main 병합 커밋 `3a19fe6` — 0.34.0부터는 태그 없이 커밋 전체 SHA로 고정. 단면 보기·묶음 원점·무늬, 터치 끌기 문턱 10화소·터치 고르기 허용 14화소, 0.7.0의 여러 단면·잘린 면 묶음 채우기·숨은 선·단색·해 조명·그림자·안개·하늘 바탕·걷기·마주 보는 그물·뒷면 재질·렌즈 이동, 0.7.1의 삼각형 변 끄기 `triangleEdges`·선분 묶음 뒤 모서리 점선 `hiddenEdges`, 0.8.0의 음영 방식 뒤 모서리 점선·선 색 선택 `edgeColor`·외곽선 색·걷기 중력과 부딪힘, 0.9.0의 교차점 계산 `segmentIntersection`·캔버스 키보드 초점 테두리·큰 배열 나눠 올리기, 0.9.1의 누른 뒤 초점 테두리 감추기, 0.10.0의 작은 `camera` 모듈의 표준 뷰 키 표 `VIEW_KEYS`·잠근 선 위 점 `lockedSnap`, 0.12.0의 모서리 끝 방향 잠금 판정 `edgeLineLock`, 0.13.0의 측정 글 자리 고르기 `placeMeasureLabel`, 0.20.0의 그물 면만 고르기 `pick(x, y, { meshesOnly: true })`, 0.21.0의 잠근 선과 끌어온 축의 교차 `lockTrackSnap`, 0.23.0의 뷰 큐브 자리 `viewCubeRect`, 0.24.0의 먼저 놓인 글상자 비키기 `placeLabelAmong`, 0.25.0의 올린 뒤 놓기 `setScene(…, { release })`와 문맥 잃음·되찾음 알림 `onContextLost`·`onContextRestore`, 0.26.0의 작은 법선·무늬 좌표 배열과 줄이기 도우미 `packNormals`·`packUvs`, 0.28.0의 글상자 자리가 막히면 예전 차례 `placeLabelAmong(…, { first, fallback: 'topRight' })`, 0.29.0의 되찾은 뒤 다시 올리기 끝 알림 `onContextRestoreDone`·`restorePending`, 0.30.0의 처음 올릴 때 무늬 다시 그리기 모으기 — 0.27.0의 새 선택 `setItemPickThrough`·`inference.trackDirs`·`setMeasureLabelSpot`, 0.28.0의 `trackDirs: { edge }`, 0.29.0의 `trackDirs: { meets }`·`inference.parallelEdge`·`setMeasureLabelSpot`의 `fallback`, 0.30.0의 `trackDirs: { meets: { guides } }`·`itemExtent`·`itemsExtent`, 0.31.0~0.35.0의 측정 글 꼴 둘째 인자·`setMeasureLabelAvoid`의 `points`·`snapshotPoints`·`setPointerClaim`·`setItemMatrices`·`setItemLooks`·`refineEnds`·열린 교차 `meets: { open, openFaces }`는 쓰지 않음)으로 받습니다.
 0.9.0부터 코어가 캔버스의 키보드 초점 테두리(`:focus-visible`일 때만 안쪽 2화소)를 그리므로, 앱은 그 색만 강조색으로 둡니다(`--v3d-focus`).
 0.9.1부터는 키보드로 초점을 준 캔버스를 마우스·터치로 누르면 테두리가 사라지고, Tab으로 다시 오면 보입니다(앱의 전역 `:focus-visible` 규칙보다 코어 규칙이 구체적). 줄자·각도기는 코어 측정을 쓰지 않고 앱 추정(`snap.ts`)이 축을 정하므로 0.9.1의 `MeasureResult.axisA`·`axisB`는 쓰지 않습니다.
 0.10.0의 추론 잠금·나란함(`setMeasureSnap({ inference: { lock, parallel } })`, `setMeasureInferenceLock`)도 코어 측정 모드 안의 상태라 쓰지 않고,
@@ -628,6 +628,11 @@ npm run preview
 0.30.0(32차)도 새 선택을 쓰지 않으면 0.29.0과 같고, 바뀐 기본 동작은 처음 올릴 때 무늬를 잇달아 풀어 올리는 동안 한 장마다 다시 그리지 않고 모아 그리는 것 하나입니다.
 코어만 올린 빌드가 31차 빌드와 측정 순서·그림 해시 103값, 잠근 축 361값, 375px 결과 글 109값, 축 둘레 추정 38,120자리, 23~31차 확인(문맥 복구·다른 언어 375px 측정 글 816값·메뉴 201값 포함)까지
 모두 같았고, 큰 모형을 처음 열 때 무늬가 다 보이기까지가 반쯤으로 줄었습니다(아래 "큰 모형의 메모리" 32차).
+0.31.0~0.35.0(35차)도 새 선택을 쓰지 않으면 그림·고르기·측정이 0.30.0과 같고(코어 판마다 화소 비교), 바뀐 기본 동작은 모두 코어 측정의 열린 교차
+(앱이 다듬기를 준 축·잠근 선·안내 선의 활꼴·면 교차)에서만이라 자체 추정(`snap.ts`)을 쓰는 줄자·각도기에는 닿지 않습니다(`snap.ts`가 부르는 코어 `track` 함수는 바뀐 함수를 부르지 않음).
+코어만 올린 빌드가 34차 빌드와 측정 순서·그림 해시 103값, 잠근 축·375px 정밀 조준 361값, 375px 어둡게 결과 글 109값, 축 둘레 추정 38,120자리가 같았고,
+165 MB·82 MB 표본 처음 열기의 그림(넓은 화면·375px 어둡게)이 화소까지 같고 처음 열기 때·메모리(개인 사용량 최고치 — 아래 "큰 모형의 메모리" 35차)는 흔들림 안이었습니다.
+0.31.0이 `bounds`의 `itemExtent`·`itemsExtent`를 작은 모듈 `extent`로 옮겨(`bounds`가 다시 내보냄) `tests/app/core-split.test.ts`의 작은 코어 모듈에 `extent`를 더했습니다.
 결과 글 자리(`labelSpot`)는 0.28.0의 `placeLabelAmong(…, { first: 가운데, fallback: 'topRight' })` 한 번으로 고릅니다(측정 점 표식은 `avoid.soft`).
 29차까지의 앱 계산(가운데가 막혔는지 먼저 보고 `placeMeasureLabel`·`placeLabelAmong`을 골라 부른 뒤 옮긴 자리가 다시 막혔는지 따짐)을 시험에 두고,
 측정 도구가 주는 꼴의 무작위 입력 4,000가지(정밀 조준 원·손가락, 툴팁, 3D 보기 위에 뜬 것, 가장자리 띠, 화면 선분과 측정 점 표식, 먼저 놓인 글상자 0~29개)에서
@@ -658,9 +663,9 @@ npm run preview
 표준 뷰 키 표(`keys.ts`)와 단면 수 한도(`doc.ts`)는 같은 값을 앱에 두어 시험이 코어 표와 견줍니다. 측정 도구를 받기 전에 쓰는 키 규칙(안내 두기 키)은 `measurehints.ts`에 두고,
 도구를 켠 뒤에만 쓰는 잠금·안내 두기 키 안내 글과 잠근 방향 이름은 측정 도구 조각이 줍니다(`lockHintText`·`lockName`).
 `tests/app/core-split.test.ts`가 `src/app/main.ts`에서 정적 가져오기로 닿는 모듈만 따라가 이 규칙을 지킵니다(인라인 `type`만 쓴 가져오기도 `verbatimModuleSyntax`에서는 모듈을 불러오므로 값으로 셉니다).
-2026-10-31 기준(코어 v0.30.0) 첫 화면 JS는 274 KB(gzip 95.2 KB — 측정 도구를 나누기 전에는 313 KB · 107 KB, 코어를 나누기 전에는 467 KB · 158 KB)이고,
-문서를 열 때 받는 코어 조각은 222 KB(gzip 72 KB — v0.10.0은 187 KB · 61 KB), 측정 도구 조각은 77 KB(gzip 25 KB)와
-코어 `inference`·`snap`·`measurelabel`·`track`·`pick`·`section`·`bvh`를 묶은 조각 52 KB(gzip 20 KB), 큰 모형 놓기·문맥 복구 조각은 4.1 KB(gzip 1.9 KB),
+2026-11-01 기준(코어 0.35.0) 첫 화면 JS는 274 KB(gzip 95.2 KB — 측정 도구를 나누기 전에는 313 KB · 107 KB, 코어를 나누기 전에는 467 KB · 158 KB)이고,
+문서를 열 때 받는 코어 조각은 231 KB(gzip 75 KB — v0.10.0은 187 KB · 61 KB), 측정 도구 조각은 77 KB(gzip 25 KB)와
+코어 `inference`·`snap`·`measurelabel`·`track`·`pick`·`section`·`bvh`를 묶은 조각 58 KB(gzip 22 KB), 큰 모형 놓기·문맥 복구 조각은 4.1 KB(gzip 1.9 KB),
 해석 워커 조각은 213 KB(gzip 81 KB), 문맥을 되찾을 때만 받는 무늬 손질 워커는 6.7 KB(gzip 3.1 KB), 큰 모형을 열 때만 받는 지문 워커는 3.5 KB(gzip 1.9 KB)입니다. v0.14.0으로 올리며 첫 화면에 남는 `bounds` 모듈이 조금 커져(gzip 15바이트),
 잠금 안내 글을 측정 도구 조각으로 옮겨 첫 화면은 오히려 0.4 KB(gzip) 줄었습니다. v0.15.0은 첫 화면을 바꾸지 않고 코어 조각(gzip +0.7 KB)과 `inference` 조각(+0.6 KB)만 키웁니다.
 v0.16.0도 첫 화면을 바꾸지 않고, 뷰어 측정 모드에 들어온 끌어온 축으로 코어 조각만 gzip 1.6 KB 커집니다.
@@ -710,12 +715,14 @@ v0.30.0(32차)도 첫 화면을 거의 바꾸지 않고(같은 방법으로 94,7
 해석 워커 조각 +1.1 KB, 손질 워커 +0.4 KB(gzip)만 커집니다.
 모서리·면 읽기 줄이기와 큰 모형의 해석 워커 끝내기(34차)는 첫 화면에 워커 손님의 지문 워커 부르기만 더해 94,864 → 95,072바이트(+208 — 같은 방법),
 해석 워커 조각은 +0.6 KB(gzip)이고, 지문 워커는 새 조각(gzip 1.9 KB — `range.ts`·`sha256.ts`만 묶임)입니다.
+코어 0.35.0(35차 — 0.31.0~0.35.0)은 첫 화면을 바꾸지 않고(같은 방법으로 95,072 → 95,071바이트) 코어 조각 +2.8 KB, 나눠 받는 조각 +1.9 KB(gzip — 코어 `track`의 열린 교차)만 커지고,
+측정 도구·해석 워커·손질 워커·지문 워커 조각은 그대로입니다.
 파일을 통째로 들지 않고 열기(16차)는 첫 화면에서 지문 계산을 빼 gzip 12바이트 줄였고, 해석 워커 조각은 조각 읽기와 SHA-256으로 gzip 3.3 KB 늘었습니다.
 안내 되돌리기·다시 하기·안내 보이기·파일별 안내 기억처럼 측정 도구에 딸린 기능은 단추·메뉴 항목·키 처리·저장까지 측정 도구 조각에 두고
 (`mountUndo`·`guideMenuItems`·`undoKey`·`openFile`·`guidestore.ts`), 첫 화면에는 부르는 줄만 둡니다(파일 내용 지문은 해석 워커가 구해 보냄).
 휴대폰 검사 워크플로는 Lighthouse 전·후 가운데값을 `tools/performance-budget.json`(성능 90 이상, FCP 2.2초·LCP 2.5초·TBT 400 ms 아래, JS 108 KiB 아래 등)과
 견주어(`opencad-site check-performance-budget`) 넘으면 실패합니다. 코어를 다시 첫 화면에 넣으면 JS가 약 57 KiB 늘어 이 단계에 걸리고, 측정 도구는 약 15 KiB 늘립니다.
-의존을 올릴 때는 `npm install "opencad-viewer3d@github:GyuTae-Kim/opencad-viewer3d#<태그>"`로 받아야 잠금 파일의 커밋이 바뀝니다.
+의존을 올릴 때는 `npm install "opencad-viewer3d@github:GyuTae-Kim/opencad-viewer3d#<태그>"`(태그가 없는 판은 `#<main 병합 커밋 전체 SHA>`)로 받아야 잠금 파일의 커밋이 바뀝니다.
 
 **공용 사이트 도구**: 다섯 언어 페이지·검색 정보·사이트맵·내용 수정일·언어별 앱 정보·서비스 워커 빌드, 공용 번역기, 언어 메뉴, 서비스 워커 등록·새 판 알림,
 방문 통계, 휴대폰 성능 비교 명령은 다른 OpenCAD 앱과 함께 쓰는 [opencad-site-kit](https://github.com/GyuTae-Kim/opencad-site-kit)
@@ -929,6 +936,12 @@ npm run sweep -- --dirs "$HOME/Downloads" --min-mb 25 --mem --jobs 1 --out .runt
   워커의 첫 2D 그리기를 해석과 겹치게 미리 데워 보았습니다(해석을 시작할 때 1화소 캔버스에 그리고 PNG로 굳힘). 무늬가 적은 82 MB·38 MB 표본에서 첫 그리기 기다림
   0.4~2.0초는 없어졌지만 해석 끝이 4.1~5.8초 → 5.2~10.9초로 늦어져(그리기 준비를 앞당긴 만큼 해석이 늦어짐 — 헤드리스 소프트웨어 GPU) 넣지 않았습니다.
   남은 큰 몫은 장면 만들기(1.5초)·무늬 손질의 첫 2D 그리기(무늬가 적은 모형에서 큼), 첫 그림 뒤 GPU 기다림(코어 몫)입니다.
+  2026-11-01(35차)에 34차에 부하로 못 잰 해석 워커 단계 때를 load average 5~10에서 다시 재었습니다(34차 빌드 여섯 번 — 헤드리스 넓은 화면, 워커 진행 알림을 받은 때).
+  165 MB 표본은 꾸러미 목록·그림 꺼내기 0.27~0.34초, model.dat 풀며 읽기와 장면 만들기 2.92~3.05초(경계 알림에 따라 1.45~2.02초 + 0.96~1.59초),
+  무늬 그림 손질 1.70~1.95초, 화면으로 넘기기 0.03초(한 번 0.16초)로 워커가 4.9~5.3초에 결과를 보내고, 82 MB 표본은 0.17~0.36초, 2.02~2.24초 + 0.46~0.55초, 0.76~1.08초로 3.5~4.4초입니다.
+  같은 때 코어 0.35.0으로 올린 빌드와 번갈아 잰 처음 열기(165 MB 넓은 화면 세 번, load average 6~12)는 해석 끝 5.1~5.4초 → 5.1~5.5초, 첫 그림 5.5~5.7초 → 5.5~5.8초,
+  나눠 올리기 끝 9.3~11.1초 → 9.4~10.2초, 무늬가 다 보이기까지 11.6~13.9초 → 11.9~13.5초, rss 최고치 1,057~1,070 → 1,051~1,070 MB,
+  렌더러 개인 사용량 최고치 688~770 MB(가운데값 744) → 693~741 MB(710), 82 MB 표본 447~533 MB(464) → 445~465 MB(459)로 흔들림 안이고, 다 연 뒤 GC 한 메모리와 그림은 같습니다.
 
 ## 내력
 
