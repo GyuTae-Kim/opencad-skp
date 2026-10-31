@@ -3924,3 +3924,59 @@ describe('고르기 도구로 안내 모두 고르기·모두 풀기(26차 — S
     expect([s.picks, s.none]).toEqual([1, 1]);
   });
 });
+
+describe('측정 도구: 툴팁을 지금 화면 언어의 글로 재어 놓기(31차 — 번역층이 나중에 바꾸면 한국어 글 크기로 놓였다)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+  // jsdom은 배치를 하지 않아 툴팁 너비를 글자 수 × 7화소로 정한다
+  const sized = (): void => {
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('measure-tip') ? (this.textContent ?? '').length * 7 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('measure-tip') ? 18 : 0;
+    });
+  };
+  const EN: Record<string, string> = { 끝점: 'Endpoint', 중간점: 'Midpoint', 모서리에: 'On edge', '빨강 축에': 'On red axis' };
+  // 앱 번역기처럼 " · "로 이은 조각마다 옮긴다
+  const localize = (t: string): string =>
+    t
+      .split(' · ')
+      .map((p) => EN[p] ?? p)
+      .join(' · ');
+
+  it('localize를 주면 옮긴 글을 넣고 그 너비로 커서 둘레에 놓으며, 툴팁을 번역층에서 뺀다', () => {
+    sized();
+    const r = rig(EDGES(), TOP, DEFAULT_UNITS, { localize });
+    r.tool.setMode('tape');
+    // 모서리 가운데(화면 150, 100) — 한국어 "중간점"(21화소)은 오른쪽에 들어가지만 "Midpoint"(56화소)는 넘쳐 왼쪽으로 넘긴다
+    r.move(151, 101);
+    expect(r.tip()).toBe('Midpoint');
+    const tip = r.q('.measure-tip') as HTMLElement;
+    expect(tip.hasAttribute('data-i18n-skip')).toBe(true);
+    const want = tooltipPosition(151, 101, 56, 18, W, W, false, []);
+    expect([parseFloat(tip.style.left), parseFloat(tip.style.top)]).toEqual([want.left, want.top]);
+    expect(want.left + 56).toBeLessThanOrEqual(W - 2);
+    // 한국어 너비로 놓았다면 오른쪽 자리 그대로라 옮긴 글이 3D 보기 밖으로 나갔다
+    const korean = tooltipPosition(151, 101, 21, 18, W, W, false, []);
+    expect(korean.left).toBe(165);
+    expect(korean.left + 56).toBeGreaterThan(W);
+    // 값이 붙은 글도 조각마다 옮긴다(시작점을 찍은 뒤 모서리 위)
+    r.click(102, 103);
+    r.move(170, 101);
+    expect(r.tip()).toMatch(/ mm$/);
+    expect(r.tip()).not.toMatch(/[가-힣]/);
+  });
+
+  it('localize가 없으면 예전 그대로(한국어 글, 번역층이 옮긴다)', () => {
+    sized();
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    r.move(151, 101);
+    expect(r.tip()).toBe('중간점');
+    const tip = r.q('.measure-tip') as HTMLElement;
+    expect(tip.hasAttribute('data-i18n-skip')).toBe(false);
+    expect(parseFloat(tip.style.left)).toBe(165);
+  });
+});

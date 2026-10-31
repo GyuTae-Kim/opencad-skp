@@ -802,6 +802,8 @@ input[type='checkbox'] {
   position: fixed;
   z-index: 50;
   min-width: 190px;
+  /* 휴대폰 폭에서도 화면 안(다른 언어의 긴 항목은 줄을 바꾼다 — 아래 .menu-item) */
+  max-width: calc(100vw - 16px);
   padding: 4px;
   border: 1px solid var(--border-soft);
   border-radius: 9px;
@@ -815,8 +817,9 @@ input[type='checkbox'] {
   justify-content: space-between;
   gap: 18px;
   width: 100%;
-  height: 32px;
-  padding: 0 10px;
+  /* 한 줄이면 32px, 넘치는 글은 다음 항목에 겹치지 않고 줄을 바꿔 높아진다 */
+  min-height: 32px;
+  padding: 6px 10px;
   border: 0;
   border-radius: 6px;
   background: transparent;
@@ -2534,11 +2537,17 @@ html:lang(zh-CN) { --font: -apple-system, "PingFang SC", "Microsoft YaHei", sans
   display: none;
 }
 
+/* 다른 언어의 긴 이름(독일어 "Parallel zur Kante gesperrt" 등)은 잘리지 않고 두 줄로(한 줄이면 띠 단추와 같은 38px) */
 .mb-lockpick {
   justify-content: flex-start;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  height: auto;
+  min-height: 38px;
+  padding-block: 4px;
+  line-height: 1.25;
+  text-align: start;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .mb-lockswatch {

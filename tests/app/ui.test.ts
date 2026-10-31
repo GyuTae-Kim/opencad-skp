@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { computeFrame, defaultCamera, projectToScreen, type CameraState } from 'opencad-viewer3d/camera';
 import { keyAction } from '../../src/app/keys';
@@ -124,5 +126,24 @@ describe('시트를 열고 닫을 때 확대해 둔 보기 지키기', () => {
     expect(f.pitch).toBe(c.pitch);
     expect(f.target).toEqual([1, 1, 1]);
     expect(cameraForBox(c, { min: [0, 0, 0], max: [2, 2, 2] }, NaN).target).toEqual([1, 1, 1]);
+  });
+});
+
+describe('다른 언어의 긴 글이 휴대폰 폭에서 잘리거나 겹치지 않게(31차 — 스타일 규칙)', () => {
+  const css = readFileSync(resolve(__dirname, '../../src/app/styles.css'), 'utf8');
+  /** 선택자 하나의 첫 규칙 본문 */
+  const rule = (sel: string): string => css.match(new RegExp(`(?:^|\\n)${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`))?.[1] ?? '';
+
+  it('도구 막대 메뉴는 화면 폭 안에 두고, 긴 항목은 다음 항목에 겹치지 않고 줄을 바꿔 높아진다(한 줄이면 32px 그대로)', () => {
+    expect(rule('.menu')).toMatch(/max-width:\s*calc\(100vw - 16px\)/);
+    expect(rule('.menu-item')).toMatch(/min-height:\s*32px/);
+    expect(rule('.menu-item')).not.toMatch(/(^|\s)height:\s*32px/);
+  });
+
+  it('잠글 방향 고르기 단추는 독일어처럼 긴 이름을 자르지 않고 두 줄로(한 줄이면 띠 단추와 같은 38px)', () => {
+    const r = rule('.mb-lockpick');
+    expect(r).toMatch(/white-space:\s*normal/);
+    expect(r).toMatch(/min-height:\s*38px/);
+    expect(r).not.toMatch(/overflow:\s*hidden/);
   });
 });

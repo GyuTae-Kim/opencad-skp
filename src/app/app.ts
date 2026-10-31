@@ -118,6 +118,7 @@ import { fogFor, lightingForShadow, shadowOrDefault, sunForShadow, usesSun } fro
 import { WalkStick } from './joystick';
 import { Vcb, vcbStartKey, type VcbKind } from './vcb';
 import { FlashNote } from './flash';
+import { uiText } from './i18n';
 
 export const APP_TITLE = 'OpenCAD SketchUp 뷰어';
 const TOOLS_URL = 'https://gyutae-kim.github.io/opencad';
@@ -447,7 +448,11 @@ export class SkpViewerApp implements PanelHost {
   // ───────────────────────── 틀 ─────────────────────────
 
   mount(): void {
-    this.root.addEventListener('languagechange', () => { if (this.viewer) this.viewer.setViewCubeSize(this.viewer.viewCubeSize); });
+    // 언어를 바꾸면 뷰 큐브 글을 다시 그리고, 측정 툴팁(측정 도구가 옮겨 넣어 번역층이 건너뜀 — uiText)도 새 언어로 다시 그린다
+    this.root.addEventListener('languagechange', () => {
+      if (this.viewer) this.viewer.setViewCubeSize(this.viewer.viewCubeSize);
+      this.overlay?.invalidate();
+    });
     this.root.innerHTML = '';
     this.root.className = 'app';
     this.applyTheme();
@@ -1382,6 +1387,8 @@ export class SkpViewerApp implements PanelHost {
         this.vcb.setKind(kind);
         this.vcb.setLive(value === null || !d ? '' : kind === 'angle' ? formatAngle(value, d.units) : formatLength(value * mmPerSceneUnit(d.scene.units), d.units));
       },
+      // 툴팁은 지금 화면 언어의 글로 재어 놓는다(번역층이 나중에 바꾸면 한국어 크기로 놓여 휴대폰 폭에서 잘렸다)
+      localize: uiText,
     });
     this.measureTool = tool;
     // 측정 띠의 안내 되돌리기·다시 하기 단추(측정값 칸 줄)
@@ -1523,14 +1530,14 @@ export class SkpViewerApp implements PanelHost {
     return this.measureLog;
   }
 
-  /** 측정 결과 글 복사: 차례(기록 안), 'all'(기록 전부, 한 줄씩), 'current'(지금 결과) */
+  /** 측정 결과 글 복사: 차례(기록 안), 'all'(기록 전부, 한 줄씩), 'current'(지금 결과). 글은 화면에 보이는 기록 줄처럼 지금 화면 언어로(31차) */
   copyMeasure(which: number | 'all' | 'current'): void {
     const d = this.doc;
     if (!d) return;
     const mm = mmPerSceneUnit(d.scene.units);
     const list = which === 'all' ? this.measureLog : which === 'current' ? (d.measure ? [d.measure] : []) : this.measureLog.slice(which, which + 1);
     if (!list.length) return;
-    const text = list.map((m) => measureLine(m, d.units, mm)).join('\n');
+    const text = list.map((m) => uiText(measureLine(m, d.units, mm))).join('\n');
     void copyText(text).then((ok) => this.flashMeasure(ok ? '복사했습니다' : '복사하지 못했습니다'));
   }
 
@@ -1581,7 +1588,8 @@ export class SkpViewerApp implements PanelHost {
     if (!d || el.hidden) return;
     const mm = mmPerSceneUnit(d.scene.units);
     const rows = this.measureLog.map((m, i) => {
-      const b = h('button', { class: 'ml-row', type: 'button', title: '눌러서 이 결과 복사' }, h('span', { 'data-i18n-skip': '' }, measureLine(m, d.units, mm)), h('span', { class: 'ml-copy', html: icon('copy', 14) }));
+      // 기록 줄의 "거리·각도"도 번역층이 옮긴다(30차까지는 번역에서 빼 다른 언어에서도 한국어로 남았다 — 값과 축 이름은 사전 틀이 그대로 끼운다)
+      const b = h('button', { class: 'ml-row', type: 'button', title: '눌러서 이 결과 복사' }, h('span', {}, measureLine(m, d.units, mm)), h('span', { class: 'ml-copy', html: icon('copy', 14) }));
       b.addEventListener('click', () => this.copyMeasure(i));
       return b;
     });
@@ -2996,7 +3004,9 @@ export class SkpViewerApp implements PanelHost {
   private menuBtn: HTMLButtonElement | null = null;
 
   private openMenu(btn: HTMLButtonElement, label: string, items: MenuItem[]): void {
-    const menu = h('div', { class: 'menu', role: 'menu', 'aria-label': label });
+    // 메뉴 너비로 자리를 정하므로 글은 지금 화면 언어로 옮겨 넣고 번역층에서 뺀다(31차 — 번역층이 나중에 바꾸면 한국어 너비로 놓여
+    // 휴대폰에서 다른 언어 메뉴가 화면 오른쪽 끝에 붙어 좁아지고 긴 항목이 두 줄로 접혔다). 메뉴는 열 때마다 새로 만든다
+    const menu = h('div', { class: 'menu', role: 'menu', 'aria-label': uiText(label), 'data-i18n-skip': '' });
     for (const it of items) {
       if (it.sep && menu.firstChild) menu.append(h('div', { class: 'menu-sep', role: 'separator' }));
       const role = it.checked === undefined ? 'menuitem' : it.toggle ? 'menuitemcheckbox' : 'menuitemradio';
@@ -3005,7 +3015,7 @@ export class SkpViewerApp implements PanelHost {
         { class: `menu-item${it.checked ? ' checked' : ''}`, type: 'button', role, disabled: !!it.disabled, 'aria-checked': it.checked === undefined ? null : it.checked ? 'true' : 'false' },
         it.checked !== undefined ? h('span', { class: 'menu-check', html: it.checked ? icon('check', 15) : '' }) : null,
         it.icon ? h('span', { class: 'menu-ico', html: icon(it.icon, 16) }) : null,
-        h('span', { class: 'menu-label' }, it.label),
+        h('span', { class: 'menu-label' }, uiText(it.label)),
         it.kbd ? h('kbd', {}, it.kbd) : null,
       );
       item.addEventListener('click', () => {

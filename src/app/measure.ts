@@ -261,6 +261,11 @@ export interface MeasureToolOptions {
   axisMeets?: boolean;
   /** 잠근 동안 잠근 선이 끌어온 점의 축·모서리·안내선과 만나는 점, 면을 뚫는 점에 붙기(기본 켬, setLockMeets로 바꾼다) */
   lockMeets?: boolean;
+  /**
+   * 툴팁 글을 지금 화면 언어로 옮긴다(31차 — 앱 i18n uiText). 툴팁은 글 크기를 재어 커서 둘레에 놓으므로, 화면 번역층이 넣은 뒤에 바꾸면
+   * 번역 전 한국어 글 크기로 놓여 다른 언어에서 3D 보기 밖으로 잘렸다. 주면 옮긴 글을 넣고 툴팁을 번역층에서 뺀다(data-i18n-skip), 없으면 예전 그대로
+   */
+  localize?: ((text: string) => string) | null;
 }
 
 /**
@@ -1187,6 +1192,8 @@ export class MeasureTool {
     this.tip.className = 'measure-tip';
     this.tip.setAttribute('role', 'status');
     this.tip.style.cssText = 'position:absolute;left:0;top:0;white-space:nowrap;pointer-events:none;display:none;';
+    // 글을 이 도구가 옮겨 넣으면 번역층이 다시 옮기지 않게(옮긴 글을 원문으로 되찾다가 다른 열쇠의 글로 바꾸지 않게)
+    if (opts.localize) this.tip.setAttribute('data-i18n-skip', '');
     const cv = viewer.canvas;
     const on = <E extends Event>(el: EventTarget, type: string, fn: (e: E) => void): void => {
       el.addEventListener(type, fn as EventListener);
@@ -3181,7 +3188,8 @@ export class MeasureTool {
       el.style.display = 'none';
       return;
     }
-    el.textContent = text;
+    // 지금 화면 언어의 글로 재어 놓는다(localize — 번역층이 나중에 바꾸면 한국어 글 크기로 놓인다)
+    el.textContent = this.opts.localize ? this.opts.localize(text) : text;
     el.style.display = 'block';
     this.layer.append(el);
     const pos = tooltipPosition(c.x, c.y, el.offsetWidth || 0, el.offsetHeight || 0, f.width, f.height, c.type === 'aim', covers());

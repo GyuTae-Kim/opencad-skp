@@ -11,12 +11,22 @@ const loaders: Record<string, () => Promise<{default: Record<string,string>}>> =
 };
 async function loadLanguage(language: string): Promise<void> { if (loaders[language]) registerCatalog(language,(await loaders[language]()).default); }
 
+/** 지금 화면 언어(사전을 받은 뒤 installLocalization이 정하고 언어를 바꾸면 따라간다 — 그 전과 닫은 뒤는 한국어) */
+let active = 'ko';
+/**
+ * 앱이 쓰는 한국어 화면 글을 지금 언어로 옮긴다(아래 번역층과 같은 translate). 번역층은 글을 넣은 뒤(다음 마이크로태스크) 바꾸므로,
+ * 글 크기를 재어 자리를 정하는 곳(측정 툴팁·도구 막대 메뉴)은 넣기 전에 이것으로 옮기고 그 요소에 data-i18n-skip을 둔다
+ * (31차 — 번역 전 한국어 크기로 놓여 휴대폰 폭에서 잘렸다). 한국어면 그대로
+ */
+export function uiText(text: string): string { return translate(text, active); }
+
 type RecordValue = { source: string; rendered: string };
 // Scene names come from the model; playback controls beside them are authored UI.
 const SKIP = '[data-static-languages], [translate="no"], [data-i18n-skip], script, style, [contenteditable]:not([contenteditable="false"]), textarea, input, code, pre, canvas, svg, .anno-layer, .pmi-layer, .docname, .doc-name, .code-list, .cmd-input, .file-name, .tree .name, .tree-name, .boot-recent-list button, .plist .name, .def-cell, .scene-tabs .scene-tab, .scene-cap, .group-item:not(.opt) .name';
 export async function installLocalization(root: HTMLElement): Promise<() => void> {
   let language = currentLanguage(location.href);
   await loadLanguage(language);
+  active = language;
   const originalViews = Object.entries(VIEW_LABELS);
   const originalFaces = CUBE_FACES.map(face => face.label);
   function canvasLabels(): void {
@@ -108,6 +118,7 @@ export async function installLocalization(root: HTMLElement): Promise<() => void
       url.pathname = base + (next === 'ko' ? '' : next + '/');
     }
     language = next;
+    active = next;
     control.setLanguage(language);
     history.replaceState(history.state,'',url.pathname+url.search+url.hash);
     metadata(); canvasLabels(); update(presentationRoot);
@@ -136,6 +147,7 @@ export async function installLocalization(root: HTMLElement): Promise<() => void
   if (title) titleObserver.observe(title,{childList:true,subtree:true,characterData:true});
   observer.observe(presentationRoot,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['title','aria-label','aria-description','placeholder','alt','href']});
   return () => {
+    active = 'ko';
     observer.disconnect(); titleObserver.disconnect(); control.dispose();
     for (const [view,label] of originalViews) VIEW_LABELS[view as keyof typeof VIEW_LABELS]=label;
     CUBE_FACES.forEach((face,index) => { face.label=originalFaces[index]!; });
