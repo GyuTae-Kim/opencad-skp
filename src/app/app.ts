@@ -1407,6 +1407,9 @@ export class SkpViewerApp implements PanelHost {
     // 고른 것 카드의 고른 안내 지우기 단추(고르기 도구로 고른 안내 — 선택 해제 ✕ 앞)
     const selActs = this.els.selBar.querySelector<HTMLElement>('.mb-acts');
     if (selActs) tool.mountGuideDelete(selActs);
+    // 손가락 기기의 휴대폰 도구 막대: 패널 단추 앞 빈자리에 안내 모두 고르기(32차 — 자리가 없으면 숨기고 보기 설정 메뉴 항목으로)
+    const gap = this.els.toolbar.querySelector<HTMLElement>(':scope > .spacer');
+    if (gap) tool.mountToolbarSelectAll(gap);
     // 문서를 연 뒤에 받았으면 그 파일의 안내를 되살린다
     if (this.doc) tool.openFile(this.docPrint);
     return tool;

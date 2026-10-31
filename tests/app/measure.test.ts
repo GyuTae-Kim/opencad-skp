@@ -80,6 +80,7 @@ import {
   guidesInBox,
   placedRects,
   selectAllKey,
+  toolbarOneRow,
 } from '../../src/app/measure';
 import type { V3 } from 'opencad-viewer3d/math';
 import { Overlay, frameFor } from '../../src/app/overlay';
@@ -3910,6 +3911,168 @@ describe('고르기 도구로 안내 모두 고르기·모두 풀기(26차 — S
     // 안내를 숨겨 보이는 것이 없으면 항목이 없다
     r.tool.setGuidesShown(false);
     expect(item()).toBeUndefined();
+  });
+
+  it('손가락 기기의 휴대폰 도구 막대(32차): 빈자리에 모두 고르기 단추를 두고, 자리가 없거나(320px·단면 위치 막대) 줄자를 켠 동안은 숨긴다', async () => {
+    // jsdom은 배치를 하지 않아 휴대폰 도구 막대(줄을 바꿔 감싸는 flex, 사이 4px, 높이 32px)를 흉내 낸다: 자식마다 data-w 폭, 빈자리(.spacer)는 최소 4px에서 그 줄의 남은 폭을 채우고,
+    // 숨긴 것과 CSS가 숨긴 것(css가 false면 모두 고르기 단추 — 넓은 도구 막대·마우스 기기)은 크기가 없다
+    let W = 387;
+    let css = true;
+    const bar = document.createElement('div');
+    const kid = (cls: string, w: number): HTMLElement => {
+      const e = document.createElement('div');
+      e.className = cls;
+      e.dataset.w = String(w);
+      return e;
+    };
+    const first = kid('tgroup', 88);
+    const fit = document.createElement('button');
+    fit.className = 'tbtn';
+    fit.dataset.w = '40';
+    first.append(fit);
+    const spacer = kid('spacer', 4);
+    bar.append(first, kid('tgroup', 84), kid('tgroup sec-group', 40), kid('tbtn more-btn', 40), spacer, kid('tgroup', 40));
+    document.body.append(bar);
+    const rectOf = (x: number, y: number, w: number, h: number): DOMRect => ({ x, y, left: x, top: y, width: w, height: h, right: x + w, bottom: y + h, toJSON: () => ({}) }) as DOMRect;
+    const layout = (): Map<Element, DOMRect> => {
+      const rows: { el: Element; x: number; w: number }[][] = [[]];
+      let x = 0;
+      for (const e of [...bar.children] as HTMLElement[]) {
+        if (e.hidden || (e.classList.contains('tb-selall') && !css)) continue;
+        const w = e.classList.contains('tb-selall') ? 40 : Number(e.dataset.w);
+        if (x > 0 && x + w > W) {
+          rows.push([]);
+          x = 0;
+        }
+        rows[rows.length - 1]!.push({ el: e, x, w });
+        x += w + 4;
+      }
+      const out = new Map<Element, DOMRect>();
+      rows.forEach((row, i) => {
+        const used = row.reduce((a, it) => a + it.w, 0) + 4 * (row.length - 1);
+        const k = row.findIndex((it) => it.el === spacer);
+        if (k >= 0) {
+          row[k]!.w += W - used;
+          for (const it of row.slice(k + 1)) it.x += W - used;
+        }
+        for (const it of row) out.set(it.el, rectOf(it.x, i * 36, it.w, 32));
+      });
+      return out;
+    };
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      const r = layout().get(this);
+      if (r) return r;
+      return this === fit ? rectOf(0, 0, 40, 32) : rectOf(0, 0, 0, 0);
+    });
+    vi.spyOn(Element.prototype, 'getClientRects').mockImplementation(function (this: Element) {
+      const r = this.getBoundingClientRect();
+      return (r.width > 0 ? [r] : []) as unknown as DOMRectList;
+    });
+    vi.spyOn(Element.prototype, 'clientWidth', 'get').mockImplementation(function (this: Element) {
+      return this === bar ? W : 0;
+    });
+    const observers: (() => void)[] = [];
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(cb: () => void) {
+          observers.push(cb);
+        }
+        observe(): void {}
+        disconnect(): void {}
+      },
+    );
+    const resize = (): void => {
+      for (const cb of observers) cb();
+    };
+    try {
+      const { r } = await setup();
+      r.tool.mountToolbarSelectAll(spacer);
+      const b = bar.querySelector<HTMLButtonElement>('.tb-selall')!;
+      // 패널 단추 앞 빈자리(75px)에 들어간다 — 이름은 카드·메뉴와 같은 글, 여전히 한 줄
+      expect(b.nextElementSibling).toBe(spacer);
+      expect(b.getAttribute('aria-label')).toBe(GUIDE_SELECT_ALL_LABEL);
+      expect(b.title).toBe(GUIDE_SELECT_ALL_LABEL);
+      expect([b.hidden, b.disabled]).toEqual([false, false]);
+      expect(toolbarOneRow(bar)).toBe(true);
+      expect(layout().get(spacer)!.width).toBe(31);
+      // 누르면 보이는 안내를 모두 고르고, 더 고를 것이 없으면 끈 채로 둔다(모두 풀면 다시 켠다)
+      b.click();
+      expect(r.tool.selectedGuideCount).toBe(5);
+      expect([b.hidden, b.disabled]).toEqual([false, true]);
+      r.tool.selectNone();
+      expect([b.hidden, b.disabled]).toEqual([false, false]);
+      // 줄자를 켠 동안·안내 보이기를 끈 동안은 숨긴다
+      r.tool.setMode('tape');
+      expect(b.hidden).toBe(true);
+      r.tool.setMode(null);
+      expect(b.hidden).toBe(false);
+      r.tool.setGuidesShown(false);
+      expect(b.hidden).toBe(true);
+      r.tool.setGuidesShown(true);
+      expect(b.hidden).toBe(false);
+      // 320px: 빈자리 20px라 넣으면 두 줄이 된다 — 숨기고, 같은 자리에서는 다시 보이지 않는다(보였다 숨겼다 되풀이하지 않게)
+      W = 332;
+      resize();
+      expect(b.hidden).toBe(true);
+      expect(toolbarOneRow(bar)).toBe(true);
+      resize();
+      r.tool.selectNone();
+      expect(b.hidden).toBe(true);
+      // 숨긴 동안 빈자리가 단추 하나와 사이보다 좁으면 보이지 않는다(넣어 보지 않는다)
+      W = 330;
+      r.tool.setGuidesShown(false);
+      r.tool.setGuidesShown(true);
+      expect(b.hidden).toBe(true);
+      expect(layout().get(spacer)!.width).toBe(18);
+      // 다시 넓어지면 보인다
+      W = 387;
+      resize();
+      expect(b.hidden).toBe(false);
+      // 단면 위치 막대(60px)를 열면 넘쳐 숨기고, 닫으면 다시 보인다
+      const range = kid('sec-range', 60);
+      bar.insertBefore(range, b);
+      resize();
+      expect(b.hidden).toBe(true);
+      expect(toolbarOneRow(bar)).toBe(true);
+      range.remove();
+      resize();
+      expect(b.hidden).toBe(false);
+      // CSS가 숨기는 곳(넓은 도구 막대·마우스 기기)에서는 자리를 따지지 않고 그대로 둔다
+      css = false;
+      r.tool.setGuidesShown(false);
+      r.tool.setGuidesShown(true);
+      expect(b.hidden).toBe(false);
+      expect(b.getClientRects().length).toBe(0);
+      W = 200;
+      resize();
+      expect(b.hidden).toBe(false);
+      // 도구를 없애면 단추도 뗀다
+      r.tool.dispose();
+      expect(bar.querySelector('.tb-selall')).toBeNull();
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('toolbarOneRow: 다음 줄로 감싼 자식이 있으면 거짓(높이가 다른 묶음·위로 붙인 단추·크기 없는 자식은 한 줄로 본다)', () => {
+    const bar = document.createElement('div');
+    const rects: [number, number][] = [];
+    const add = (top: number, h: number): void => {
+      const e = document.createElement('span');
+      const i = rects.push([top, h]) - 1;
+      e.getBoundingClientRect = () => ({ x: 0, y: rects[i]![0], left: 0, top: rects[i]![0], width: rects[i]![1] ? 30 : 0, height: rects[i]![1], right: 30, bottom: rects[i]![0] + rects[i]![1], toJSON: () => ({}) }) as DOMRect;
+      bar.append(e);
+    };
+    expect(toolbarOneRow(bar)).toBe(true);
+    add(4, 36);
+    add(6, 32);
+    add(2, 32);
+    add(20, 0);
+    expect(toolbarOneRow(bar)).toBe(true);
+    add(40, 32);
+    expect(toolbarOneRow(bar)).toBe(false);
   });
 
   it('Mac(안내 두기 키 Option): ⌘A로 모두 고르고 Shift+⌘A로 모두 풀며, Ctrl+A·⌘T는 받지 않는다', async () => {

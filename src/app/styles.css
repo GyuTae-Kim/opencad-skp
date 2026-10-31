@@ -1741,6 +1741,17 @@ button.scene-card.sel {
   }
 }
 
+/* 손가락 기기의 휴대폰 도구 막대: 패널 단추 앞 빈자리의 안내 모두 고르기(32차 — 측정 도구가 자리가 있을 때만 보인다, 넓은 도구 막대·마우스 기기는 없음) */
+.toolbar .tb-selall {
+  display: none;
+}
+
+@media (pointer: coarse) and (max-width: 759.98px), (pointer: coarse) and (max-height: 499.98px) {
+  .toolbar .tb-selall {
+    display: inline-flex;
+  }
+}
+
 /* 좁은 휴대폰: "다시 재기"·고른 안내 숨기기는 아이콘만(안내 글 자리를 남긴다 — 이름은 aria-label) */
 @media (max-width: 429.98px) {
   .mb-btn.mb-clear,
