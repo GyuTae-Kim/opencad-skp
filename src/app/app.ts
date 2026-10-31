@@ -55,7 +55,7 @@ import {
 import { DEFAULT_UNITS, formatAngle, formatLength, mmPerSceneUnit } from './units';
 import { Overlay } from './overlay';
 import { cardName, cardRows, entityInfo } from './entity';
-import { h, icon } from './dom';
+import { h, icon, reopenMenu } from './dom';
 import {
   canHideNode,
   createDoc,
@@ -448,10 +448,19 @@ export class SkpViewerApp implements PanelHost {
   // ───────────────────────── 틀 ─────────────────────────
 
   mount(): void {
-    // 언어를 바꾸면 뷰 큐브 글을 다시 그리고, 측정 툴팁(측정 도구가 옮겨 넣어 번역층이 건너뜀 — uiText)도 새 언어로 다시 그린다
+    // 언어를 바꾸면 뷰 큐브 글을 다시 그리고, 측정 툴팁(측정 도구가 옮겨 넣어 번역층이 건너뜀 — uiText)도 새 언어로 다시 그린다.
+    // 열린 도구 막대 메뉴(같은 까닭으로 번역층이 건너뜀)는 그 단추로 다시 열어 새 언어로(32차 — 닫을 때까지 앞 언어였다)
     this.root.addEventListener('languagechange', () => {
       if (this.viewer) this.viewer.setViewCubeSize(this.viewer.viewCubeSize);
       this.overlay?.invalidate();
+      const menu = this.menu;
+      const btn = this.menuBtn;
+      if (menu && btn)
+        reopenMenu(menu, () => {
+          this.closeMenu();
+          btn.click();
+          return this.menu;
+        });
     });
     this.root.innerHTML = '';
     this.root.className = 'app';

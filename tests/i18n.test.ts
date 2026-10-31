@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 const { JSDOM } = createRequire(import.meta.url)('jsdom');
 import { installLocalization, uiText } from '../src/app/i18n';
+import { reopenMenu } from '../src/app/dom';
 import { GUIDE_CLEAR_FILE_LABEL, GUIDE_DELETE_KEY_HINT, GUIDE_DELETE_TEXT, GUIDE_KIND_NAMES, GUIDE_REDO_LABEL, GUIDE_UNDO_LABEL, GUIDES_SHOWN_LABEL, LOCK_HINTS, LOCK_MENU_LABEL, guideKeyHint, lockHint, measureHint, trackHint } from '../src/app/measure';
 import { GUIDE_HIDE_LABEL, GUIDE_HIDE_TEXT, GUIDE_SELECT_ALL_LABEL, GUIDE_SELECT_ALL_TEXT, GUIDE_UNHIDE_LABEL, guideCountText, guideDeleteLabel } from '../src/app/measure';
 import { AXIS_LABELS, FACE_PERPENDICULAR_LABEL, GUIDE_LINE_LABEL, SNAP_LABELS, TRACK_ALIGN_LABEL, TRACK_AXIS_LABELS, TRACK_PAIR_LABELS } from '../src/app/snap';
@@ -274,6 +275,63 @@ describe('language URLs and UI presentation', () => {
     expect(tip.textContent).toBe('Zentrum'); expect(plain.textContent).toBe(translate('중심','ja'));
     dispose(); dispose=undefined;
     expect(uiText('끝점')).toBe('끝점');
+    dom.window.close();
+  });
+  it('reopens an open toolbar menu in the new language on languagechange, keeping the focused item or the outside focus and the scroll (32nd round)', async () => {
+    const dom = new JSDOM('<!doctype html><html><head><title>OpenCAD</title></head><body><div id="app"><header class="titlebar"></header><button id="more">보기 설정</button></div></body></html>', {url:languageUrl(metadataForLanguage('ko').url,'de')});
+    for (const name of ['window','document','Node','Element','HTMLAnchorElement','MutationObserver','location','history','localStorage','CustomEvent']) vi.stubGlobal(name,(dom.window as unknown as Record<string,unknown>)[name]);
+    const root = document.getElementById('app')!;
+    dispose = await installLocalization(root);
+    // 앱 openMenu처럼: 글은 지금 언어로 옮겨 넣고 번역층에서 뺀다(data-i18n-skip), 단추를 누를 때마다 새로 만든다
+    const labels = ['외곽선(윤곽 굵게)', '안개', '걷기(1인칭)'];
+    let menu = null as HTMLElement | null;
+    const open = (): void => {
+      menu = document.createElement('div'); menu.className = 'menu'; menu.setAttribute('data-i18n-skip','');
+      for (const l of labels) { const b = document.createElement('button'); b.className = 'menu-item'; b.textContent = uiText(l); menu.append(b); }
+      document.body.append(menu); (menu.firstElementChild as HTMLElement).focus();
+    };
+    const close = (): void => { menu?.remove(); menu = null; };
+    const more = document.getElementById('more') as HTMLButtonElement;
+    more.addEventListener('click', () => { if (menu) close(); else open(); });
+    let reopened = 0;
+    root.addEventListener('languagechange', () => { const m = menu; if (m) { reopened++; reopenMenu(m, () => { close(); more.click(); return menu; }); } });
+    more.click();
+    const texts = (): string[] => [...menu!.querySelectorAll('.menu-item')].map((e) => e.textContent!);
+    expect(texts()).toEqual(labels.map((l) => translate(l,'de')));
+    // 키보드로 메뉴에서 언어 고르기 단추로 옮겨(Tab — 메뉴는 열린 채) 고르면 새 언어로 다시 열고, 초점은 언어 고르기 단추에 남는다(새 메뉴가 가져가지 않게)
+    const trigger = root.querySelector<HTMLButtonElement>('.language-trigger')!;
+    trigger.focus();
+    const first = menu;
+    (document.querySelector('.language-list [data-language="ja"]') as HTMLButtonElement).click();
+    for (let i=0;i<4;i++) await new Promise(resolve=>setTimeout(resolve,0));
+    expect(reopened).toBe(1);
+    expect(menu).not.toBe(first); expect(first!.isConnected).toBe(false);
+    expect(texts()).toEqual(labels.map((l) => translate(l,'ja')));
+    expect(texts().join('')).not.toMatch(/[가-힣]/);
+    expect(document.activeElement).toBe(trigger);
+    expect(document.querySelectorAll('.menu')).toHaveLength(1);
+    // 굴린 자리는 그대로, 초점이 메뉴 안이었으면 새 메뉴의 처음 초점(앱 openMenu처럼 첫 항목)
+    (menu!.querySelectorAll('.menu-item')[2] as HTMLElement).focus();
+    Object.defineProperty(menu!, 'scrollTop', { value: 40, writable: true });
+    const second = menu!;
+    expect(reopenMenu(second, () => { close(); more.click(); Object.defineProperty(menu!, 'scrollTop', { value: 0, writable: true }); return menu; })).toBe(menu);
+    expect(menu).not.toBe(second);
+    expect(document.activeElement).toBe(menu!.querySelectorAll('.menu-item')[0]);
+    expect(menu!.scrollTop).toBe(40);
+    (document.querySelector('.language-list [data-language="ko"]') as HTMLButtonElement).click();
+    for (let i=0;i<4;i++) await new Promise(resolve=>setTimeout(resolve,0));
+    expect(reopened).toBe(2);
+    expect(texts()).toEqual(labels);
+    // 메뉴가 닫혀 있으면 아무것도 열지 않는다
+    close();
+    (document.querySelector('.language-list [data-language="en"]') as HTMLButtonElement).click();
+    for (let i=0;i<4;i++) await new Promise(resolve=>setTimeout(resolve,0));
+    expect(reopened).toBe(2); expect(document.querySelector('.menu')).toBeNull();
+    // 다시 열지 못하면(단추가 꺼짐 등) null — 앞 메뉴는 닫힌 채
+    open();
+    expect(reopenMenu(menu!, () => { close(); return null; })).toBeNull();
+    expect(document.querySelector('.menu')).toBeNull();
+    dispose(); dispose=undefined;
     dom.window.close();
   });
   it('updates dynamic UI and switches languages without changing document data or listeners', async () => {

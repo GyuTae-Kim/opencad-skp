@@ -89,6 +89,22 @@ const ICONS: Record<string, string> = {
   logo: '<path d="M12 2.8 20.5 7.6v8.8L12 21.2l-8.5-4.8V7.6L12 2.8Z" fill="currentColor" fill-opacity=".18"/><path d="M12 12 20.5 7.6M12 12v9.2M12 12 3.5 7.6"/>',
 };
 
+/**
+ * 열린 메뉴를 다시 연다(32차 — 언어를 바꿀 때): 도구 막대 메뉴는 열 때 글을 지금 언어로 옮겨 넣고 번역층에서 빼므로(31차) 열린 채 언어를 바꾸면
+ * 닫을 때까지 앞 언어였다. 번역층이 그 자리에서 옮기는 다른 열린 창처럼 새 언어로 다시 그린다. reopen은 앞 메뉴를 닫고 새로 열어 그 메뉴를 돌려준다(못 열면 null).
+ * 굴린 자리를 지키고, 초점이 메뉴 밖(언어 고르기 단추 등)이었으면 그 요소로 되돌린다(새 메뉴가 첫 항목으로 가져가지 않게 — 메뉴 안이었으면 새 메뉴의 처음 초점)
+ */
+export function reopenMenu(menu: HTMLElement, reopen: () => HTMLElement | null): HTMLElement | null {
+  const active = document.activeElement as HTMLElement | null;
+  const top = menu.scrollTop;
+  const next = reopen();
+  if (next) {
+    next.scrollTop = top;
+    if (active && !menu.contains(active) && active.isConnected) active.focus();
+  }
+  return next;
+}
+
 /** 아이콘 SVG 글 */
 export function icon(name: string, size = 18): string {
   const body = ICONS[name] ?? '';
