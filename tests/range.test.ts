@@ -311,6 +311,24 @@ describe('sourceSha256: 파일 전체로 구한 SHA-256과 같다', () => {
     expect(hex(await sourceSha256(blobSource(new Blob([big as BlobPart]))))).toBe(ref(big));
   });
 
+  it('다 읽은 덩이는 GC를 기다리지 않고 곧바로 놓는다(41차 — 받은 배열이 떼어져 길이 0), 지문은 같다', async () => {
+    const big = new Uint8Array(randomBytes(9 * 1024 * 1024 + 5));
+    const inner = bytesSource(big);
+    const got: Uint8Array[] = [];
+    const src: SkpSource = {
+      size: inner.size,
+      read: async (a, b) => {
+        const x = await inner.read(a, b);
+        got.push(x);
+        return x;
+      },
+    };
+    expect(hex(await sourceSha256(src))).toBe(ref(big));
+    expect(got.map((x) => x.byteLength)).toEqual([0, 0, 0]);
+    // 파일 바이트(읽어 준 곳의 것)는 그대로
+    expect(big.byteLength).toBe(9 * 1024 * 1024 + 5);
+  });
+
   it('파일이 중간에 짧아지면 실패(잘못된 지문을 내지 않는다)', async () => {
     const b = new Uint8Array(randomBytes(10_000));
     const short: SkpSource = { size: b.length, read: async (a, e) => (a >= 4000 ? new Uint8Array(0) : b.slice(a, Math.min(e, 4000))) };
