@@ -18,7 +18,7 @@ import type { ContextWatch, GraphicsState, RestoreRecord } from './release';
 import { dragStartPx } from 'opencad-viewer3d/pointer';
 import { ParseClient } from './client';
 import { AnnotationLabels, occludedBy } from './annotations';
-import { ExportDialog, type ExportContext } from './exporter';
+import type { ExportDialog, ExportContext } from './exporter';
 import { edgeGeometry } from './faces';
 import { copyText } from './clipboard';
 import { HISTORY_LIMIT, HISTORY_SETTLE_MS, ViewHistory } from './history';
@@ -101,7 +101,19 @@ import { MAX_FILE_BYTES, SKP_ACCEPT, baseName, fmtCount, formatBytes, formatMs, 
 import { AnnotationMarks } from './dimmarks';
 import { VIEW_KEY_OF, VIEW_MENU, isEditableTarget, isViewKey, keyAction } from './keys';
 import type { LaunchRequest } from './launch';
-import { PANEL_WIDTH_DEFAULT, SHEET_DEFAULT, clampPanelWidth, clampSheetFraction, readLayout, storeLayout, type StoredLayout } from './layout';
+import {
+  PANEL_WIDTH_DEFAULT,
+  PANEL_WIDTH_MIN,
+  PANEL_WIDTH_STEPS,
+  SHEET_DEFAULT,
+  SHEET_STEPS,
+  clampPanelWidth,
+  clampSheetFraction,
+  nextSize,
+  readLayout,
+  storeLayout,
+  type StoredLayout,
+} from './layout';
 import { Panel, type PanelHost } from './panel';
 import { RecentStore, canKeepRecent, nameOfRecentId, recentTimeText, type RecentEntry } from './recent';
 import { emptySceneNotice, errorText, sceneHasGeometry } from './protocol';
@@ -112,7 +124,7 @@ import { cameraForBox, keepViewOnHeightChange } from './view';
 import { cssHex, isLightBackground, loadFileBackground, safeStorage, skyBackground, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
 import type { BackgroundOptions, Rgba } from 'opencad-viewer3d';
 import { DEFAULT_EDGE_COLOR, LineContrast, edgeLooks, lineColorOverrides } from './linecontrast';
-import { openShortcutsDialog } from './shortcuts';
+import { focusIfLost, focusSpot, listKeys, refocus } from './kbd';
 import type { Rgb, SkpEdgeColorMode, SkpShadowMeta, SkpStyleMeta } from '../meta';
 import { fogFor, lightingForShadow, shadowOrDefault, sunForShadow, usesSun } from './sun';
 import { WalkStick } from './joystick';
@@ -364,8 +376,10 @@ export class SkpViewerApp implements PanelHost {
   private userMoved = false;
   /** 구간을 숨겨 둔 항목 id(다음에 바뀌면 풀려고)와 지금 숨긴 구간(항목 차례 → 구간) */
   private rangedIds = new Set<string>();
-  /** 그림 저장 창 */
+  /** 그림 저장 창(처음 열 때 조각을 받아 만든다 — 44차, 첫 화면 JS에서 뺐다)·받는 중인지·창을 붙일 3D 보기 자리 */
   private exportDialog: ExportDialog | null = null;
+  private exportLoading = false;
+  private stageEl: HTMLElement | null = null;
   /** 최근 측정(새것이 앞)·측정 띠 알림 */
   private measureLog: MeasureToolResult[] = [];
   private measureNote: FlashNote | null = null;
@@ -590,14 +604,20 @@ export class SkpViewerApp implements PanelHost {
     );
     const start = this.buildStart();
     // 장면 탭(SketchUp 장면 탭처럼 3D 보기 위 한 줄)
-    const sceneTabs = h('div', { class: 'scene-tabs', role: 'tablist', 'aria-label': '장면', hidden: true });
+    // 재생 단추와 탭 줄(role=tablist — 탭만 담는다, renderSceneTabs)을 함께 담는 띠
+    const sceneTabs = h('div', { class: 'scene-tabs', hidden: true });
     // 측정 띠(휴대폰·터치): 안내·결과를 크게 보이고, Esc 대신 지우기·끝내기 단추를 둔다
     const measureText = h('div', { class: 'mb-text', 'aria-live': 'polite' });
     // 좁은 휴대폰(폭 430px 미만)에서는 글을 숨기고 아이콘만(안내 두기 단추 자리 — 이름은 aria-label)
     const measureClear = h('button', { class: 'mb-btn mb-clear', type: 'button', title: '찍은 점과 결과 지우기', 'aria-label': '다시 재기', html: `${icon('back', 16)}<span class="mb-clear-text">다시 재기</span>` });
     measureClear.addEventListener('click', () => this.measureTool?.clear());
     const measureClose = h('button', { class: 'mb-btn icon', type: 'button', title: '측정 끝내기', 'aria-label': '측정 끝내기', html: icon('close', 16) });
-    measureClose.addEventListener('click', () => this.setMeasureMode(null));
+    // 닫으면 숨는 띠 안 초점은 그 도구 단추로(44차 — body로 사라지지 않게)
+    measureClose.addEventListener('click', () => {
+      const b = this.measureModeNow === 'protractor' ? this.els.protractorBtn : this.els.measureBtn;
+      this.setMeasureMode(null);
+      focusIfLost(b, measureBar);
+    });
     // 지금 결과 복사·최근 측정 기록(새것부터 10개, 줄마다 복사)
     const measureCopy = h('button', { class: 'mb-btn icon', type: 'button', title: '지금 결과 글 복사', 'aria-label': '지금 결과 글 복사', html: icon('copy', 16) });
     measureCopy.addEventListener('click', () => this.copyMeasure('current'));
@@ -646,6 +666,7 @@ export class SkpViewerApp implements PanelHost {
     selClose.addEventListener('click', () => {
       this.measureTool?.deselectGuide();
       this.applySelection(null, false);
+      focusIfLost(this.viewer?.canvas, selBar);
     });
     const selBar = h('div', { class: 'measure-bar sel-bar', role: 'status', hidden: true }, selText, h('div', { class: 'mb-acts' }, selPart, selMore, selClose));
     // 카메라 띠: 걷기(1인칭)·시야각·2점 투시(보기 설정 메뉴로 연다, 걸으면 늘 보인다). 휴대폰은 걷는 동안 왼쪽 아래에 조이스틱
@@ -663,7 +684,10 @@ export class SkpViewerApp implements PanelHost {
     const collideBtn = h('button', { class: 'mb-btn', type: 'button', title: '부딪힘: 벽·면을 지나가지 않기', 'aria-pressed': 'true', hidden: true }, '부딪힘');
     collideBtn.addEventListener('click', () => this.setWalkCollide(!this.walkCollide));
     const camClose = h('button', { class: 'mb-btn icon', type: 'button', title: '카메라 띠 닫기(걷기 끝내기)', 'aria-label': '카메라 띠 닫기', html: icon('close', 16) });
-    camClose.addEventListener('click', () => this.closeCamBar());
+    camClose.addEventListener('click', () => {
+      this.closeCamBar();
+      focusIfLost(this.els.moreBtn, camBar);
+    });
     const camBar = h(
       'div',
       { class: 'measure-bar cam-bar', role: 'group', 'aria-label': '카메라', hidden: true },
@@ -700,22 +724,17 @@ export class SkpViewerApp implements PanelHost {
         else this.viewer?.canvas.focus({ preventScroll: true });
       },
     });
-    const stage = h('div', { class: 'stage' }, viewHost, sceneTabs, measureBar, selBar, camBar, this.vcb.el, this.stick.el, start, notice, busy, updateBar);
-    this.exportDialog = new ExportDialog(
-      {
-        docName: () => this.doc?.name ?? 'model',
-        context: () => this.exportContext(),
-        notify: (e) => this.showNotice('error', '그림을 저장하지 못했습니다', errorText(e)),
-        track: () => trackExport('png'),
-      },
-      stage,
-    );
+    // 장면 탭은 3D 보기 위에 놓이므로 Tab 차례도 3D 보기 앞(WCAG 2.4.3 — 44차)
+    const stage = h('div', { class: 'stage' }, sceneTabs, viewHost, measureBar, selBar, camBar, this.vcb.el, this.stick.el, start, notice, busy, updateBar);
+    this.stageEl = stage;
+    // 창 가르개(APG Window Splitter): 값·방향은 applyLayout이 맞춘다. 끌지 않고 누르기·Enter로 크기 단계(WCAG 2.5.7)
     const resizer = h('div', {
       class: 'resizer',
       role: 'separator',
       tabindex: '0',
-      'aria-label': '패널 크기 바꾸기(끌기·화살표 키, 두 번 누르면 처음 크기)',
-      title: '끌어서 패널 크기 바꾸기 · 두 번 누르면 처음 크기',
+      'aria-controls': 'side-panel',
+      'aria-label': '패널 크기 바꾸기(끌기·누르기·화살표 키, 두 번 누르면 처음 크기)',
+      title: '끌거나 눌러서 패널 크기 바꾸기 · 두 번 누르면 처음 크기',
       hidden: true,
     });
     const workspace = h('main', { class: 'workspace' }, stage, resizer, this.panel.el);
@@ -817,9 +836,11 @@ export class SkpViewerApp implements PanelHost {
       e.stopPropagation();
       void this.openSample();
     });
+    // 끌어다 놓는 칸은 마우스로 눌러도 열기(키보드·화면 읽기는 안의 두 단추 — 44차: 칸이 role=button이라 안 단추가 단추 안 단추였고,
+    // 칸의 Enter·Space 받기가 안 단추의 키까지 가로채 "예제 열기"에서 Enter를 누르면 파일 고르기가 열렸다)
     const zone = h(
       'div',
-      { class: 'dropzone', role: 'button', tabindex: '0', 'aria-label': 'SketchUp 파일을 끌어다 놓거나 눌러서 열기' },
+      { class: 'dropzone' },
       h('div', { class: 'dz-icon', html: icon('drop', 34) }),
       h('p', { class: 'dz-main fine-only' }, '.skp 파일을 여기에 끌어다 놓으세요'),
       h('p', { class: 'dz-sub fine-only' }, '창 어디에 놓아도 열립니다'),
@@ -827,12 +848,6 @@ export class SkpViewerApp implements PanelHost {
       h('div', { class: 'dz-actions' }, openBtn, sampleBtn),
     );
     zone.addEventListener('click', () => this.chooseFile());
-    zone.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        this.chooseFile();
-      }
-    });
     return h(
       'div',
       { class: 'start' },
@@ -2035,6 +2050,8 @@ export class SkpViewerApp implements PanelHost {
   private renderSceneTabs(): void {
     const el = this.els.sceneTabs;
     const d = this.doc;
+    // 다시 그려도 키보드 초점은 같은 탭·단추로(44차 — Enter로 장면을 고르면 초점이 body로 사라졌다)
+    const spot = focusSpot(el);
     el.innerHTML = '';
     el.hidden = !d || !d.pages.length;
     if (!d) return;
@@ -2048,18 +2065,31 @@ export class SkpViewerApp implements PanelHost {
       html: icon(this.sliding ? 'stop' : 'play', 16),
     });
     play.addEventListener('click', () => this.toggleSlideshow());
-    el.append(play);
+    // APG Tabs(손으로 고르기): ←→·Home·End는 초점만 옮기고 Enter·Space가 장면을 고른다. 고른 탭(없으면 첫 탭)만 Tab 차례
+    const list = h('div', { class: 'scene-list', role: 'tablist', 'aria-label': '장면' });
+    const cur = d.page !== null && d.page >= 0 && d.page < d.pages.length ? d.page : 0;
     d.pages.forEach((pg, i) => {
       const on = d.page === i;
       const b = h(
         'button',
-        { class: `scene-tab${on ? ' on' : ''}${pg.includeInAnimation === false ? ' no-play' : ''}`, type: 'button', role: 'tab', 'aria-selected': on ? 'true' : 'false', title: [pg.name, pg.description].filter(Boolean).join('\n') },
+        {
+          class: `scene-tab${on ? ' on' : ''}${pg.includeInAnimation === false ? ' no-play' : ''}`,
+          type: 'button',
+          role: 'tab',
+          'data-page': String(i),
+          tabindex: i === cur ? '0' : '-1',
+          'aria-selected': on ? 'true' : 'false',
+          title: [pg.name, pg.description].filter(Boolean).join('\n'),
+        },
         pg.name || `장면 ${i + 1}`,
       );
       b.addEventListener('click', () => this.applyPage(i));
-      el.append(b);
+      list.append(b);
     });
+    list.addEventListener('keydown', (e) => listKeys(e, [...list.children] as HTMLElement[], 'ArrowLeft', 'ArrowRight'));
+    el.append(play, list);
     el.querySelector<HTMLElement>('.scene-tab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    refocus(el, spot);
   }
 
   /** 이전·다음 장면(PageUp·PageDown) */
@@ -2750,6 +2780,8 @@ export class SkpViewerApp implements PanelHost {
     const h0 = this.els.viewHost.clientHeight;
     this.panelOpen = on;
     this.refreshChrome();
+    // 닫으면 패널(또는 가르개) 안 초점은 패널 단추로(44차 — 패널 닫기 단추와 함께 사라졌다)
+    if (!on) focusIfLost(this.els.panelBtn);
     if (this.viewer && this.doc && this.narrowQuery?.matches) this.afterViewHeightChange(h0);
   }
 
@@ -2787,13 +2819,45 @@ export class SkpViewerApp implements PanelHost {
     if (w !== undefined) st.setProperty('--panel-w', `${clampPanelWidth(w, window.innerWidth)}px`);
     else st.removeProperty('--panel-w');
     const f = this.layout.sheet;
-    if (f !== undefined) st.setProperty('--sheet-h', `${(clampSheetFraction(f, this.els?.workspace.clientHeight || window.innerHeight) * 100).toFixed(2)}%`);
+    const wsH = this.els?.workspace.clientHeight || window.innerHeight;
+    if (f !== undefined) st.setProperty('--sheet-h', `${(clampSheetFraction(f, wsH) * 100).toFixed(2)}%`);
     else st.removeProperty('--sheet-h');
+    // 가르개 값(접근성 — 초점 받는 separator는 값이 있어야 한다): 넓은 화면은 패널 폭(px, 세로 가르개), 좁은 화면은 시트 높이(%, 가로)
+    const r = this.els?.resizer;
+    if (!r) return;
+    const vw = window.innerWidth;
+    const [now, min, max, unit] = this.narrow
+      ? [clampSheetFraction(f ?? SHEET_DEFAULT, wsH) * 100, clampSheetFraction(0, wsH) * 100, clampSheetFraction(1, wsH) * 100, '%']
+      : [clampPanelWidth(w ?? PANEL_WIDTH_DEFAULT, vw), PANEL_WIDTH_MIN, clampPanelWidth(1e9, vw), 'px'];
+    r.setAttribute('aria-orientation', this.narrow ? 'horizontal' : 'vertical');
+    r.setAttribute('aria-valuenow', String(Math.round(now)));
+    r.setAttribute('aria-valuemin', String(Math.round(min)));
+    r.setAttribute('aria-valuemax', String(Math.round(max)));
+    r.setAttribute('aria-valuetext', `${Math.round(now)}${unit}`);
+  }
+
+  /** 가르개를 눌러(끌지 않고)·Enter로: 다음 크기 단계(가장 크면 가장 작은 단계로). Home·End는 가장 작게·크게 */
+  private stepPanelSize(to?: 'min' | 'max'): void {
+    const h0 = this.els.viewHost.clientHeight;
+    const wsH = this.els.workspace.clientHeight || window.innerHeight;
+    const vw = window.innerWidth;
+    if (this.narrow) {
+      const steps = [...new Set(SHEET_STEPS.map((s) => clampSheetFraction(s, wsH)))];
+      const cur = clampSheetFraction(this.layout.sheet ?? SHEET_DEFAULT, wsH);
+      this.layout.sheet = to ? clampSheetFraction(to === 'min' ? 0 : 1, wsH) : nextSize(cur, steps, 0.01);
+    } else {
+      const steps = [...new Set(PANEL_WIDTH_STEPS.map((s) => clampPanelWidth(s, vw)))];
+      const cur = clampPanelWidth(this.layout.panelWidth ?? PANEL_WIDTH_DEFAULT, vw);
+      this.layout.panelWidth = to ? clampPanelWidth(to === 'min' ? 0 : 1e9, vw) : nextSize(cur, steps, 1);
+    }
+    this.applyLayout();
+    storeLayout(this.layout);
+    if (this.narrow && this.doc) this.afterViewHeightChange(h0);
   }
 
   private bindResizer(): void {
     const el = this.els.resizer;
-    let drag: { id: number } | null = null;
+    let drag: { id: number; x: number; y: number } | null = null;
     const moveTo = (clientX: number, clientY: number): void => {
       const ws = this.els.workspace.getBoundingClientRect();
       if (this.narrow) {
@@ -2809,10 +2873,13 @@ export class SkpViewerApp implements PanelHost {
         this.applyLayout();
       }
     };
+    // 4px 넘게 움직여야 끌기(그보다 적으면 누르기 — 크기 단계)
+    let moved = false;
     el.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
       e.preventDefault();
-      drag = { id: e.pointerId };
+      drag = { id: e.pointerId, x: e.clientX, y: e.clientY };
+      moved = false;
       try {
         el.setPointerCapture(e.pointerId);
       } catch {
@@ -2821,7 +2888,13 @@ export class SkpViewerApp implements PanelHost {
       el.classList.add('dragging');
     });
     el.addEventListener('pointermove', (e) => {
-      if (drag && e.pointerId === drag.id) moveTo(e.clientX, e.clientY);
+      if (!drag || e.pointerId !== drag.id || (!moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 4)) return;
+      moved = true;
+      moveTo(e.clientX, e.clientY);
+    });
+    // 끌지 않고 한 번 누르기: 다음 크기 단계(두 번 누르기의 둘째는 처음 크기 — dblclick)
+    el.addEventListener('click', (e) => {
+      if (!moved && e.detail < 2) this.stepPanelSize();
     });
     const end = (e: PointerEvent): void => {
       if (!drag || e.pointerId !== drag.id) return;
@@ -2852,6 +2925,10 @@ export class SkpViewerApp implements PanelHost {
         const cur = this.layout.panelWidth ?? PANEL_WIDTH_DEFAULT;
         moveTo(ws.right - (cur + (e.key === 'ArrowLeft' ? step : -step)), 0);
         storeLayout(this.layout);
+      } else if (e.key === 'Enter' || e.key === ' ' || e.key === 'Home' || e.key === 'End') {
+        // 누르기와 같은 크기 단계(Enter·Space), 가장 작게(Home)·크게(End)
+        e.preventDefault();
+        this.stepPanelSize(e.key === 'Home' ? 'min' : e.key === 'End' ? 'max' : undefined);
       }
     });
   }
@@ -2860,11 +2937,21 @@ export class SkpViewerApp implements PanelHost {
   savePng(): void {
     if (!this.viewer || !this.doc) return;
     const x = this.exportDialog;
-    if (!x) return;
-    if (x.isOpen) x.close();
-    else {
+    if (x?.isOpen) x.close();
+    else if (x) {
       this.closeMenu();
       x.open();
+    } else if (!this.exportLoading && this.stageEl) {
+      // 처음: 그림 저장 조각을 받아 창을 만든다(오프라인 앱은 서비스 워커가 미리 담아 둔다)
+      const notify = (e: unknown): void => this.showNotice('error', '그림을 저장하지 못했습니다', errorText(e));
+      const stage = this.stageEl;
+      this.exportLoading = true;
+      void import('./exporter')
+        .then((m) => {
+          this.exportDialog ??= new m.ExportDialog({ docName: () => this.doc?.name ?? 'model', context: () => this.exportContext(), notify, track: () => trackExport('png') }, stage);
+          if (this.viewer && this.doc) this.savePng();
+        }, notify)
+        .finally(() => (this.exportLoading = false));
     }
   }
 
@@ -2958,7 +3045,16 @@ export class SkpViewerApp implements PanelHost {
       { label: '안개', checked: this.fogOn, toggle: true, run: () => this.setFogOn(!this.fogOn) },
       { label: '걷기(1인칭)', icon: 'walk', checked: this.walking, toggle: true, sep: true, run: () => this.setWalk(!this.walking) },
       { label: '2점 투시', checked: this.twoPointOn, toggle: true, run: () => this.setTwoPoint(!this.twoPointOn) },
-      { label: '시야각·카메라 띠…', icon: 'camera', run: () => this.openCamBar() },
+      {
+        label: '시야각·카메라 띠…',
+        icon: 'camera',
+        run: () => {
+          // 연 띠로 초점을 옮긴다(키보드로 연 사람이 띠를 찾아가지 않아도 — 평행 투영이면 시야각이 꺼져 있어 걷기 단추로)
+          this.openCamBar();
+          const f = this.els.fovRange;
+          (f.disabled ? this.els.walkBtn : f).focus({ preventScroll: true });
+        },
+      },
       ...(document.fullscreenEnabled ? [{ label: '전체 화면', icon: 'expand', checked: this.fullscreenOn, toggle: true, sep: true, run: () => this.toggleFullscreen() }] : []),
       ...(phone ? [{ label: '그림 저장…', icon: 'image', sep: !document.fullscreenEnabled, run: () => this.savePng() }] : []),
     ]);
@@ -2988,10 +3084,22 @@ export class SkpViewerApp implements PanelHost {
   /** 키보드 바로 가기 안내(닫으면 연 곳에 초점) */
   private shortcutsClose: (() => void) | null = null;
 
+  /** 바로 가기 안내 조각을 받는 중(두 번 열지 않게) */
+  private shortcutsLoading = false;
+
   openShortcuts(): void {
-    if (this.shortcutsClose) return;
+    if (this.shortcutsClose || this.shortcutsLoading) return;
+    const b = this.menuBtn;
     this.closeMenu();
-    this.shortcutsClose = openShortcutsDialog(document.body, () => (this.shortcutsClose = null));
+    focusIfLost(b);
+    // 안내 글은 열 때 받는다(44차 — 첫 화면 JS에서 빼서 키보드 이동 코드 자리를 만든다. 오프라인 앱은 서비스 워커가 미리 담아 둔다)
+    this.shortcutsLoading = true;
+    void import('./shortcuts')
+      .then((m) => {
+        if (!this.shortcutsClose) this.shortcutsClose = m.openShortcutsDialog(document.body, () => (this.shortcutsClose = null));
+      })
+      .catch((e: unknown) => console.error('바로 가기 안내를 받지 못했습니다', e))
+      .finally(() => (this.shortcutsLoading = false));
   }
 
   /** 전체 화면(Fullscreen API — 앱 전체를, 지원하지 않는 브라우저는 메뉴에 없다) */
@@ -3013,26 +3121,31 @@ export class SkpViewerApp implements PanelHost {
     for (const it of items) {
       if (it.sep && menu.firstChild) menu.append(h('div', { class: 'menu-sep', role: 'separator' }));
       const role = it.checked === undefined ? 'menuitem' : it.toggle ? 'menuitemcheckbox' : 'menuitemradio';
+      // 항목은 Tab 차례에서 빼고 화살표로 오간다(APG Menu Button)
       const item = h(
         'button',
-        { class: `menu-item${it.checked ? ' checked' : ''}`, type: 'button', role, disabled: !!it.disabled, 'aria-checked': it.checked === undefined ? null : it.checked ? 'true' : 'false' },
+        { class: `menu-item${it.checked ? ' checked' : ''}`, type: 'button', role, tabindex: '-1', disabled: !!it.disabled, 'aria-checked': it.checked === undefined ? null : it.checked ? 'true' : 'false' },
         it.checked !== undefined ? h('span', { class: 'menu-check', html: it.checked ? icon('check', 15) : '' }) : null,
         it.icon ? h('span', { class: 'menu-ico', html: icon(it.icon, 16) }) : null,
         h('span', { class: 'menu-label' }, uiText(it.label)),
         it.kbd ? h('kbd', {}, it.kbd) : null,
       );
       item.addEventListener('click', () => {
+        // 고른 뒤 초점은 메뉴 단추로(지운 항목과 함께 body로 사라지지 않게 — 여는 창·띠는 그 단추를 연 곳으로 기억한다)
+        const b = this.menuBtn;
         this.closeMenu();
+        focusIfLost(b);
         it.run();
       });
       menu.append(item);
     }
     menu.addEventListener('keydown', (e) => {
-      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
-      e.preventDefault();
-      const list = [...menu.querySelectorAll<HTMLElement>('.menu-item:not(:disabled)')];
-      const i = list.indexOf(document.activeElement as HTMLElement);
-      list[(i + (e.key === 'ArrowDown' ? 1 : list.length - 1)) % list.length]?.focus();
+      // Tab·Shift+Tab: 메뉴를 닫고 단추 다음·앞으로(기본 동작은 그대로 — 단추에서 옮긴다)
+      if (e.key === 'Tab') {
+        const b = this.menuBtn;
+        this.closeMenu();
+        b?.focus();
+      } else listKeys(e, [...menu.querySelectorAll<HTMLElement>('.menu-item')], 'ArrowUp', 'ArrowDown', true, 0);
     });
     document.body.append(menu);
     const r = btn.getBoundingClientRect();
@@ -3306,6 +3419,8 @@ export class SkpViewerApp implements PanelHost {
   private refreshChrome(): void {
     const e = this.els;
     const d = this.doc;
+    // 처음 화면 단추(예제 열기 등)로 열었으면 숨는 처음 화면 대신 3D 보기로 초점을 옮긴다(44차 — body로 사라지지 않게)
+    if (d && e.start.contains(document.activeElement)) focusIfLost(this.viewer?.canvas, e.start);
     e.start.hidden = !!d;
     e.docName.textContent = d ? d.name : '';
     e.docName.title = d ? `${d.name} (${docLabel(d.info)})` : '';

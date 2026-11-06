@@ -2900,3 +2900,31 @@ html:lang(zh-CN) { --font: -apple-system, "PingFang SC", "Microsoft YaHei", sans
     }
   }
 }
+
+/*
+ * ---------------------------------------------------------------- 키보드로 쓰기(44차)
+ * 장면 탭 줄(role=tablist)은 탭만 담고 재생 단추와 나란히 띠 안에 든다(띠가 가로로 굴린다 — 간격은 띠 그대로)
+ */
+.scene-list {
+  display: flex;
+  flex: none;
+  gap: inherit;
+}
+
+/* 정의별 개수 줄의 이름 단추(키보드·화면 읽기용 — 보이는 모양은 예전 글 그대로) */
+button.def-cell {
+  width: 100%;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+/* 메뉴 항목의 키보드 초점: 배경만 바뀌면 마우스 올림과 같고 메뉴 바탕과 대비가 1.2:1이라 안쪽 테두리를 더한다(WCAG 2.4.7 — 언어 목록처럼) */
+.menu-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
