@@ -226,8 +226,8 @@ const MEND_BACK = 96;
 const MEND_AHEAD = 6;
 const MEND_LOOKAHEAD = 4;
 const MEND_GAIN = 64;
-/** 시험으로 다시 읽을 바이트 한도 = 파일 크기 × 이 값 */
-const MEND_BUDGET = 64;
+/** 시험으로 다시 읽을 바이트 한도 = 파일 크기 × 이 값(실제 파일 하나는 10.4 MB에 1 MB를 다시 읽었다 — 정의 목록 항목은 정의 전체를 다시 읽으므로 넉넉히) */
+const MEND_BUDGET = 8;
 /** 메워 볼 낱자: U+2028, U+2029(지워진 줄·문단 나눔), U+000D(CRLF의 CR — 짝수 자리 LF 앞에만) */
 const MEND_UNITS = [0x2028, 0x2029] as const;
 /** 이미 고쳐 보다 못한 멈춤(바깥 목록이 같은 자리를 다시 시험하지 않게) */
