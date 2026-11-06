@@ -647,9 +647,11 @@ export class SkpViewerApp implements PanelHost {
     });
     const measureLogEl = h('div', { class: 'measure-log', hidden: true });
     const measureFlash = h('div', { class: 'measure-flash', role: 'status', hidden: true });
+    // 띠는 이름 붙은 묶음이고 알림 영역은 안의 결과 글(mb-text) 하나와 잠깐 알림(measure-flash)뿐이다(45차 — 띠가 role=status였을 때는
+    // 결과 글의 aria-live가 그 안에 겹쳐 두 번 읽힐 수 있었고, 휴대폰에서 띠 안으로 옮긴 VCB 알림도 겹쳤다. WAI-ARIA 1.2 status는 암묵 polite·atomic)
     const measureBar = h(
       'div',
-      { class: 'measure-bar', role: 'status', hidden: true },
+      { class: 'measure-bar', role: 'group', 'aria-label': '측정', hidden: true },
       measureText,
       h('div', { class: 'mb-acts' }, measureGuide, measureLock, measureCopy, measureLogBtn, measureClear, measureClose),
       measureLogEl,

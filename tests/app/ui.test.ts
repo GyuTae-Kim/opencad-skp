@@ -215,3 +215,29 @@ describe('휴대폰 점검(43차 — 스타일 규칙)', () => {
     expect(part).toMatch(/@media \(max-width: 359\.98px\) \{\s*\.brand-text \{\s*display: none;/);
   });
 });
+
+describe('측정 띠 알림 영역(45차 — 앱 원본 규칙)', () => {
+  const src = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
+  /** `const <이름> = h(` 호출 하나의 원본(괄호 짝까지) */
+  const call = (name: string): string => {
+    const at = src.indexOf(`const ${name} = h(`);
+    expect(at).toBeGreaterThan(0);
+    let depth = 0;
+    for (let i = src.indexOf('(', at); i < src.length; i++) {
+      if (src[i] === '(') depth++;
+      else if (src[i] === ')' && --depth === 0) return src.slice(at, i + 1);
+    }
+    return '';
+  };
+
+  it('띠는 이름 붙은 묶음이고 알림 영역이 아니다(안의 결과 글·잠깐 알림·VCB 알림이 겹치지 않게)', () => {
+    const bar = call('measureBar');
+    expect(bar).toContain(`role: 'group', 'aria-label': '측정'`);
+    expect(bar).not.toMatch(/role: '(status|alert|log)'|'aria-live'/);
+  });
+
+  it('결과 글은 알림 영역 하나(polite), 잠깐 알림은 따로 status', () => {
+    expect(call('measureText')).toContain(`'aria-live': 'polite'`);
+    expect(call('measureFlash')).toContain(`role: 'status'`);
+  });
+});
