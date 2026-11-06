@@ -19,7 +19,7 @@ import { parseMaterialXml, type SkpMaterialInfo } from './materials';
 import type { SkpMetaExtras } from './meta';
 import { MfcRefused, readMfcModel, rememberMfcImages, takeMfcResult } from './mfcmodel';
 import { readModelDat, type SkpModel } from './model';
-import { inflateNative, STREAM_MIN_BYTES, streamModelDat, type InflateInput } from './modelstream';
+import { inflateNative, STREAM_MIN_BYTES, streamModelDat, type InflateInput, type InflatePump } from './modelstream';
 import { buildSceneParts, type SceneTexture } from './scene';
 import { axesMeta, cameraMeta, edgeColoringFor, locationMeta, pagesMeta, shadowMeta, styleFor, unitsFor } from './scene-meta';
 import { parseStyleXml } from './styles';
@@ -215,6 +215,11 @@ export interface SkpAsyncOptions extends SkpOptions {
   streamMin?: number;
   /** model.dat를 어떻게 읽었는지 알린다(진단·훑기 도구용) */
   onModelRead?: (how: SkpModelRead) => void;
+  /**
+   * 풀면서 읽을 때 풀기를 맡길 곳(49차 — 앱 해석 워커는 풀기 워커에 맡겨 풀기와 객체 읽기를 겹친다: src/inflatepipe.ts).
+   * 없으면 같은 스레드에서 푼다. 받는 바이트·차례가 같아 장면도 같다
+   */
+  inflate?: InflatePump;
 }
 
 /** SKP 바이트 → 장면. 읽지 못하는 판·깨진 파일은 경고와 함께 빈(또는 일부) 장면 */
@@ -643,7 +648,7 @@ async function streamPackageModel(
   src: ModelBytes,
   pkg: OpenPackage,
   st: Start,
-  opts: Pick<SkpAsyncOptions, 'inflated' | 'streamMin' | 'onModelRead'>,
+  opts: Pick<SkpAsyncOptions, 'inflated' | 'streamMin' | 'onModelRead' | 'inflate'>,
 ): Promise<Package | Scene3d> {
   const told = (how: SkpModelRead): void => {
     try {
@@ -680,7 +685,7 @@ async function streamPackageModel(
   progress(0.4, '모형 요소 읽는 중');
   let res: Awaited<ReturnType<typeof streamModelDat>>;
   try {
-    res = await streamModelDat(data, item.size, { textured: pkg.texImages.keys() }, (f) => progress(0.4 + 0.24 * f, '모형 요소 읽는 중'));
+    res = await streamModelDat(data, item.size, { textured: pkg.texImages.keys() }, (f) => progress(0.4 + 0.24 * f, '모형 요소 읽는 중'), opts.inflate);
   } catch (e) {
     return emptyScene(name, [...warnings, `SketchUp 파일을 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`], meta);
   }

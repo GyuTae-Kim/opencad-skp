@@ -22,6 +22,8 @@ import { packBigScene } from './pack';
 import { filePrint } from './print';
 import { splitLongAttrs } from './attrlong';
 import { progressFor } from './progress';
+import { pipeInflate } from '../inflatepipe';
+import { pumpInflate } from '../modelstream';
 import type { SkpAttrDictsMeta } from '../meta';
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
@@ -30,18 +32,30 @@ function post(msg: ParseResponse, transfer: Transferable[] = []): void {
   ctx.postMessage(msg, transfer);
 }
 
+/** 풀기 워커(49차 — inflate.worker.ts). 워커 안에서 워커를 띄울 수 없는 곳이면 null(같은 스레드에서 푼다) */
+function inflateWorker(): Worker | null {
+  if (typeof Worker !== 'function') return null;
+  try {
+    return new Worker(new URL('./inflate.worker.ts', import.meta.url), { type: 'module', name: 'opencad-skp-inflate' });
+  } catch {
+    return null;
+  }
+}
 
 /**
  * 파일 → 장면과 그림. 그림을 먼저 꺼내고(개수·한 장·전체 크기 한도는 readSkpImages 기본값 — 없어도 된다. 2020 이하는 여기서 모형을 다 읽고 해석기가 이어 쓴다)
  * 그 무늬 그림으로 장면을 만든다. 큰 2021+ 모형의 model.dat(압축 1 MiB 이상)는 파일에서 덩이씩 읽어 브라우저 내장 풀기로
- * 조각조각 풀면서 읽는다(직접 푸는 것보다 몇 배 빠르고, 파일 바이트도 풀린 model.dat 전체도 들지 않는다 — 안 되면 해석기가 직접 푼다)
+ * 조각조각 풀면서 읽는다(직접 푸는 것보다 몇 배 빠르고, 파일 바이트도 풀린 model.dat 전체도 들지 않는다 — 안 되면 해석기가 직접 푼다).
+ * 49차: 풀기는 풀기 워커가 맡아 이 워커의 객체 읽기와 겹친다(src/inflatepipe.ts — 풀면서 읽을 때만 띄우고 다 쓰면 끈다.
+ * 그림·재질을 읽는 동안 미리 띄워 두는 것과 처음 열기 때가 같았다)
  */
 function readScene(file: Blob, rawName: string, progress: (fraction: number, stage: string) => void): Promise<SkpFileResult> {
   const name = rawName.replace(/^.*[\\/]/, '');
   const streamMin = STREAM_MIN_BYTES;
   progress(0.01, '그림 꺼내는 중');
+  const inflate = pipeInflate(inflateWorker, pumpInflate);
   // 훑기 도구(scripts/sweep/probe.ts)가 같은 선택을 쓰는지 시험이 이 줄을 견준다(tests/sweep.test.ts)
-  return skpFileToScene(file, { name, outline: true, extras: true, smooth: true, onProgress: progress, streamMin, images: { onProgress: (f) => progress(0.02 + 0.6 * f, '모형 요소 읽는 중') } });
+  return skpFileToScene(file, { name, outline: true, extras: true, smooth: true, onProgress: progress, streamMin, images: { onProgress: (f) => progress(0.02 + 0.6 * f, '모형 요소 읽는 중') }, inflate });
 }
 
 async function open(req: ParseRequest): Promise<ParseResult> {
