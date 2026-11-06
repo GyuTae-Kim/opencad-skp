@@ -391,17 +391,19 @@ describe('정의·인스턴스·곡선', () => {
     const N = 6;
     const vertices = Array.from({ length: N }, (_, i): [number, number, number] => [2 * Math.cos((i * 2 * Math.PI) / N), 2 * Math.sin((i * 2 * Math.PI) / N), 0]);
     const ring = Array.from({ length: N }, (_, i) => ({ a: i, b: (i + 1) % N, curve: 0 }));
-    const r = read({
-      schemas: 'v3',
+    const spec = (v: 'v3' | 'v4', guides = true): MfcSpec => ({
+      schemas: v,
       definitions: [{ name: '판', entities: squareEntities(), thumbnail: tiny }],
       root: {
         vertices: [...vertices, [0, 0, 5], [5, 0, 5]],
         edges: [ring[3]!, ring[0]!, ring[5]!, ring[1]!, ring[4]!, ring[2]!, { a: 0, b: 3, curve: 1 }, { a: N, b: N + 1, curve: 2 }],
         curves: [{ arc: { center: [0, 0, 0], normal: [0, 0, 1], xaxis: [2, 0, 0], start: (2 * Math.PI) / N, end: 2 * Math.PI } }, { polygon: true }, {}],
-        guides: [{ kind: 'line', point: [1, 2, 3], dir: [0, 0, 1], range: [0, 5] }, { kind: 'point', point: [4, 5, 6] }],
+        guides: guides ? [{ kind: 'line', point: [1, 2, 3], dir: [0, 0, 1], range: [0, 5] }, { kind: 'point', point: [4, 5, 6] }] : [],
         instances: [{ def: 0, xform: ID13 }],
       },
+      pages: [{ name: '숨김', flags: 0x10, hidden: [{ kind: 'edge', index: 5 }] }],
     });
+    const r = read(spec('v3'));
     const m = r.model;
     expect(m.warnings).toEqual([]);
     expect(m.root.edges.length).toBe(8);
@@ -409,6 +411,16 @@ describe('정의·인스턴스·곡선', () => {
     expect([circle!.kind, circle!.radius, circle!.edges.length]).toEqual(['circle', 2, 6]);
     // 잇는 차례는 다른 판과 같다(시작각 60° 정점에서 반시계)
     const k = (v: number): number => (Math.round((Math.atan2(m.root.points[3 * v + 1]!, m.root.points[3 * v]!) * 3) / Math.PI) + 6) % 6;
+    // 곡선 안에서 먼저 읽은 끝 모서리(ring[2])도 요소 목록 차례(다섯째)로 되돌린다 — C API와 같은 모서리 차례, 장면 선도 4판과 같다
+    const ends = (e: number): number[] => [k(edgeAt(m.root.edges, e).a), k(edgeAt(m.root.edges, e).b)].sort((x, y) => x - y);
+    expect([ends(0), ends(1), ends(5)]).toEqual([
+      [3, 4],
+      [0, 1],
+      [2, 3],
+    ]);
+    // 장면이 숨긴 모서리 참조도 다시 매긴 차례를 따른다
+    expect(m.pages![0]!.hiddenIds).toEqual([edgeAt(m.root.edges, 5).pid]);
+    expect(skpToScene(mfcFile(spec('v3', false))).lines).toEqual(skpToScene(mfcFile(spec('v4', false))).lines);
     expect(circle!.edges.map((e) => [k(edgeAt(m.root.edges, e).a), k(edgeAt(m.root.edges, e).b)].sort((x, y) => x - y))).toEqual([
       [1, 2],
       [2, 3],

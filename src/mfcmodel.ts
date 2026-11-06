@@ -173,6 +173,8 @@ class Decoder {
   private folderParent = -1;
   private folderKeep = true;
   private loop: LoopRec | null = null;
+  /** SketchUp 3: 요소 묶음마다 요소 목록의 모서리 차례(reorderEdges) */
+  private readonly edgeOrders = new Map<Collection, number[]>();
   activeLayer: number | undefined;
   damaged = false;
 
@@ -344,7 +346,47 @@ class Decoder {
     const defs = s.count(MAX_DEFINITIONS, '정의');
     for (let i = 0; i < defs; i++) s.readObject(C.DEFINITION);
     const ents = s.count(50_000_000, '요소');
-    for (let i = 0; i < ents; i++) s.readObject();
+    // SketchUp 3(CCurve 3)은 곡선의 끝 모서리를 곡선 안에서 먼저 읽는다 — 요소 목록의 모서리 차례를 적어 두고 다 읽은 뒤 그 차례로 되돌린다(C API와 같은 차례)
+    const c = st.top;
+    const order: number[] | null = (st.schemas.get('CCurve') ?? 4) < 4 ? [] : null;
+    for (let i = 0; i < ents; i++) {
+      const v = s.readObject();
+      if (order && s.lastClass === 'CEdge' && typeof v === 'number' && cidOf(v) === c.cid) order.push(indexOf(v));
+    }
+    if (order) this.edgeOrders.set(c, order);
+  }
+
+  /**
+   * SketchUp 3: 요소 묶음마다 모서리를 요소 목록 차례로 다시 매긴다(곡선 안에서 먼저 읽은 끝 모서리를 제자리로).
+   * 면의 고리 모서리와 장면이 숨긴 모서리 참조도 함께 옮긴다. 목록에 없는 모서리는 읽은 차례로 뒤에 둔다
+   */
+  reorderEdges(): void {
+    const maps = new Map<number, Int32Array>();
+    for (const [c, order] of this.edgeOrders) {
+      const n = c.edges.length;
+      const seen = new Uint8Array(n);
+      const perm: number[] = [];
+      for (const i of order)
+        if (i < n && !seen[i]) {
+          seen[i] = 1;
+          perm.push(i);
+        }
+      for (let i = 0; i < n; i++) if (!seen[i]) perm.push(i);
+      if (perm.every((v, i) => v === i)) continue;
+      const map = new Int32Array(n);
+      perm.forEach((old, i) => (map[old] = i));
+      c.edges = perm.map((i) => c.edges[i]!);
+      c.edgeCurve = perm.map((i) => c.edgeCurve[i]!);
+      for (const f of c.faces) if (f.loopEdges) f.loopEdges = f.loopEdges.map((l) => l.map((e) => (e >= 0 && e < n ? map[e]! : e)));
+      maps.set(c.cid, map);
+    }
+    if (!maps.size) return;
+    for (const p of this.view.pages)
+      for (const h of p.hidden) {
+        const map = h.cls === 'CEdge' ? maps.get(cidOf(h.packed)) : undefined;
+        const i = indexOf(h.packed);
+        if (map && i < map.length) h.packed = pack(cidOf(h.packed), map[i]!);
+      }
   }
 
   /** 관계(CRelationship, 0개여야 한다)와 활성 단면 */
@@ -1296,6 +1338,7 @@ export function readMfcModel(bytes: Uint8Array, header: SkpHeader, onProgress?: 
       `깨진 참조 ${s.badRefs.toLocaleString('en-US')}개를 건너뛰었습니다(첫 자리 ${s.firstBadRef.toLocaleString('en-US')}바이트) — 그 모서리와 그 모서리를 쓰는 면은 그리지 않습니다`,
     );
   }
+  dec.reorderEdges();
   const { model, materials } = assemble(dec, head);
   return { model, materials, styles: dec.view.styles, images: dec.st.images };
 }
