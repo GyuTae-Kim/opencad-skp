@@ -135,7 +135,7 @@ export class Panel {
     this.tabsEl = h('div', { class: 'ptabs', role: 'tablist', 'aria-label': '패널 탭' });
     // APG Tabs(손으로 고르기): ←→·Home·End는 초점만, Enter·Space가 고른다. 고른 탭만 Tab 차례
     this.tabsEl.addEventListener('keydown', (e) => listKeys(e, [...this.tabsEl.querySelectorAll<HTMLElement>('[role=tab]')], 'ArrowLeft', 'ArrowRight'));
-    const close = h('button', { class: 'icon-btn', type: 'button', title: '패널 닫기', 'aria-label': '패널 닫기', html: icon('close') });
+    const close = h('button', { class: 'icon-btn', title: '패널 닫기', 'aria-label': '패널 닫기', html: icon('close') });
     close.addEventListener('click', () => this.host.closePanel());
     this.body = h('div', { class: 'pbody', role: 'tabpanel', id: 'pbody' });
     this.foot = h('div', { class: 'pfoot', hidden: true, 'aria-live': 'polite' });
@@ -216,7 +216,7 @@ export class Panel {
     this.body.setAttribute('aria-labelledby', `ptab-${d.panelTab}`);
     for (const [k, label] of panelTabs(d)) {
       const on = k === d.panelTab;
-      const b = h('button', { class: `ptab${on ? ' on' : ''}`, type: 'button', role: 'tab', id: `ptab-${k}`, 'aria-controls': 'pbody', tabindex: on ? '0' : '-1', 'aria-selected': on ? 'true' : 'false' }, label);
+      const b = h('button', { class: `ptab${on ? ' on' : ''}`, role: 'tab', id: `ptab-${k}`, 'aria-controls': 'pbody', tabindex: on ? '0' : '-1', 'aria-selected': on ? 'true' : 'false' }, label);
       b.addEventListener('click', () => {
         if (d.panelTab === k) return;
         d.panelTab = k as PanelTab;
@@ -289,7 +289,7 @@ export class Panel {
         const on = d.fileSections.includes(sp.index);
         const b = h(
           'button',
-          { class: `prow pick${on ? ' sel' : ''}`, type: 'button', 'aria-pressed': on ? 'true' : 'false', title: on ? '누르면 이 단면을 끕니다' : '누르면 이 단면으로 자릅니다(같은 그룹의 다른 단면은 꺼짐)' },
+          { class: `prow pick${on ? ' sel' : ''}`, 'aria-pressed': on ? 'true' : 'false', title: on ? '누르면 이 단면을 끕니다' : '누르면 이 단면으로 자릅니다(같은 그룹의 다른 단면은 꺼짐)' },
           h('span', { class: 'swatch sec', 'aria-hidden': 'true' }),
           h('span', { class: 'name' }, sp.name || `단면 ${i + 1}`),
           sp.active ? chip('활성', '파일에서 활성인 단면') : null,
@@ -312,7 +312,7 @@ export class Panel {
                 'div',
                 { class: 'pbar' },
                 (() => {
-                  const off = h('button', { class: 'mini-btn', type: 'button' }, '파일 단면 모두 끄기');
+                  const off = h('button', { class: 'mini-btn' }, '파일 단면 모두 끄기');
                   off.addEventListener('click', () => this.host.setFileSection(null));
                   return off;
                 })(),
@@ -325,8 +325,8 @@ export class Panel {
 
     // 태그: 폴더 없는 태그 → 폴더(앞 순회 차례)와 그 안 태그
     const tags = d.tags;
-    const allOn = h('button', { class: 'mini-btn', type: 'button' }, '모두 보기');
-    const allOff = h('button', { class: 'mini-btn', type: 'button' }, '모두 숨기기');
+    const allOn = h('button', { class: 'mini-btn' }, '모두 보기');
+    const allOff = h('button', { class: 'mini-btn' }, '모두 숨기기');
     allOn.addEventListener('click', () => this.host.setAllTagsVisible(true));
     allOff.addEventListener('click', () => this.host.setAllTagsVisible(false));
     const list = h('div', { class: 'plist' });
@@ -390,7 +390,7 @@ export class Panel {
         : h('span', { class: 'swatch', style: `background:${rgbCss(m.color)};opacity:${Math.max(0.3, m.color[3])}` });
       const b = h(
         'button',
-        { class: 'prow pick', type: 'button', 'data-sel': selKey(sel), title: `${m.name} — 누르면 이 재질의 면을 강조합니다` },
+        { class: 'prow pick', 'data-sel': selKey(sel), title: `${m.name} — 누르면 이 재질의 면을 강조합니다` },
         swatch,
         h('span', { class: 'name', translate: 'no' }, m.name),
         m.textured
@@ -506,7 +506,7 @@ export class Panel {
   /** 3D 누르기 방식 막대(나무가 있으면 펼친 단계·가장 안쪽·면·모서리, 없으면 그룹·면·모서리). collapse: 모두 접기 단추도 */
   private pickBar(d: SkpDoc, collapse = false): HTMLElement {
     const modeBtn = (mode: PickMode, label: string, title: string): HTMLButtonElement => {
-      const b = h('button', { class: `seg-btn${d.pickMode === mode ? ' on' : ''}`, type: 'button', title, 'aria-pressed': d.pickMode === mode ? 'true' : 'false' }, label);
+      const b = h('button', { class: `seg-btn${d.pickMode === mode ? ' on' : ''}`, title, 'aria-pressed': d.pickMode === mode ? 'true' : 'false' }, label);
       b.addEventListener('click', () => this.host.setPickMode(mode));
       return b;
     };
@@ -525,7 +525,7 @@ export class Panel {
       h('div', { class: 'seg-mini', role: 'group', 'aria-label': '3D에서 누를 때 고르는 것' }, ...modes),
     );
     if (collapse) {
-      const btn = h('button', { class: 'mini-btn', type: 'button', title: '펼친 노드를 모두 접습니다(3D 고르기도 윗단계로)' }, '모두 접기');
+      const btn = h('button', { class: 'mini-btn', title: '펼친 노드를 모두 접습니다(3D 고르기도 윗단계로)' }, '모두 접기');
       btn.addEventListener('click', () => this.host.collapseAll());
       btn.disabled = !d.expanded.size;
       bar.append(h('span', { class: 'spacer' }), btn);
@@ -553,7 +553,7 @@ export class Panel {
           // 나무 안 줄이라 treeitem(단추라 Enter·Space는 그대로 누르기)
           const more = h(
             'button',
-            { class: 'mini-btn more-btn', type: 'button', role: 'treeitem', 'aria-level': String(t.depth[kids[k]!]!), style: `margin-left:${indent(t.depth[kids[k]!]!) + 22}px` },
+            { class: 'mini-btn more-btn', role: 'treeitem', 'aria-level': String(t.depth[kids[k]!]!), style: `margin-left:${indent(t.depth[kids[k]!]!) + 22}px` },
             `… ${fmtCount(kids.length - k)}개 더 보기`,
           );
           more.addEventListener('click', () => {
@@ -678,7 +678,7 @@ export class Panel {
     const hiddenInModel = (t.flags[n]! & NODE_HIDDEN) !== 0;
     const more = (t.flags[n]! & NODE_MORE) !== 0;
     const twisty = hasKids
-      ? h('button', { class: `twisty${open ? ' open' : ''}`, type: 'button', tabindex: '-1', 'aria-label': open ? `${name} 접기` : `${name} 펼치기`, html: icon('twisty', 14) })
+      ? h('button', { class: `twisty${open ? ' open' : ''}`, tabindex: '-1', 'aria-label': open ? `${name} 접기` : `${name} 펼치기`, html: icon('twisty', 14) })
       : h('span', { class: 'twisty-space', title: more ? '안쪽이 더 있지만 노드가 많아 목록에 넣지 않았습니다' : '' }, more ? '…' : '');
     if (hasKids)
       twisty.addEventListener('click', (e) => {
@@ -745,7 +745,7 @@ export class Panel {
       const tr = h(
         'tr',
         { class: 'pick', 'data-sel': selKey(sel), title: `누르면 "${x.name}" 인스턴스 ${fmtCount(x.count)}개를 모두 고릅니다 · 두 번 누르면 맞춰 보기` },
-        h('td', {}, h('button', { class: 'def-cell', type: 'button' }, img ? h('img', { class: 'thumb', src: img, alt: '', loading: 'lazy', decoding: 'async', title: `${x.name} 미리보기` }) : null, x.name)),
+        h('td', {}, h('button', { class: 'def-cell' }, img ? h('img', { class: 'thumb', src: img, alt: '', loading: 'lazy', decoding: 'async', title: `${x.name} 미리보기` }) : null, x.name)),
         h('td', { class: 'num' }, fmtCount(x.count)),
       );
       this.bindPick(tr, d, sel);
@@ -774,14 +774,14 @@ export class Panel {
     const part = partOfPick(d);
     let pickPart: HTMLElement | null = null;
     if (part) {
-      pickPart = h('button', { class: 'mini-btn', type: 'button', title: '3D에서 누른 면 하나(넓이)나 모서리 하나(길이)만 고릅니다' }, part === 'face' ? '누른 면만 고르기' : '누른 모서리만 고르기');
+      pickPart = h('button', { class: 'mini-btn', title: '3D에서 누른 면 하나(넓이)나 모서리 하나(길이)만 고릅니다' }, part === 'face' ? '누른 면만 고르기' : '누른 모서리만 고르기');
       pickPart.addEventListener('click', () => this.host.selectPickedPart());
     }
     // 고른 컴포넌트와 같은 정의의 인스턴스 모두(SketchUp "인스턴스 고르기")
     const def = selectionDefinition(d, d.selection);
     let allOfDef: HTMLElement | null = null;
     if (def) {
-      allOfDef = h('button', { class: 'mini-btn', type: 'button', title: `"${def.name}" 정의의 인스턴스 ${fmtCount(def.count)}개를 모두 고릅니다` }, `같은 정의 모두 고르기(${fmtCount(def.count)}개)`);
+      allOfDef = h('button', { class: 'mini-btn', title: `"${def.name}" 정의의 인스턴스 ${fmtCount(def.count)}개를 모두 고릅니다` }, `같은 정의 모두 고르기(${fmtCount(def.count)}개)`);
       allOfDef.addEventListener('click', () => this.host.select({ kind: 'definition', name: def.name }));
     }
     this.body.append(
@@ -890,7 +890,7 @@ export class Panel {
         const on = d.page === i;
         const card = h(
           'button',
-          { class: `scene-card pick${on ? ' sel' : ''}`, type: 'button', 'aria-pressed': on ? 'true' : 'false', title: [pg.name, pg.description].filter(Boolean).join('\n') },
+          { class: `scene-card pick${on ? ' sel' : ''}`, 'aria-pressed': on ? 'true' : 'false', title: [pg.name, pg.description].filter(Boolean).join('\n') },
           url ? h('img', { src: url, alt: '', loading: 'lazy', decoding: 'async' }) : h('span', { class: 'scene-blank', html: icon('scene', 28) }),
           h('span', { class: 'scene-cap' }, pg.name || `장면 ${i + 1}`, d.activePage === i ? chip('활성', '파일을 저장할 때 고른 장면') : null),
         );
@@ -955,7 +955,7 @@ export class Panel {
     const anyHidden = d.hiddenNodes.size > 0 || d.hiddenOutline.size > 0;
     if (canHide || anyHidden) {
       const act = (label: string, ico: string, title: string, run: () => void, on = false): HTMLButtonElement => {
-        const b = h('button', { class: `mini-btn${on ? ' on' : ''}`, type: 'button', title, 'aria-pressed': on ? 'true' : undefined, html: `${icon(ico, 14)}<span>${label}</span>` });
+        const b = h('button', { class: `mini-btn${on ? ' on' : ''}`, title, 'aria-pressed': on ? 'true' : undefined, html: `${icon(ico, 14)}<span>${label}</span>` });
         b.addEventListener('click', run);
         return b;
       };
@@ -982,14 +982,14 @@ export class Panel {
     if (log.length) {
       const mm = mmPerSceneUnit(d.scene.units);
       const rows = log.map((m, i) => {
-        const b = h('button', { class: 'mini-btn ml-copy-btn', type: 'button', title: '이 결과 글 복사', 'aria-label': '이 결과 글 복사', html: icon('copy', 13) });
+        const b = h('button', { class: 'mini-btn ml-copy-btn', title: '이 결과 글 복사', 'aria-label': '이 결과 글 복사', html: icon('copy', 13) });
         b.addEventListener('click', () => this.host.copyMeasure(i));
         // "거리·각도"도 번역층이 옮긴다(값과 축 이름은 사전 틀이 그대로 끼운다 — 31차 전에는 다른 언어에서도 한국어로 남았다)
         return h('div', { class: 'ml-line' }, h('span', {}, measureLine(m, d.units, mm)), b);
       });
-      const all = h('button', { class: 'mini-btn', type: 'button' }, '모두 복사');
+      const all = h('button', { class: 'mini-btn' }, '모두 복사');
       all.addEventListener('click', () => this.host.copyMeasure('all'));
-      const clear = h('button', { class: 'mini-btn', type: 'button' }, '기록 지우기');
+      const clear = h('button', { class: 'mini-btn' }, '기록 지우기');
       clear.addEventListener('click', () => this.host.clearMeasureLog());
       lines.push(h('details', { class: 'measure-history', open: this.logOpen ? true : undefined }, h('summary', {}, `최근 측정 ${fmtCount(log.length)}개`), ...rows, h('div', { class: 'pbar' }, all, clear)));
       const det = lines[lines.length - 1] as HTMLDetailsElement;

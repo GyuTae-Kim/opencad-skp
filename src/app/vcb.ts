@@ -77,14 +77,14 @@ export class Vcb {
     this.label = h('label', { class: 'vcb-label', for: id }, KIND_TEXT.length.label);
     // 안내점 지우기: 수를 함께 보여 측정 끝내기(✕)와 헷갈리지 않게
     this.guideCount = h('span', { class: 'vcb-gn' });
-    this.clearBtn = h('button', { class: 'vcb-btn vcb-clear', type: 'button', hidden: true }, this.guideCount);
+    this.clearBtn = h('button', { class: 'vcb-btn vcb-clear', hidden: true }, this.guideCount);
     this.clearBtn.insertAdjacentHTML('beforeend', icon('close', 12));
     this.clearBtn.addEventListener('click', () => {
       this.opts.onClearGuides();
       this.setGuides(0);
     });
     // 고른 안내 하나 지우기(휴대폰은 Delete가 없어 이 단추로 — 고른 안내가 있을 때만)
-    this.delBtn = h('button', { class: 'vcb-btn vcb-del', type: 'button', hidden: true, html: icon('trash', 16) });
+    this.delBtn = h('button', { class: 'vcb-btn vcb-del', hidden: true, html: icon('trash', 16) });
     this.delBtn.addEventListener('click', () => {
       this.opts.onDeleteGuide?.();
       this.setSelected(null);

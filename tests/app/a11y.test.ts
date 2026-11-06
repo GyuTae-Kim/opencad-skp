@@ -9,8 +9,10 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { h } from '../../src/app/dom';
 
 const css = readFileSync(process.env.A11Y_CSS || resolve(__dirname, '../../src/app/styles.css'), 'utf8');
+const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
 
 type Rgba = [number, number, number, number];
 
@@ -154,6 +156,11 @@ describe('움직임 줄이기(47차 — 2.3.3)', () => {
     expect(b).toMatch(/transition:\s*none !important/);
     expect(b).toMatch(/animation:\s*none !important/);
   });
+  it('앱: 코어 맞춰 보기·표준 뷰·뷰 큐브(animate 선택)와 앱 카메라 옮기기(장면 전환·고른 것 맞춰 보기·이전 보기)를 바로 둔다', () => {
+    expect(app).toMatch(/calmQuery = media\('\(prefers-reduced-motion: reduce\)'\)/);
+    expect(app).toMatch(/animate: !this\.calmQuery\?\.matches/);
+    expect(app).toMatch(/if \(!\(ms > 0\) \|\| this\.calmQuery\?\.matches\) \{\s*v\.setCamera\(to\);/);
+  });
 });
 
 describe('고대비(47차 — forced-colors)', () => {
@@ -184,5 +191,14 @@ describe('다시 흐르기(47차 — 1.4.10, 1280px 창 400% = 320×256)', () =>
     expect(n).toMatch(/overflow-y:\s*auto/);
     expect(bodies('.measure-bar', '@media (max-height: 300px) and (max-width: 479.98px)')).toMatch(/flex-wrap:\s*wrap/);
     expect(bodies('.measure-bar .mb-text', '@media (max-height: 300px) and (max-width: 479.98px)')).toMatch(/flex:\s*1 1 100%/);
+  });
+});
+
+describe('단추 기본 type(47차 — 첫 화면 조각 줄이기)', () => {
+  it('h(button)은 type을 주지 않으면 button(폼 안에서도 보내지 않음), 준 type은 그대로', () => {
+    expect(h('button').type).toBe('button');
+    expect(h('button', { type: 'submit' }).type).toBe('submit');
+    const f = h('form', {}, h('button', { class: 'x' }));
+    expect((f.querySelector('button') as HTMLButtonElement).type).toBe('button');
   });
 });
