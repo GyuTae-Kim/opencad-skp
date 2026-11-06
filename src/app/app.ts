@@ -1129,7 +1129,8 @@ export class SkpViewerApp implements PanelHost {
         },
         rel,
       );
-      this.noticeDamage(doc);
+      // 일부만 읽었거나 고쳐 읽은 파일·한도에 걸린 모형의 알림(글은 해석 워커가 만든다 — worker/notice.ts)
+      if (res.notice) this.showNotice('warn', res.notice.title, res.notice.text);
       await uploaded;
       if (seq !== this.openSeq || this.doc !== doc) return false;
       attempt.success();
@@ -1268,18 +1269,6 @@ export class SkpViewerApp implements PanelHost {
     document.title = `${d.name} - ${APP_TITLE}`;
     this.refreshChrome();
     return done;
-  }
-
-  /** 잘렸거나 깨진 파일·출력 한도는 알림으로 알린다(경고 목록은 정보 탭) */
-  private noticeDamage(d: SkpDoc): void {
-    const warns = d.scene.warnings ?? [];
-    if (d.damaged) {
-      const why = warns.find((w) => /잘렸|깨져|깨진/.test(w)) ?? warns[0] ?? '';
-      this.showNotice('warn', `"${d.name}" 파일의 일부만 보입니다`, `파일이 잘렸거나 깨진 곳이 있어 읽을 수 있는 부분만 그렸습니다. ${why}`);
-    } else if (d.limited) {
-      const why = warns.find((w) => /한도/.test(w)) ?? '';
-      this.showNotice('warn', '모형이 너무 커서 일부만 그렸습니다', why);
-    }
   }
 
   /** 뷰어를 한 번 만든다(코어 입구를 처음에 받는다). 받지 못했거나 WebGL2를 쓸 수 없으면 알리고 false */

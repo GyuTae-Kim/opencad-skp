@@ -17,6 +17,7 @@ import { TEXTURE_LIMIT } from 'opencad-viewer3d/texture';
 import { skpFileToScene, STREAM_MIN_BYTES, type SkpFileResult, type SkpImages } from '../index';
 import { collectTransfers, errorText, isBigScene, type ParseRequest, type ParseResponse, type ParseResult } from '../app/protocol';
 import { prepareSceneTextures } from './textures';
+import { damageNotice } from './notice';
 import { packBigScene } from './pack';
 import { filePrint } from './print';
 
@@ -73,6 +74,9 @@ async function open(req: ParseRequest): Promise<ParseResult> {
   // 큰 모형은 법선(Int8 정점 4값)·무늬 좌표(Int16과 변환 — 오차가 큰 그물은 Float32)를 줄여 넘긴다. 무늬 손질(무늬를 빼면 그 무늬 좌표도 지운다) 뒤에
   const packed = packBigScene(scene);
   if (packed) result.packed = packed;
+  // 일부만 읽었거나 고쳐 읽은 파일의 알림(41차 — 글을 첫 화면 JS에 두지 않으려고 여기서 만든다. 화면은 그대로 보인다)
+  const notice = damageNotice(scene, req.name);
+  if (notice) result.notice = notice;
   progress(0.98, '화면으로 넘기는 중');
   result.ms = performance.now() - t0;
   return result;

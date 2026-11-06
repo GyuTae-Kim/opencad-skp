@@ -83,6 +83,14 @@ export interface ParseResult {
   print?: Promise<ArrayBuffer | null>;
   /** 큰 모형이라 워커가 법선·무늬 좌표를 줄였으면 그 셈(worker/pack.ts — 28차) */
   packed?: PackStats;
+  /** 일부만 읽었거나(고쳐 읽었거나) 한도에 걸린 파일의 알림(worker/notice.ts — 41차, 글을 첫 화면 JS에 두지 않으려고 워커가 만든다) */
+  notice?: ParseNotice;
+}
+
+/** 열고 나서 보일 알림(경고 띠의 제목·글) */
+export interface ParseNotice {
+  title: string;
+  text: string;
 }
 
 /**

@@ -5,6 +5,7 @@
   "\"{0}\" 파일을 받지 못했습니다": "File \"{0}\" was not received",
   "\"{0}\" 파일을 열지 못했습니다": "Failed to open file \"{0}\"",
   "\"{0}\" 파일을 읽지 못했습니다": "Failed to read file \"{0}\"",
+  "\"{0}\" 파일을 고쳐 읽었습니다": "Repaired and opened the file \"{0}\"",
   "\"{0}\" 파일을 찾지 못했습니다": "File \"{0}\" was not found",
   "\"{0}\" 파일의 일부만 보입니다": "Only part of the file \"{0}\" is visible",
   "\"{0}\" 파일이 너무 큽니다": "The file \"{0}\" is too large",
