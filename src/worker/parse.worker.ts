@@ -20,6 +20,8 @@ import { prepareSceneTextures } from './textures';
 import { damageNotice } from './notice';
 import { packBigScene } from './pack';
 import { filePrint } from './print';
+import { splitLongAttrs } from './attrlong';
+import type { SkpAttrDictsMeta } from '../meta';
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 
@@ -77,6 +79,9 @@ async function open(req: ParseRequest): Promise<ParseResult> {
   // 일부만 읽었거나 고쳐 읽은 파일의 알림(41차 — 글을 첫 화면 JS에 두지 않으려고 여기서 만든다. 화면은 그대로 보인다)
   const notice = damageNotice(scene, req.name);
   if (notice) result.notice = notice;
+  // 아주 긴 속성 글 값은 앞부분만 장면 정보로, 원래 글은 Blob으로(47차 — 펼칠 때 화면이 잘라 읽는다)
+  const long = splitLongAttrs((scene.meta as { attributes?: SkpAttrDictsMeta[] } | undefined)?.attributes);
+  if (long) result.attrLong = long;
   progress(0.98, '화면으로 넘기는 중');
   result.ms = performance.now() - t0;
   return result;

@@ -85,6 +85,28 @@ export interface ParseResult {
   packed?: PackStats;
   /** 일부만 읽었거나(고쳐 읽었거나) 한도에 걸린 파일의 알림(worker/notice.ts — 41차, 글을 첫 화면 JS에 두지 않으려고 워커가 만든다) */
   notice?: ParseNotice;
+  /** 앞부분만 넘긴 아주 긴 속성 글 값의 원래 글(47차 — worker/attrlong.ts, 펼칠 때 app/attrview.ts가 잘라 읽는다) */
+  attrLong?: AttrLong;
+}
+
+/** 속성 글 값이 이보다 길면(자) 장면 정보에는 앞부분만 넘긴다(47차 — 표본 값의 99%는 1,000자 아래, 화면은 2,000자에서 자른다) */
+export const ATTR_LONG_CHARS = 4000;
+/** 넘기는 앞부분(자): 화면이 자르는 2,000자(entity.ts ATTR_VALUE_CHARS)보다 한 자 길게 — 화면 글이 예전과 같고 "…"도 붙는다 */
+export const ATTR_HEAD_CHARS = 2001;
+
+/** 긴 값 하나의 자리: meta.attributes[i][d][k]의 원래 글이 blob의 at부터 bytes바이트(UTF-8, 글자 수 chars) */
+export interface AttrLongRef {
+  i: number;
+  d: string;
+  k: string;
+  at: number;
+  bytes: number;
+  chars: number;
+}
+
+export interface AttrLong {
+  blob: Blob;
+  refs: AttrLongRef[];
 }
 
 /** 열고 나서 보일 알림(경고 띠의 제목·글) */

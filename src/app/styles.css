@@ -2280,6 +2280,28 @@ button.scene-card.sel {
   padding-inline: 8px;
 }
 
+/* 앞부분만 받은 아주 긴 글 값(47차): 전체 값 보기 단추와 읽기 전용 글 칸(고르고 복사) */
+.attr-more {
+  display: block;
+  margin-top: 4px;
+}
+
+.attr-full {
+  display: block;
+  width: 100%;
+  min-height: 8em;
+  max-height: 40vh;
+  margin-top: 4px;
+  padding: 4px 6px;
+  border: 1px solid var(--border-input);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text);
+  font: 12px/1.4 var(--mono);
+  overflow-wrap: anywhere;
+  resize: vertical;
+}
+
 .foot-acts {
   margin-top: 4px;
 }

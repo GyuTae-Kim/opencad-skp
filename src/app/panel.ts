@@ -92,6 +92,8 @@ export const CHILD_LIMIT = 200;
 const TREE_ROW_LIMIT = 4000;
 
 const row = (k: string, v: string): HTMLElement => h('div', { class: 'prop-row' }, h('span', { class: 'k' }, k), h('span', { class: 'v', title: v }, v));
+/** 받아 둔 속성 사전 칸 조각(attrview.ts) */
+let attrView: typeof import('./attrview') | null = null;
 /** 안내 글 · 줄 끝 꼬리표(칩) · 줄 끝 수 */
 const hint = (text: string): HTMLElement => h('p', { class: 'hint' }, text);
 const chip = (text: string, title?: string): HTMLElement => h('span', { class: 'chip', title }, text);
@@ -793,17 +795,13 @@ export class Panel {
         !d.selection ? hint('3D나 구성 목록에서 그룹·컴포넌트·재질을 고르면 그 정보를 보입니다. "면·모서리"로 누르면 면 하나의 넓이·모서리 하나의 길이를 봅니다.') : null,
       ),
     );
+    // 속성 사전 칸은 처음 그릴 때 받는 조각(attrview.ts — 47차, 아주 긴 글 값 펼치기와 함께 첫 화면 조각에서 뗐다). 받은 뒤에는 곧바로 그린다
     if (e.dicts.length) {
-      const blocks = e.dicts.map((dict) =>
-        h(
-          'details',
-          { class: 'attr-dict', open: e.dicts.length <= 3 ? true : undefined },
-          h('summary', {}, dict.name, chip(dict.source === 'definition' ? '정의' : '이 항목'), countEl(`${fmtCount(dict.entries.length)}개`)),
-          ...dict.entries.map(([k, v]) => row(k, v)),
-          dict.more ? hint(`열쇠 ${fmtCount(dict.more)}개는 더 있어 줄였습니다.`) : null,
-        ),
-      );
-      this.body.append(section('속성 사전', ...blocks, e.moreDicts ? hint(`사전 ${fmtCount(e.moreDicts)}개는 줄였습니다.`) : null));
+      const slot = h('div');
+      this.body.append(slot);
+      const put = (m: typeof import('./attrview')): void => slot.replaceWith(m.attrSection(d, e));
+      if (attrView) put(attrView);
+      else void import('./attrview').then((m) => put((attrView = m)), () => slot.remove());
     }
   }
 
