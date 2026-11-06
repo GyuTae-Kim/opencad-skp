@@ -3,7 +3,7 @@
  * 큰 모형만 줄이고, 법선은 Int8 정점 4값, 무늬 좌표는 Int16과 변환(다시 편 오차가 무늬 화소로 한도를 넘으면 Float32), 같은 배열은 한 번만.
  */
 import { describe, expect, it } from 'vitest';
-import { unpackValue } from 'opencad-viewer3d/attribs';
+import { packNormals, packUvs, unpackValue } from 'opencad-viewer3d/attribs';
 import { TEXTURE_LIMIT } from 'opencad-viewer3d/texture';
 import type { Mesh3d, Scene3d } from 'opencad-viewer3d/types';
 import { skpFileToScene } from '../src/index';
@@ -134,6 +134,92 @@ describe('법선·무늬 좌표 줄이기(pack.ts)', () => {
     const big: Pick<Scene3d, 'meshes' | 'lines' | 'textures'> = { meshes: many, lines: [] };
     expect(packBigScene(big)?.normals).toBe(INCREMENTAL_ITEMS);
     expect(many.every((m) => m.normals instanceof Int8Array && m.uvs instanceof Int16Array && m.uvTransform)).toBe(true);
+  });
+});
+
+/** 시험마다 같은 값이 나오는 작은 난수 */
+function rng(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+}
+
+/** 51차 앞의 packUvsChecked(코어 packUvs로 줄인 뒤 한 번 더 돌며 다시 펴 견준다) — 지금 판이 같은 배열·변환·오차를 내는지 견준다 */
+function packUvsCheckedBefore(uvs: ArrayLike<number>, nv: number, size: readonly [number, number]): { uvs: Int16Array; transform: number[]; errTexel: number } {
+  const p = packUvs(uvs, nv, 'int16');
+  const out = p.uvs as Int16Array;
+  const [su, sv, ou, ov] = p.transform;
+  const k = nv > 0 && uvs.length >= nv * 3 ? 3 : 2;
+  let err = 0;
+  for (let i = 0; i < nv; i++) {
+    const q = k === 3 ? uvs[i * 3 + 2]! : 1;
+    const qn = k === 3 ? unpackValue(out[i * 3 + 2]!, 'short') : 1;
+    for (let c = 0; c < 2; c++) {
+      const u = uvs[i * k + c]! / q;
+      if (!Number.isFinite(u)) continue;
+      const s = unpackValue(out[i * k + c]!, 'short');
+      const back = c === 0 ? (su * s + ou * qn) / qn : (sv * s + ov * qn) / qn;
+      const d = Number.isFinite(back) ? Math.abs(back - u) * size[c]! : Infinity;
+      if (d > err) err = d;
+    }
+  }
+  return { uvs: out, transform: [...p.transform], errTexel: err };
+}
+
+describe('줄이기를 앱에서 돌아도 코어 도우미와 같은 값(51차)', () => {
+  it('법선: 코어 packNormals(int8, 정점 4값)와 같은 배열 — 단위·단위 아님·0·NaN·무한·거울상 법선', () => {
+    const r = rng(11);
+    const n = new Float32Array(30_000 * 3);
+    for (let i = 0; i < n.length; i++) {
+      const t = r();
+      n[i] = t < 0.01 ? 0 : t < 0.012 ? NaN : t < 0.014 ? (r() < 0.5 ? Infinity : -Infinity) : t < 0.3 ? (r() * 2 - 1) * 1e3 : r() * 2 - 1;
+    }
+    // 반은 단위 길이로(장면의 법선처럼)
+    for (let i = 0; i < n.length / 2; i += 3) {
+      const l = Math.hypot(n[i]!, n[i + 1]!, n[i + 2]!);
+      if (l > 0 && Number.isFinite(l)) for (let c = 0; c < 3; c++) n[i + c] = n[i + c]! / l;
+    }
+    expect(Array.from(packMeshNormals(n))).toEqual(Array.from(packNormals(n, 'int8', 4)));
+    expect(Array.from(packMeshNormals(new Float32Array(0)))).toEqual([]);
+    // 정점 3값으로 나누어떨어지지 않는 길이는 남는 값을 버린다(코어와 같게)
+    expect(Array.from(packMeshNormals(n.subarray(0, 7)))).toEqual(Array.from(packNormals(n.subarray(0, 7), 'int8', 4)));
+  });
+
+  it('무늬 좌표: 코어 packUvs(int16)와 같은 배열·변환, 예전 견주기와 같은 오차 — 2값·원근 3값, 수 아닌 값·같은 값·좁고 넓은 범위', () => {
+    const r = rng(23);
+    const cases: { uvs: Float32Array; nv: number }[] = [];
+    for (let t = 0; t < 60; t++) {
+      const k = t % 2 ? 3 : 2;
+      const nv = 1 + Math.floor(r() * 3000);
+      const span = 10 ** Math.floor(r() * 7 - 3);
+      const off = (r() * 2 - 1) * 10 ** Math.floor(r() * 6);
+      const a = new Float32Array(nv * k);
+      for (let i = 0; i < nv; i++) {
+        a[i * k] = off + r() * span;
+        a[i * k + 1] = t % 5 === 0 ? 0.25 : -off + r() * span * 0.5;
+        if (k === 3) a[i * k + 2] = t % 6 === 1 ? (r() < 0.5 ? -1 : 1) * (0.001 + r()) : 0.2 + r();
+        const z = r();
+        if (t % 7 === 0 && z < 0.01) a[i * k] = NaN;
+        if (t % 7 === 0 && z > 0.99) a[i * k + 1] = Infinity;
+        if (t % 9 === 0 && k === 3 && z < 0.02) a[i * k + 2] = 0;
+        if (t % 11 === 0 && z < 0.05) a[i * k] = -0;
+      }
+      cases.push({ uvs: a, nv });
+    }
+    cases.push({ uvs: new Float32Array(0), nv: 0 });
+    cases.push({ uvs: Float32Array.of(5, 5, 5, 5), nv: 2 });
+    cases.push({ uvs: Float32Array.of(NaN, NaN, NaN, NaN, NaN, NaN), nv: 2 });
+    for (const [i, c] of cases.entries()) {
+      for (const size of [[512, 256], [TEXTURE_LIMIT, TEXTURE_LIMIT], [1, 1]] as const) {
+        const got = packUvsChecked(c.uvs, c.nv, size);
+        const want = packUvsCheckedBefore(c.uvs, c.nv, size);
+        expect(Array.from(got.uvs), `경우 ${i}`).toEqual(Array.from(want.uvs));
+        expect(got.transform.map((x) => (Object.is(x, -0) ? '-0' : x)), `경우 ${i}`).toEqual(want.transform.map((x) => (Object.is(x, -0) ? '-0' : x)));
+        expect(Object.is(got.errTexel, want.errTexel), `경우 ${i}: ${got.errTexel} ${want.errTexel}`).toBe(true);
+      }
+    }
   });
 });
 
