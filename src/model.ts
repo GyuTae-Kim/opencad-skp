@@ -613,37 +613,64 @@ function iga(word: string): string {
 const frontMatrixAt = new Float64Array(9);
 const backMatrixAt = new Float64Array(9);
 
+/** 투영 한쪽(TEX_SIDE)에서 찾는 자식: 행렬, 종류, 방향(면마다 다시 쓴다 — 읽기는 다시 들어오지 않는다) */
+const SIDE_TAGS: readonly number[] = [TAG.TEX_MATRIX, TAG.TEX_KIND, TAG.TEX_DIR];
+const sideKids: (TlvNode | undefined)[] = [];
+
 /**
  * 면 바탕의 무늬 투영(앞·뒤). 없거나 깨졌으면 빈 결과. 낸 투영의 행렬은 다음 면을 읽으면 바뀐다(위 자리 — 받는 쪽은 곧바로 옮겨 적는다).
- * 같은 쪽 투영이 또 나오면 처음 것을 쓰고(뒤 것의 행렬은 적지 않는다), 꼬리표를 찾는 차례·던지는 곳은 예전과 같다(내보내는 것은 시험용)
+ * 같은 쪽 투영이 또 나오면 처음 것을 쓰고(뒤 것의 행렬은 적지 않는다), 꼬리표를 찾는 차례·던지는 곳은 예전과 같다(내보내는 것은 시험용).
+ * 51차: 속성 목록·투영 목록은 r.each와 같은 검사로 그 자리에서 돌고(면마다 닫힘 함수 둘을 만들지 않는다 — readFaceItem과 같은 꼴),
+ * 투영 한쪽의 행렬·종류·방향은 자식을 한 번만 돌아 찾는다(firstEach — r.first를 셋 부른 것과 같은 값, 같은 자리에서 같은 글로 던진다)
  */
 export function readTextureMaps(r: TlvReader, face: TlvNode): { front?: SkpTextureMap; back?: SkpTextureMap } {
   const out: { front?: SkpTextureMap; back?: SkpTextureMap } = {};
   const items = r.path(face, TAG.BASE, TAG.ID_BOX, TAG.ATTRS, TAG.ATTR_LIST, TAG.ATTR_ITEMS);
   if (!items) return out;
-  r.each(items.start, items.end, (tag, start, end) => {
-    if (tag !== TAG.TEX_MAP) return;
-    r.each(start, end, (st, ss, se) => {
-      if (st !== TAG.TEX_FRONT && st !== TAG.TEX_BACK) return;
+  const dv = r.dv;
+  // 속성 목록(r.each와 같다: 머리가 잘렸거나 길이가 넘친 자식에서 같은 글로 던진다)
+  const e0 = items.end;
+  let p = items.start;
+  while (p < e0) {
+    if (p + 6 > e0) throw new Error(`TLV 머리가 잘렸습니다(@${p})`);
+    const tag = dv.getUint16(p, true);
+    const start = p + 6;
+    const end = start + dv.getUint32(p + 2, true);
+    if (end > e0) throw new Error(`TLV 길이가 범위를 넘습니다(꼬리표 0x${tag.toString(16)} @${p})`);
+    p = end;
+    if (tag !== TAG.TEX_MAP) continue;
+    // 투영 목록(앞·뒤)
+    let q = start;
+    while (q < end) {
+      if (q + 6 > end) throw new Error(`TLV 머리가 잘렸습니다(@${q})`);
+      const st = dv.getUint16(q, true);
+      const ss = q + 6;
+      const se = ss + dv.getUint32(q + 2, true);
+      if (se > end) throw new Error(`TLV 길이가 범위를 넘습니다(꼬리표 0x${st.toString(16)} @${q})`);
+      q = se;
+      if (st !== TAG.TEX_FRONT && st !== TAG.TEX_BACK) continue;
       const side = r.firstIn(ss, se, TAG.TEX_SIDE);
-      if (!side) return;
+      if (!side) continue;
+      const broken = r.firstEach(side.start, side.end, SIDE_TAGS, sideKids);
+      const kindN = sideKids[1];
+      const dirN = sideKids[2];
       // 행렬 앞 9칸은 바이트에서 바로 형식 배열로(33차 — 큰 무늬 모형에서 면마다 수 배열 둘을 거쳐 만들지 않는다. 값과 읽는 차례는 같다)
-      const mn = r.first(side, TAG.TEX_MATRIX);
-      if (!mn || mn.end - mn.start < 72) return;
+      const mn = firstFound(sideKids[0], broken);
+      if (!mn || mn.end - mn.start < 72) continue;
       const front = st === TAG.TEX_FRONT;
       const taken = front ? out.front !== undefined : out.back !== undefined;
       const matrix = front ? frontMatrixAt : backMatrixAt;
       if (!taken) for (let i = 0; i < 9; i++) matrix[i] = r.f64(mn, i);
-      const kn = r.first(side, TAG.TEX_KIND);
+      const kn = firstFound(kindN, broken);
       // 방향은 앞 세 칸만 쓴다(f64s의 앞 세 칸과 같다 — 24바이트 이상일 때)
-      const dn = r.first(side, TAG.TEX_DIR);
-      if (taken) return;
+      const dn = firstFound(dirN, broken);
+      if (taken) continue;
       const map: SkpTextureMap = { kind: r.i32(kn) ?? r.u8(kn) ?? 0, matrix };
       if (dn && dn.end - dn.start >= 24) map.dir = [r.f64(dn, 0), r.f64(dn, 1), r.f64(dn, 2)];
       if (front) out.front = map;
       else out.back = map;
-    });
-  });
+    }
+  }
   return out;
 }
 
