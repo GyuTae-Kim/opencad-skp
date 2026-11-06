@@ -220,7 +220,9 @@ describe('그림 주소', () => {
   it('문서를 만들 때 주소 만들기를 넘기면 그림을 붙인다', () => {
     const bytes = sampleSkpBytes();
     const d = createDoc('예제', 1, { scene: skpToScene(bytes, { outline: true }), ms: 1, images: readSkpImages(bytes) }, { makeUrl: () => 'blob:x' });
-    expect(d.images?.components.size).toBe(3);
+    // 컴포넌트 그림 셋 × 열쇠 둘(꾸러미 경로·파일 이름 — 45차)
+    expect(d.images?.components.size).toBe(6);
+    expect(d.images?.components.get('thumbnails/의자.png')).toBe(d.images?.components.get('의자'));
     expect(d.materials.find((m) => m.name === '잔디')!.folder).toBe('잔디');
     expect(materialImage(d, d.materials.find((m) => m.name === '잔디')!)).toBe('blob:x');
     expect(createDoc('예제', 1, { scene: skpToScene(bytes), ms: 1 }).images).toBeNull();

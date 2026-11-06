@@ -3386,6 +3386,11 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       definitionFaceCamera: Uint8Array.from(definitionNames, (_, k) => (defOfIndex[k]?.behavior?.alwaysFaceCamera ? 1 : 0)),
     };
     if (nodeVolume!.some(Number.isFinite)) info.volume = nodeVolume!;
+    // 불러온 파일·미리보기 그림 경로는 가진 정의가 있을 때만(없는 파일의 장면은 예전과 같다)
+    const definitionPath = definitionNames.map((_, k) => defOfIndex[k]?.path ?? '');
+    if (definitionPath.some(Boolean)) info.definitionPath = definitionPath;
+    const definitionThumbnail = definitionNames.map((_, k) => defOfIndex[k]?.thumbnail ?? '');
+    if (definitionThumbnail.some(Boolean)) info.definitionThumbnail = definitionThumbnail;
     parts.treeInfo = info;
 
     if (!outlineSkipped) {

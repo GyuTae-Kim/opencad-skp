@@ -9,7 +9,9 @@
  *            ├ 01f8 태그 3a98 ─ 3a99/3c8c(번호, 이름 3c8d, 숨김 3c8e, 색 3c8f, 장면 기본 숨김 3c90, 선 종류 3c91), 3a9a 활성 태그, 3a9b 태그 폴더
  *            ├ 01fa 카메라 34bc, 01fb 렌더링 733c, 0206 스타일 6978, 0207 장면 6d60, 0208 선 종류, 0209 모형 속성 36b1
  *            ├ 01fd 글꼴 4e20/4e21/5014, 01fe·01ff 문자·치수 기본값
- *            ├ 01f9 정의 1770/1771/157c(요소 1388, GUID 157d, 이름 157e, 설명 157f, 종류 1583, 동작 1b58)
+ *            ├ 01f9 정의 1770/1771/157c(요소 1388, GUID 157d, 이름 157e, 설명 157f, 불러온 파일 1580, 종류 1583, 동작 1b58,
+ *            │                          미리보기 1585 → 251c → 251e → 2328 → 232a 꾸러미 안 그림 경로)
+ *            ├ 0205 분류 체계 6784(이름 6786)
  *            └ 01f6 모형 요소 1388
  *   요소 1388 ─ 07d0 바탕(번호 = 정의 번호, 05dd 속성 사전), 1389 정점 09c4(번호, 좌표 09c5 = f64×3)
  *            ├ 138a 모서리 0bb8(바탕 07d0, 시작 0bb9, 끝 0bba, 곡선 0bbb)
@@ -261,6 +263,10 @@ export interface SkpDefinition {
   description?: string;
   /** 그림 정의는 동작이 없다 */
   behavior?: SkpBehavior;
+  /** 정의를 불러온 파일 경로(0x1580, 2020 이하 CComponentDefinition 경로). 빈 글이면 없다 */
+  path?: string;
+  /** 정의 미리보기 그림의 꾸러미 안 경로(0x1585 → … → 0x232a, 예: thumbnails/의자.png). 2021+만 */
+  thumbnail?: string;
 }
 
 /** 글꼴(0x01fd 목록) */
@@ -450,6 +456,8 @@ export interface SkpModel {
   shadowInfo?: SkpShadowInfo;
   /** 그리기 축(0x01fc, 2020 이하 모형 꼬리 CSketchCS) — 기본 축이면 없다 */
   axes?: SkpAxes;
+  /** 불러온 분류 체계 이름(0x0205 → 0x6784 → 0x6786, 예: IFC 2x3) — 2021+만 */
+  classifications?: string[];
 }
 
 /** 모형 전체를 읽은 뒤 풀 붙은 치수 점 */
@@ -1082,6 +1090,32 @@ function readDefinitionFields(r: TlvReader, n: TlvNode, def: SkpDefinition): voi
     const b = def.kind !== 'image' ? r.firstSafe(n, TAG.BEHAVIOR) : undefined;
     if (b) def.behavior = readBehavior(r, b);
   });
+  safe(() => {
+    const p = r.str(r.firstSafe(n, TAG.DEF_PATH));
+    if (p) def.path = p;
+  });
+  // 미리보기 그림 경로: 실제 2021~2026 파일의 정의 994개 가운데 993개가 꾸러미에 있는 thumbnails/ 항목 이름과 같았다(docs/formats/skp.md)
+  safe(() => {
+    let c: TlvNode | undefined = n;
+    for (const t of [TAG.DEF_PREVIEW, TAG.PREVIEW, TAG.PREVIEW_IMAGE, TAG.IMAGE_REF, TAG.IMAGE_REF_PATH]) c = c && r.firstSafe(c, t);
+    const p = r.str(c);
+    if (p) def.thumbnail = p;
+  });
+}
+
+/** 분류 체계 이름(0x0205 → 0x6784* → 0x6786). 같은 이름은 한 번, 깨진 항목은 건너뛴다 */
+export function readClassifications(r: TlvReader, n: TlvNode): string[] {
+  const out: string[] = [];
+  r.eachSafe(n.start, n.end, (tag, start, end) => {
+    if (tag !== TAG.CLASSIFICATION) return;
+    try {
+      const name = r.str(r.firstSafe({ tag, start, end }, TAG.CLASSIFICATION_NAME))?.trim();
+      if (name && !out.includes(name)) out.push(name);
+    } catch {
+      /* 이 항목만 */
+    }
+  });
+  return out;
 }
 
 /**
@@ -1429,6 +1463,7 @@ export class ModelParse {
       const rec = r.firstSafe(n, TAG.AXES);
       return rec ? readAxes(r, rec) : undefined;
     });
+    const classifications = this.section('props', TAG.CLASSIFICATION_SECTION, '분류 체계', (r, n) => readClassifications(r, n));
 
     // 경고: 묶음을 한 버퍼 읽기의 차례로 합친다
     const all = new Map<string, number>();
@@ -1460,6 +1495,7 @@ export class ModelParse {
     if (props?.description !== undefined) model.description = props.description;
     if (shadowInfo) model.shadowInfo = shadowInfo;
     if (axes) model.axes = axes;
+    if (classifications?.length) model.classifications = classifications;
     if (ctx.damaged) model.damaged = true;
     return model;
   }

@@ -270,6 +270,10 @@ export interface SkpTreeInfo {
   definitionAttrs: Int32Array;
   /** 정의마다 항상 카메라 보기(동작 0x1B5D, 1 = 켜짐) */
   definitionFaceCamera?: Uint8Array;
+  /** 정의마다 불러온 파일 경로('' = 없음). 경로를 가진 정의가 하나도 없으면 칸이 없다 */
+  definitionPath?: string[];
+  /** 정의마다 미리보기 그림의 꾸러미 안 경로('' = 없음, readSkpImages의 components[].path와 같은 글). 하나도 없으면 칸이 없다 */
+  definitionThumbnail?: string[];
   /**
    * 노드마다 SketchUp 입체(닫힌 껍질, 면 방향이 맞고 떠 있는 모서리·안쪽 그룹이 없음)면 부피(장면 단위³), 아니면 NaN.
    * 입체 노드가 하나도 없으면 칸이 없다
@@ -319,6 +323,8 @@ export interface SkpMetaExtras {
    * 모형 스타일이 그 방식이거나(아니면) 스타일을 쓰는 장면이 그 방식일 때만. 화면은 지금 스타일이 모두 같게면 묶음 색(color) 한 색으로 덮는다
    */
   edgeColoring?: SkpEdgeColorMode;
+  /** 불러온 분류 체계 이름(정보 탭 — SketchUp Model Info > 분류, 예: IFC 2x3). 2021+만 */
+  classifications?: string[];
   /** 위치(정보 탭)·그림자 설정·그리기 축 */
   location?: SkpLocationMeta;
   shadow?: SkpShadowMeta;

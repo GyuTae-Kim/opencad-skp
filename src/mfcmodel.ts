@@ -129,6 +129,8 @@ interface DefRec {
   coll: Collection;
   name: string;
   description: string;
+  /** 불러온 파일 경로(빈 글 = 모형 안에서 만든 정의) */
+  path: string;
   guid?: string;
   behavior?: SkpBehavior;
   kinds: Set<'component' | 'group' | 'image'>;
@@ -1030,7 +1032,7 @@ class Decoder {
     const pre = st.preamble();
     const coll = newCollection(st.collections.length);
     st.collections.push(coll);
-    const rec: DefRec = { coll, name: '', description: '', kinds: new Set() };
+    const rec: DefRec = { coll, name: '', description: '', path: '', kinds: new Set() };
     if (pre.attrs) {
       rec.attrs = pre.attrs;
       coll.attrs = pre.attrs;
@@ -1046,7 +1048,7 @@ class Decoder {
     if (guid) rec.guid = guid;
     rec.name = s.cstr();
     rec.description = s.cstr();
-    s.cstr();
+    rec.path = s.cstr();
     s.u32();
     // 동작 덩어리: CComponentBehavior 5(SketchUp 7+) 42바이트, 4(SketchUp 4~6) 38바이트(늘이지 않음 마스크가 없다),
     // 3(SketchUp 3) 35바이트(붙기·구멍·붙는 면이 2 앞 — 카메라 보기·해 그림자 칸은 표준 파일이 모두 꺼져 있어 자리를 몰라 읽지 않는다)
@@ -1641,6 +1643,7 @@ function assemble(
     const def: SkpDefinition = { id: i, name: d.name || `정의 ${i + 1}`, entities: built[d.coll.cid]!, kind };
     if (d.guid && kind !== 'image') def.guid = d.guid;
     if (d.description) def.description = d.description;
+    if (d.path) def.path = d.path;
     if (d.behavior && kind !== 'image') def.behavior = d.behavior;
     definitions.set(i, def);
   });

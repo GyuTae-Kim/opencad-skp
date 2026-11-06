@@ -153,7 +153,10 @@ export interface DocImages {
   model: { name: string; url: string } | null;
   /** 재질 폴더 → 무늬 그림 */
   materials: Map<string, { name: string; url: string }>;
-  /** 컴포넌트 미리보기(파일 이름 = 정의 이름으로 보임) */
+  /**
+   * 컴포넌트 미리보기: 꾸러미 안 경로(정의가 적은 미리보기 경로 meta.treeInfo.definitionThumbnail로 잇는다)와
+   * 파일 이름(= 정의 이름으로 보임 — 정의가 경로를 적지 않은 파일에서 쓴다) 둘 다 열쇠로 둔다
+   */
   components: Map<string, string>;
   /** 장면 미리보기(path = ZIP 경로, 장면의 thumbnail과 잇는다) */
   scenes: { name: string; url: string; path: string }[];
@@ -236,6 +239,8 @@ export interface SkpDoc {
   tagFolders: SkpTagFolderMeta[];
   modelName: string | null;
   modelDescription: string | null;
+  /** 불러온 분류 체계 이름(meta.classifications, 없으면 빈 목록) */
+  classifications: string[];
   texts: SkpTextMeta[];
   dimensions: SkpDimensionMeta[];
   /** 읽을 수 있는 단면(index = meta.sectionPlanes 차례) */
@@ -543,7 +548,12 @@ export function docImages(images: SkpImages | undefined, make: UrlMaker): DocIma
   const out: DocImages = { model: null, materials: new Map(), components: new Map(), scenes: [], skipped: images.skipped ?? 0, urls };
   if (images.model) out.model = { name: images.model.name, url: url(images.model.bytes, images.model.mime) };
   for (const m of images.materials ?? []) if (!out.materials.has(m.folder)) out.materials.set(m.folder, { name: m.name, url: url(m.bytes, m.mime) });
-  for (const c of images.components ?? []) if (!out.components.has(c.name)) out.components.set(c.name, url(c.bytes, c.mime));
+  for (const c of images.components ?? [])
+    if (!out.components.has(c.path)) {
+      const u = url(c.bytes, c.mime);
+      out.components.set(c.path, u);
+      if (!out.components.has(c.name)) out.components.set(c.name, u);
+    }
   for (const sc of images.scenes ?? []) out.scenes.push({ name: sc.name, url: url(sc.bytes, sc.mime), path: sc.path });
   return out;
 }
@@ -553,11 +563,16 @@ export function fileSafeName(name: string): string {
   return name.replace(/[<>:"/\\|?*]/g, '_');
 }
 
-/** 컴포넌트 정의 이름 → 미리보기 그림 주소(이름이 같거나, 못 쓰는 글자를 _로 바꾼 이름이 같으면) */
-export function componentImage(d: Pick<SkpDoc, 'images'>, definition: string): string | null {
+/**
+ * 컴포넌트 정의 이름 → 미리보기 그림 주소. 정의가 미리보기 경로를 적었으면(2021+ 0x1585 → … → 0x232a, meta.treeInfo.definitionThumbnail)
+ * 그 경로의 그림을 쓴다(45차 — 실제 파일의 정의 994개 가운데 993개가 꾸러미 항목과 같은 경로였고, 이름으로는 35개를 못 찾았다:
+ * 이름 "의자.dae#1" → thumbnails/의자_1.jpg, "가/나/다" → thumbnails/다.jpg 꼴). 없으면 예전처럼 이름이 같거나 못 쓰는 글자를 _로 바꾼 이름이 같은 그림
+ */
+export function componentImage(d: Pick<SkpDoc, 'images'> & Partial<Pick<SkpDoc, 'tree' | 'treeInfo'>>, definition: string): string | null {
   const imgs = d.images?.components;
   if (!imgs) return null;
-  return imgs.get(definition) ?? imgs.get(fileSafeName(definition)) ?? null;
+  const p = d.treeInfo?.definitionThumbnail?.[d.tree?.definitionNames.indexOf(definition) ?? -1];
+  return (p && imgs.get(p)) || imgs.get(definition) || imgs.get(fileSafeName(definition)) || null;
 }
 
 /** 재질 줄 → 무늬 그림 주소 */
@@ -779,6 +794,7 @@ export function readMetaExtras(scene: Scene3d): Pick<
   | 'tagFolders'
   | 'modelName'
   | 'modelDescription'
+  | 'classifications'
   | 'texts'
   | 'dimensions'
   | 'sectionPlanes'
@@ -834,6 +850,7 @@ export function readMetaExtras(scene: Scene3d): Pick<
     tagFolders: objects<SkpTagFolderMeta>(m.tagFolders),
     modelName: str(m.modelName),
     modelDescription: str(m.modelDescription),
+    classifications: ids(m.classifications),
     texts: objects<SkpTextMeta>(m.texts),
     dimensions: objects<SkpDimensionMeta>(m.dimensions),
     sectionPlanes,
@@ -1374,6 +1391,7 @@ export function selectionEntity(d: SkpDoc): EntityInput {
         const def = t.definition[first]!;
         e.description = d.treeInfo.definitionDescription[def] || null;
         e.definitionGuid = d.treeInfo.definitionGuid[def] || null;
+        e.definitionPath = d.treeInfo.definitionPath?.[def] || null;
       }
     } else {
       e.faces = rows.reduce((s, r) => s + r.faces, 0);

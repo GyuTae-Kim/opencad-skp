@@ -670,6 +670,10 @@ export interface DefinitionSpec {
   guid?: Uint8Array;
   description?: string;
   behavior?: BehaviorOpts;
+  /** 불러온 파일 경로(1580) */
+  path?: string;
+  /** 미리보기 그림의 꾸러미 안 경로(1585 → 251c → 251e → 2328 → 232a, 꼴 2329 = 4 그림 파일) */
+  thumbnail?: string;
 }
 
 export interface ModelOpts {
@@ -715,7 +719,9 @@ const definitionItem = (d: DefinitionSpec): Uint8Array =>
     tlv(0x157d, d.guid ?? new Uint8Array(16)),
     tlv(0x157e, utf8(d.name)),
     ...(d.description !== undefined ? [tlv(0x157f, utf8(d.description))] : []),
+    ...(d.path !== undefined ? [tlv(0x1580, utf8(d.path))] : []),
     ...(d.kind !== undefined ? [tlv(0x1583, i32(d.kind))] : []),
+    ...(d.thumbnail !== undefined ? [tlv(0x1585, tlv(0x251c, tlv(0x251e, tlv(0x2328, tlv(0x2329, i32(4)), tlv(0x232a, utf8(d.thumbnail))))))] : []),
     ...(d.behavior
       ? [
           tlv(
