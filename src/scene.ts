@@ -1096,6 +1096,8 @@ export interface SkpMaterialStat {
   /** 그린 면 넓이 합(세계, 장면 단위²) */
   area: number;
   meshIds: string[];
+  /** 재질 속성 사전의 meta.attributes 차례(속성 사전이 있는 재질만) */
+  attrs?: number;
 }
 
 /** 모형 바로 아래 그룹·컴포넌트 하나(outline 선택일 때) */
@@ -3424,6 +3426,11 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     parts.outline = loose ? [loose] : [];
   }
   if (outlineSkipped) parts.outlineSkipped = outlineSkipped;
+  // 재질 속성 사전: 모형·나무·정의 뒤에 넣는다(그것들의 meta.attributes 차례는 그대로)
+  for (const ms of matStats.values()) {
+    const i = ms.folder !== undefined ? pool.add(materials.get(ms.folder)?.attrs) : -1;
+    if (i >= 0) ms.attrs = i;
+  }
   if (pool.list.length) parts.attributes = pool.list;
   if (revealIds.size) parts.revealItems = [...revealIds].map(([node, ids]) => ({ node, ids }));
   return parts;

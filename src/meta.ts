@@ -285,6 +285,7 @@ export interface SkpTreeInfo {
  * Scene3d.meta에 더하는 칸(SkpOptions에 따라). 기존 칸(version·lengthUnit·tagStats·materialStats·outline·tree·extraItems 등)은 그대로다.
  * tagStats 항목에는 visible(태그 자신의 보임)·color·folder(tagFolders 차례)·dashed(선 종류가 실선이 아님)·lineStyle이 더해진다.
  * materialStats·outline 항목에는 area(보통 면 넓이 합, 장면 단위²)가 더해진다.
+ * materialStats 항목에는 재질 속성 사전이 있으면 attrs(meta.attributes 차례)가 더해진다.
  */
 export interface SkpMetaExtras {
   units?: SkpUnitsMeta;
@@ -336,7 +337,7 @@ export interface SkpMetaExtras {
    * 화면은 처음에 숨기고, 그 노드를 숨기지 않는 장면을 고르면 보인다(숨긴 형상 보기의 반투명 그물과는 따로)
    */
   revealItems?: { node: number; ids: string[] }[];
-  /** 속성 사전 모음(같은 것은 한 번만): 모형 속성은 modelAttrs 차례 */
+  /** 속성 사전 모음(같은 것은 한 번만): 모형 속성은 modelAttrs 차례, 재질 속성은 materialStats[].attrs 차례(모형·나무·정의 뒤에 더한다) */
   attributes?: SkpAttrDictsMeta[];
   modelAttrs?: number;
   treeInfo?: SkpTreeInfo;

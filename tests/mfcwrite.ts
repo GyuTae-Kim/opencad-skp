@@ -497,6 +497,8 @@ export interface MfcMaterialSpec {
   useAlpha?: boolean;
   texture?: { image: Uint8Array; kind?: 0 | 1 | 4; path: string; width?: number; height?: number; avg?: [number, number, number, number] };
   type?: number;
+  /** CMaterial 앞머리 속성 사전 */
+  attrs?: MfcDicts;
 }
 
 export interface MfcLayerSpec {
@@ -1195,7 +1197,7 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
       for (const m of mats)
         materialSlots.push(
           w.obj('CMaterial', () => {
-            pre();
+            pre(m.attrs);
             materialBody(m);
           }),
         );

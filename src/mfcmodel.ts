@@ -935,9 +935,9 @@ class Decoder {
     return out;
   }
 
-  /** CMaterial: 앞머리 + 재질 칸. 값은 재질 차례 */
+  /** CMaterial: 앞머리(속성 사전) + 재질 칸. 값은 재질 차례 */
   private material(slot: number): number {
-    this.st.preamble();
+    const pre = this.st.preamble();
     const index = this.materials.length;
     this.s.values[slot] = index;
     const m = this.materialBody();
@@ -954,6 +954,7 @@ class Decoder {
       if (file) info.texture.file = file;
     }
     if (m.colorize) info.colorize = m.colorize;
+    if (pre.attrs) info.attrs = pre.attrs;
     this.materials.push({ key, info, translucent: m.translucent });
     if (m.texture) this.image('material', baseName(m.texture.path) || key, m.texture.dib, key);
     return index;
