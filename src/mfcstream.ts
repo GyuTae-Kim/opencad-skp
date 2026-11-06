@@ -47,10 +47,11 @@ export type MfcReadFn = (slot: number) => unknown;
 const utf16 = new TextDecoder('utf-16le');
 
 export class MfcStream {
-  readonly b: Uint8Array;
-  readonly dv: DataView;
+  /** 읽는 바이트(글 왕복 손상 고쳐 읽기는 빠진 2바이트를 메운 사본으로 바꿔 끼운다 — useBuffer) */
+  b: Uint8Array;
+  dv: DataView;
   pos: number;
-  readonly end: number;
+  end: number;
   /** 칸마다 클래스 이름(객체 칸은 그 객체의 클래스) */
   readonly names: string[] = [''];
   /** 칸마다 값(클래스 칸은 CLASS) */
@@ -65,6 +66,16 @@ export class MfcStream {
   /** 너그럽게 읽다 버린 참조 수와 첫 자리(readObject의 lenient) */
   badRefs = 0;
   firstBadRef = -1;
+  /**
+   * 글 왕복 손상 고쳐 읽기(mfcmend.ts)에서만 켠다(읽는 바이트가 사본일 때): 너그러운 참조가 맞지 않으면 꼬리표에 걸친 짝수 자리 LF(0A 00)를
+   * CR(0D 00)로 되돌려 보고, 맞는 참조가 되면 그 바이트를 고친 채 쓴다. crFixed = 그렇게 되살린 참조 수
+   */
+  crFix = false;
+  crFixed = 0;
+  /** 그렇게 고친 바이트 자리(시험 읽기를 거둘 때 되돌린다) */
+  readonly crLog: number[] = [];
+  /** 고쳐 읽기 시험에서 읽는 함수가 센 이상한 값(그럴듯하지 않은 좌표·법선, 이어지지 않는 고리) — 시험 고르기의 벌점 */
+  suspect = 0;
 
   constructor(b: Uint8Array, pos: number, maxRecords: number) {
     this.b = b;
@@ -72,6 +83,13 @@ export class MfcStream {
     this.pos = pos;
     this.end = b.length;
     this.maxRecords = maxRecords;
+  }
+
+  /** 읽는 바이트를 바꾼다(자리는 그대로) */
+  useBuffer(b: Uint8Array): void {
+    this.b = b;
+    this.dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+    this.end = b.length;
   }
 
   // ── 낱값 ──────────────────────────────────────────────────────
@@ -214,19 +232,51 @@ export class MfcStream {
       return this.newObject(this.className(tag & ~CLASS_TAG, at), expected, at);
     }
     // 이미 읽은 객체 참조
-    if (tag >= this.names.length) return this.badRef(lenient, `아직 읽지 않은 칸 ${tag}를 가리킵니다`, at);
+    if (tag >= this.names.length) return this.badRef(lenient, `아직 읽지 않은 칸 ${tag}를 가리킵니다`, at, expected);
     const value = this.values[tag];
-    if (value === CLASS) return this.badRef(lenient, `클래스 칸 ${tag}를 객체로 가리킵니다`, at);
+    if (value === CLASS) return this.badRef(lenient, `클래스 칸 ${tag}를 객체로 가리킵니다`, at, expected);
     const name = this.names[tag]!;
-    if (expected && !expected.has(name)) return this.badRef(lenient, `${[...expected].join('/')} 자리에 ${name} 참조가 있습니다`, at);
+    if (expected && !expected.has(name)) return this.badRef(lenient, `${[...expected].join('/')} 자리에 ${name} 참조가 있습니다`, at, expected);
     this.lastClass = name;
     return value;
   }
 
-  private badRef(lenient: boolean, message: string, at: number): typeof BAD_REF {
+  private badRef(lenient: boolean, message: string, at: number, expected: ReadonlySet<string> | undefined): unknown {
     if (!lenient) throw new MfcError('corrupt', message, at);
+    if (this.crFix) {
+      const v = this.crRef(at, expected);
+      if (v !== BAD_REF) return v;
+    }
     if (!this.badRefs++) this.firstBadRef = at;
     this.lastClass = '';
+    return BAD_REF;
+  }
+
+  /**
+   * 맞지 않는 참조 꼬리표(at ~ 지금 자리)에 걸친 짝수 자리 낱자 LF(0A 00)를 하나씩 CR(0D 00)로 되돌려 본다(글 왕복이 CR을 LF로 바꾼 파일).
+   * 같은 길이의 맞는 참조가 되면 그 바이트를 고친 채 그 값을, 아니면 되돌리고 BAD_REF
+   */
+  private crRef(at: number, expected: ReadonlySet<string> | undefined): unknown {
+    const b = this.b;
+    const end = this.pos;
+    for (let p = at + (at & 1); p < end; p += 2) {
+      if (b[p] !== 0x0a || b[p + 1] !== 0) continue;
+      b[p] = 0x0d;
+      let tag = b[at]! | (b[at + 1]! << 8);
+      let len = 2;
+      if (tag === BIG_OBJECT_TAG) {
+        tag = this.dv.getUint32(at + 2, true);
+        len = 6;
+      }
+      const isRef = tag !== 0 && (len === 2 ? tag < CLASS_TAG : !(tag & BIG_CLASS_TAG));
+      if (at + len === end && isRef && tag < this.names.length && this.values[tag] !== CLASS && (!expected || expected.has(this.names[tag]!))) {
+        this.crFixed++;
+        this.crLog.push(p);
+        this.lastClass = this.names[tag]!;
+        return this.values[tag];
+      }
+      b[p] = 0x0a;
+    }
     return BAD_REF;
   }
 
