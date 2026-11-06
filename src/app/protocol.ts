@@ -26,13 +26,15 @@ export interface ParseRequest {
 }
 
 /**
- * 쥐어 둔 무늬 하나(29차): 해석 워커가 색을 바꾼 무늬의 원래 그림 파일 바이트(Blob — 그림 꼴은 type)와 그 무늬의 손질 정보(meta.textures — 색 바꾸기·알파).
- * 문맥을 되찾으면 처음 열 때와 같은 손질(worker/textures.ts)로 다시 그림을 만든다
+ * 쥐어 둔 무늬 하나(29차): 큰 모형을 놓아 올릴 때 쥔 원래 그림 파일 바이트(Blob — 그림 꼴은 type)와 그 무늬의 손질 정보(meta.textures — 색 바꾸기·알파).
+ * 문맥을 되찾으면 색 바꾼 무늬는 처음 열 때와 같은 손질(worker/textures.ts)로 다시 그림을 만들고, raw(41차 — 코어가 푸는 무늬·워커가 알파만 잰 무늬)는
+ * 바이트를 그대로 코어에 다시 준다
  */
 export interface HeldTexture {
   id: string;
   blob: Blob;
   info: SkpTextureInfo;
+  raw?: boolean;
 }
 
 /** 쥐어 둔 무늬를 다시 손질해 받기(문맥 복구 — 처음 열 때와 같은 한도로 푼다). Blob은 복사 없이 넘어간다 */

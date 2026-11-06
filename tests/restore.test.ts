@@ -139,8 +139,11 @@ describe('되찾을 때 다시 손질하기', () => {
     ]);
     // 장면 무늬의 크기는 올린 그림 크기로 바뀌었다 — 이것으로 풀면 크기를 모르고 풀어 차례가 달라진다
     expect(scene.textures![0]).toMatchObject({ width: 2048, height: 512 });
-    const held = prepareRelease(scene);
-    expect(held.map((h) => h.id)).toEqual(['a', 'b']);
+    const held = prepareRelease({ scene });
+    expect(held.map((h) => [h.id, !!h.raw])).toEqual([
+      ['a', false],
+      ['b', false],
+    ]);
     log.calls.length = 0;
     const res = await recolorTextures(held, 2048);
     expect(log.calls.map((c) => c.opts?.resizeWidth ?? null)).toEqual(first);
@@ -154,7 +157,7 @@ describe('되찾을 때 다시 손질하기', () => {
     fakeDecode();
     const scene = openedScene();
     await prepareSceneTextures(scene, 2048);
-    const held = prepareRelease(scene);
+    const held = prepareRelease({ scene });
     const bad = { ...held[0]!, blob: new Blob([new Uint8Array([9])], { type: 'image/png' }) };
     vi.stubGlobal('createImageBitmap', async (src: Blob) => {
       if ((await src.arrayBuffer()).byteLength < 8) throw new Error('풀지 못함');

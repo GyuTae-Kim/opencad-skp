@@ -1190,9 +1190,9 @@ export class SkpViewerApp implements PanelHost {
       }
       this.uploadDone = resolve;
     });
-    // 큰 모형 놓기: 색을 바꾼 무늬는 그림 바이트를 장면에서 빼 쥐어 두고 되찾을 때 다시 손질한다(release.ts prepareRelease)
+    // 큰 모형 놓기: 무늬 그림 바이트를 Blob으로 쥐어 두고(색 바꾼 무늬는 장면에서 빼고, 나머지는 코어가 올린 뒤 지운다) 되찾을 때 다시 준다(release.ts prepareRelease)
     const rel = big && release ? release : null;
-    const held = rel ? rel.prepareRelease(d.scene) : [];
+    const held = rel ? rel.prepareRelease(d) : [];
     // 앞 문서의 다시 손질은 거둔다(놓아 올렸으면 아래에서 이 문서의 것을 준다)
     this.ctxWatch?.setSource(null);
     if (big)
