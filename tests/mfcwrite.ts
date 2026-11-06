@@ -48,8 +48,29 @@ const BASE = {
   CVertex: 0,
   CViewPage: 12,
 };
-export const MFC_SCHEMAS: Record<'v4' | 'v6' | 'v7' | 'v8' | 'v15' | 'v17' | 'v18' | 'v19' | 'v20', Record<string, number>> = {
+/** SketchUp 5에는 스타일 클래스가 없다 */
+const { CSkpStyle: _noStyle, ...BASE_NO_STYLE } = BASE;
+export const MFC_SCHEMAS: Record<'v4' | 'v5' | 'v6' | 'v7' | 'v8' | 'v15' | 'v17' | 'v18' | 'v19' | 'v20', Record<string, number>> = {
   v4: { ...BASE, CSketchUpModel: 12, CRenderingOptions: 25, CComponentInstance: 3, CDrawingElement: 8, CViewPage: 9, CArcCurve: 1 },
+  // SketchUp 5: 6의 것 + 머리 8바이트, 카메라 2점 투시·24바이트 없음, 렌더링 덩어리 150바이트(장면 안 146), 무늬 그림은 u8 + 줄 안 CDib(JPEG 품질 없음),
+  // 치수 머리 글꼴·정렬·끝 표시와 선형 치수 글 자리 없음, 글꼴 세계 크기 없음, 문자 기본값 18바이트·지시선 글꼴 없음, 장면 스타일·미리보기 없음, 스타일 없음
+  v5: {
+    ...BASE_NO_STYLE,
+    CSketchUpModel: 12,
+    CRenderingOptions: 28,
+    CComponentInstance: 4,
+    CViewPage: 9,
+    CArcCurve: 1,
+    CAttributeNamed: 0,
+    CComponentBehavior: 4,
+    CCamera: 4,
+    CDib: 2,
+    CDimension: 0,
+    CDimensionLinear: 4,
+    CSkFont: 0,
+    CTextStyle: 4,
+    CTexture: 4,
+  },
   // SketchUp 6: 설정 묶음이 꼬리에, 동작 덩어리 38바이트, CAttributeNamed 끝 u32 없음, 렌더링 덩어리 189바이트
   v6: { ...BASE, CSketchUpModel: 18, CRenderingOptions: 32, CComponentInstance: 4, CViewPage: 11, CArcCurve: 1, CAttributeNamed: 0, CComponentBehavior: 4 },
   v7: { ...BASE, CSketchUpModel: 22, CRenderingOptions: 35, CComponentInstance: 4, CViewPage: 11, CArcCurve: 1 },
@@ -90,6 +111,7 @@ export const MFC_SCHEMAS: Record<'v4' | 'v6' | 'v7' | 'v8' | 'v15' | 'v17' | 'v1
 /** 판 → 머리 판 글 */
 export const MFC_VERSIONS: Record<keyof typeof MFC_SCHEMAS, string> = {
   v4: '4.0.1',
+  v5: '5.0.1',
   v6: '6.0.1',
   v7: '7.0.1',
   v8: '8.0.1',
@@ -480,8 +502,9 @@ export interface MfcRenderSpec {
   mode?: number;
   texture?: boolean;
   xray?: boolean;
-  background?: Vec3;
-  foreground?: Vec3;
+  /** null이면 네 바이트 0(정하지 않은 색) */
+  background?: Vec3 | null;
+  foreground?: Vec3 | null;
   front?: Vec3;
   back?: Vec3;
   sky?: Vec3;
@@ -592,11 +615,12 @@ export interface MfcSpec {
 // ── 쓰기 ──────────────────────────────────────────────────────
 
 /** 렌더링 덩어리 칸 자리(src/mfcview.ts와 같은 형식 기록에서) */
-const BLOCK_SIZE: Record<number, number> = { 25: 160, 32: 189, 33: 190, 35: 197, 36: 216, 37: 221, 38: 222, 39: 223 };
+const BLOCK_SIZE: Record<number, number> = { 25: 160, 28: 150, 32: 189, 33: 190, 35: 197, 36: 216, 37: 221, 38: 222, 39: 223 };
 const F36 = { xray: 6, background: 13, foreground: 17, texture: 32, profiles: 42, hiddenGeometry: 58, front: 63, back: 67, sky: 123, ground: 131, drawSky: 135, drawGround: 136 };
 const F38 = { ...F36, background: 14, foreground: 18, texture: 33, profiles: 43, hiddenGeometry: 59, front: 64, back: 68, sky: 124, ground: 132, drawSky: 136, drawGround: 137, sectionFill: 167 };
 const FIELDS: Record<number, Record<string, number>> = {
   25: F36,
+  28: { ...F36, sky: 89, ground: 97, drawSky: 101, drawGround: 102 },
   32: F36,
   35: F36,
   36: F36,
@@ -708,12 +732,14 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
       w.nil();
       return;
     }
-    w.obj('CDib', () => {
-      w.u32(kind);
-      w.u32(image.length);
-      w.raw(image);
-      if (kind === 1) w.u32(90);
-    });
+    w.obj('CDib', () => dibBody(image, kind));
+  };
+  /** CDib 내용(CDib 2 = SketchUp 5는 JPEG 품질이 없다) */
+  const dibBody = (image: Uint8Array, kind: 0 | 1 | 4): void => {
+    w.u32(kind);
+    w.u32(image.length);
+    w.raw(image);
+    if (kind === 1 && w.schema('CDib') >= 3) w.u32(90);
   };
   const camera = (c: MfcCameraSpec | undefined): void => {
     if (!c) {
@@ -730,13 +756,15 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
       w.zeros(2);
       w.str('');
       w.f64(0);
+      // CCamera 4(SketchUp 5)는 그림 너비에서 끝난다
+      if (w.schema('CCamera') < 5) return;
       w.u8(c.twoPoint ? 1 : 0);
       w.zeros(24);
     });
   };
   const block = (r: MfcRenderSpec | undefined, insidePage: boolean): void => {
     const schema = w.schema('CRenderingOptions');
-    const size = (BLOCK_SIZE[schema] ?? 216) - (insidePage ? 8 : 0);
+    const size = (BLOCK_SIZE[schema] ?? 216) - (insidePage ? (schema < 32 ? 4 : 8) : 0);
     const b = new Uint8Array(size);
     const f = FIELDS[schema] ?? F36;
     new DataView(b.buffer).setUint32(2, r?.mode ?? 2, true);
@@ -754,8 +782,8 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
     put('sectionFill', r?.sectionFill ? 1 : 0);
     put('drawSky', r?.drawSky ? 1 : 0);
     put('drawGround', r?.drawGround ? 1 : 0);
-    rgb('background', r?.background ?? [255, 255, 255]);
-    rgb('foreground', r?.foreground ?? [0, 0, 0]);
+    rgb('background', r?.background === null ? undefined : (r?.background ?? [255, 255, 255]));
+    rgb('foreground', r?.foreground === null ? undefined : (r?.foreground ?? [0, 0, 0]));
     rgb('front', r?.front ?? [255, 255, 255]);
     rgb('back', r?.back ?? [164, 178, 187]);
     rgb('sky', r?.sky);
@@ -767,8 +795,15 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
     w.str(m.name);
     w.u8(m.texture ? 1 : 0);
     if (m.texture) {
-      pre();
-      dib(m.texture.image, m.texture.kind ?? 4);
+      if ((w.schemas.CTexture ?? 6) < 5) {
+        // CTexture 4(SketchUp 5): 앞머리 없이 u8(그림 있음) + 줄 안 CDib
+        const image = m.texture.image;
+        w.u8(image ? 1 : 0);
+        if (image) dibBody(image, m.texture.kind ?? 4);
+      } else {
+        pre();
+        dib(m.texture.image, m.texture.kind ?? 4);
+      }
       w.f64(m.texture.width ?? 10, m.texture.height ?? 10);
       w.str(m.texture.path);
       w.raw(m.texture.avg ?? [128, 128, 128, 255]);
@@ -827,6 +862,8 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
       w.u8(f.bold ? 1 : 0);
       w.u8(f.italic ? 1 : 0);
       w.i32(f.points ?? 12);
+      // CSkFont 0(SketchUp 5)은 세계 크기 둘이 없다
+      if (w.schema('CSkFont') < 1) return;
       w.u8(f.worldSize !== undefined ? 1 : 0);
       w.f64(f.worldSize ?? 10);
     });
@@ -1014,6 +1051,8 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
       pre(undefined, pid);
       drawing(undefined, {}, undefined);
       w.str(text);
+      // CDimension 0(SketchUp 5)은 글에서 끝난다
+      if ((w.schemas.CDimension ?? 1) < 1) return;
       fontRef(font);
       w.u8(aligned ? 1 : 0);
       w.u32(arrow ?? 3);
@@ -1027,7 +1066,7 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
           w.f64(...d.normal, ...d.xaxis);
           w.i32(d.alignment);
           w.f64(0, d.distance);
-          w.i32(d.textPos ?? 1);
+          if (w.schema('CDimensionLinear') >= 5) w.i32(d.textPos ?? 1);
         });
       }),
     );
@@ -1158,7 +1197,8 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
 
   // CSketchUpModel 본문
   const modelSchema = w.schema('CSketchUpModel');
-  w.zeros(12);
+  // SketchUp 5(모형 스키마 12): 미리보기 앞이 8바이트
+  w.zeros(modelSchema >= 18 ? 12 : 8);
   if (modelSchema >= 26) w.zeros(8);
   dib(spec.thumbnail);
   // SketchUp 6(모형 스키마 18): 머리가 4바이트 짧고 설정 묶음·모형 속성·두 번째 그림이 없다(설정 묶음은 꼬리에)
@@ -1204,10 +1244,14 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
         w.str(p.name);
         w.str(p.description ?? '');
         w.u32(p.flags);
+        // CViewPage 9(SketchUp 5): 장면 스타일·미리보기가 없고 재생 넣기 뒤 u8이 하나 더 있다
+        const oldPage = w.schema('CViewPage') < 11;
         if (p.flags & 0x1) camera(p.camera);
         if (p.flags & 0x2) {
           block(p.rendering, true);
-          if (p.style !== undefined) styleRef(p.style);
+          if (oldPage) {
+            /* 스타일 없음 */
+          } else if (p.style !== undefined) styleRef(p.style);
           else styleObj({ name: `${p.name} 스타일` });
         }
         if (p.flags & 0x4) shadow();
@@ -1230,7 +1274,9 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
           for (const sec of p.sections ?? []) w.ref((sec.def === undefined ? rootSlots : defEntSlots[sec.def]!).sections[sec.index]!);
         }
         w.u8(p.include === false ? 0 : 1);
+        if (oldPage) w.u8(1);
         w.f64(p.transition ?? -1, p.delay ?? -1);
+        if (oldPage) return;
         w.nil();
         if (w.schema('CViewPage') >= 12) {
           w.u8(0);
@@ -1262,18 +1308,22 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
   w.raw(dim);
   w.zeros(pids ? 3 : 2);
   fontRef(d.textFont);
-  const text = new Uint8Array(22);
+  // CTextStyle 4(SketchUp 5): 문자 기본값 18바이트(지시선 글 색 없음), 지시선 글꼴 없음
+  const leaders = (w.schemas.CTextStyle ?? 5) >= 5;
+  const text = new Uint8Array(leaders ? 22 : 18);
   const tv = new DataView(text.buffer);
   tv.setInt32(0, d.leaderType ?? 2, true);
   tv.setInt32(9, d.leaderArrow ?? 2, true);
   text.set([...(d.textColor ?? [0, 0, 0]), 255], 14);
-  text.set([...(d.leaderColor ?? [0, 0, 0]), 255], 18);
+  if (leaders) text.set([...(d.leaderColor ?? [0, 0, 0]), 255], 18);
   w.raw(text);
-  fontRef(d.leaderFont);
+  if (leaders) fontRef(d.leaderFont);
   w.zeros(pids ? 3 : 2);
   const fonts = spec.fonts ?? [];
   w.u32(fonts.length);
   fonts.forEach((_, i) => fontRef(i));
+  // SketchUp 5: 스타일이 없고 글꼴 목록에서 모형이 끝난다
+  if (modelSchema < 18) return concat([head, w.bytes()]);
   if (w.schema('CLineStyleManager') >= 1) {
     w.zeros(3);
     const ls = spec.lineStyles ?? [];

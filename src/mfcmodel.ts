@@ -1,13 +1,13 @@
 /**
  * SketchUp 2020 이하(머리 뒤 MFC CArchive 객체 직렬화) → 중간 모형(SkpModel, 2021+ 해석기와 같은 꼴).
- * SketchUp 6(CSketchUpModel 스키마 18)·7·8·2013~2020(21~29)을 읽고, SketchUp 3~5는 분명한 까닭과 함께 거절한다(MfcRefused).
+ * SketchUp 5(CSketchUpModel 스키마 12 + CRenderingOptions 28)·6(18)·7·8·2013~2020(21~29)을 읽고, SketchUp 3~4는 분명한 까닭과 함께 거절한다(MfcRefused).
  * 형식 지식은 MFC 직렬화 규칙(Microsoft TN002)과, 사용자가 허락한 2026-10 비공개 참조 해석기(SketchUp C API를 비교 기준으로 맞춘 해석기)의
  * legacy 부분과 문서에서 옮긴 것이다(docs/formats/skp.md). 코드는 opencad-skp 꼴로 새로 썼다.
  *
  * 차례(클래스마다 스키마는 파일의 CVersionMap이 알린다):
  *   CString "SketchUp Model", CString "{판}", 16바이트 GUID, CString 경로, u32 시각
  *   CVersionMap(클래스 이름 → 스키마, "End-Of-Version-Map"까지)
- *   CSketchUpModel 본문: 12바이트, (스키마 26+) u64 다음 영구 번호, 미리보기 CDib, 14/15바이트, 설명, 설정 묶음,
+ *   CSketchUpModel 본문: 12바이트(5는 8), (스키마 26+) u64 다음 영구 번호, 미리보기 CDib, 14/15바이트(5·6은 10 — 설정 묶음부터 두 번째 CDib까지 없음), 설명, 설정 묶음,
  *     CAttributeContainer(ModelProperties 등), CDib, CCamera, 렌더링 덩어리, 뿌리 앞머리(모형 속성),
  *     CComponent 본문(재질·태그·(2020) 태그 폴더·정의·요소) + 꼬리(관계 0개, 활성 단면), 모형 꼬리(mfcview.ts)
  *   CComponentDefinition: CComponent 본문 + 꼬리, GUID, 이름, 설명, 경로, 시각, 동작 42/43바이트, CThumbnail
@@ -63,6 +63,12 @@ const MIN_MODEL_SCHEMA = 21;
 const MAX_MODEL_SCHEMA = 29;
 /** SketchUp 6(CSketchUpModel 18): 머리에 설정 묶음·모형 속성이 없고 설정 묶음은 뿌리 요소 뒤에 온다 */
 const SU6_MODEL_SCHEMA = 18;
+/**
+ * SketchUp 5(CSketchUpModel 12 + CRenderingOptions 28): 6의 꼴에 더해 모형 머리가 4바이트 짧고, 카메라·렌더링 덩어리·글꼴·문자 기본값이 짧으며
+ * 스타일이 없다. SketchUp 4도 모형 스키마가 12라 렌더링 스키마(4는 25)로 가른다
+ */
+const SU5_MODEL_SCHEMA = 12;
+const SU5_RENDERING_SCHEMA = 28;
 /** 칸(클래스·객체) 수 한도 — 브라우저 메모리 보호 */
 export const MFC_MAX_RECORDS = 60_000_000;
 const MAX_DEFINITIONS = 1_000_000;
@@ -73,7 +79,7 @@ const DEFAULT_LAYER_NAMES = new Set(['Layer0', 'Untagged']);
 const UNSET_LAYER_COLOR: [number, number, number] = [64, 64, 64];
 const SNAP_TO = ['any', 'horizontal', 'vertical', 'sloped'] as const;
 
-/** SketchUp 3~5처럼 읽지 않는 옛 판 */
+/** SketchUp 3~4처럼 읽지 않는 옛 판 */
 export class MfcRefused extends Error {
   readonly modelSchema: number;
   readonly renderingSchema: number;
@@ -207,13 +213,15 @@ class Decoder {
     s.readObject(C.VERSION_MAP);
     const model = this.st.schemas.get('CSketchUpModel') ?? -1;
     const rendering = this.st.schemas.get('CRenderingOptions') ?? -1;
-    const known = (model >= MIN_MODEL_SCHEMA && model <= MAX_MODEL_SCHEMA) || model === SU6_MODEL_SCHEMA;
+    const su5 = model === SU5_MODEL_SCHEMA && rendering === SU5_RENDERING_SCHEMA;
+    const known = (model >= MIN_MODEL_SCHEMA && model <= MAX_MODEL_SCHEMA) || model === SU6_MODEL_SCHEMA || su5;
     if (!known || !(rendering in RENDERING_BLOCK)) {
-      const old = model >= 0 && model < SU6_MODEL_SCHEMA;
+      // SketchUp 3(모형 10)·4(모형 12 + 렌더링 25)
+      const old = model >= 0 && (model < SU5_MODEL_SCHEMA || (model === SU5_MODEL_SCHEMA && rendering >= 0 && rendering < SU5_RENDERING_SCHEMA));
       throw new MfcRefused(
         old
-          ? `SketchUp ${this.header.version} 파일은 SketchUp 3~5의 아주 옛 형식(모형 스키마 ${model})이라 아직 읽지 못합니다. SketchUp 6 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.`
-          : `SketchUp ${this.header.version} 파일의 형식(모형 스키마 ${model}, 렌더링 스키마 ${rendering})은 확인한 SketchUp 6~2020 형식과 달라 읽지 못합니다.`,
+          ? `SketchUp ${this.header.version} 파일은 SketchUp 3~4의 아주 옛 형식(모형 스키마 ${model})이라 아직 읽지 못합니다. SketchUp 5 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.`
+          : `SketchUp ${this.header.version} 파일의 형식(모형 스키마 ${model}, 렌더링 스키마 ${rendering})은 확인한 SketchUp 5~2020 형식과 달라 읽지 못합니다.`,
         model,
         rendering,
       );
@@ -241,7 +249,8 @@ class Decoder {
     const s = this.s;
     const st = this.st;
     const schema = st.schema('CSketchUpModel');
-    s.skip(12);
+    // SketchUp 5(모형 스키마 12)는 미리보기 앞이 8바이트(6 이상은 12)
+    s.skip(schema >= SU6_MODEL_SCHEMA ? 12 : 8);
     if (schema >= 26) s.skip(8); // 다음 영구 번호
     const thumb = s.readObject(C.DIB);
     if (isDib(thumb)) this.image('model', '모형 미리보기', thumb);
@@ -338,7 +347,10 @@ class Decoder {
 
   // ── 여러 클래스가 쓰는 기록 ─────────────────────────────────────────
 
-  /** CDib: u32 꼴(0 날 DIB, 1 JPEG + 뒤 u32 품질, 4 부호화한 그림 파일), u32 길이, 바이트 */
+  /**
+   * CDib: u32 꼴(0 날 DIB, 1 JPEG + 뒤 u32 품질, 4 부호화한 그림 파일), u32 길이, 바이트.
+   * CDib 2(SketchUp 5)는 JPEG 뒤 품질이 없다(무늬 안에 줄로 쓴 그림에서 확인)
+   */
   private dib(): DibRef {
     const s = this.s;
     const at = s.pos;
@@ -346,8 +358,9 @@ class Decoder {
     const size = s.u32();
     const start = s.pos;
     s.skip(size);
-    if (kind === 1) s.u32();
-    else if (kind !== 0 && kind !== 4) throw new MfcError('unsupported', `아직 읽지 못하는 그림 꼴 ${kind}`, at);
+    if (kind === 1) {
+      if ((this.st.schemas.get('CDib') ?? 3) >= 3) s.u32();
+    } else if (kind !== 0 && kind !== 4) throw new MfcError('unsupported', `아직 읽지 못하는 그림 꼴 ${kind}`, at);
     return { kind, start, end: start + size };
   }
 
@@ -442,8 +455,14 @@ class Decoder {
     let width = 0;
     let height = 0;
     if (textured) {
-      this.st.preamble();
-      const d = s.readObject(C.DIB);
+      let d: unknown = null;
+      if ((this.st.schemas.get('CTexture') ?? 6) < 5) {
+        // CTexture 4(SketchUp 5): 앞머리가 없고 그림은 객체가 아니라 u8(있음) 뒤 줄 안 CDib
+        if (s.u8()) d = this.dib();
+      } else {
+        this.st.preamble();
+        d = s.readObject(C.DIB);
+      }
       width = s.f64();
       height = s.f64();
       const path = s.cstr();
@@ -1190,7 +1209,7 @@ const isDamage = (e: unknown): boolean => !(e instanceof MfcError) || e.kind ===
 
 /**
  * 2020 이하 SKP 바이트 → 중간 모형. 머리가 MFC 꼴이어야 한다(readSkpHeader의 container = 'mfc').
- * SketchUp 3~5나 모르는 스키마는 MfcRefused, 형상 앞에서 멈추면 그 까닭의 Error를 던진다.
+ * SketchUp 3~4나 모르는 스키마는 MfcRefused, 형상 앞에서 멈추면 그 까닭의 Error를 던진다.
  * onProgress는 읽은 바이트 위치로 진행(0~1)을 알린다.
  */
 export function readMfcModel(bytes: Uint8Array, header: SkpHeader, onProgress?: (fraction: number) => void): MfcResult {
