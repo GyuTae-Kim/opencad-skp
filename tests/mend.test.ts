@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { translate } from '../site/i18n.mjs';
 import { faceAt } from '../src/entities';
 import { readSkpHeader } from '../src/header';
 import { skpToScene } from '../src/index';
@@ -193,7 +194,14 @@ describe('글 왕복 손상 고쳐 읽기', () => {
     expect(bad.length).toBeLessThan(bytes!.length);
     const m = readM(bad);
     expect(m.damaged).toBe(true);
-    expect(m.warnings.find((w) => w.startsWith('글로 한 번 저장되며 깨진 파일을 고쳐 읽었습니다'))).toMatch(/빠진 2바이트 1곳을 메우고 .*뺀 면 0개, 정점 0개/);
+    const note = m.warnings.find((w) => w.startsWith('글로 한 번 저장되며 깨진 파일을 고쳐 읽었습니다'))!;
+    expect(note).toMatch(/빠진 2바이트 1곳을 메우고 .*뺀 면 0개, 정점 0개/);
+    // 경고 글은 언어 사전의 틀로 옮겨진다(수는 그대로)
+    for (const code of ['en', 'ja', 'zh-CN', 'de']) {
+      const t = translate(note, code);
+      expect(t).not.toMatch(/[가-힣]/);
+      expect(t).toContain('1');
+    }
     expect(m.warnings.some((w) => w.startsWith('형상을 읽다 멈췄습니다'))).toBe(false);
     // 면 수·차례·좌표가 손상 전과 같다(메운 정점의 x도 면 평면으로 맞게 골랐다)
     const want = faceCoords(good);
