@@ -131,7 +131,7 @@ describe('정의를 불러온 파일·미리보기 그림 경로(2021+)', () => 
     expect(e!.definitionPath).toBe('C:\\Users\\me\\Downloads\\의자.skp');
     const rows = entityInfo(e!, DEFAULT_UNITS, 25.4).rows;
     expect(rows.find((r) => r.label === '불러온 파일')).toEqual({ label: '불러온 파일', value: '의자.skp', title: 'C:\\Users\\me\\Downloads\\의자.skp' });
-    const other = nodeEntity(tree, tree.names.findIndex((n, i) => i !== node && tree.definitionNames[tree.definition[i]!] === '탁자'), info, [], {});
+    const other = nodeEntity(tree, tree.names.findIndex((_, i) => i !== node &&tree.definitionNames[tree.definition[i]!] === '탁자'), info, [], {});
     expect(entityInfo(other!, DEFAULT_UNITS, 25.4).rows.some((r) => r.label === '불러온 파일')).toBe(false);
     // 슬래시 경로도 마지막 이름만
     expect(entityInfo({ kind: 'component', definitionPath: '/Users/me/Library/의자.skp' }, DEFAULT_UNITS, 1).rows).toContainEqual({ label: '불러온 파일', value: '의자.skp', title: '/Users/me/Library/의자.skp' });
