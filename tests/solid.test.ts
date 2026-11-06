@@ -205,4 +205,21 @@ describe('단면 채우기 묶음과 노드 부피(buildSceneParts)', () => {
     expect(set.overlaps([0, 0, 10, 1000, 1000, 20], budget)).toBe(false);
     expect(set.overlaps([0, 0, 0, 1, 1, 1], { left: 0 })).toBeNull();
   });
+
+  it('칸 번호가 정확한 정수를 넘는 아주 큰 좌표(깨진 파일)도 끝나고 겹침을 찾는다', () => {
+    // 1e270에서는 칸 번호에 1을 더해도 그대로라, 예전에는 칸 돌기가 끝나지 않고 목록이 메모리를 다 쓸 때까지 자랐다
+    const set = new BoxSet();
+    const budget = { left: 1e6 };
+    set.add([0, 0, 1e270, 10, 10, 1e270]);
+    set.add([0, 0, 0, 10, 10, 10]);
+    expect(set.size).toBe(2);
+    expect(set.overlaps([1, 1, 1e270, 2, 2, 1e270], budget)).toBe(false); // 높이 0 — 닿기만
+    expect(set.overlaps([1, 1, -1e270, 2, 2, 1e270], budget)).toBe(true);
+    expect(set.overlaps([1, 1, 1, 2, 2, 2], budget)).toBe(true);
+    expect(set.overlaps([20, 20, 0, 30, 30, 10], budget)).toBe(false);
+    const t = performance.now();
+    const parts = buildSceneParts(cubes([[0, 0, 0, 1], [30, 0, 1e270, 1], [0, 30, 1e270, 1]]), mats, 1);
+    expect(performance.now() - t).toBeLessThan(2000);
+    expect(parts.meshes.length).toBeGreaterThan(0);
+  });
 });

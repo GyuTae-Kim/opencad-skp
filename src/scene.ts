@@ -129,13 +129,14 @@ export const MAX_CAP_TESTS = 4_000_000;
 
 /**
  * 범위 상자(최소 xyz, 최대 xyz) 모음과 겹침 찾기: 크기 단계(상자보다 큰 2의 거듭제곱 칸)마다 격자에 넣어, 찾을 상자가 덮는 칸만 본다
- * (덮는 칸이 너무 많은 작은 단계는 그 단계 상자를 모두 본다). 닿기만 한 상자(맞붙은 벽·쌓은 상자)는 겹치지 않은 것으로 본다
+ * (덮는 칸이 너무 많은 작은 단계는 그 단계 상자를 모두 본다). 닿기만 한 상자(맞붙은 벽·쌓은 상자)는 겹치지 않은 것으로 본다.
+ * 칸 번호가 정확한 정수를 넘는 상자(깨진 파일의 1e270 같은 좌표 — 칸 번호에 1을 더해도 그대로라 칸 돌기가 끝나지 않는다)는 격자에 넣지 않고 늘 견준다
  */
 export class BoxSet {
   private readonly boxes: number[] = [];
   private readonly seen: number[] = [];
   private query = 0;
-  private readonly levels = new Map<number, { cells: Map<string, number[]>; members: number[] }>();
+  private readonly levels = new Map<number, { cells: Map<string, number[]>; members: number[]; loose: number[] }>();
 
   get size(): number {
     return this.boxes.length / 6;
@@ -146,18 +147,28 @@ export class BoxSet {
     return Math.ceil(Math.log2(ext));
   }
 
+  /** 칸 c 격자에서 상자가 덮는 칸 번호 범위(x0, x1, y0, y1, z0, z1). 정확한 정수가 아니면 null */
+  private static cellRange(b: ArrayLike<number>, c: number): number[] | null {
+    const r = [Math.floor(b[0]! / c), Math.floor(b[3]! / c), Math.floor(b[1]! / c), Math.floor(b[4]! / c), Math.floor(b[2]! / c), Math.floor(b[5]! / c)];
+    return r.every(Number.isSafeInteger) ? r : null;
+  }
+
   add(b: ArrayLike<number>): void {
     const id = this.boxes.length / 6;
     for (let k = 0; k < 6; k++) this.boxes.push(b[k]!);
     this.seen.push(0);
     const L = BoxSet.level(b);
     let lv = this.levels.get(L);
-    if (!lv) this.levels.set(L, (lv = { cells: new Map(), members: [] }));
+    if (!lv) this.levels.set(L, (lv = { cells: new Map(), members: [], loose: [] }));
     lv.members.push(id);
-    const c = 2 ** L;
-    for (let x = Math.floor(b[0]! / c); x <= Math.floor(b[3]! / c); x++)
-      for (let y = Math.floor(b[1]! / c); y <= Math.floor(b[4]! / c); y++)
-        for (let z = Math.floor(b[2]! / c); z <= Math.floor(b[5]! / c); z++) {
+    const r = BoxSet.cellRange(b, 2 ** L);
+    if (!r) {
+      lv.loose.push(id);
+      return;
+    }
+    for (let x = r[0]!; x <= r[1]!; x++)
+      for (let y = r[2]!; y <= r[3]!; y++)
+        for (let z = r[4]!; z <= r[5]!; z++) {
           const key = `${x},${y},${z}`;
           const list = lv.cells.get(key);
           if (list) list.push(id);
@@ -184,18 +195,20 @@ export class BoxSet {
       return true;
     };
     for (const [L, lv] of this.levels) {
-      const c = 2 ** L;
-      const x0 = Math.floor(b[0]! / c), x1 = Math.floor(b[3]! / c);
-      const y0 = Math.floor(b[1]! / c), y1 = Math.floor(b[4]! / c);
-      const z0 = Math.floor(b[2]! / c), z1 = Math.floor(b[5]! / c);
-      const cells = (x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1);
-      if (!(cells <= 64) || cells > lv.members.length) {
+      const r = BoxSet.cellRange(b, 2 ** L);
+      const cells = r ? (r[1]! - r[0]! + 1) * (r[3]! - r[2]! + 1) * (r[5]! - r[4]! + 1) : Infinity;
+      if (!r || !(cells <= 64) || cells > lv.members.length) {
         for (const id of lv.members) {
           if (budget.left <= 0) return null;
           if (test(id)) return true;
         }
         continue;
       }
+      for (const id of lv.loose) {
+        if (budget.left <= 0) return null;
+        if (test(id)) return true;
+      }
+      const [x0, x1, y0, y1, z0, z1] = r as [number, number, number, number, number, number];
       for (let x = x0; x <= x1; x++)
         for (let y = y0; y <= y1; y++)
           for (let z = z0; z <= z1; z++) {
