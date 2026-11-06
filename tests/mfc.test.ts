@@ -6,7 +6,7 @@ import { MfcError, MfcStream } from '../src/mfcstream';
 import type { SkpModel } from '../src/model';
 import { styleFor } from '../src/scene-meta';
 import { pngRgb } from './build';
-import { ID13, MFC_SCHEMAS, SU3_SCHEMAS, mfcFile, move13, mv, squareEntities, type MfcEntitiesSpec, type MfcSpec } from './mfcwrite';
+import { ID13, MFC_SCHEMAS, PRE3_SCHEMAS, mfcFile, move13, mv, squareEntities, type MfcEntitiesSpec, type MfcSpec } from './mfcwrite';
 import { edgeAt, edgeList, faceAt } from '../src/entities';
 
 const read = (spec: MfcSpec): ReturnType<typeof readMfcModel> => {
@@ -15,7 +15,7 @@ const read = (spec: MfcSpec): ReturnType<typeof readMfcModel> => {
 };
 const model = (spec: MfcSpec): SkpModel => read(spec).model;
 const tiny = pngRgb(2, 2, (x, y) => [x * 255, y * 255, 0]);
-const ALL = ['v4', 'v5', 'v6', 'v7', 'v8', 'v15', 'v17', 'v18', 'v19', 'v20'] as const;
+const ALL = ['v3', 'v4', 'v5', 'v6', 'v7', 'v8', 'v15', 'v17', 'v18', 'v19', 'v20'] as const;
 
 /** 가운데에 구멍이 난 정사각형(구멍 고리를 먼저 쓰고 바깥 고리를 둘째로 쓴다) */
 const holed = (): MfcEntitiesSpec => ({
@@ -148,26 +148,28 @@ describe('MFC 바이트 커서', () => {
 });
 
 describe('판 거르기', () => {
-  it('SketchUp 3은 까닭을 적어 거절하고, 장면은 meta.unsupported', () => {
-    const bytes = mfcFile({ schemas: SU3_SCHEMAS, version: '3.0.1', root: squareEntities() });
+  it('SketchUp 3보다 옛 형식(모형 스키마 10 아래)은 까닭을 적어 거절하고, 장면은 meta.unsupported', () => {
+    const bytes = mfcFile({ schemas: PRE3_SCHEMAS, version: '2.0.1', root: squareEntities() });
     expect(() => readMfcModel(bytes, readSkpHeader(bytes)!)).toThrow(MfcRefused);
     const s = skpToScene(bytes);
     expect(s.meshes.length).toBe(0);
-    expect(s.warnings![0]).toContain('SketchUp 3의 아주 옛 형식(모형 스키마 10)');
-    expect(s.warnings![0]).toContain('SketchUp 4 이상');
+    expect(s.warnings![0]).toContain('SketchUp 3보다 옛 형식(모형 스키마 8)');
+    expect(s.warnings![0]).toContain('SketchUp 3 이상');
     expect(s.meta?.unsupported).toBe(true);
     expect(s.meta?.container).toBe('mfc');
-    // 모형 스키마 12에 4보다 낮은 렌더링 스키마도 옛 판 안내
-    const older = mfcFile({ schemas: { ...MFC_SCHEMAS.v4, CRenderingOptions: 22 }, root: squareEntities() });
-    expect(() => readMfcModel(older, readSkpHeader(older)!)).toThrow(/SketchUp 3의 아주 옛 형식\(모형 스키마 12\)/);
   });
 
-  it('모르는 스키마(2020 뒤 같은 값, 4·5의 모형 스키마에 모르는 렌더링 스키마)도 거절한다', () => {
+  it('모르는 스키마(2020 뒤 같은 값, 3~5의 모형 스키마에 모르는 렌더링 스키마)도 거절한다', () => {
     const bytes = mfcFile({ schemas: { ...MFC_SCHEMAS.v20, CSketchUpModel: 30 }, root: squareEntities() });
-    expect(() => readMfcModel(bytes, readSkpHeader(bytes)!)).toThrow(/확인한 SketchUp 4~2020 형식과 달라/);
+    expect(() => readMfcModel(bytes, readSkpHeader(bytes)!)).toThrow(/확인한 SketchUp 3~2020 형식과 달라/);
     for (const rendering of [26, 30]) {
       const odd = mfcFile({ schemas: { ...MFC_SCHEMAS.v5, CRenderingOptions: rendering }, root: squareEntities() });
-      expect(() => readMfcModel(odd, readSkpHeader(odd)!)).toThrow(/확인한 SketchUp 4~2020 형식과 달라/);
+      expect(() => readMfcModel(odd, readSkpHeader(odd)!)).toThrow(/확인한 SketchUp 3~2020 형식과 달라/);
+    }
+    // 모형 스키마 12에 SketchUp 3의 렌더링 스키마, 3의 모형 스키마에 4의 렌더링 스키마
+    for (const schemas of [{ ...MFC_SCHEMAS.v4, CRenderingOptions: 22 }, { ...MFC_SCHEMAS.v3, CRenderingOptions: 25 }]) {
+      const odd = mfcFile({ schemas, root: squareEntities() });
+      expect(() => readMfcModel(odd, readSkpHeader(odd)!)).toThrow(/확인한 SketchUp 3~2020 형식과 달라/);
     }
   });
 
@@ -385,6 +387,47 @@ describe('정의·인스턴스·곡선', () => {
     expect(edgeAt(m.root.edges, 6).curve).toBe(1);
   });
 
+  it('SketchUp 3: 곡선은 첫·끝 모서리를 가리키고(끝 모서리가 곡선 안에 새 객체로 나온다), 보조선은 끝이 없고, 미리보기 카메라는 줄 안', () => {
+    const N = 6;
+    const vertices = Array.from({ length: N }, (_, i): [number, number, number] => [2 * Math.cos((i * 2 * Math.PI) / N), 2 * Math.sin((i * 2 * Math.PI) / N), 0]);
+    const ring = Array.from({ length: N }, (_, i) => ({ a: i, b: (i + 1) % N, curve: 0 }));
+    const r = read({
+      schemas: 'v3',
+      definitions: [{ name: '판', entities: squareEntities(), thumbnail: tiny }],
+      root: {
+        vertices: [...vertices, [0, 0, 5], [5, 0, 5]],
+        edges: [ring[3]!, ring[0]!, ring[5]!, ring[1]!, ring[4]!, ring[2]!, { a: 0, b: 3, curve: 1 }, { a: N, b: N + 1, curve: 2 }],
+        curves: [{ arc: { center: [0, 0, 0], normal: [0, 0, 1], xaxis: [2, 0, 0], start: (2 * Math.PI) / N, end: 2 * Math.PI } }, { polygon: true }, {}],
+        guides: [{ kind: 'line', point: [1, 2, 3], dir: [0, 0, 1], range: [0, 5] }, { kind: 'point', point: [4, 5, 6] }],
+        instances: [{ def: 0, xform: ID13 }],
+      },
+    });
+    const m = r.model;
+    expect(m.warnings).toEqual([]);
+    expect(m.root.edges.length).toBe(8);
+    const [circle, poly, open] = m.root.curves!;
+    expect([circle!.kind, circle!.radius, circle!.edges.length]).toEqual(['circle', 2, 6]);
+    // 잇는 차례는 다른 판과 같다(시작각 60° 정점에서 반시계)
+    const k = (v: number): number => (Math.round((Math.atan2(m.root.points[3 * v + 1]!, m.root.points[3 * v]!) * 3) / Math.PI) + 6) % 6;
+    expect(circle!.edges.map((e) => [k(edgeAt(m.root.edges, e).a), k(edgeAt(m.root.edges, e).b)].sort((x, y) => x - y))).toEqual([
+      [1, 2],
+      [2, 3],
+      [3, 4],
+      [4, 5],
+      [0, 5],
+      [0, 1],
+    ]);
+    expect([poly!.kind, poly!.edges.length, open!.kind, open!.edges.length]).toEqual(['polygon', 1, 'curve', 1]);
+    // 보조선 0: 방향에서 끝나 끝없는 선, 보조점은 같다
+    const [line, point] = m.root.guides!;
+    expect(line).toMatchObject({ kind: 'line', point: [1, 2, 3], direction: [0, 0, 1] });
+    expect([line!.start, line!.end]).toEqual([undefined, undefined]);
+    expect(point).toMatchObject({ kind: 'point', point: [4, 5, 6] });
+    // 컴포넌트 미리보기: 줄 안 카메라 뒤 그림
+    expect(r.images.find((i) => i.kind === 'component')).toMatchObject({ name: '판' });
+    expect(m.definitions.get(0)!.entities.faces.length).toBe(1);
+  });
+
   it('곡선 잇기: 열린 곡선은 자유 끝에서, 갈라지면 읽은 차례', () => {
     const edges = [
       { a: 1, b: 2, flags: 0 },
@@ -493,7 +536,7 @@ describe('주석', () => {
 });
 
 describe('장면·스타일·설정', () => {
-  const pageSpec = (schemas: 'v4' | 'v5' | 'v6' | 'v15' | 'v17' | 'v20'): MfcSpec => ({
+  const pageSpec = (schemas: 'v3' | 'v4' | 'v5' | 'v6' | 'v15' | 'v17' | 'v20'): MfcSpec => ({
     schemas,
     layers: [{ name: 'Layer0' }, { name: '지붕' }],
     definitions: [{ name: '상자', entities: squareEntities({ sections: [{ plane: [0, 0, 1, -1], pid: 51 }] }) }],
@@ -651,6 +694,87 @@ describe('장면·스타일·설정', () => {
     // 숨긴 형상 칸은 덩어리 자리를 몰라 기본 스타일 값(끔)
     expect([st.name, st.faceStyle, st.hiddenGeometry, st.edges]).toEqual(['Style', 'textured', false, true]);
     expect(styleFor(m.pages![1]!.rendering, r.styles)!.faceStyle).toBe('wireframe');
+  });
+
+  it('SketchUp 3: 앞머리가 비었고, 카메라는 줄 안(목표 = 눈 + 방향), 렌더링 덩어리 129바이트(장면 안 125), 장면에 전환·지연·활성 장면이 없다', () => {
+    const base = pageSpec('v3');
+    const r = read({
+      ...base,
+      layers: [{ name: 'Layer0' }, { name: '지붕', color: [200, 10, 20], hidden: true }],
+      rendering: { mode: 1, front: [10, 20, 30], back: [40, 50, 60], sky: [1, 2, 3], ground: [4, 5, 6], drawGround: true },
+      definitions: [{ ...base.definitions![0]!, behavior: { glue: true, snap: 1 } }],
+      root: { ...base.root, edges: [{ a: 0, b: 1, soft: true, smooth: true }, { a: 1, b: 2, hidden: true }, { a: 2, b: 3 }, { a: 3, b: 0 }] },
+      axes: [1, 2, 3, 1, 0, 0, 0, 1, 0, 0, 0, 1],
+    });
+    const m = r.model;
+    expect(m.warnings).toEqual([]);
+    expect(edgeList(m.root.edges).map((e) => e.flags)).toEqual([24, 1, 0, 0]);
+    expect(m.root.instances.map((i) => i.name)).toEqual([undefined, undefined]);
+    // 태그: 끝 4바이트 없이 색 재질 칸에서 끝난다
+    expect(m.tags!.map((t) => [t.name, t.visible])).toEqual([
+      ['Layer0', true],
+      ['지붕', false],
+    ]);
+    expect(r.materials.get(m.tags![1]!.colorMaterial!)!.color.slice(0, 3).map((x) => Math.round(x * 255))).toEqual([200, 10, 20]);
+    // 카메라: 보는 방향(단위)만 있어 목표는 눈에서 1인치(C API도 같다)
+    const dir = [20 - 100, 15 + 100, 10 - 80];
+    const len = Math.hypot(...dir);
+    expect(m.camera).toMatchObject({ eye: [100, -100, 80], up: [0, 0, 1], perspective: true, fov: 35, twoPoint: false });
+    m.camera!.target.forEach((v, i) => expect(v).toBeCloseTo(m.camera!.eye[i]! + dir[i]! / len, 12));
+    expect(m.camera!.aspect).toBeUndefined();
+    // 설정 묶음(꼬리)·축·글꼴·문자 기본값
+    expect(m.lengthUnit).toBe(2);
+    expect(m.animation).toEqual({ showTransition: true, transitionTime: 1.5, sceneDelay: 2, loop: true });
+    expect(m.axes?.origin).toEqual([1, 2, 3]);
+    expect([...m.fonts!.values()].map((f) => [f.face, f.worldSize])).toEqual([
+      ['Arial', undefined],
+      ['Tahoma', undefined],
+    ]);
+    expect(m.annotationDefaults).toMatchObject({ textColor: [1, 2, 3], dimColor: [7, 8, 9], dimArrow: 'open' });
+    // 동작 35바이트: 붙기·붙는 면은 읽고, 카메라 보기 칸은 자리를 몰라 끔
+    expect(m.definitions.get(0)!.behavior).toEqual({ alwaysFaceCamera: false, cutsOpening: false, shadowsFaceSun: false, snapTo: 'horizontal' });
+    // 장면 6: 카메라 줄 안, 스타일 없음, 전환·지연이 없어 모형 기본값, 활성 장면 없음
+    const [a, b] = m.pages!;
+    expect([a!.name, a!.hiddenTags, a!.includeInAnimation, a!.transition, a!.delay]).toEqual(['원근', [1], true, 1.5, 2]);
+    expect(b!.camera).toMatchObject({ eye: [0, 0, 50], target: [0, 0, 49], perspective: false, height: 30 });
+    expect([b!.includeInAnimation, b!.transition, b!.delay]).toEqual([false, 1.5, 2]);
+    expect(b!.hiddenIds.sort()).toEqual([m.root.instances[1]!.pid!, faceAt(m.definitions.get(0)!.entities.faces, 0).pid!].sort());
+    expect(b!.sectionIds).toEqual([m.definitions.get(0)!.entities.sections![0]!.pid]);
+    expect(m.activePage).toBeUndefined();
+    // 덩어리(RenderMode가 맨 앞, 하늘 뒤 4바이트 없음)와 SketchUp 기본 스타일
+    const st = styleFor(m.rendering, r.styles)!;
+    const rgb = (c: number[] | null | undefined): number[] | null | undefined => c && c.map((x) => Math.round(x * 255));
+    expect([rgb(st.front), rgb(st.back), st.sky, rgb(st.ground), rgb(st.background), rgb(st.edgeColor)]).toEqual([
+      [10, 20, 30],
+      [40, 50, 60],
+      null,
+      [4, 5, 6],
+      [255, 255, 255],
+      [0, 0, 0],
+    ]);
+    expect([st.name, st.faceStyle, st.edges]).toEqual(['Style', 'hiddenLine', true]);
+    expect(styleFor(b!.rendering, r.styles)!.faceStyle).toBe('wireframe');
+  });
+
+  it('SketchUp 3: 같은 명세의 4판 파일과 장면(그물·모서리·태그·재질)이 같다', () => {
+    const spec = (v: 'v3' | 'v4'): MfcSpec => ({
+      schemas: v,
+      materials: [
+        { name: '앞', color: [200, 0, 0] },
+        { name: '뒤', color: [0, 0, 200], transparency: 0.5, useAlpha: true },
+      ],
+      layers: [{ name: 'Layer0' }, { name: '벽', color: [10, 20, 30] }],
+      definitions: [{ name: '판', entities: squareEntities() }],
+      root: { ...holed(), instances: [{ def: 0, xform: move13(20, 0, 0), layer: 1, material: 0 }] },
+    });
+    const a = skpToScene(mfcFile(spec('v3')));
+    const b = skpToScene(mfcFile(spec('v4')));
+    expect(a.warnings ?? []).toEqual([]);
+    expect(a.meshes).toEqual(b.meshes);
+    expect(a.lines).toEqual(b.lines);
+    expect(a.meta?.tags).toEqual(b.meta?.tags);
+    expect(a.meta?.materials).toEqual(b.meta?.materials);
+    expect(a.meta?.version).toBe('3.0.1');
   });
 
   it('영구 번호가 없는 파일(2016 이하)은 숨긴 대상에 음수 임시 번호를 붙여 잇는다', () => {
@@ -889,7 +1013,7 @@ describe('깨진 파일·모르는 기록', () => {
     expect(m.warnings.some((w) => w.includes('형상을 읽다 멈췄습니다'))).toBe(false);
   });
 
-  it.each(['v4', 'v5'] as const)('SketchUp %s: 어디서 잘라도, 바이트를 망가뜨려도 던지지 않고 끝난다', (v) => {
+  it.each(['v3', 'v4', 'v5'] as const)('SketchUp %s: 어디서 잘라도, 바이트를 망가뜨려도 던지지 않고 끝난다', (v) => {
     const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46, 0, 1, 0xff, 0xd9]);
     const bytes = mfcFile({
       schemas: v,

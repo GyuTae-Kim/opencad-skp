@@ -3,22 +3,36 @@
  * 선 종류(CCustomLineStyle)와 모형 꼬리(뿌리 요소 뒤: 위치·장면·축·문자/치수 기본값·글꼴·선 종류·스타일). 형상은 없다.
  * 형식 지식은 2026-10 비공개 참조 해석기(SketchUp C API를 비교 기준으로 맞춘 해석기)의 legacy 부분에서 옮긴 것이다(docs/formats/skp.md).
  *
- * 렌더링 설정은 클래스 꼬리표 없이 고정 길이 덩어리로 쓴다(CRenderingOptions 스키마마다 길이·칸 자리가 다르고, 장면 안에서는 8바이트(SketchUp 5는 4) 짧고,
+ * 렌더링 설정은 클래스 꼬리표 없이 고정 길이 덩어리로 쓴다(CRenderingOptions 스키마마다 길이·칸 자리가 다르고, 장면 안에서는 8바이트(SketchUp 3~5는 4) 짧고,
  * SketchUp 2017+는 앞에 1바이트가 더 있다). SketchUp은 렌더링 설정을 스타일로 받치므로 색·켜고 끄기는 스타일 값이 이기고,
  * 면 스타일(그리기 방식)·무늬·X-ray·숨긴 형상·단면 채우기는 덩어리 값이 이긴다(장면은 스타일 사본을 건드리지 않고 덩어리만 바꾼다).
  * 이것을 2021+와 같은 꼴(SkpRenderingRaw의 0x733c 자식 꼬리표 값 + style.xml 항목 번호 글)로 옮겨 styles.ts가 함께 푼다.
  */
 
-import type { SkpAnnotationDefaults, SkpAxes, SkpCamera, SkpFont, SkpPage, SkpRenderingRaw, SkpShadowInfo } from './model';
+import type { SkpAnnotationDefaults, SkpAxes, SkpCamera, SkpFont, SkpPage, SkpRenderingRaw, SkpShadowInfo, Vec3 } from './model';
 import { axesOf } from './vffroot';
 import { MfcError, type MfcReadFn } from './mfcstream';
 import { C, type MfcState } from './mfcstate';
 import { arrowName, leaderName, textAlignmentName } from './vffcommon';
 
 /** CRenderingOptions 스키마 → 모형 카메라 뒤 덩어리 길이(장면 안은 8 짧다) */
-export const RENDERING_BLOCK: Readonly<Record<number, number>> = { 25: 135, 28: 150, 32: 189, 33: 190, 35: 197, 36: 216, 37: 221, 38: 222, 39: 223 };
+export const RENDERING_BLOCK: Readonly<Record<number, number>> = { 22: 129, 25: 135, 28: 150, 32: 189, 33: 190, 35: 197, 36: 216, 37: 221, 38: 222, 39: 223 };
 
-type Field = 'xray' | 'background' | 'foreground' | 'texture' | 'profiles' | 'hiddenGeometry' | 'front' | 'back' | 'sky' | 'ground' | 'drawSky' | 'drawGround' | 'sectionFill';
+type Field =
+  | 'mode'
+  | 'xray'
+  | 'background'
+  | 'foreground'
+  | 'texture'
+  | 'profiles'
+  | 'hiddenGeometry'
+  | 'front'
+  | 'back'
+  | 'sky'
+  | 'ground'
+  | 'drawSky'
+  | 'drawGround'
+  | 'sectionFill';
 
 /** 덩어리 안 칸 자리(2017+ 앞 1바이트를 뺀 뒤) */
 const RO_36: Partial<Record<Field, number>> = {
@@ -51,6 +65,8 @@ const RO_38: Partial<Record<Field, number>> = {
   sectionFill: 167,
 };
 const RO_FIELDS: Readonly<Record<number, Partial<Record<Field, number>>>> = {
+  // SketchUp 3: 4의 앞 2바이트가 없어(RenderMode가 0) 모두 2 당겨지고, 4의 하늘 뒤 4바이트(82~85)가 없어 지면부터 4 더 당겨진다
+  22: { mode: 0, xray: 4, background: 11, foreground: 15, texture: 30, profiles: 40, front: 50, back: 54, sky: 76, ground: 80, drawSky: 84, drawGround: 85 },
   // SketchUp 4: 5의 48~58(선 끝·깊이 굵기 등 11바이트)이 없어 앞뒷면 색부터 11 당겨지고, 숨긴 형상 칸은 자리를 몰라 넣지 않는다
   25: { xray: 6, background: 13, foreground: 17, texture: 32, profiles: 42, front: 52, back: 56, sky: 78, ground: 86, drawSky: 90, drawGround: 91 },
   // SketchUp 5: 앞뒷면 색까지는 32~36과 같고, 그 뒤 34바이트(안개 칸 등)가 없어 하늘·지면이 34 당겨진다
@@ -137,11 +153,15 @@ const PAGE_SECTIONS = 0x40;
 /** SketchUp 2020.1부터 0x10(숨긴 것)을 숨긴 형상 0x80 · 숨긴 개체 0x100으로 나눴다 */
 const PAGE_HIDDEN_SPLIT = 0x180;
 
+/** CViewPage 9(SketchUp 4)부터 장면에 전환·지연 시간이 있다 */
+const SU4_VIEW_PAGE = 9;
+
 const SOLID_LINE_STYLES = new Set(['', 'Solid Basic']);
-/** SketchUp 6의 CSketchUpModel 스키마(이보다 낮으면 SketchUp 4·5) */
+/** SketchUp 6의 CSketchUpModel 스키마(이보다 낮으면 SketchUp 3~5) */
 const SU6_MODEL = 18;
 /**
- * SketchUp 4·5는 스타일 기록이 없고, SketchUp은 이 판 파일을 기본 스타일로 연다(C API 기대값: 표준 파일 28개씩 모두 같은 파일의 6판과 렌더링 설정이 같다).
+ * SketchUp 3~5는 스타일 기록이 없고, SketchUp은 이 판 파일을 기본 스타일로 연다(C API 기대값: 표준 파일 28개씩 모두 같은 파일의 6판과 렌더링 설정이 같다 —
+ * 3판도 4판과 같다).
  * 렌더링 덩어리에 없는 값만 그 기본 스타일 항목(6판 표준 파일의 기본 스타일과 같은 값)으로 채운다 — 덩어리 값(면 스타일·앞뒷면·하늘·지면 색·켜기·숨긴 형상)이 이긴다.
  * 모서리 색·배경은 덩어리의 네 바이트가 0(정하지 않음)일 때만 이 값(검정·흰색)이 쓰인다
  */
@@ -224,6 +244,28 @@ export class MfcView {
     s.f64();
     const twoPoint = !old && s.u8() !== 0;
     if (!old) s.skip(24);
+    return this.cameraOf(eye, target, up, perspective, fov, height, aspect, twoPoint);
+  }
+
+  /**
+   * SketchUp 3의 줄 안 카메라(CCamera 클래스가 없다): 눈, 보는 방향(목표 − 눈, 길이 1), 위, 16바이트, u8 원근, 시야각, 평행 높이, 24바이트.
+   * 목표는 눈 + 방향이다(C API 기대값의 목표가 눈에서 1인치 떨어진 점 — 4판 같은 파일의 목표 쪽 단위 벡터와 같다). 종횡비·2점 투시는 없다
+   */
+  inlineCamera(): SkpCamera | null {
+    const s = this.st.s;
+    const eye = s.vec3();
+    const dir = s.vec3();
+    const up = s.vec3();
+    s.skip(16);
+    const perspective = s.u8() !== 0;
+    const fov = s.f64();
+    const height = s.f64();
+    s.skip(24);
+    const target: [number, number, number] = [eye[0] + dir[0], eye[1] + dir[1], eye[2] + dir[2]];
+    return this.cameraOf(eye, target, up, perspective, fov, height, NaN, false);
+  }
+
+  private cameraOf(eye: Vec3, target: Vec3, up: Vec3, perspective: boolean, fov: number, height: number, aspect: number, twoPoint: boolean): SkpCamera | null {
     if (![...eye, ...target, ...up].every(Number.isFinite) || (eye[0] === target[0] && eye[1] === target[1] && eye[2] === target[2])) {
       this.st.note('깨진 카메라를 건너뛰었습니다');
       return null;
@@ -299,7 +341,7 @@ export class MfcView {
     return style;
   }
 
-  /** 렌더링 설정 덩어리(2017+ 앞 1바이트는 버린다). 장면 안 덩어리는 끝 8바이트(SketchUp 5는 4바이트)가 없다 */
+  /** 렌더링 설정 덩어리(2017+ 앞 1바이트는 버린다). 장면 안 덩어리는 끝 8바이트(SketchUp 3~5는 4바이트)가 없다 */
   renderingBlock(insidePage: boolean): Uint8Array {
     const st = this.st;
     const schema = st.schema('CRenderingOptions');
@@ -313,7 +355,8 @@ export class MfcView {
     const fields = RO_FIELDS[this.st.schema('CRenderingOptions')];
     if (!fields || block.length < 8) return undefined;
     const values = new Map<number, Uint8Array>();
-    values.set(0x733d, block.slice(2, 6)); // RenderMode u32
+    const mode = fields.mode ?? 2;
+    values.set(0x733d, block.slice(mode, mode + 4)); // RenderMode u32
     const at = (f: Field, n: number): number | undefined => {
       const o = fields[f];
       return o !== undefined && o + n <= block.length ? o : undefined;
@@ -323,7 +366,7 @@ export class MfcView {
       if (o !== undefined) values.set(tag, new Uint8Array([block[o] ? 1 : 0]));
     };
     for (const [tag, f] of BLOCK_FLAGS) flag(tag, f);
-    // SketchUp 5(렌더링 스키마 28)는 스타일이 없다: 덩어리의 네 바이트 0 색(배경·모서리 색)은 정하지 않은 색이라 넣지 않는다(SketchUp 기본색)
+    // SketchUp 3~5(렌더링 스키마 32 아래)는 스타일이 없다: 덩어리의 네 바이트 0 색(배경·모서리 색)은 정하지 않은 색이라 넣지 않는다(SketchUp 기본색)
     const unsetZero = this.st.schema('CRenderingOptions') < 32;
     for (const [tag, f, item] of STYLE_COLORS) {
       const k = style?.kinds.get(item);
@@ -349,7 +392,8 @@ export class MfcView {
   page(slot: number): MfcPage {
     const st = this.st;
     const s = st.s;
-    const old = (st.schemas.get('CViewPage') ?? 11) < 11;
+    const schema = st.schemas.get('CViewPage') ?? 11;
+    const old = schema < 11;
     const pre = st.preamble();
     const name = s.cstr();
     const description = s.cstr();
@@ -358,7 +402,8 @@ export class MfcView {
     if (pre.pid !== undefined) page.pid = pre.pid;
     const out: MfcPage = { page, hidden: [], unresolved: 0, layers: [], sections: [] };
     if (stored & PAGE_CAMERA) {
-      const cam = s.readObject(C.CAMERA) as SkpCamera | null;
+      // SketchUp 3(CCamera 클래스 없음)은 모형 카메라처럼 줄 안에 쓴다
+      const cam = st.schemas.has('CCamera') ? (s.readObject(C.CAMERA) as SkpCamera | null) : this.inlineCamera();
       if (cam) page.camera = cam;
     }
     if (stored & PAGE_RENDERING) {
@@ -395,6 +440,8 @@ export class MfcView {
     }
     page.includeInAnimation = s.u8() !== 0;
     if (old) s.u8();
+    // CViewPage 6(SketchUp 3)은 전환·지연 시간이 없다(모형 기본값 — C API 기대값도 없음)
+    if (schema < SU4_VIEW_PAGE) return out;
     const transition = s.f64();
     const delay = s.f64();
     if (Number.isFinite(transition) && transition >= 0) page.transition = transition;
@@ -420,9 +467,10 @@ export class MfcView {
 
   /**
    * 줄 안에 쓴 CShadowInfo: 2021+ 6590과 같은 차례 — 앞머리, u32 시각, u8, 도시, 나라, f64 경도·위도·시간대, f64×3 북쪽, 4바이트 깃발,
-   * i32 밝음·어둠, 2바이트. 깃발 넷은 2020 이하 파일이 모두 0 1 1 0이라 어느 것이 그림자 보이기인지 몰라 넣지 않는다(참조 해석기와 같다)
+   * i32 밝음·어둠, 2바이트(SketchUp 3의 모형 꼬리는 이 2바이트가 없다 — trail). 깃발 넷은 2020 이하 파일이 모두 0 1 1 0이라 어느 것이 그림자 보이기인지 몰라
+   * 넣지 않는다(참조 해석기와 같다)
    */
-  shadowInfo(): SkpShadowInfo {
+  shadowInfo(trail = true): SkpShadowInfo {
     const st = this.st;
     const s = st.s;
     st.preamble();
@@ -441,7 +489,7 @@ export class MfcView {
     s.skip(4);
     out.light = s.i32();
     out.dark = s.i32();
-    s.skip(2);
+    if (trail) s.skip(2);
     return out;
   }
 
@@ -467,7 +515,9 @@ export class MfcView {
     const st = this.st;
     const s = st.s;
     const pids = st.entityPids;
-    this.shadow = this.shadowInfo();
+    // SketchUp 3(앞머리가 빈 CEntity 2): 그림자 뒤 2바이트·활성 장면·치수/문자 기본값 사이 2바이트씩이 없다(장면 목록 앞 1바이트만 있다)
+    const su3 = !st.entityAttrs;
+    this.shadow = this.shadowInfo(!su3);
     s.skip(pids ? 2 : 1);
     const seen = new Set<MfcPage>();
     const n = s.count(100_000, '장면');
@@ -479,30 +529,30 @@ export class MfcView {
         this.pages.push(p);
       }
     }
-    const active = s.readObject(C.PAGE) as MfcPage | null;
+    const active = su3 ? null : (s.readObject(C.PAGE) as MfcPage | null);
     const ai = active ? this.pages.indexOf(active) : -1;
     if (ai >= 0) this.activePage = ai;
     this.axesValue = this.axes();
     // Model Info 기본값: 치수 글꼴 + 58바이트(2021+ 24502..24518과 같은 차례), 문자 글꼴 + 22바이트, 지시선 글꼴
     if (options) {
-      // SketchUp 6: 69바이트 사이(63 뒤)에 설정 묶음이 끼어 있다
+      // SketchUp 3~6: 69바이트 사이(63 뒤)에 설정 묶음이 끼어 있다(SketchUp 3은 그 뒤가 4바이트)
       s.skip(63);
       options();
-      s.skip(6);
+      s.skip(su3 ? 4 : 6);
     } else s.skip(pids ? 70 : 69);
     const dimFont = s.readObject(C.FONT);
     const dim = s.bytes(58);
-    s.skip((pids ? 61 : 60) - 58);
+    if (!su3) s.skip((pids ? 61 : 60) - 58);
     const textFont = s.readObject(C.FONT);
-    // CTextStyle 4(SketchUp 5): 문자 기본값이 18바이트이고(지시선 글 색이 없다) 지시선 글꼴이 없다
+    // CTextStyle 4(SketchUp 3~5): 문자 기본값이 18바이트이고(지시선 글 색이 없다) 지시선 글꼴이 없다
     const leaders = (st.schemas.get('CTextStyle') ?? 5) >= 5;
     const text = s.bytes(leaders ? 22 : 18);
     const leaderFont = leaders ? s.readObject(C.FONT) : null;
-    s.skip(pids ? 3 : 2);
+    if (!su3) s.skip(pids ? 3 : 2);
     this.defaults = annotationDefaults(dim, text, dimFont, textFont, leaderFont);
     const fonts = s.count(100_000, '글꼴');
     for (let i = 0; i < fonts; i++) s.readObject(C.FONT);
-    // SketchUp 5는 스타일이 없고 글꼴 목록에서 모형이 끝난다(SketchUp처럼 기본 스타일로 보인다)
+    // SketchUp 3~5는 스타일이 없고 글꼴 목록에서 모형이 끝난다(SketchUp처럼 기본 스타일로 보인다)
     if (!st.schemas.has('CSkpStyleManager') && st.schema('CSketchUpModel') < SU6_MODEL) {
       this.modelStyle = this.defaultStyle();
       return;
@@ -537,7 +587,7 @@ const i32At = (b: Uint8Array, o: number): number => new DataView(b.buffer, b.byt
 /**
  * Model Info 문자·치수 기본값.
  * 치수 58바이트: u8 글 정렬, u8, i32×5(넷째 = 끝 표시), u8, 4바이트, u8, u8, f64, u8, f64, 4바이트 색, 4바이트, i32 글 자리.
- * 문자 22바이트: i32 지시선 종류, i32, u8, i32 끝 표시, u8, 4바이트 화면 글 색, 4바이트 지시선 글 색(SketchUp 5는 18바이트 — 지시선 글 색이 없다).
+ * 문자 22바이트: i32 지시선 종류, i32, u8, i32 끝 표시, u8, 4바이트 화면 글 색, 4바이트 지시선 글 색(SketchUp 3~5는 18바이트 — 지시선 글 색이 없다).
  */
 function annotationDefaults(dim: Uint8Array, text: Uint8Array, dimFont: unknown, textFont: unknown, leaderFont: unknown): SkpAnnotationDefaults {
   const out: SkpAnnotationDefaults = {};
