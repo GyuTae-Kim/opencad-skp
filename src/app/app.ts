@@ -705,7 +705,10 @@ export class SkpViewerApp implements PanelHost {
       h('button', { class: 'mini-btn primary upd-apply', type: 'button' }, '새로 고침'),
       updLater,
     );
-    updLater.addEventListener('click', () => (updateBar.hidden = true));
+    updLater.addEventListener('click', () => {
+      updateBar.hidden = true;
+      focusIfLost(this.viewer && this.doc ? this.viewer.canvas : start.querySelector('button'), updateBar);
+    });
     // 측정값 칸(VCB): 넓은 화면은 3D 보기 오른쪽 아래, 측정 띠를 쓰는 화면은 띠 안 둘째 줄(placeVcb)
     this.vcb = new Vcb({
       onSubmit: (value, kind) => this.submitValue(value, kind),
@@ -3402,7 +3405,11 @@ export class SkpViewerApp implements PanelHost {
     n.className = `notice ${kind}`;
     n.innerHTML = '';
     const close = h('button', { class: 'icon-btn', type: 'button', title: '알림 닫기', 'aria-label': '알림 닫기', html: icon('close') });
-    close.addEventListener('click', () => this.closeNotice());
+    close.addEventListener('click', () => {
+      this.closeNotice();
+      // 숨는 알림 안 초점은 3D 보기로(문서가 없으면 처음 화면의 첫 단추로 — 44차)
+      focusIfLost(this.viewer && this.doc ? this.viewer.canvas : this.els.start.querySelector('button'), n);
+    });
     n.append(
       h('span', { class: 'notice-icon', html: icon(kind === 'info' ? 'info' : 'warn', 22) }),
       h('div', { class: 'notice-text' }, h('b', {}, title), h('span', {}, text)),
