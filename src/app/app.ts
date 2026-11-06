@@ -658,7 +658,8 @@ export class SkpViewerApp implements PanelHost {
       measureFlash,
     );
     // 고른 것 카드(휴대폰·터치): 패널을 열지 않고 고른 그룹·컴포넌트의 크기·태그를 보이고, 자세히(선택 탭)·선택 해제 단추를 둔다
-    const selText = h('div', { class: 'mb-text' });
+    // 카드도 측정 띠처럼 이름 붙은 묶음 + 알림 영역은 글 하나(45차 — 카드가 role=status(atomic)일 때는 글이 바뀔 때마다 단추 이름까지 읽혔다)
+    const selText = h('div', { class: 'mb-text', 'aria-live': 'polite' });
     // 그룹을 고른 뒤 누른 면·모서리 하나만(면 넓이·모서리 길이) — 휴대폰에서 패널을 열지 않고
     const selPart = h('button', { class: 'mb-btn', type: 'button', title: '누른 면 하나의 넓이(모서리면 길이)만 보기', hidden: true, html: `${icon('face', 16)}<span class="mb-part">면만</span>` });
     selPart.addEventListener('click', () => this.selectPickedPart());
@@ -670,7 +671,7 @@ export class SkpViewerApp implements PanelHost {
       this.applySelection(null, false);
       focusIfLost(this.viewer?.canvas, selBar);
     });
-    const selBar = h('div', { class: 'measure-bar sel-bar', role: 'status', hidden: true }, selText, h('div', { class: 'mb-acts' }, selPart, selMore, selClose));
+    const selBar = h('div', { class: 'measure-bar sel-bar', role: 'group', 'aria-label': '고른 것', hidden: true }, selText, h('div', { class: 'mb-acts' }, selPart, selMore, selClose));
     // 카메라 띠: 걷기(1인칭)·시야각·2점 투시(보기 설정 메뉴로 연다, 걸으면 늘 보인다). 휴대폰은 걷는 동안 왼쪽 아래에 조이스틱
     const camText = h('div', { class: 'mb-text cam-text' });
     const fovRange = h('input', { class: 'fov-range', type: 'range', min: '10', max: '120', step: '1', value: '35', 'aria-label': '시야각(도)', title: '세로 시야각(도)' });

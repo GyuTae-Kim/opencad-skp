@@ -240,4 +240,11 @@ describe('측정 띠 알림 영역(45차 — 앱 원본 규칙)', () => {
     expect(call('measureText')).toContain(`'aria-live': 'polite'`);
     expect(call('measureFlash')).toContain(`role: 'status'`);
   });
+
+  it('고른 것 카드도 이름 붙은 묶음이고 알림 영역은 글 하나(단추 이름까지 읽히지 않게)', () => {
+    const bar = call('selBar');
+    expect(bar).toContain(`role: 'group', 'aria-label': '고른 것'`);
+    expect(bar).not.toMatch(/role: '(status|alert|log)'|'aria-live'/);
+    expect(call('selText')).toContain(`'aria-live': 'polite'`);
+  });
 });
