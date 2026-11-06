@@ -164,6 +164,9 @@ describe('고대비(47차 — forced-colors)', () => {
       expect(bodies(s, at), s).toMatch(/color:\s*HighlightText/);
     }
   });
+  it('고른 줄 안 글(수·경로·칩)도 강조 글 색(제 색이 CanvasText로 바뀌어 강조 바탕 위 1.9~3.4:1)', () => {
+    for (const s of ['.prow.sel *', '.ptable tr.pick.sel *', 'button.scene-card.sel *']) expect(bodies(s, at), s).toMatch(/color:\s*HighlightText/);
+  });
   it('태그·재질 색 견본은 그대로, 창 가르개 초점 막대는 강조색(::after 바탕이 지워졌다)', () => {
     expect(bodies('.swatch', at)).toMatch(/forced-color-adjust:\s*none/);
     expect(bodies('.resizer:focus-visible::after', at)).toMatch(/background:\s*Highlight/);

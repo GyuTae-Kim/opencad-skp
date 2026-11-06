@@ -3056,6 +3056,13 @@ button.def-cell {
     color: HighlightText;
   }
 
+  /* 고른 줄 안 글(수·경로·칩·정의 이름 단추)은 제 색이 글 색(CanvasText)으로 바뀌어 강조 바탕 위 1.9~3.4:1이었다 */
+  .prow.sel *,
+  .ptable tr.pick.sel *,
+  button.scene-card.sel * {
+    color: HighlightText;
+  }
+
   .swatch {
     forced-color-adjust: none;
   }
