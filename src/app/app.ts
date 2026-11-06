@@ -847,7 +847,7 @@ export class SkpViewerApp implements PanelHost {
           'ul',
           { class: 'facts' },
           h('li', {}, h('b', {}, '지원 형식 '), 'SketchUp 3~8·2013~2026에서 저장한 파일 (확장자 .skp)'),
-          h('li', { class: 'muted' }, h('b', {}, '아직 못 읽음 '), 'SketchUp 1·2에서 저장한 아주 옛 파일(형식을 확인하지 못해 판만 알려 드립니다)'),
+          h('li', { class: 'muted' }, h('b', {}, '아직 못 읽음 '), 'SketchUp 1·2에서 저장한 아주 옛 파일(판만 알려 드립니다)'),
           h('li', {}, h('span', { class: 'lock', html: icon('lock', 15) }), h('b', {}, '파일은 이 브라우저 밖으로 나가지 않습니다. '), '서버로 올리지 않고 이 컴퓨터에서 읽습니다.'),
         ),
         h('p', { class: 'keys fine-only' }, '왼쪽 끌기 돌리기 · 오른쪽 끌기 옮기기 · 휠 확대 · F 전체 보기 · 1~7 표준 뷰 · F7 격자'),
