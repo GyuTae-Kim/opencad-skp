@@ -1938,12 +1938,17 @@ function finishPass(pass: Pass): MfcResult {
 
 /** 고쳐 읽기 끝 확인의 면 평면 허용 거리(인치 — SketchUp 길이 허용 오차 0.001인치) */
 const MEND_PLANE_TOL = 1e-3;
+/**
+ * 고쳐 읽은 파일에서 고치지 않은 면의 허용 거리(인치). 실제 파일의 작은 곡면 삼각형은 저장된 평면에서 0.0015인치쯤 벗어나기도 해
+ * 그보다 넉넉히 둔다(틀린 정점 참조는 보통 0.1인치 넘게 벗어난다)
+ */
+const MEND_LOOSE_TOL = 1e-2;
 
 /**
  * 고쳐 읽기에서 확신할 수 없는 바이트로 읽은 면·정점·모서리를 면 평면으로 확인한다.
  * 면: 고리의 모든 정점이 그 면 법선 방향으로 MEND_PLANE_TOL 안에 있고(평평함), 바깥 고리가 도는 방향의 법선이 저장된 법선과 같은 쪽이어야 한다.
  * 정점: 그 정점을 쓰는 면이 하나 이상 있고 모두 맞아야 한다(아니면 그 정점을 쓰는 모서리를 버린다).
- * 맞지 않는 면은 drop에 넣어 그리지 않는다
+ * 고치지 않은 면은 저장된 평면에서 MEND_LOOSE_TOL 넘게 벗어날 때만 뺀다. 맞지 않는 면은 drop에 넣어 그리지 않는다
  */
 function verifyMended(dec: Decoder): { drop: Set<SkpFace>; lost: number; checked: number; picked: number; repointed: number } {
   const m = dec.mend!;
@@ -2083,7 +2088,11 @@ function verifyMended(dec: Decoder): { drop: Set<SkpFace>; lost: number; checked
       let touch = faces.has(f);
       if (!touch && vs) touch = f.loops.some((l) => l.some((v) => vs.has(v)));
       if (!touch && edges.size && f.loopEdges) touch = f.loopEdges.some((l) => l.some((e) => e >= 0 && edges.has(c.edges[e]!)));
-      if (!touch) continue;
+      if (!touch) {
+        // 고치지 않은 면도 글 왕복이 같은 길이로 바꾼 참조(알아볼 수 없는 CR → LF)로 정점이 틀렸을 수 있다 — 저장된 평면에서 크게 벗어난 면은 그리지 않는다
+        if (faceFit(f, c.pos, false) > MEND_LOOSE_TOL) drop.add(f);
+        continue;
+      }
       checked++;
       const ok = faceFit(f, c.pos) <= MEND_PLANE_TOL;
       if (!ok) drop.add(f);
@@ -2109,10 +2118,10 @@ function verifyMended(dec: Decoder): { drop: Set<SkpFace>; lost: number; checked
  * 면이 저장된 평면에 맞는 정도: 정점들의 법선 방향 퍼짐(인치). 바깥 고리 방향(뉴웰 법선)이 저장된 법선과 다른 쪽이거나
  * 넓이가 없으면 Infinity
  */
-function faceFit(f: SkpFace, pos: readonly number[]): number {
+function faceFit(f: SkpFace, pos: readonly number[], orient = true): number {
   const [nx, ny, nz] = f.normal;
   const len = Math.hypot(nx, ny, nz);
-  if (!(len > 0.5)) return Infinity;
+  if (!(len > 0.5)) return orient ? Infinity : 0;
   let lo = Infinity;
   let hi = -Infinity;
   for (const l of f.loops)
@@ -2125,6 +2134,7 @@ function faceFit(f: SkpFace, pos: readonly number[]): number {
       lo = Math.min(lo, t);
       hi = Math.max(hi, t);
     }
+  if (!orient) return hi - lo;
   if (!(hi - lo <= MEND_PLANE_TOL)) return hi - lo || Infinity;
   const outer = f.loops[0]!;
   let ax = 0;

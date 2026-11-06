@@ -36,7 +36,7 @@ function indexOfBytes(b: Uint8Array, pat: Uint8Array): number {
 }
 
 /** n×n 칸의 기울어진 땅(칸마다 삼각형 둘 — 면 법선이 여러 방향이라 정점 x가 틀리면 면 평면에서 벗어난다). move로 정점 하나를 옮길 수 있다 */
-function terrain(n: number, move?: { at: number; x: number }): MfcEntitiesSpec {
+function terrain(n: number, move?: { at: number; x: number }, flatPlane?: number): MfcEntitiesSpec {
   const V: Vec3[] = [];
   for (let j = 0; j <= n; j++) for (let i = 0; i <= n; i++) V.push([i * 3, j * 3, ((i * 7 + j * 3) % 5) * 0.4]);
   if (move) V[move.at]![0] = move.x;
@@ -70,6 +70,8 @@ function terrain(n: number, move?: { at: number; x: number }): MfcEntitiesSpec {
       tri(id(i, j), id(i + 1, j), id(i + 1, j + 1));
       tri(id(i, j), id(i + 1, j + 1), id(i, j + 1));
     }
+  // 저장된 평면이 정점과 맞지 않는 면(같은 길이로 바뀐 참조로 정점이 틀린 것 흉내): 기울어진 삼각형에 바닥 평면을 적는다
+  if (flatPlane !== undefined) faces[flatPlane]!.plane = [0, 0, 1, 0];
   return { vertices: V, edges, faces };
 }
 
@@ -219,6 +221,23 @@ describe('글 왕복 손상 고쳐 읽기', () => {
     expect(faceCoords(m)).toEqual(faceCoords(good));
     const tri = (b: Uint8Array): number => skpToScene(b).meshes.reduce((k, mesh) => k + (mesh.indices?.length ?? 0) / 3, 0);
     expect(tri(bad)).toBe(tri(planted));
+  });
+
+  it('고쳐 읽은 파일에서는 저장된 평면과 0.01인치 넘게 어긋난 면을 그리지 않는다(보통 읽기는 그대로 그림)', () => {
+    const n = 5;
+    const bytes = buildAligned((description) => ({ description, root: terrain(n, undefined, 0) }));
+    const s = indexOfBytes(bytes, f64(...terrain(n).faces![3]!.plane));
+    const q = s + 24 + (s & 1 ? 1 : 0);
+    const planted = bytes.slice();
+    planted[q] = 0x28;
+    planted[q + 1] = 0x20;
+    const good = readM(planted);
+    const m = readM(textTrip(planted));
+    expect(good.root.faces.length).toBe(2 * n * n);
+    expect(m.root.faces.length).toBe(2 * n * n - 1);
+    expect(m.warnings.find((w) => w.startsWith('글로 한 번 저장되며'))).toContain('뺀 면 1개, 정점 0개');
+    // 뺀 것은 바닥 평면을 적은 첫 면뿐
+    expect(faceCoords(m)[0]).toEqual(faceCoords(good)[0]!.slice(1));
   });
 
   it('요소 수의 LF를 CR로 되돌려 남은 요소를 마저 읽는다(0x0D개 → 0x0A개로 줄어든 목록)', () => {
