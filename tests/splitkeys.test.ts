@@ -99,6 +99,85 @@ describe('묶음 열쇠만 세기(33차)', () => {
     expect(k).toEqual(preparedKeys(prepare(closed, undefined, { failed: 0 }, true, true, undefined, null, false)));
   });
 
+  it('36차: 이미 되는 면이 있는 묶음을 건너뛰어도 열쇠가 같다 — 닫힌 입체의 뒤쪽 면이 삼각화되지 않으면 c를 떼고, 열린 묶음은 앞 면이 안 되고 뒤 면이 되면 넣는다', () => {
+    // 닫힌 상자(면 6개가 한 묶음 — 모서리마다 쓰임 둘). bad면 세 번째 면(앞)의 평면 법선을 +Z로 적어 그 면이 한 줄로 눌려 삼각화되지 않는다
+    const box = (id: number, bad: boolean, material = 5): ReturnType<typeof merge> => {
+      const P: [number, number, number][] = [
+        [0, 0, 0],
+        [10, 0, 0],
+        [10, 10, 0],
+        [0, 10, 0],
+        [0, 0, 10],
+        [10, 0, 10],
+        [10, 10, 10],
+        [0, 10, 10],
+      ];
+      const E: [number, number][] = [
+        [0, 1],
+        [1, 2],
+        [2, 3],
+        [3, 0],
+        [4, 5],
+        [5, 6],
+        [6, 7],
+        [7, 4],
+        [0, 4],
+        [1, 5],
+        [2, 6],
+        [3, 7],
+      ];
+      const e = (k: number, rev = false): [number, boolean] => [id + 8 + k, rev];
+      const F: { n: [number, number, number, number]; loop: [number, boolean][] }[] = [
+        { n: [0, 0, -1, 0], loop: [e(3, true), e(2, true), e(1, true), e(0, true)] },
+        { n: [0, 0, 1, -10], loop: [e(4), e(5), e(6), e(7)] },
+        { n: bad ? [0, 0, 1, 0] : [0, -1, 0, 0], loop: [e(0), e(9), e(4, true), e(8, true)] },
+        { n: [1, 0, 0, -10], loop: [e(1), e(10), e(5, true), e(9, true)] },
+        { n: [0, 1, 0, -10], loop: [e(2), e(11), e(6, true), e(10, true)] },
+        { n: [-1, 0, 0, 0], loop: [e(3), e(8), e(7, true), e(11, true)] },
+      ];
+      return {
+        vertices: P.map((p, i) => vertex(id + i, ...p)),
+        edges: E.map(([a, b], k) => edge(id + 8 + k, id + a, id + b)),
+        faces: F.map((f, k) => face(id + 20 + k, f.n, [f.loop], { material })),
+      };
+    };
+    const defs = [
+      { name: '닫힌 상자', entities: entities(70, box(300, false)) },
+      { name: '앞면이 눌린 닫힌 상자', entities: entities(71, box(400, true)) },
+      // 열린 묶음: 재질 5 묶음의 첫 면은 삼각화되지 않고 둘째 면은 된다, 재질 6 묶음은 모두 안 된다
+      { name: '열린', entities: entities(72, merge([quad(500, 0, { material: 5, flat: true }), quad(510, 20, { material: 5 }), quad(520, 40, { material: 6, flat: true }), quad(530, 60, { material: 6, flat: true })])) },
+    ];
+    const m = readModelDat(modelDat({ definitions: defs, root: entities(undefined, { components: [instance(10, 70, IDENTITY13), instance(11, 71, IDENTITY13), instance(12, 72, IDENTITY13)] }) }));
+    const got: string[][] = [];
+    for (const id of [70, 71, 72]) {
+      const ents = m.definitions.get(id)!.entities;
+      for (const extras of [false, true]) {
+        const want = preparedKeys(prepare(ents, undefined, { failed: 0 }, extras, true, undefined, null, false));
+        const solids = new Map();
+        expect(prepareKeys(ents, undefined, extras, solids), `${id} ${extras}`).toEqual(want);
+        // 구해 둔 닫힌 입체 정보를 prepare에 주어도 같은 Prepared
+        const again = prepare(ents, undefined, { failed: 0 }, extras, true, undefined, null, false, solids.get(ents));
+        expect(plain(again)).toBe(plain(prepare(ents, undefined, { failed: 0 }, extras, true, undefined, null, false)));
+        if (extras) got.push(want.keys);
+      }
+    }
+    expect(got).toEqual([['f5|-1c', 'l-1'], ['f5|-1', 'l-1'], ['f5|-1', 'l-1']]);
+  });
+
+  it('36차: 삼각화한 묶음 배열은 꼭 맞는 버퍼를 혼자 쥔다(먼저 센 크기 — 삼각화하지 못한 면이 있어도)', () => {
+    const m = readModelDat(model());
+    for (const id of [50, 60])
+      for (const extras of [false, true]) {
+        const p = prepare(m.definitions.get(id)!.entities, undefined, { failed: 0 }, extras, true, undefined, null, true);
+        const arrays = [
+          ...[...p.batches, ...p.hiddenBatches].flatMap((b) => [b.pos, b.idx, b.fa, b.fn, b.ft, b.nrm, b.uv, b.buv, b.plane]),
+          ...[...p.lines, ...p.extraLines].flatMap((l) => [l.pos, l.curve, l.mat]),
+        ].filter((a): a is NonNullable<typeof a> => !!a);
+        expect(arrays.length).toBeGreaterThan(5);
+        for (const a of arrays) expect(a.byteLength, `${id} ${extras}`).toBe(a.buffer.byteLength);
+      }
+  });
+
   it('위 한도는 실제 삼각화 바이트보다 작지 않다', () => {
     const m = readModelDat(model());
     for (const id of [50, 60]) {

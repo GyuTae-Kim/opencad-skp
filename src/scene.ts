@@ -64,7 +64,7 @@ import { cornerNormals, faceUnitNormal } from './scene-smooth';
 import { emptyEdges, emptyFaces, MAP_STRIDE, opt, type SkpFaces } from './entities';
 import { F32, F64, I32, U32, freeTyped } from './grow';
 import { applyFaceUvq, faceUvqInto, planeAxesInto } from './projection';
-import { solidInfo } from './solid';
+import { solidInfo, type SolidInfo } from './solid';
 
 export const DEFAULT_FACE_COLOR: Rgba = [0.82, 0.82, 0.8, 1];
 export const EDGE_COLOR: Rgba = [0.12, 0.12, 0.12, 1];
@@ -359,6 +359,13 @@ function freeTables(e: SkpEntities): void {
   for (const a of [g.a, g.b, g.flags, g.layer, g.material, g.pid, g.curve]) freeTyped(a);
 }
 
+/**
+ * 면마다 다시 쓰는 earcut 입력(2D 좌표·구멍 시작) 자리(triangulateFace — earcut은 입력 배열을 붙들지 않는다).
+ * 36차: 면마다 두 배열을 새로 잡던 것(165 MB 표본에서 장면 만들기 동안 100만 번 남짓)을 줄인다 — 넘기는 값·차례는 같다
+ */
+const earFlat: number[] = [];
+const earHoles: number[] = [];
+
 /** 면 표의 면 k를 삼각화해 (위치, 삼각형)을 쌓기에 더한다. 실패하면 false(쌓기는 그대로) */
 export function triangulateFace(points: Float64Array, faces: SkpFaces, k: number, pos: F64, idx: U32): boolean {
   const N = faces.normal;
@@ -369,8 +376,10 @@ export function triangulateFace(points: Float64Array, faces: SkpFaces, k: number
   const drop = az >= ax && az >= ay ? 2 : ax >= ay ? 0 : 1;
   const u = drop === 0 ? 1 : 0;
   const v = drop === 2 ? 1 : 2;
-  const flat: number[] = [];
-  const holes: number[] = [];
+  const flat = earFlat;
+  const holes = earHoles;
+  flat.length = 0;
+  holes.length = 0;
   const base = pos.n / 3;
   const L0 = faces.loopStart[k]!;
   const L1 = faces.loopStart[k + 1]!;
@@ -520,6 +529,7 @@ export function prepare(
   onFaces?: (n: number) => void,
   tex?: PrepTex | null,
   edgeMats = false,
+  known?: SolidInfo,
 ): Prepared {
   const layerKey = (l: number | undefined): number => (l === undefined || l === defaultLayer ? -1 : l);
   const groups = new Map<string, FaceGroup>();
@@ -531,60 +541,102 @@ export function prepare(
   const normal: [number, number, number] = [0, 0, 0];
   let k = 0;
   let failedHere = 0;
-  // 바로 앞 면과 재질·뒷면·태그·숨김이 같으면 그 묶음을 그대로 쓴다(면마다 열쇠 글을 만들지 않는다 — 같은 묶음)
-  let last: FaceGroup | undefined;
-  let lastHidden = false;
-  let lastMat = NaN;
-  let lastBack = NaN;
-  let lastLayer = NaN;
+  // 36차: 묶음을 먼저 가르고(면마다 묶음 차례) 묶음마다 쌓을 값 수를 세어 꼭 맞게 잡는다 — 면 꼭짓점 수(위치·법선·무늬 좌표·평면 좌표), 면 수(넓이·법선·삼각형 수),
+  // 삼각형 수의 위 한도(고리 꼭짓점 + 2·구멍 − 2). 쌓기가 1024칸에서 두 배씩 자라며 옮기고 끝(done)에 꼭 맞게 다시 옮기던 것을 줄인다
+  // (165 MB 표본 장면 만들기에서 자라며 옮긴 332 MB·끝에 줄인 567 MB 가운데 이 몫이 절반쯤). 셈이 모자라면 예전처럼 자라고, 남으면 끝에 줄인다 — 낸 값은 같다.
+  // 묶음 차례(처음 나온 차례)와 바로 앞 면과 같으면 열쇠 글을 만들지 않는 것은 그대로다
+  interface GroupSize {
+    key: string;
+    hidden: boolean;
+    mat: MatKey;
+    back: MatKey;
+    layer: number;
+    corners: number;
+    faces: number;
+    tris: number;
+  }
+  const sizes: GroupSize[] = [];
+  const sizeAt = new Map<string, number>();
+  const hiddenAt = new Map<string, number>();
+  const faceGroup = new Int32Array(F.length).fill(-1);
+  {
+    let lastAt = -1;
+    let lastHidden = false;
+    let lastMat = NaN;
+    let lastBack = NaN;
+    let lastLayer = NaN;
+    const LS = F.loopStart;
+    const CS = F.cornerStart;
+    for (let fi = 0; fi < F.length; fi++) {
+      const isHidden = (F.flags[fi]! & FLAG_HIDDEN) !== 0;
+      if (isHidden && !extras) continue;
+      const fr = F.front[fi]!;
+      const bk = F.back[fi]!;
+      const mat: MatKey = fr === fr ? fr : -1;
+      const back: MatKey = bk === bk ? bk : -1;
+      const layer = layerKey(opt(F.layer[fi]!));
+      let at: number;
+      if (lastAt >= 0 && isHidden === lastHidden && mat === lastMat && back === lastBack && layer === lastLayer) at = lastAt;
+      else {
+        const key = `${mat}|${back}|${layer}`;
+        const map = isHidden ? hiddenAt : sizeAt;
+        const had = map.get(key);
+        if (had === undefined) {
+          at = sizes.length;
+          map.set(key, at);
+          sizes.push({ key, hidden: isHidden, mat, back, layer, corners: 0, faces: 0, tris: 0 });
+        } else at = had;
+        lastAt = at;
+        lastHidden = isHidden;
+        lastMat = mat;
+        lastBack = back;
+        lastLayer = layer;
+      }
+      faceGroup[fi] = at;
+      const s = sizes[at]!;
+      const l0 = LS[fi]!;
+      const l1 = LS[fi + 1]!;
+      const c = CS[l1]! - CS[l0]!;
+      s.corners += c;
+      s.faces++;
+      s.tris += Math.max(0, c + 2 * (l1 - l0) - 4);
+    }
+  }
+  const faceGroups: FaceGroup[] = sizes.map((s) => {
+    const { mat, back, corners: c, faces: f } = s;
+    const own = tex && mat >= 0 ? tex.tile(mat) : undefined;
+    const ownBack = tex && back >= 0 ? tex.tile(back) : undefined;
+    const g: FaceGroup = {
+      mat,
+      back,
+      layer: s.layer,
+      pos: new F64(3 * c),
+      idx: new U32(3 * s.tris),
+      faces: 0,
+      area: 0,
+      fa: new F64(f),
+      fn: new F32(3 * f),
+      nrm: smooth ? new F32(3 * c) : null,
+      smoothed: false,
+      uv: own ? new F64(3 * c) : null,
+      buv: ownBack ? new F64(3 * c) : null,
+      plane: tex?.plane && (mat < 0 || back < 0) ? new F32(2 * c) : null,
+      ft: new U32(f),
+    };
+    (s.hidden ? hidden : groups).set(s.key, g);
+    return g;
+  });
   for (let fi = 0; fi < F.length; fi++) {
     if (onFaces && ++k % 2048 === 0) onFaces(2048);
+    const at = faceGroup[fi]!;
+    if (at < 0) continue;
     const isHidden = (F.flags[fi]! & FLAG_HIDDEN) !== 0;
-    if (isHidden && !extras) continue;
-    const fr = F.front[fi]!;
-    const bk = F.back[fi]!;
-    const mat: MatKey = fr === fr ? fr : -1;
-    const back: MatKey = bk === bk ? bk : -1;
-    const layer = layerKey(opt(F.layer[fi]!));
+    const mat = faceGroups[at]!.mat;
+    const back = faceGroups[at]!.back;
     normal[0] = F.normal[3 * fi]!;
     normal[1] = F.normal[3 * fi + 1]!;
     normal[2] = F.normal[3 * fi + 2]!;
-    let g: FaceGroup | undefined;
-    if (last && isHidden === lastHidden && mat === lastMat && back === lastBack && layer === lastLayer) g = last;
-    else {
-      const key = `${mat}|${back}|${layer}`;
-      const map = isHidden ? hidden : groups;
-      g = map.get(key);
-      if (!g) {
-        const own = tex && mat >= 0 ? tex.tile(mat) : undefined;
-        const ownBack = tex && back >= 0 ? tex.tile(back) : undefined;
-        map.set(
-          key,
-          (g = {
-            mat,
-            back,
-            layer,
-            pos: new F64(),
-            idx: new U32(),
-            faces: 0,
-            area: 0,
-            fa: new F64(64),
-            fn: new F32(192),
-            nrm: smooth ? new F32() : null,
-            smoothed: false,
-            uv: own ? new F64() : null,
-            buv: ownBack ? new F64() : null,
-            plane: tex?.plane && (mat < 0 || back < 0) ? new F32() : null,
-            ft: new U32(64),
-          }),
-        );
-      }
-      last = g;
-      lastHidden = isHidden;
-      lastMat = mat;
-      lastBack = back;
-      lastLayer = layer;
-    }
+    const g = faceGroups[at]!;
     const before = g.pos.n;
     const tri0 = g.idx.n;
     if (!triangulateFace(ents.points, F, fi, g.pos, g.idx)) {
@@ -715,31 +767,59 @@ export function prepare(
     curve: I32 | null;
     /** 모서리 재질 번호(모서리 색 "재질별"일 때 보통 모서리만) */
     mat: F64 | null;
+    /** 이 묶음에 들 모서리 수(먼저 센 값) */
+    total: number;
   }
   const lineGroups = new Map<number, LineGroup>();
   const softGroups = new Map<number, LineGroup>();
   const hiddenLines = new Map<number, LineGroup>();
   const p = ents.points;
   const E = ents.edges;
+  // 36차: 갈래·태그마다 모서리 수를 먼저 세어 꼭 맞게 잡는다(면 묶음과 같은 까닭 — 낸 값·차례는 같다)
+  const lineCount = new Map<number, number>();
+  const softCount = new Map<number, number>();
+  const hiddenCount = new Map<number, number>();
+  for (let ei = 0; ei < E.length; ei++) {
+    const flags = E.flags[ei]!;
+    let count: Map<number, number>;
+    if (flags & FLAG_HIDDEN) {
+      if (!extras) continue;
+      count = hiddenCount;
+    } else if (flags & FLAG_SOFT_SMOOTH) {
+      if (!extras) continue;
+      count = softCount;
+    } else count = lineCount;
+    const layer = layerKey(opt(E.layer[ei]!));
+    count.set(layer, (count.get(layer) ?? 0) + 1);
+  }
   for (let ei = 0; ei < E.length; ei++) {
     const flags = E.flags[ei]!;
     let map: Map<number, LineGroup>;
+    let count: Map<number, number>;
     if (flags & FLAG_HIDDEN) {
       if (!extras) continue;
       map = hiddenLines;
+      count = hiddenCount;
     } else if (flags & FLAG_SOFT_SMOOTH) {
       if (!extras) continue;
       map = softGroups;
-    } else map = lineGroups;
+      count = softCount;
+    } else {
+      map = lineGroups;
+      count = lineCount;
+    }
     const layer = layerKey(opt(E.layer[ei]!));
     let g = map.get(layer);
-    if (!g) map.set(layer, (g = { pos: new F64(), curve: null, mat: edgeMats && map === lineGroups ? new F64() : null }));
+    if (!g) {
+      const total = count.get(layer)!;
+      map.set(layer, (g = { pos: new F64(6 * total), curve: null, mat: edgeMats && map === lineGroups ? new F64(total) : null, total }));
+    }
     g.mat?.push(E.material[ei]!);
     const k = E.curve[ei]! >= 0 ? E.curve[ei]! : -1;
     if (k >= 0 && !g.curve) {
       // 앞서 든 곡선 아닌 선분은 -1
       const n = g.pos.n / 6;
-      g.curve = new I32(Math.max(64, 2 * n));
+      g.curve = new I32(g.total);
       g.curve.a.fill(-1, 0, n);
       g.curve.n = n;
     }
@@ -769,8 +849,8 @@ export function prepare(
   const extraLines: LineBatch[] = [];
   for (const [layer, g] of softGroups) extraLines.push(batchOf(layer, g, 1));
   for (const [layer, g] of hiddenLines) extraLines.push(batchOf(layer, g, 2));
-  // 닫힌 입체: 단면에서 잘린 면을 채울 수 있다(삼각화하지 못한 면이 있으면 그물에 틈이 생기므로 빼고)
-  const solid = solidInfo(ents);
+  // 닫힌 입체: 단면에서 잘린 면을 채울 수 있다(삼각화하지 못한 면이 있으면 그물에 틈이 생기므로 빼고). known: 열쇠를 셀 때 구해 둔 같은 값(prepareKeys — 36차)
+  const solid = known ?? solidInfo(ents);
   const out: Prepared = { batches: toBatches(groups), lines, hiddenBatches: toBatches(hidden), extraLines, closed: solid.closed && !failedHere };
   if (solid.volume !== undefined) out.volume = solid.volume;
   return out;
@@ -798,7 +878,7 @@ export function preparedKeys(p: Prepared): PreparedKeys {
  * 큰 모형에서 나눌 단계를 정할 때 들고 있을 수 없는 정의를 통째로 삼각화했다가 놓고, 장면에 옮길 때 다시 통째로 삼각화하던 것을 줄인다
  * (165 MB 표본에서 정의 1,143개 가운데 623개, 면 39만 개를 두 번 — prepare 시간의 3분의 1)
  */
-export function prepareKeys(ents: SkpEntities, defaultLayer: number | undefined, extras: boolean): PreparedKeys {
+export function prepareKeys(ents: SkpEntities, defaultLayer: number | undefined, extras: boolean, solids?: Map<SkpEntities, SolidInfo>): PreparedKeys {
   const layerKey = (l: number | undefined): number => (l === undefined || l === defaultLayer ? -1 : l);
   interface KeyGroup {
     mat: MatKey;
@@ -811,6 +891,17 @@ export function prepareKeys(ents: SkpEntities, defaultLayer: number | undefined,
   const pos = new F64();
   const idx = new U32();
   let failedHere = 0;
+  // 36차: 닫힌 입체인지 먼저 본다(solidInfo — 면 차례와 상관없는 값). 열쇠는 묶음마다 삼각화되는 면이 있는지와(닫힌 입체면) 실패한 면이 있는지만 쓰므로,
+  // 이미 되는 면이 있는 묶음의 면은 닫히지 않았거나 실패를 이미 찾았으면 삼각화하지 않는다(같은 열쇠 — 165 MB 표본에서 열쇠만 셈한 정의 515개·면 40만 개를
+  // 장면에 옮길 때 한 번 더 삼각화했다). 바로 앞 면과 묶음이 같으면 열쇠 글을 만들지 않는다(prepare와 같게).
+  // solids를 주면 그 정의의 solidInfo를 넣어 둔다(장면에 옮길 때 prepare가 다시 구하지 않게 — buildSceneParts)
+  const solid = solidInfo(ents);
+  solids?.set(ents, solid);
+  let last: KeyGroup | undefined;
+  let lastHidden = false;
+  let lastMat = NaN;
+  let lastBack = NaN;
+  let lastLayer = NaN;
   for (let fi = 0; fi < F.length; fi++) {
     const isHidden = (F.flags[fi]! & FLAG_HIDDEN) !== 0;
     if (isHidden && !extras) continue;
@@ -819,10 +910,20 @@ export function prepareKeys(ents: SkpEntities, defaultLayer: number | undefined,
     const mat: MatKey = fr === fr ? fr : -1;
     const back: MatKey = bk === bk ? bk : -1;
     const layer = layerKey(opt(F.layer[fi]!));
-    const key = `${mat}|${back}|${layer}`;
-    const map = isHidden ? hidden : groups;
-    let g = map.get(key);
-    if (!g) map.set(key, (g = { mat, layer, ok: false }));
+    let g: KeyGroup | undefined;
+    if (last && isHidden === lastHidden && mat === lastMat && back === lastBack && layer === lastLayer) g = last;
+    else {
+      const key = `${mat}|${back}|${layer}`;
+      const map = isHidden ? hidden : groups;
+      g = map.get(key);
+      if (!g) map.set(key, (g = { mat, layer, ok: false }));
+      last = g;
+      lastHidden = isHidden;
+      lastMat = mat;
+      lastBack = back;
+      lastLayer = layer;
+    }
+    if (g.ok && (!solid.closed || failedHere)) continue;
     pos.n = 0;
     idx.n = 0;
     if (!triangulateFace(ents.points, F, fi, pos, idx)) {
@@ -831,7 +932,6 @@ export function prepareKeys(ents: SkpEntities, defaultLayer: number | undefined,
     }
     g.ok = true;
   }
-  const solid = solidInfo(ents);
   const closed = solid.closed && !failedHere;
   const keys: string[] = [];
   let n = 0;
@@ -1268,12 +1368,15 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   const emptied = new Set<SkpEntities>();
   /** 나눌 단계를 정할 때 묶음 열쇠만 셈하고(prepareKeys) 아직 삼각화하지 않은 묶음 — 끝까지 옮기지 않으면 끝에 한 번 삼각화해 경고 수를 센다 */
   const keysOnly = new Set<SkpEntities>();
+  /** 열쇠만 셀 때 구해 둔 닫힌 입체 정보(prepareKeys — 장면에 옮길 때 prepare가 다시 구하지 않게, 36차) */
+  const solids = new Map<SkpEntities, SolidInfo>();
   const prep = (e: SkpEntities): Prepared => {
     let p = cache.get(e);
     if (!p) {
       if (emptied.has(e)) throw new Error('표를 비운 정의를 다시 삼각화하려 했습니다');
       const again = preparedOnce.has(e);
-      p = prepare(e, model.defaultLayer, again ? quietCounter : counter, extras, smooth, again ? undefined : onFaces, again ? quietTex : prepTex, edgeColoring === 'material');
+      p = prepare(e, model.defaultLayer, again ? quietCounter : counter, extras, smooth, again ? undefined : onFaces, again ? quietTex : prepTex, edgeColoring === 'material', solids.get(e));
+      solids.delete(e);
       cache.set(e, p);
       if (!again) {
         preparedOnce.add(e);
@@ -1418,7 +1521,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
           const had = cache.has(e);
           // 33차: 들고 있을 몫(위 한도 preparedBound)이 남지 않은 정의는 묶음 열쇠만 셈한다(prepareKeys — 같은 열쇠, 장면에 옮길 때 한 번만 삼각화)
           if (!had && held + preparedBound(e) > prepBudget) {
-            r = prepareKeys(e, model.defaultLayer, extras);
+            r = prepareKeys(e, model.defaultLayer, extras, solids);
             if (!preparedOnce.has(e)) keysOnly.add(e);
           } else {
             const p = prep(e);
