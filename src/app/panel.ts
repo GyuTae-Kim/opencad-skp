@@ -239,7 +239,8 @@ export class Panel {
       cb.checked = on;
       cb.disabled = disabled;
       cb.addEventListener('change', () => set(cb.checked));
-      return h('label', { class: `prow${disabled ? ' off' : ''}`, title }, cb, h('span', { class: 'name' }, label), h('span', { class: 'count' }, count));
+      // opt: 앱 글(모형 이름이 아님)이라 자르지 않고 줄을 바꾼다(44차 — 독일어 "Versteckte Funktionen anzeigen"이 말줄임으로 잘렸다)
+      return h('label', { class: `prow opt${disabled ? ' off' : ''}`, title }, cb, h('span', { class: 'name' }, label), h('span', { class: 'count' }, count));
     };
     const view: HTMLElement[] = [];
     if (x)
