@@ -422,3 +422,63 @@ describe('모서리·면·무늬 투영 읽기(34차)', () => {
     expect(mapped).toBeGreaterThan(100);
   });
 });
+
+describe('무늬 투영 목록을 그 자리에서 돌기(51차)', () => {
+  it('속성 목록·투영 목록에 넘친 자식·잘린 머리가 끼어도 옛 식(r.each 콜백)과 같은 값, 같은 글로 던진다', () => {
+    const r = rng(51);
+    const snapshot = (fn: () => { front?: SkpTextureMap; back?: SkpTextureMap }): unknown => {
+      try {
+        const o = fn();
+        const one = (m?: SkpTextureMap) => (m ? { kind: m.kind, matrix: Array.from(m.matrix), dir: m.dir ? [...m.dir] : undefined } : undefined);
+        return { front: one(o.front), back: one(o.back) };
+      } catch (e) {
+        return `throw: ${(e as Error).message}`;
+      }
+    };
+    /** 목록 몸통 끝에 가끔 넘친 자식이나 6바이트가 안 되는 잘린 머리를 붙인다 */
+    const breakTail = (kids: Uint8Array[], tags: readonly number[]): Uint8Array => {
+      const k = r() % 6;
+      if (k === 0) kids.splice(r() % (kids.length + 1), 0, overflow(pick(r, tags), u8(1), 1 + (r() % 40)));
+      else if (k === 1) kids.push(new Uint8Array(1 + (r() % 5)));
+      return concat(kids);
+    };
+    let threw = 0;
+    let mapped = 0;
+    for (let k = 0; k < 3000; k++) {
+      const items: Uint8Array[] = [];
+      for (let i = r() % 4; i > 0; i--) {
+        if (maybe(r, 5)) {
+          items.push(tlv(0x36b3, u8(0)));
+          continue;
+        }
+        // 투영 목록(앞·뒤)을 직접 만들어 그 목록 안에도 넘친 자식·잘린 머리를 끼운다
+        const m = mapping(r);
+        const body = m.subarray(6);
+        const sides: Uint8Array[] = [];
+        for (let p = 0; p < body.length; ) {
+          const len = new DataView(body.buffer, body.byteOffset + p + 2, 4).getUint32(0, true);
+          sides.push(body.subarray(p, p + 6 + len));
+          p += 6 + len;
+        }
+        items.push(concat([u16(TAG.TEX_MAP), u32(0), breakTail(sides, [TAG.TEX_FRONT, TAG.TEX_BACK, 0x2719])]));
+        // 위 머리의 길이 칸을 몸통 길이로
+        const last = items[items.length - 1]!;
+        new DataView(last.buffer, last.byteOffset + 2, 4).setUint32(0, last.length - 6, true);
+      }
+      const itemsBody = breakTail(items, [TAG.TEX_MAP, 0x36b3]);
+      const bytes = concat([
+        tlv(TAG.FACE, tlv(TAG.BASE, tlv(TAG.ID_BOX, tlv(TAG.ID, uintLE(k)), tlv(TAG.ATTRS, tlv(TAG.ATTR_LIST, concat([u16(TAG.ATTR_ITEMS), u32(itemsBody.length), itemsBody])))))),
+        tlv(0x1234, u8(9)),
+      ]);
+      const reader = new TlvReader(bytes);
+      const node: TlvNode = { tag: TAG.FACE, start: 6, end: bytes.length - 7 };
+      const want = snapshot(() => oldReadTextureMaps(reader, node));
+      const got = snapshot(() => readTextureMaps(reader, node));
+      expect(got).toEqual(want);
+      if (typeof want === 'string') threw++;
+      else if ((want as { front?: unknown }).front || (want as { back?: unknown }).back) mapped++;
+    }
+    // 던진 것·투영을 읽은 것이 넉넉히 섞였다
+    expect([threw, mapped].map((n) => n > 200)).toEqual([true, true]);
+  });
+});
