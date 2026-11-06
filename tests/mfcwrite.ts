@@ -50,27 +50,31 @@ const BASE = {
 };
 /** SketchUp 5에는 스타일 클래스가 없다 */
 const { CSkpStyle: _noStyle, ...BASE_NO_STYLE } = BASE;
+// SketchUp 5: 6의 것 + 머리 8바이트, 카메라 2점 투시·24바이트 없음, 렌더링 덩어리 150바이트(장면 안 146), 무늬 그림은 u8 + 줄 안 CDib(JPEG 품질 없음),
+// 치수 머리 글꼴·정렬·끝 표시와 선형 치수 글 자리 없음, 글꼴 세계 크기 없음, 문자 기본값 18바이트·지시선 글꼴 없음, 장면 스타일·미리보기 없음, 스타일 없음
+const V5 = {
+  ...BASE_NO_STYLE,
+  CSketchUpModel: 12,
+  CRenderingOptions: 28,
+  CComponentInstance: 4,
+  CViewPage: 9,
+  CArcCurve: 1,
+  CAttributeNamed: 0,
+  CComponentBehavior: 4,
+  CCamera: 4,
+  CDib: 2,
+  CDimension: 0,
+  CDimensionLinear: 4,
+  CSkFont: 0,
+  CTextStyle: 4,
+  CTexture: 4,
+};
+/** SketchUp 3(모형 스키마 10) — 읽지 않는 판(거절 시험용, 스키마만 다르다) */
+export const SU3_SCHEMAS: Record<string, number> = { ...V5, CSketchUpModel: 10, CRenderingOptions: 22, CComponentInstance: 3, CDrawingElement: 8 };
 export const MFC_SCHEMAS: Record<'v4' | 'v5' | 'v6' | 'v7' | 'v8' | 'v15' | 'v17' | 'v18' | 'v19' | 'v20', Record<string, number>> = {
-  v4: { ...BASE, CSketchUpModel: 12, CRenderingOptions: 25, CComponentInstance: 3, CDrawingElement: 8, CViewPage: 9, CArcCurve: 1 },
-  // SketchUp 5: 6의 것 + 머리 8바이트, 카메라 2점 투시·24바이트 없음, 렌더링 덩어리 150바이트(장면 안 146), 무늬 그림은 u8 + 줄 안 CDib(JPEG 품질 없음),
-  // 치수 머리 글꼴·정렬·끝 표시와 선형 치수 글 자리 없음, 글꼴 세계 크기 없음, 문자 기본값 18바이트·지시선 글꼴 없음, 장면 스타일·미리보기 없음, 스타일 없음
-  v5: {
-    ...BASE_NO_STYLE,
-    CSketchUpModel: 12,
-    CRenderingOptions: 28,
-    CComponentInstance: 4,
-    CViewPage: 9,
-    CArcCurve: 1,
-    CAttributeNamed: 0,
-    CComponentBehavior: 4,
-    CCamera: 4,
-    CDib: 2,
-    CDimension: 0,
-    CDimensionLinear: 4,
-    CSkFont: 0,
-    CTextStyle: 4,
-    CTexture: 4,
-  },
+  // SketchUp 4: 5의 것 + 그리기 요소 깃발 5바이트(잠김 없음), 인스턴스 이름 없음, 렌더링 덩어리 135바이트(장면 안 131)
+  v4: { ...V5, CRenderingOptions: 25, CComponentInstance: 3, CDrawingElement: 8 },
+  v5: V5,
   // SketchUp 6: 설정 묶음이 꼬리에, 동작 덩어리 38바이트, CAttributeNamed 끝 u32 없음, 렌더링 덩어리 189바이트
   v6: { ...BASE, CSketchUpModel: 18, CRenderingOptions: 32, CComponentInstance: 4, CViewPage: 11, CArcCurve: 1, CAttributeNamed: 0, CComponentBehavior: 4 },
   v7: { ...BASE, CSketchUpModel: 22, CRenderingOptions: 35, CComponentInstance: 4, CViewPage: 11, CArcCurve: 1 },
@@ -615,11 +619,11 @@ export interface MfcSpec {
 // ── 쓰기 ──────────────────────────────────────────────────────
 
 /** 렌더링 덩어리 칸 자리(src/mfcview.ts와 같은 형식 기록에서) */
-const BLOCK_SIZE: Record<number, number> = { 25: 160, 28: 150, 32: 189, 33: 190, 35: 197, 36: 216, 37: 221, 38: 222, 39: 223 };
+const BLOCK_SIZE: Record<number, number> = { 25: 135, 28: 150, 32: 189, 33: 190, 35: 197, 36: 216, 37: 221, 38: 222, 39: 223 };
 const F36 = { xray: 6, background: 13, foreground: 17, texture: 32, profiles: 42, hiddenGeometry: 58, front: 63, back: 67, sky: 123, ground: 131, drawSky: 135, drawGround: 136 };
 const F38 = { ...F36, background: 14, foreground: 18, texture: 33, profiles: 43, hiddenGeometry: 59, front: 64, back: 68, sky: 124, ground: 132, drawSky: 136, drawGround: 137, sectionFill: 167 };
 const FIELDS: Record<number, Record<string, number>> = {
-  25: F36,
+  25: { xray: 6, background: 13, foreground: 17, texture: 32, profiles: 42, front: 52, back: 56, sky: 78, ground: 86, drawSky: 90, drawGround: 91 },
   28: { ...F36, sky: 89, ground: 97, drawSky: 101, drawGround: 102 },
   32: F36,
   35: F36,
@@ -651,6 +655,8 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
   const version = spec.version ?? (preset ? MFC_VERSIONS[preset] : '15.0.1');
   const w = new MfcWriter(schemas);
   const pids = w.pids;
+  // CDrawingElement 8(SketchUp 4): 잠김이 없어 깃발 5바이트
+  const flagBytes = (w.schemas.CDrawingElement ?? 9) >= 9 ? 6 : 5;
   const head = concat([utf16String('SketchUp Model'), utf16String(`{${version}}`)]);
   w.zeros(16); // 모형 GUID
   w.str(''); // 마지막 저장 경로
@@ -842,7 +848,7 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
   const lref = (i: number | undefined): void => (i === undefined ? w.nil() : w.ref(layerSlots[i]!));
   const drawing = (material: number | undefined, flags: { hidden?: boolean; soft?: boolean; smooth?: boolean; locked?: boolean }, layer: number | undefined): void => {
     mref(material);
-    w.raw([flags.hidden ? 1 : 0, 0, 0, flags.soft ? 1 : 0, flags.smooth ? 1 : 0, flags.locked ? 1 : 0]);
+    w.raw([flags.hidden ? 1 : 0, 0, 0, flags.soft ? 1 : 0, flags.smooth ? 1 : 0, flags.locked ? 1 : 0].slice(0, flagBytes));
     lref(layer);
   };
   const fontRef = (i: number | undefined): void => {
@@ -912,7 +918,7 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
   };
   const axes = (): void => {
     pre();
-    w.zeros(10);
+    w.zeros(4 + flagBytes);
     w.f64(...(spec.axes ?? [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]));
     w.u8(0);
   };
@@ -1025,7 +1031,7 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
           drawing(inst.material, inst, inst.layer);
           defRef(inst.def);
           w.f64(...inst.xform);
-          w.str(inst.name ?? '');
+          if (w.schema('CComponentInstance') >= 4) w.str(inst.name ?? '');
           if (w.schema('CComponentInstance') >= 5) w.raw(inst.guid ?? new Uint8Array(16));
         });
       }),
@@ -1114,7 +1120,7 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
   };
 
   const componentBody = (isModel: boolean, e: MfcEntitiesSpec, slots: Slots, vestigial: string[] = []): void => {
-    w.zeros(pids ? 13 : 12);
+    w.zeros((pids ? 13 : 12) - (6 - flagBytes));
     if (isModel) {
       const mats = spec.materials ?? [];
       w.u32(mats.length);

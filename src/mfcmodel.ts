@@ -1,6 +1,6 @@
 /**
  * SketchUp 2020 이하(머리 뒤 MFC CArchive 객체 직렬화) → 중간 모형(SkpModel, 2021+ 해석기와 같은 꼴).
- * SketchUp 5(CSketchUpModel 스키마 12 + CRenderingOptions 28)·6(18)·7·8·2013~2020(21~29)을 읽고, SketchUp 3~4는 분명한 까닭과 함께 거절한다(MfcRefused).
+ * SketchUp 4·5(CSketchUpModel 스키마 12 + CRenderingOptions 25·28)·6(18)·7·8·2013~2020(21~29)을 읽고, SketchUp 3은 분명한 까닭과 함께 거절한다(MfcRefused).
  * 형식 지식은 MFC 직렬화 규칙(Microsoft TN002)과, 사용자가 허락한 2026-10 비공개 참조 해석기(SketchUp C API를 비교 기준으로 맞춘 해석기)의
  * legacy 부분과 문서에서 옮긴 것이다(docs/formats/skp.md). 코드는 opencad-skp 꼴로 새로 썼다.
  *
@@ -69,6 +69,8 @@ const SU6_MODEL_SCHEMA = 18;
  */
 const SU5_MODEL_SCHEMA = 12;
 const SU5_RENDERING_SCHEMA = 28;
+/** SketchUp 4(CSketchUpModel 12 + CRenderingOptions 25): 5의 꼴에 더해 잠김(그리기 요소 깃발·잠긴 색)·인스턴스 이름이 없고 렌더링 덩어리가 짧다 */
+const SU4_RENDERING_SCHEMA = 25;
 /** 칸(클래스·객체) 수 한도 — 브라우저 메모리 보호 */
 export const MFC_MAX_RECORDS = 60_000_000;
 const MAX_DEFINITIONS = 1_000_000;
@@ -79,7 +81,7 @@ const DEFAULT_LAYER_NAMES = new Set(['Layer0', 'Untagged']);
 const UNSET_LAYER_COLOR: [number, number, number] = [64, 64, 64];
 const SNAP_TO = ['any', 'horizontal', 'vertical', 'sloped'] as const;
 
-/** SketchUp 3~4처럼 읽지 않는 옛 판 */
+/** SketchUp 3처럼 읽지 않는 옛 판 */
 export class MfcRefused extends Error {
   readonly modelSchema: number;
   readonly renderingSchema: number;
@@ -213,15 +215,15 @@ class Decoder {
     s.readObject(C.VERSION_MAP);
     const model = this.st.schemas.get('CSketchUpModel') ?? -1;
     const rendering = this.st.schemas.get('CRenderingOptions') ?? -1;
-    const su5 = model === SU5_MODEL_SCHEMA && rendering === SU5_RENDERING_SCHEMA;
-    const known = (model >= MIN_MODEL_SCHEMA && model <= MAX_MODEL_SCHEMA) || model === SU6_MODEL_SCHEMA || su5;
+    const su45 = model === SU5_MODEL_SCHEMA && (rendering === SU5_RENDERING_SCHEMA || rendering === SU4_RENDERING_SCHEMA);
+    const known = (model >= MIN_MODEL_SCHEMA && model <= MAX_MODEL_SCHEMA) || model === SU6_MODEL_SCHEMA || su45;
     if (!known || !(rendering in RENDERING_BLOCK)) {
-      // SketchUp 3(모형 10)·4(모형 12 + 렌더링 25)
-      const old = model >= 0 && (model < SU5_MODEL_SCHEMA || (model === SU5_MODEL_SCHEMA && rendering >= 0 && rendering < SU5_RENDERING_SCHEMA));
+      // SketchUp 3(모형 10)
+      const old = model >= 0 && (model < SU5_MODEL_SCHEMA || (model === SU5_MODEL_SCHEMA && rendering >= 0 && rendering < SU4_RENDERING_SCHEMA));
       throw new MfcRefused(
         old
-          ? `SketchUp ${this.header.version} 파일은 SketchUp 3~4의 아주 옛 형식(모형 스키마 ${model})이라 아직 읽지 못합니다. SketchUp 5 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.`
-          : `SketchUp ${this.header.version} 파일의 형식(모형 스키마 ${model}, 렌더링 스키마 ${rendering})은 확인한 SketchUp 5~2020 형식과 달라 읽지 못합니다.`,
+          ? `SketchUp ${this.header.version} 파일은 SketchUp 3의 아주 옛 형식(모형 스키마 ${model})이라 아직 읽지 못합니다. SketchUp 4 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.`
+          : `SketchUp ${this.header.version} 파일의 형식(모형 스키마 ${model}, 렌더링 스키마 ${rendering})은 확인한 SketchUp 4~2020 형식과 달라 읽지 못합니다.`,
         model,
         rendering,
       );
@@ -239,6 +241,7 @@ class Decoder {
       map.set(name, v);
     }
     this.st.entityPids = (map.get('CEntity') ?? 0) >= 5;
+    this.st.drawingFlagBytes = (map.get('CDrawingElement') ?? 9) >= 9 ? 6 : 5;
     return true;
   }
 
@@ -312,7 +315,8 @@ class Decoder {
   private componentBody(isModel: boolean): void {
     const s = this.s;
     const st = this.st;
-    s.skip(st.entityPids ? 13 : 12);
+    // 앞 12바이트에 그리기 요소 깃발이 든다(SketchUp 4는 깃발이 5바이트라 11)
+    s.skip((st.entityPids ? 13 : 12) - (6 - st.drawingFlagBytes));
     const mats = s.count(1_000_000, '재질');
     for (let i = 0; i < mats; i++) s.readObject(C.MATERIAL);
     s.u32();
@@ -634,7 +638,8 @@ class Decoder {
     const at = s.pos;
     const rows = s.doubles(13);
     if (!rows.every(Number.isFinite)) throw new MfcError('corrupt', '인스턴스 변환이 수가 아닙니다', at);
-    const name = s.cstr();
+    // CComponentInstance 3(SketchUp 4)은 이름이 없다
+    const name = (st.schemas.get('CComponentInstance') ?? 4) >= 4 ? s.cstr() : '';
     const guid = st.schema('CComponentInstance') >= 5 ? ifcGuid(s.bytes(16)) : undefined;
     this.defs[def]!.kinds.add(kind);
     const inst: SkpInstance = { definition: def, matrix: matrixFrom13(rows), flags: elementFlags(d.flags), kind };
@@ -1209,7 +1214,7 @@ const isDamage = (e: unknown): boolean => !(e instanceof MfcError) || e.kind ===
 
 /**
  * 2020 이하 SKP 바이트 → 중간 모형. 머리가 MFC 꼴이어야 한다(readSkpHeader의 container = 'mfc').
- * SketchUp 3~4나 모르는 스키마는 MfcRefused, 형상 앞에서 멈추면 그 까닭의 Error를 던진다.
+ * SketchUp 3이나 모르는 스키마는 MfcRefused, 형상 앞에서 멈추면 그 까닭의 Error를 던진다.
  * onProgress는 읽은 바이트 위치로 진행(0~1)을 알린다.
  */
 export function readMfcModel(bytes: Uint8Array, header: SkpHeader, onProgress?: (fraction: number) => void): MfcResult {

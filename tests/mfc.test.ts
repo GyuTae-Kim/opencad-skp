@@ -6,7 +6,7 @@ import { MfcError, MfcStream } from '../src/mfcstream';
 import type { SkpModel } from '../src/model';
 import { styleFor } from '../src/scene-meta';
 import { pngRgb } from './build';
-import { ID13, MFC_SCHEMAS, mfcFile, move13, mv, squareEntities, type MfcEntitiesSpec, type MfcSpec } from './mfcwrite';
+import { ID13, MFC_SCHEMAS, SU3_SCHEMAS, mfcFile, move13, mv, squareEntities, type MfcEntitiesSpec, type MfcSpec } from './mfcwrite';
 import { edgeAt, edgeList, faceAt } from '../src/entities';
 
 const read = (spec: MfcSpec): ReturnType<typeof readMfcModel> => {
@@ -15,7 +15,7 @@ const read = (spec: MfcSpec): ReturnType<typeof readMfcModel> => {
 };
 const model = (spec: MfcSpec): SkpModel => read(spec).model;
 const tiny = pngRgb(2, 2, (x, y) => [x * 255, y * 255, 0]);
-const ALL = ['v5', 'v6', 'v7', 'v8', 'v15', 'v17', 'v18', 'v19', 'v20'] as const;
+const ALL = ['v4', 'v5', 'v6', 'v7', 'v8', 'v15', 'v17', 'v18', 'v19', 'v20'] as const;
 
 /** 가운데에 구멍이 난 정사각형(구멍 고리를 먼저 쓰고 바깥 고리를 둘째로 쓴다) */
 const holed = (): MfcEntitiesSpec => ({
@@ -148,25 +148,27 @@ describe('MFC 바이트 커서', () => {
 });
 
 describe('판 거르기', () => {
-  it('SketchUp 3~4는 까닭을 적어 거절하고, 장면은 meta.unsupported', () => {
-    const bytes = mfcFile({ schemas: 'v4', root: squareEntities() });
+  it('SketchUp 3은 까닭을 적어 거절하고, 장면은 meta.unsupported', () => {
+    const bytes = mfcFile({ schemas: SU3_SCHEMAS, version: '3.0.1', root: squareEntities() });
     expect(() => readMfcModel(bytes, readSkpHeader(bytes)!)).toThrow(MfcRefused);
     const s = skpToScene(bytes);
     expect(s.meshes.length).toBe(0);
-    expect(s.warnings![0]).toContain('SketchUp 3~4');
-    expect(s.warnings![0]).toContain('SketchUp 5 이상');
+    expect(s.warnings![0]).toContain('SketchUp 3의 아주 옛 형식(모형 스키마 10)');
+    expect(s.warnings![0]).toContain('SketchUp 4 이상');
     expect(s.meta?.unsupported).toBe(true);
     expect(s.meta?.container).toBe('mfc');
-    // 모형 스키마 10(SketchUp 3)도 같은 안내
-    const v3 = mfcFile({ schemas: { ...MFC_SCHEMAS.v4, CSketchUpModel: 10, CRenderingOptions: 22 }, root: squareEntities() });
-    expect(() => readMfcModel(v3, readSkpHeader(v3)!)).toThrow(/SketchUp 3~4의 아주 옛 형식\(모형 스키마 10\)/);
+    // 모형 스키마 12에 4보다 낮은 렌더링 스키마도 옛 판 안내
+    const older = mfcFile({ schemas: { ...MFC_SCHEMAS.v4, CRenderingOptions: 22 }, root: squareEntities() });
+    expect(() => readMfcModel(older, readSkpHeader(older)!)).toThrow(/SketchUp 3의 아주 옛 형식\(모형 스키마 12\)/);
   });
 
-  it('모르는 스키마(2020 뒤 같은 값, 5의 모형 스키마에 모르는 렌더링 스키마)도 거절한다', () => {
+  it('모르는 스키마(2020 뒤 같은 값, 4·5의 모형 스키마에 모르는 렌더링 스키마)도 거절한다', () => {
     const bytes = mfcFile({ schemas: { ...MFC_SCHEMAS.v20, CSketchUpModel: 30 }, root: squareEntities() });
-    expect(() => readMfcModel(bytes, readSkpHeader(bytes)!)).toThrow(/확인한 SketchUp 5~2020 형식과 달라/);
-    const odd = mfcFile({ schemas: { ...MFC_SCHEMAS.v5, CRenderingOptions: 30 }, root: squareEntities() });
-    expect(() => readMfcModel(odd, readSkpHeader(odd)!)).toThrow(/확인한 SketchUp 5~2020 형식과 달라/);
+    expect(() => readMfcModel(bytes, readSkpHeader(bytes)!)).toThrow(/확인한 SketchUp 4~2020 형식과 달라/);
+    for (const rendering of [26, 30]) {
+      const odd = mfcFile({ schemas: { ...MFC_SCHEMAS.v5, CRenderingOptions: rendering }, root: squareEntities() });
+      expect(() => readMfcModel(odd, readSkpHeader(odd)!)).toThrow(/확인한 SketchUp 4~2020 형식과 달라/);
+    }
   });
 
   it.each(ALL)('%s: 면·모서리·고리·재질·태그를 같은 중간 모형으로', (v) => {
@@ -491,7 +493,7 @@ describe('주석', () => {
 });
 
 describe('장면·스타일·설정', () => {
-  const pageSpec = (schemas: 'v5' | 'v6' | 'v15' | 'v17' | 'v20'): MfcSpec => ({
+  const pageSpec = (schemas: 'v4' | 'v5' | 'v6' | 'v15' | 'v17' | 'v20'): MfcSpec => ({
     schemas,
     layers: [{ name: 'Layer0' }, { name: '지붕' }],
     definitions: [{ name: '상자', entities: squareEntities({ sections: [{ plane: [0, 0, 1, -1], pid: 51 }] }) }],
@@ -618,6 +620,37 @@ describe('장면·스타일·설정', () => {
       [200, 210, 220],
       [9, 8, 7],
     ]);
+  });
+
+  it('SketchUp 4: 그리기 요소 깃발에 잠김이 없고(5바이트) 인스턴스 이름이 없으며, 렌더링 덩어리가 135바이트(장면 안 131)다', () => {
+    const r = read({
+      ...pageSpec('v4'),
+      rendering: { front: [10, 20, 30], back: [40, 50, 60], sky: [1, 2, 3], ground: [4, 5, 6], drawGround: true },
+      root: squareEntities({
+        edges: [{ a: 0, b: 1, soft: true, smooth: true }, { a: 1, b: 2, hidden: true }, { a: 2, b: 3 }, { a: 3, b: 0 }],
+        instances: [
+          { def: 0, xform: ID13, name: '이름', hidden: true, locked: true },
+          { def: 0, xform: move13(20, 0, 0) },
+        ],
+      }),
+      axes: [1, 2, 3, 1, 0, 0, 0, 1, 0, 0, 0, 1],
+    });
+    const m = r.model;
+    expect(m.warnings).toEqual([]);
+    expect(edgeList(m.root.edges).map((e) => e.flags)).toEqual([24, 1, 0, 0]);
+    const [a, b] = m.root.instances;
+    expect([a!.name, a!.flags, b!.name, b!.flags]).toEqual([undefined, 1, undefined, 0]);
+    // 그리기 축(그리기 요소 깃발 5바이트)·장면·설정 묶음이 제자리
+    expect(m.axes?.origin).toEqual([1, 2, 3]);
+    expect(m.lengthUnit).toBe(2);
+    expect(m.pages!.map((p) => p.name)).toEqual(['원근', '평행']);
+    expect([m.pages![1]!.transition, m.pages![1]!.includeInAnimation]).toEqual([3, false]);
+    const st = styleFor(m.rendering, r.styles)!;
+    const rgb = (c: number[] | null | undefined): number[] | null | undefined => c && c.map((x) => Math.round(x * 255));
+    expect([rgb(st.front), rgb(st.back), st.sky, rgb(st.ground), rgb(st.background)]).toEqual([[10, 20, 30], [40, 50, 60], null, [4, 5, 6], [255, 255, 255]]);
+    // 숨긴 형상 칸은 덩어리 자리를 몰라 기본 스타일 값(끔)
+    expect([st.name, st.faceStyle, st.hiddenGeometry, st.edges]).toEqual(['Style', 'textured', false, true]);
+    expect(styleFor(m.pages![1]!.rendering, r.styles)!.faceStyle).toBe('wireframe');
   });
 
   it('영구 번호가 없는 파일(2016 이하)은 숨긴 대상에 음수 임시 번호를 붙여 잇는다', () => {
@@ -856,10 +889,10 @@ describe('깨진 파일·모르는 기록', () => {
     expect(m.warnings.some((w) => w.includes('형상을 읽다 멈췄습니다'))).toBe(false);
   });
 
-  it('SketchUp 5: 어디서 잘라도, 바이트를 망가뜨려도 던지지 않고 끝난다', () => {
+  it.each(['v4', 'v5'] as const)('SketchUp %s: 어디서 잘라도, 바이트를 망가뜨려도 던지지 않고 끝난다', (v) => {
     const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46, 0, 1, 0xff, 0xd9]);
     const bytes = mfcFile({
-      schemas: 'v5',
+      schemas: v,
       materials: [
         { name: '나무', color: [0, 0, 0, 0], texture: { image: tiny, path: 'wood.png' } },
         { name: '사진', color: [0, 0, 0, 0], texture: { image: jpeg, kind: 1, path: 'p.jpg' } },

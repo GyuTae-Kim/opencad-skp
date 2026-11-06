@@ -127,6 +127,8 @@ export class MfcState {
   readonly schemas = new Map<string, number>();
   /** CEntity 5 이상(SketchUp 2017+): 앞머리에 영구 번호가 있다 */
   entityPids = false;
+  /** CDrawingElement 8(SketchUp 4)은 잠김이 없어 깃발이 5바이트(9 이상은 6) */
+  drawingFlagBytes = 6;
   readonly warn = new Map<string, number>();
   readonly collections: Collection[] = [];
   readonly stack: Collection[] = [];
@@ -179,11 +181,16 @@ export class MfcState {
     return out;
   }
 
-  /** CDrawingElement: 재질 포인터, 깃발 6바이트, 태그 포인터 */
+  /** CDrawingElement: 재질 포인터, 깃발 6바이트(CDrawingElement 8은 잠김 없는 5바이트 — 6바이트로 채워 돌려준다), 태그 포인터 */
   drawing(): Drawing {
     const s = this.s;
     const m = s.readObject(C.MATERIAL);
-    const flags = s.bytes(6);
+    let flags = s.bytes(this.drawingFlagBytes);
+    if (flags.length < 6) {
+      const full = new Uint8Array(6);
+      full.set(flags);
+      flags = full;
+    }
     const l = s.readObject(C.LAYER);
     return { material: typeof m === 'number' ? m : -1, flags, layer: typeof l === 'number' ? l : -1 };
   }

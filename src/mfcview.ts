@@ -16,7 +16,7 @@ import { C, type MfcState } from './mfcstate';
 import { arrowName, leaderName, textAlignmentName } from './vffcommon';
 
 /** CRenderingOptions 스키마 → 모형 카메라 뒤 덩어리 길이(장면 안은 8 짧다) */
-export const RENDERING_BLOCK: Readonly<Record<number, number>> = { 28: 150, 32: 189, 33: 190, 35: 197, 36: 216, 37: 221, 38: 222, 39: 223 };
+export const RENDERING_BLOCK: Readonly<Record<number, number>> = { 25: 135, 28: 150, 32: 189, 33: 190, 35: 197, 36: 216, 37: 221, 38: 222, 39: 223 };
 
 type Field = 'xray' | 'background' | 'foreground' | 'texture' | 'profiles' | 'hiddenGeometry' | 'front' | 'back' | 'sky' | 'ground' | 'drawSky' | 'drawGround' | 'sectionFill';
 
@@ -51,6 +51,8 @@ const RO_38: Partial<Record<Field, number>> = {
   sectionFill: 167,
 };
 const RO_FIELDS: Readonly<Record<number, Partial<Record<Field, number>>>> = {
+  // SketchUp 4: 5의 48~58(선 끝·깊이 굵기 등 11바이트)이 없어 앞뒷면 색부터 11 당겨지고, 숨긴 형상 칸은 자리를 몰라 넣지 않는다
+  25: { xray: 6, background: 13, foreground: 17, texture: 32, profiles: 42, front: 52, back: 56, sky: 78, ground: 86, drawSky: 90, drawGround: 91 },
   // SketchUp 5: 앞뒷면 색까지는 32~36과 같고, 그 뒤 34바이트(안개 칸 등)가 없어 하늘·지면이 34 당겨진다
   28: { ...RO_36, sky: 89, ground: 97, drawSky: 101, drawGround: 102 },
   32: RO_36,
@@ -136,11 +138,11 @@ const PAGE_SECTIONS = 0x40;
 const PAGE_HIDDEN_SPLIT = 0x180;
 
 const SOLID_LINE_STYLES = new Set(['', 'Solid Basic']);
-/** SketchUp 6의 CSketchUpModel 스키마(이보다 낮으면 SketchUp 5) */
+/** SketchUp 6의 CSketchUpModel 스키마(이보다 낮으면 SketchUp 4·5) */
 const SU6_MODEL = 18;
 /**
- * SketchUp 5는 스타일 기록이 없고, SketchUp은 5판 파일을 기본 스타일로 연다(C API 기대값: 표준 파일 28개 모두 같은 파일의 6판과 렌더링 설정이 같다).
- * 렌더링 덩어리에 없는 값만 그 기본 스타일 항목(6판 표준 파일의 기본 스타일과 같은 값)으로 채운다 — 덩어리 값(면 스타일·앞뒷면·하늘·지면 색·켜기)이 이긴다.
+ * SketchUp 4·5는 스타일 기록이 없고, SketchUp은 이 판 파일을 기본 스타일로 연다(C API 기대값: 표준 파일 28개씩 모두 같은 파일의 6판과 렌더링 설정이 같다).
+ * 렌더링 덩어리에 없는 값만 그 기본 스타일 항목(6판 표준 파일의 기본 스타일과 같은 값)으로 채운다 — 덩어리 값(면 스타일·앞뒷면·하늘·지면 색·켜기·숨긴 형상)이 이긴다.
  * 모서리 색·배경은 덩어리의 네 바이트가 0(정하지 않음)일 때만 이 값(검정·흰색)이 쓰인다
  */
 const SU5_STYLE_ITEMS: readonly (readonly [number, string])[] = [
@@ -154,6 +156,7 @@ const SU5_STYLE_ITEMS: readonly (readonly [number, string])[] = [
   [7012, '0'], // 보조선 숨기기
   [7013, '3'], // 단면 평면·자른 면 보이기
   [7015, '0'], // 단면 채우기
+  [7017, '0'], // 숨긴 형상 보이기(SketchUp 4 덩어리는 이 칸 자리를 모른다 — 5는 덩어리 값이 이긴다)
   [7018, '0'], // 숨긴 개체 보이기
 ];
 const SU5_STYLE_NAME = 'Style';
@@ -443,13 +446,13 @@ export class MfcView {
   }
 
   /**
-   * 줄 안에 쓴 CSketchCS(그리기 축): 앞머리, 10바이트, f64×12(원점, x·y·z 축 — 2021+ 4651~4654와 같은 차례로 본다), u8.
+   * 줄 안에 쓴 CSketchCS(그리기 축): 앞머리, 10바이트(그리기 요소 — SketchUp 4는 깃발이 5바이트라 9), f64×12(원점, x·y·z 축 — 2021+ 4651~4654와 같은 차례로 본다), u8.
    * 기본 축이면 undefined
    */
   axes(): SkpAxes | undefined {
     this.st.preamble();
     const s = this.st.s;
-    s.skip(10);
+    s.skip(4 + this.st.drawingFlagBytes);
     const v = s.doubles(12);
     s.skip(1);
     const p = (i: number): [number, number, number] => [v[i]!, v[i + 1]!, v[i + 2]!];

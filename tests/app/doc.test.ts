@@ -28,7 +28,7 @@ import {
 } from '../../src/app/doc';
 import { readSkpImages, skpToScene } from '../../src/index';
 import { oldSkpHeader } from '../build';
-import { mfcFile, squareEntities } from '../mfcwrite';
+import { SU3_SCHEMAS, mfcFile, squareEntities } from '../mfcwrite';
 import { sampleSkpBytes } from '../../src/app/sample';
 
 const sampleScene = (): Scene3d => skpToScene(sampleSkpBytes(), { name: '예제', outline: true });
@@ -44,8 +44,9 @@ describe('판·단위 글', () => {
     expect(releaseName('이상함')).toBe('SketchUp');
   });
 
-  it('SketchUp 3~4만 아직 못 읽는 판으로 가린다(5·6·7·8·2013~2020은 읽는다)', () => {
-    expect(unsupportedVersion(skpToScene(mfcFile({ schemas: 'v4', root: squareEntities() })))).toBe('4.0.1');
+  it('SketchUp 3만 아직 못 읽는 판으로 가린다(4·5·6·7·8·2013~2020은 읽는다)', () => {
+    expect(unsupportedVersion(skpToScene(mfcFile({ schemas: SU3_SCHEMAS, version: '3.0.1', root: squareEntities() })))).toBe('3.0.1');
+    expect(unsupportedVersion(skpToScene(mfcFile({ schemas: 'v4', root: squareEntities() })))).toBeNull();
     expect(unsupportedVersion(skpToScene(mfcFile({ schemas: 'v5', root: squareEntities() })))).toBeNull();
     expect(unsupportedVersion(skpToScene(mfcFile({ schemas: 'v6', root: squareEntities() })))).toBeNull();
     expect(unsupportedVersion(skpToScene(mfcFile({ schemas: 'v8', root: squareEntities() })))).toBeNull();
@@ -53,7 +54,8 @@ describe('판·단위 글', () => {
     // 잘린 2017 파일은 판 안내가 아니라 열지 못한 파일이다
     expect(unsupportedVersion(skpToScene(oldSkpHeader('17.2.2555')))).toBeNull();
     expect(unsupportedVersion(sampleScene())).toBeNull();
-    expect(unsupportedVersion({ name: 'x', units: 'unknown', meshes: [], lines: [], meta: { version: '4.0.1', container: 'mfc' } })).toBe('4.0.1');
+    expect(unsupportedVersion({ name: 'x', units: 'unknown', meshes: [], lines: [], meta: { version: '3.0.1', container: 'mfc' } })).toBe('3.0.1');
+    expect(unsupportedVersion({ name: 'x', units: 'unknown', meshes: [], lines: [], meta: { version: '4.0.1', container: 'mfc' } })).toBeNull();
     expect(unsupportedVersion({ name: 'x', units: 'unknown', meshes: [], lines: [], meta: { version: '5.0.1', container: 'mfc' } })).toBeNull();
     expect(unsupportedVersion({ name: 'x', units: 'unknown', meshes: [], lines: [], meta: { version: '6.0.1', container: 'mfc' } })).toBeNull();
     expect(unsupportedVersion({ name: 'x', units: 'unknown', meshes: [], lines: [], meta: { version: '20.0.1', container: 'mfc' } })).toBeNull();
