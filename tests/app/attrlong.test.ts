@@ -88,6 +88,8 @@ describe('속성 사전 칸: 전체 값 보기', () => {
     const box = el.querySelector<HTMLTextAreaElement>('textarea.attr-full')!;
     expect(box.value).toBe(original);
     expect(box.readOnly).toBe(true);
+    // 누른 단추가 사라져도 키보드 초점은 글 칸으로
+    expect(document.activeElement).toBe(box);
     expect(box.getAttribute('aria-label')).toBe('conf 전체 값');
     expect(el.querySelector('button.attr-more')).toBeNull();
     el.remove();
