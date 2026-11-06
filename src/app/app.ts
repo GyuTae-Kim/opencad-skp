@@ -98,7 +98,7 @@ import {
   type SkpDoc,
 } from './doc';
 import { MAX_FILE_BYTES, SKP_ACCEPT, baseName, fmtCount, formatBytes, formatMs, rgbCss } from './format';
-import { AnnotationMarks } from './dimmarks';
+import type { AnnotationMarks } from './dimmarks';
 import { VIEW_KEY_OF, VIEW_MENU, isEditableTarget, isViewKey, keyAction } from './keys';
 import type { LaunchRequest } from './launch';
 import {
@@ -1318,8 +1318,19 @@ export class SkpViewerApp implements PanelHost {
       this.labels = new AnnotationLabels(this.overlay);
       // 형상 뒤의 글·치수는 숨긴다(카메라가 멈추면 라벨 기준점에서 코어 고르기로 판정)
       this.labels.setOcclusion((p, x, y, f) => this.labelOccluded(p, x, y, f));
-      this.marks = new AnnotationMarks(this.overlay);
-      this.marks.setOcclusion((p, x, y, f) => this.labelOccluded(p, x, y, f));
+      // 치수·지시선 끝 표시는 조각을 받는 대로(45차 — 첫 화면 조각에서 뺐다. 받은 뒤 지금 문서의 표시를 넣고 다시 그린다)
+      const ov = this.overlay;
+      void import('./dimmarks').then(
+        ({ AnnotationMarks }) => {
+          if (this.overlay !== ov) return;
+          const m = new AnnotationMarks(ov);
+          m.setOcclusion((p, x, y, f) => this.labelOccluded(p, x, y, f));
+          this.marks = m;
+          if (this.doc) m.setData(this.doc.annotationMarks);
+          this.refreshMarks();
+        },
+        () => undefined,
+      );
       // 측정 도구는 조각을 받는 대로 만든다(문서를 열 때 받기 시작했다 — 받지 못했으면 처음 켤 때 다시 받고 알린다)
       void this.ensureMeasureTool().catch(() => undefined);
       // 그래픽 문맥 잃음·되찾음 안내도 조각을 받는 대로(받지 못하면 안내 없이 코어가 스스로 다시 그린다)
