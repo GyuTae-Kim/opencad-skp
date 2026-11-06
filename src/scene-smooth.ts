@@ -158,27 +158,38 @@ export function cornerNormals(ents: SkpEntities): CornerNormals | null {
     join(e, edges.a[e]!);
     join(e, edges.b[e]!);
   }
-  // 무리 뿌리에 면 법선을 모아 정규화하고, 나머지 꼭짓점은 뿌리 값을 옮겨 적는다
+  // 무리 뿌리에 면 법선을 모아 정규화하고, 나머지 꼭짓점은 뿌리 값을 옮겨 적는다.
+  // 36차: 꼭짓점마다 뿌리를 한 번만 찾아 두고(root), 정규화는 뿌리마다 한 번만 한다(같은 무리의 꼭짓점은 같은 합을 같은 식으로 나눠 값이 같다 —
+  // 165 MB 표본에서 이 함수의 2할이 꼭짓점마다 다시 한 Math.hypot였다)
+  const root = new Int32Array(C);
+  for (let c = 0; c < C; c++) root[c] = find(c);
   const normals = new Float32Array(C * 3);
   const sum = new Float64Array(C * 3);
   for (let i = 0; i < picked.length; i++) {
     const f = picked[i]!;
     for (let c = start[i]!; c < start[i + 1]!; c++) {
-      const r = find(c);
+      const r = root[c]!;
       sum[3 * r] += fn[3 * f]!;
       sum[3 * r + 1] += fn[3 * f + 1]!;
       sum[3 * r + 2] += fn[3 * f + 2]!;
     }
   }
   for (let c = 0; c < C; c++) {
-    const r = find(c);
-    const x = sum[3 * r]!;
-    const y = sum[3 * r + 1]!;
-    const z = sum[3 * r + 2]!;
+    if (root[c] !== c) continue;
+    const x = sum[3 * c]!;
+    const y = sum[3 * c + 1]!;
+    const z = sum[3 * c + 2]!;
     const l = Math.hypot(x, y, z) || 1;
     normals[3 * c] = x / l;
     normals[3 * c + 1] = y / l;
     normals[3 * c + 2] = z / l;
+  }
+  for (let c = 0; c < C; c++) {
+    const r = root[c]!;
+    if (r === c) continue;
+    normals[3 * c] = normals[3 * r]!;
+    normals[3 * c + 1] = normals[3 * r + 1]!;
+    normals[3 * c + 2] = normals[3 * r + 2]!;
   }
   return { faceIndex, start, normals };
 }
