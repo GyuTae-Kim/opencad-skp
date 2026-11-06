@@ -93,7 +93,7 @@ describe('language URLs and UI presentation', () => {
     expect(translate('면 · 넓이 12.5 m² · 재질 Wood · 태그 Walls', 'en')).toBe('Face · Area 12.5 m² · Material Wood · Tag Walls');
     expect(translate('면 12 · 뒷면 4', 'en')).toBe('Face 12 · Back 4');
     expect(translate('그룹 Wall · 면 12', 'en')).toBe('Group Wall · Face 12');
-    expect(translate('그룹 3 · 컴포넌트 5 · 그림 3(모든 단계, 4단계까지).', 'en')).toBe('Group 3 · Component 5 · Picture 3 (all steps, up to step 4).');
+    expect(translate('그룹 3 · 컴포넌트 5 · 그림 3(모든 단계, 4단계까지).', 'en')).toBe('Group 3 · Component 5 · Picture 3 (all levels, up to level 4).');
     // 잡은 값(파일의 이름)은 그대로: 이름에 " · "가 들거나 이름이 앱 낱말과 같아도 바꾸지 않는다
     expect(translate('재질 나무 · 참나무', 'en')).toBe('Material 나무 · 참나무');
     expect(translate('재질 나무 · 면 88', 'en')).toBe('Material 나무 · Face 88');
