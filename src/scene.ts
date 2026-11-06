@@ -63,7 +63,8 @@ import { AttrPool, PAGE_USE_HIDDEN_OBJECTS } from './scene-meta';
 import { cornerNormals, faceUnitNormal } from './scene-smooth';
 import { emptyEdges, emptyFaces, MAP_STRIDE, opt, type SkpFaces } from './entities';
 import { F32, F64, I32, U32, freeTyped } from './grow';
-import { applyFaceUvq, faceUvqInto, planeAxesInto } from './projection';
+import { hypot3 } from './hypot';
+import { applyFaceUvqAt, faceUvqInto, planeAxesInto } from './projection';
 import { solidInfo, type SolidInfo } from './solid';
 
 export const DEFAULT_FACE_COLOR: Rgba = [0.82, 0.82, 0.8, 1];
@@ -373,13 +374,10 @@ function freeTables(e: SkpEntities): void {
 }
 
 /**
- * 면마다 다시 쓰는 earcut 입력(2D 좌표·구멍 시작) 자리(triangulateFace — earcut은 입력 배열을 붙들지 않는다).
- * 36차: 면마다 두 배열을 새로 잡던 것(165 MB 표본에서 장면 만들기 동안 100만 번 남짓)을 줄인다 — 넘기는 값·차례는 같다
+ * 면 표의 면 k를 삼각화해 (위치, 삼각형)을 쌓기에 더한다. 실패하면 false(쌓기는 그대로).
+ * earcut 입력(2D 좌표·구멍 시작)은 면마다 꼭 맞는 길이로 새로 잡는다(51차 — 36차의 다시 쓰는 배열은 면마다 length = 0으로 비울 때 V8이
+ * 뒷받침 저장소를 놓아 push가 다시 잡았다. 165 MB 표본에서 비우기·채우기가 earcut 자신보다 오래 걸렸다). 넘기는 값·차례는 같다
  */
-const earFlat: number[] = [];
-const earHoles: number[] = [];
-
-/** 면 표의 면 k를 삼각화해 (위치, 삼각형)을 쌓기에 더한다. 실패하면 false(쌓기는 그대로) */
 export function triangulateFace(points: Float64Array, faces: SkpFaces, k: number, pos: F64, idx: U32): boolean {
   const N = faces.normal;
   const ax = Math.abs(N[3 * k]!);
@@ -389,30 +387,34 @@ export function triangulateFace(points: Float64Array, faces: SkpFaces, k: number
   const drop = az >= ax && az >= ay ? 2 : ax >= ay ? 0 : 1;
   const u = drop === 0 ? 1 : 0;
   const v = drop === 2 ? 1 : 2;
-  const flat = earFlat;
-  const holes = earHoles;
-  flat.length = 0;
-  holes.length = 0;
   const base = pos.n / 3;
   const L0 = faces.loopStart[k]!;
   const L1 = faces.loopStart[k + 1]!;
   const C = faces.cornerStart;
   const V = faces.vertex;
+  // 고리마다 꼭짓점 수의 합(표는 늘어나는 차례지만, 손으로 만든 표에서도 쓰는 자리를 넘지 않게 고리마다 센다)
+  let corners = 0;
+  for (let li = L0; li < L1; li++) if (C[li + 1]! > C[li]!) corners += C[li + 1]! - C[li]!;
+  const flat: number[] = new Array(2 * corners);
+  // 구멍(둘째 고리부터)이 있을 때만 시작 차례 배열
+  const holes: number[] | undefined = L1 - L0 > 1 ? new Array(L1 - L0 - 1) : undefined;
+  pos.reserve(3 * corners);
+  const P = pos.a;
+  let w = pos.n;
+  let f = 0;
   for (let li = L0; li < L1; li++) {
-    if (li > L0) holes.push(flat.length / 2);
-    pos.reserve(3 * (C[li + 1]! - C[li]!));
-    const P = pos.a;
-    let n = pos.n;
+    if (li > L0) holes![li - L0 - 1] = f / 2;
     for (let c = C[li]!; c < C[li + 1]!; c++) {
       const o = 3 * V[c]!;
-      flat.push(points[o + u]!, points[o + v]!);
-      P[n++] = points[o]!;
-      P[n++] = points[o + 1]!;
-      P[n++] = points[o + 2]!;
+      flat[f++] = points[o + u]!;
+      flat[f++] = points[o + v]!;
+      P[w++] = points[o]!;
+      P[w++] = points[o + 1]!;
+      P[w++] = points[o + 2]!;
     }
-    pos.n = n;
   }
-  const tri = earcut(flat, holes.length ? holes : undefined, 2);
+  pos.n = w;
+  const tri = earcut(flat, holes, 2);
   if (tri.length === 0) {
     pos.n = base * 3;
     return false;
@@ -479,16 +481,14 @@ function loopArea(points: Float64Array, V: Int32Array, s: number, e: number, n: 
 const uvMatrix = new Float64Array(12);
 const planeAt = [0, 0, 0, 0, 0, 0];
 
-/** 면 하나의 무늬 좌표(u, v, q)를 쌓기에 더한다(applyFaceUvq를 면마다 다시 쓰는 작은 배열에 적고 옮긴다). 원근 없이 칠하면 true */
-const uvScratch: number[] = [];
+/**
+ * 면 하나의 무늬 좌표(u, v, q)를 쌓기에 더한다. 원근 없이 칠하면 true.
+ * 51차: 쌓기 배열에 바로 적는다(applyFaceUvqAt — 같은 값). 면마다 작은 JS 배열을 비우고(length = 0이 뒷받침 저장소를 놓는다) 다시 채워 옮기던 것을 줄인다
+ */
 function applyUv(m: ArrayLike<number>, points: ArrayLike<number>, start: number, count: number, out: F64): boolean {
-  uvScratch.length = 0;
-  const flat = applyFaceUvq(m, points, start, count, uvScratch).flat;
-  out.reserve(uvScratch.length);
-  const A = out.a;
-  let n = out.n;
-  for (let i = 0; i < uvScratch.length; i++) A[n++] = uvScratch[i]!;
-  out.n = n;
+  out.reserve(3 * count);
+  const flat = applyFaceUvqAt(m, points, start, count, out.a, out.n);
+  out.n += 3 * count;
   return flat;
 }
 
@@ -1055,7 +1055,7 @@ function placedArea(b: Batch, L: Linear): number {
     const x = b.fn[3 * i]!;
     const y = b.fn[3 * i + 1]!;
     const z = b.fn[3 * i + 2]!;
-    s += b.fa[i]! * Math.hypot(k[0]! * x + k[3]! * y + k[6]! * z, k[1]! * x + k[4]! * y + k[7]! * z, k[2]! * x + k[5]! * y + k[8]! * z);
+    s += b.fa[i]! * hypot3(k[0]! * x + k[3]! * y + k[6]! * z, k[1]! * x + k[4]! * y + k[7]! * z, k[2]! * x + k[5]! * y + k[8]! * z);
   }
   return s;
 }
@@ -1965,7 +1965,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       const x = uy * vz - uz * vy;
       const y = uz * vx - ux * vz;
       const z = ux * vy - uy * vx;
-      const l = Math.hypot(x, y, z);
+      const l = hypot3(x, y, z);
       if (!(l > 0)) continue;
       for (const i of [i0, i1, i2]) {
         a[i] = x / l;
@@ -1976,7 +1976,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     nrm.n = base * 3;
     return nrm;
   };
-  /** 로컬 꼭짓점 법선을 배치 변환의 역전치(여인수 행렬, 거울상이면 부호를 바로잡는다)로 옮겨 쌓는다 */
+  /** 로컬 꼭짓점 법선을 배치 변환의 역전치(여인수 행렬, 거울상이면 부호를 바로잡는다)로 옮겨 쌓는다(길이는 Math.hypot과 같은 hypot3 — 51차, 정점마다) */
   const putNormals = (dst: F32, src: Float32Array, L: Linear): void => {
     dst.reserve(src.length);
     const a = dst.a;
@@ -1990,7 +1990,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       const X = k[0]! * x + k[3]! * y + k[6]! * z;
       const Y = k[1]! * x + k[4]! * y + k[7]! * z;
       const Z = k[2]! * x + k[5]! * y + k[8]! * z;
-      const l = Math.hypot(X, Y, Z);
+      const l = hypot3(X, Y, Z);
       const f = l > 0 ? sg / l : 0;
       a[n++] = X * f;
       a[n++] = Y * f;
