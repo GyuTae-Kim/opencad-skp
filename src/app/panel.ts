@@ -318,7 +318,7 @@ export class Panel {
                 })(),
               )
             : null,
-          ...notes.map((t) => hint(t)),
+          ...notes.map(hint),
         ),
       );
     }
@@ -399,6 +399,7 @@ export class Panel {
             : chip('무늬 · 평균색', '무늬(텍스처) 재질 — 무늬 그림을 쓸 수 없어(없거나 한도를 넘음) 3D에서는 무늬의 평균색으로 보입니다')
           : null,
         m.color[3] < 0.999 ? chip('투명', '반투명 재질') : null,
+        m.attrs != null && chip('속성', '속성 사전'),
         countEl(materialCount(m)),
       );
       b.addEventListener('click', () => this.host.select(selKey(d.selection) === selKey(sel) ? null : sel));

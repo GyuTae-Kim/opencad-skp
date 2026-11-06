@@ -8,6 +8,10 @@ import type { Scene3d } from 'opencad-viewer3d/types';
 import { skpToScene } from '../src/index';
 import { parseMaterialAttrs, parseMaterialXml } from '../src/materials';
 import type { SkpMaterialStat } from '../src/scene';
+import { createDoc, materialRows, selectionEntity } from '../src/app/doc';
+import { entityInfo } from '../src/app/entity';
+import { DEFAULT_UNITS } from '../src/app/units';
+import { translate } from '../site/i18n.mjs';
 import { edge, entities, face, materialXml, modelDat, skpFile, val, vertex } from './build';
 import { mfcFile, mv, squareEntities } from './mfcwrite';
 
@@ -167,5 +171,31 @@ describe('장면 정보의 재질 속성 사전', () => {
     const t = stat(s, 'Tagged material');
     expect((m.attributes as unknown[])[t.attrs!]).toEqual({ material_dict: { sku: 'M-1' } });
     expect('attrs' in stat(s, '빈 재질')).toBe(false);
+  });
+});
+
+describe('화면: 재질 고르기 → 선택 탭 속성 사전', () => {
+  it('재질 목록 줄에 차례, 고른 재질의 정보에 사전(이 항목)', () => {
+    const d = createDoc('m.skp', 1, { scene: vffScene(), ms: 1 });
+    const rows = materialRows(d.scene);
+    expect(rows.find((r) => r.name === '색칠')!.attrs).toBe(1);
+    expect(rows.find((r) => r.name === '없음')!.attrs).toBeNull();
+    d.selection = { kind: 'material', name: '색칠' };
+    const info = entityInfo(selectionEntity(d), DEFAULT_UNITS, 1);
+    // 사전 이름은 한국어 글 차례(한글이 로마자보다 앞 — 모형·정의 속성과 같다)
+    expect(info.dicts.map((x) => [x.name, x.source, x.entries.length])).toEqual([
+      ['렌더러', 'instance', 6],
+      ['a & b', 'instance', 1],
+    ]);
+    expect(info.dicts[0]!.entries).toContainEqual(['template', '[14, -2, 2.5]']);
+    // 재질 행(색 등)은 그대로
+    expect(info.rows.map((r) => r.label)).toEqual(['이름', '면 넓이 합', '면', '색']);
+    d.selection = { kind: 'material', name: '없음' };
+    expect(entityInfo(selectionEntity(d), DEFAULT_UNITS, 1).dicts).toEqual([]);
+  });
+
+  it('목록 칩 글은 언어 사전에 있다', () => {
+    for (const code of ['en', 'ja', 'zh-CN', 'de'])
+      for (const s of ['속성', '속성 사전']) expect(translate(s, code)).not.toMatch(/[가-힣]/);
   });
 });
