@@ -11,9 +11,10 @@ import { sceneDigest } from '../scripts/sweep/probe';
 import { readSkpImages, skpFileToScene, skpToSceneAsync, type SkpFileRead, type SkpImages, type SkpModelRead } from '../src/index';
 import { READ_BLOCK, streamModelDat } from '../src/modelstream';
 import { readModelDat } from '../src/model';
-import { blobSource, bytesSource, HEAD_BYTES, readSourceDirectory, SourceItems, sourceSha256, WINDOW, type SkpSource } from '../src/range';
+import { AHEAD_BYTES, AHEAD_READS, blobSource, bytesSource, HEAD_BYTES, readSourceDirectory, SourceItems, sourceSha256, WINDOW, type SkpSource } from '../src/range';
 import { findSkpZipItems, readZipDirectory, readZipItem, ZIP_END_SEARCH } from '../src/zip';
 import { readSkpHeader } from '../src/header';
+import { zipImageReads } from '../src/images';
 import { concat, edge, entities, face, IDENTITY13, instance, materialXml, modelDat, pngRgb, skpFile, styleXml, vertex, zip } from './build';
 import { mfcFile, squareEntities } from './mfcwrite';
 
@@ -289,6 +290,135 @@ describe('파일을 통째로 들지 않고 열기: 예전 길과 같은 결과'
     expect(r.length).toBe(md.compressedSize);
     await expect(items.data({ ...md, compressedSize: bytes.length })).rejects.toThrow('ZIP 항목이 잘렸습니다');
     await expect(items.data({ ...md, localOffset: md.localOffset + 1 })).rejects.toThrow('ZIP 지역 머리가 깨졌습니다');
+  });
+});
+
+describe('SourceItems.plan: 곧 읽을 항목을 알려 읽기를 겹친다(48차)', () => {
+  /** 작은 material.xml(압축)과 그림 자리(작은 것·WINDOW_MAX보다 큰 것)가 번갈아 놓인 꾸러미 */
+  const mixed = (n: number, big: number): Uint8Array =>
+    zip(
+      Array.from({ length: n }, (_, k) => [
+        { name: `materials/m${k}/material.xml`, data: new TextEncoder().encode(`<m k="${k}">${'x'.repeat(k * 7)}</m>`), deflate: true },
+        { name: `materials/m${k}/t.png`, data: new Uint8Array(k % 3 ? 2000 + k : big).fill(k) },
+      ]).flat(),
+    );
+
+  /** Blob 읽기처럼 한 번마다 잠깐 기다리는 SkpSource: 읽은 자리, 함께 열린 읽기 수의 최대, 실패시킬 읽기 */
+  function slow(bytes: Uint8Array, fail: (a: number, b: number, n: number) => boolean = () => false) {
+    const inner = bytesSource(bytes);
+    const log = { reads: [] as [number, number][], open: 0, most: 0 };
+    const src: SkpSource = {
+      size: inner.size,
+      read: async (a, b) => {
+        const n = log.reads.push([a, b]);
+        log.open++;
+        log.most = Math.max(log.most, log.open);
+        await new Promise((r) => setTimeout(r, 2));
+        log.open--;
+        if (fail(a, b, n)) throw new Error(`읽기 실패 ${a}`);
+        return inner.read(a, b);
+      },
+    };
+    return { src, log };
+  }
+
+  it('계획대로 받아 가면 값·읽는 자리·횟수가 하나씩 읽을 때와 같고, 읽기를 AHEAD_READS까지 겹친다', async () => {
+    const bytes = mixed(40, 200_000);
+    const dir = readZipDirectory(bytes)!;
+    const one = slow(bytes);
+    const a = new SourceItems(one.src);
+    const want: Uint8Array[] = [];
+    for (const d of dir) want.push(await a.content(d));
+    const two = slow(bytes);
+    const b = new SourceItems(two.src);
+    b.plan(dir);
+    for (let k = 0; k < dir.length; k++) expect(await b.content(dir[k]!), dir[k]!.name).toEqual(want[k]);
+    for (let k = 0; k < dir.length; k++) expect(want[k]).toEqual(readZipItem(bytes, dir[k]!));
+    expect(two.log.reads).toEqual(one.log.reads);
+    expect(b.reads).toBe(a.reads);
+    expect(one.log.most).toBe(1);
+    expect(two.log.most).toBeGreaterThan(1);
+    expect(two.log.most).toBeLessThanOrEqual(AHEAD_READS);
+    expect(b.mostOpen).toBe(two.log.most);
+  });
+
+  it('계획과 다르게 받아 가도(건너뜀·차례 바뀜·계획 밖·새 계획) 같은 값', async () => {
+    const bytes = mixed(30, 120_000);
+    const dir = readZipDirectory(bytes)!;
+    const { src } = slow(bytes);
+    const items = new SourceItems(src);
+    items.plan(dir);
+    const order = [...dir.filter((_, k) => k % 3 === 0), dir[1]!, dir[4]!, ...dir.filter((_, k) => k % 3 === 2).reverse()];
+    for (const d of order) expect(await items.content(d), d.name).toEqual(readZipItem(bytes, d));
+    // 새 계획(앞 계획에서 받아 가지 않은 것은 버린다)과 계획 밖 항목
+    items.plan(dir.slice(10, 20));
+    for (const d of [...dir.slice(12, 18), dir[2]!, dir[25]!]) expect(await items.content(d), d.name).toEqual(readZipItem(bytes, d));
+    items.plan([]);
+    expect(await items.content(dir[11]!)).toEqual(readZipItem(bytes, dir[11]!));
+  });
+
+  it('미리 읽기가 실패한 항목은 그때 다시 읽는다 — 다시 되면 같은 값, 계속 안 되면 하나씩 읽을 때와 같은 오류', async () => {
+    const bytes = mixed(12, 100_000);
+    const dir = readZipDirectory(bytes)!;
+    const big = dir.find((d) => d.name === 'materials/m3/t.png')!;
+    // 그 그림 자리 첫 읽기만 실패
+    let tries = 0;
+    const once = slow(bytes, (a) => a === big.localOffset && ++tries === 1);
+    const items = new SourceItems(once.src);
+    items.plan(dir);
+    for (const d of dir) expect(await items.content(d), d.name).toEqual(readZipItem(bytes, d));
+    expect(once.log.reads.filter(([a]) => a === big.localOffset).length).toBe(2);
+    // 늘 실패
+    const always = slow(bytes, (a) => a === big.localOffset);
+    const plain = new SourceItems(always.src);
+    const err = await plain.content(big).catch((e: Error) => e.message);
+    const planned = new SourceItems(slow(bytes, (a) => a === big.localOffset).src);
+    planned.plan(dir);
+    for (const d of dir) {
+      if (d === big) expect(await planned.content(d).catch((e: Error) => e.message)).toBe(err);
+      else expect(await planned.content(d), d.name).toEqual(readZipItem(bytes, d));
+    }
+  });
+
+  it('받아 가지 않은 미리 읽기는 AHEAD_BYTES(+ 한 읽기) 안에서만 보낸다', async () => {
+    const each = 3 * 1024 * 1024;
+    const bytes = zip(Array.from({ length: 12 }, (_, k) => ({ name: `thumbnails/t${k}.png`, data: new Uint8Array(each).fill(k + 1) })));
+    const dir = readZipDirectory(bytes)!;
+    const { src, log } = slow(bytes);
+    const items = new SourceItems(src);
+    items.plan(dir);
+    let used = 0;
+    let most = 0;
+    for (const d of dir) {
+      most = Math.max(most, log.reads.length - used);
+      await items.content(d);
+      used++;
+    }
+    expect(log.reads.length).toBe(dir.length);
+    expect(most * each).toBeLessThanOrEqual(AHEAD_BYTES + each + 1024);
+    expect(most).toBeGreaterThan(1);
+  });
+
+  it('그림 꺼내기·재질 읽기가 알린 차례는 실제로 내어 받은 차례와 같다(한도에 걸리는 그림 포함)', async () => {
+    const bytes = richFile();
+    const dir = readZipDirectory(bytes)!;
+    for (const opts of [{}, { maxCount: 2 }, { maxTotalBytes: 200 }]) {
+      const plans: string[] = [];
+      const gen = zipImageReads(dir, opts, undefined, (l) => plans.push(...l.map((i) => i.name)));
+      const asked: string[] = [];
+      let r = gen.next();
+      while (!r.done) {
+        asked.push(r.value.name);
+        r = gen.next(readZipItem(bytes, r.value));
+      }
+      expect(plans, JSON.stringify(opts)).toEqual(asked);
+    }
+    // 앱 워커 길(skpFileToScene)은 읽기가 늦게 와도(겹쳐 읽어도) 예전 길과 같은 장면·그림
+    const want = await wholeWay(bytes, 1);
+    const got = await partsWay(slow(bytes).src, 1);
+    expect(got.digest).toBe(want.digest);
+    expect(got.images).toBe(want.images);
+    expect(got.warnings).toEqual(want.warnings);
   });
 });
 

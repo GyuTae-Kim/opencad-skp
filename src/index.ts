@@ -61,6 +61,9 @@ export const SKP_ZIP_MIN_MAJOR = 21;
 export const SKP_MAX_CHECKED_MAJOR = 26;
 /** 꾸러미 style.xml 한 파일 크기 한도 */
 const MAX_STYLE_XML_BYTES = 16 * 1024 * 1024;
+/** 꾸러미의 스타일(styles/<이름>/style.xml)·재질(materials/<폴더>/material.xml) 항목 */
+const STYLE_XML = /^styles\/(.+)\/style\.xml$/;
+const MATERIAL_XML = /^materials\/(.+)\/material\.xml$/;
 
 export interface SkpOptions {
   /** 장면 이름(보통 파일 이름) */
@@ -316,8 +319,10 @@ export async function skpFileToScene(file: Blob | SkpSource, opts: SkpFileOption
   told('parts');
   const items = new SourceItems(src);
   const read = (item: ZipItem): Promise<Uint8Array> => items.content(item);
+  // 48차: 그림·재질 항목(큰 모형은 수백 개)을 하나씩 기다리지 않게 곧 읽을 차례를 알려 읽기를 겹친다(SourceItems.plan — 읽는 자리·값은 같다)
+  const plan = (list: readonly ZipItem[]): void => items.plan(list);
   try {
-    images = await runZipReadsAsync(zipImageReads(dir, imageOpts), read);
+    images = await runZipReadsAsync(zipImageReads(dir, imageOpts, undefined, plan), read);
   } catch (e) {
     imageError = errText(e);
   }
@@ -325,7 +330,9 @@ export async function skpFileToScene(file: Blob | SkpSource, opts: SkpFileOption
   const st = startScene(head, o);
   if (!('header' in st)) return out(st, images, imageError);
   st.progress(0.05, '꾸러미(ZIP) 목록 읽는 중');
-  const pkg = await runZipReadsAsync(packageReads({ items: dir, salvaged: false, truncated: false }, st, o), read);
+  const pkg = await runZipReadsAsync(packageReads({ items: dir, salvaged: false, truncated: false }, st, o, plan), read);
+  // 받아 가지 않은 미리 읽기를 놓는다(model.dat를 읽는 동안 붙들지 않게)
+  items.plan([]);
   const model: ModelBytes = {
     region: async (item) => ({ ...(await items.region(item)), release: true }),
     data: (item) => items.data(item),
@@ -493,8 +500,11 @@ function openZipPackage(bytes: Uint8Array, st: Start, opts: Pick<SkpOptions, 'te
 
 type FoundZip = ReturnType<typeof findSkpZipItems>;
 
-/** 꾸러미 목록(found)에서 재질·스타일을 읽는다(openZipPackage의 목록 뒤 — 항목 내용은 내어 받는다: runZipReads·range.ts) */
-function* packageReads(found: FoundZip, st: Start, opts: Pick<SkpOptions, 'textures' | 'maxTextures'>): ZipReads<OpenPackage | Scene3d> {
+/**
+ * 꾸러미 목록(found)에서 재질·스타일을 읽는다(openZipPackage의 목록 뒤 — 항목 내용은 내어 받는다: runZipReads·range.ts).
+ * plan을 주면 내어 받을 항목 차례(목록 차례의 스타일·재질 XML — 아래 고리와 같은 거르기)를 먼저 알린다(48차 — range.ts가 읽기를 앞질러 보낸다)
+ */
+function* packageReads(found: FoundZip, st: Start, opts: Pick<SkpOptions, 'textures' | 'maxTextures'>, plan?: (items: readonly ZipItem[]) => void): ZipReads<OpenPackage | Scene3d> {
   const { name, meta, warnings, progress } = st;
   const materials = new Map<string, SkpMaterialInfo>();
   /** 무늬를 입힐 재질 폴더 → 그림 */
@@ -518,8 +528,9 @@ function* packageReads(found: FoundZip, st: Start, opts: Pick<SkpOptions, 'textu
     }
     const text = new TextDecoder('utf-8');
     progress(0.1, '재질 읽는 중');
+    plan?.(dir.filter((it) => (STYLE_XML.test(it.name) && it.size <= MAX_STYLE_XML_BYTES) || MATERIAL_XML.test(it.name)));
     for (const item of dir) {
-      const sm = /^styles\/(.+)\/style\.xml$/.exec(item.name);
+      const sm = STYLE_XML.exec(item.name);
       if (sm) {
         // 한 파일 16 MiB까지(참조 해석기와 같은 한도 — 스타일 글은 보통 수십 KB)
         if (item.size > MAX_STYLE_XML_BYTES) {
@@ -533,7 +544,7 @@ function* packageReads(found: FoundZip, st: Start, opts: Pick<SkpOptions, 'textu
         }
         continue;
       }
-      const m = /^materials\/(.+)\/material\.xml$/.exec(item.name);
+      const m = MATERIAL_XML.exec(item.name);
       if (!m) continue;
       try {
         const info = parseMaterialXml(text.decode(yield item));
@@ -548,7 +559,7 @@ function* packageReads(found: FoundZip, st: Start, opts: Pick<SkpOptions, 'textu
     // 무늬: 그림이 있는 무늬 재질만(재질 폴더 = model.dat 재질 이름). 한도를 넘는 재질은 평균색
     const folders: string[] = [];
     for (const item of dir) {
-      const m = /^materials\/(.+)\/material\.xml$/.exec(item.name);
+      const m = MATERIAL_XML.exec(item.name);
       if (m) folders.push(m[1]!);
     }
     for (const [k, v] of textureImages(materials, opts, warnings, folders)) texImages.set(k, v);

@@ -69,14 +69,150 @@ const WINDOW_MAX = 64 * 1024;
 const EXTRA_GUESS = 64;
 const utf8 = new TextEncoder();
 
+/** 미리 읽기(plan)로 함께 보내 두는 읽기 수의 위 한도 */
+export const AHEAD_READS = 8;
+/** 미리 읽기로 받아 두는(아직 쓰지 않은) 바이트의 위 한도(넘으면 앞 것을 쓸 때까지 더 보내지 않는다 — 한 읽기만큼 넘을 수 있다) */
+export const AHEAD_BYTES = 16 * 1024 * 1024;
+
+/** 미리 읽기 한 번: 계획한 항목(차례로 이어진 작은 항목들은 덩이 하나, 큰 항목은 그 자리만)이 들어갈 [start, end) */
+interface Ahead {
+  /** 계획 안 차례 */
+  index: number;
+  start: number;
+  end: number;
+  /** 이 읽기에서 받아 갈 항목들(받아 가면 빠진다) */
+  items: ZipItem[];
+  /** 작은 항목 덩이(WINDOW — 받아 가면 다음 작은 항목이 쓸 덩이가 된다). 아니면 큰 항목 하나의 자리 */
+  window: boolean;
+  bytes?: Promise<Uint8Array<ArrayBuffer>>;
+  /** 계획할 때 이미 든 덩이를 쓴다(새로 읽지 않는다 — 보낸 수·바이트에 세지 않는다) */
+  kept?: boolean;
+  /** 다 받아 갔거나 버렸다 */
+  done?: boolean;
+}
+
 /** 꾸러미 항목 읽기(한 파일, 한 번 여는 동안) */
 export class SourceItems {
   private win: Uint8Array<ArrayBuffer> = EMPTY;
   private winAt = 0;
+  /** 미리 읽기: 계획한 읽기 차례, 항목 → 그 읽기, 아직 보내지 않은 첫 차례, 받아 가지 않은 가장 앞 차례, 보낸 수·바이트 */
+  private queue: Ahead[] = [];
+  private aheadOf = new Map<ZipItem, Ahead>();
+  private next = 0;
+  private low = 0;
+  private sent = 0;
+  private held = 0;
   /** 파일에서 읽은 횟수(진단·시험용) */
   reads = 0;
+  /** 한꺼번에 보낸(아직 끝나지 않은) 읽기 수의 최대(진단·시험용) */
+  mostOpen = 0;
+  private open = 0;
 
   constructor(readonly src: SkpSource) {}
+
+  /**
+   * 곧 읽을 항목 차례를 알린다(48차). 항목마다 읽기를 하나씩 기다리지 않고 AHEAD_READS·AHEAD_BYTES 안에서 앞질러 보내 둔다 —
+   * Blob 읽기는 한 번마다 브라우저를 오가므로(큰 모형은 그림·재질 항목 수백 개) 기다림을 겹친다. 읽는 자리(작은 항목은 WINDOW 덩이, 큰 항목은 그 자리)와
+   * 내는 값은 하나씩 읽을 때와 같다. 계획에 없거나 차례가 어긋난 항목은 예전처럼 그때 읽고, 미리 읽기가 실패한 항목도 그때 다시 읽는다
+   * (같은 오류·같은 값). 새 계획은 앞 계획에서 받아 가지 않은 것을 버린다. 받아 간 항목보다 앞선 차례의 읽기는 쓰지 않을 것으로 보고 놓는다.
+   * 덩이를 정하는 법은 하나씩 읽을 때(range)와 같다: 작은 항목이 지금 덩이(계획 차례로 마지막 작은 항목 덩이 — 처음에는 이미 든 덩이) 안이면
+   * 그 덩이에서, 아니면 그 항목 자리부터 새 덩이. 그래서 계획대로 받아 가면 읽는 자리·횟수도 하나씩 읽을 때와 같다
+   */
+  plan(list: readonly ZipItem[]): void {
+    for (let k = this.low; k < this.queue.length; k++) this.drop(this.queue[k]!);
+    this.queue = [];
+    this.aheadOf.clear();
+    this.next = this.low = 0;
+    const size = this.src.size;
+    let cur: Ahead | null = null;
+    const add = (a: Ahead, item: ZipItem): void => {
+      a.items.push(item);
+      this.aheadOf.set(item, a);
+    };
+    for (const item of list) {
+      if (this.aheadOf.has(item)) continue;
+      const [s, e] = this.headRange(item);
+      if (e - s > WINDOW_MAX) {
+        const a: Ahead = { index: this.queue.length, start: s, end: e, items: [], window: false };
+        this.queue.push(a);
+        add(a, item);
+        continue;
+      }
+      if (cur && s >= cur.start && e <= cur.end) {
+        add(cur, item);
+        continue;
+      }
+      if (!cur && this.win.length && s >= this.winAt && e <= this.winAt + this.win.length) {
+        cur = { index: this.queue.length, start: this.winAt, end: this.winAt + this.win.length, items: [], window: true, kept: true, bytes: Promise.resolve(this.win) };
+      } else cur = { index: this.queue.length, start: s, end: Math.min(size, s + WINDOW), items: [], window: true };
+      this.queue.push(cur);
+      add(cur, item);
+    }
+    this.pump();
+  }
+
+  /** 항목을 처음 읽을 자리(region이 처음 부르는 range와 같다 — 파일 밖은 잘라 낸다) */
+  private headRange(item: ZipItem): [number, number] {
+    const size = this.src.size;
+    const p = item.localOffset;
+    const s = clamp(p, size);
+    return [s, Math.max(s, clamp(p + 30 + utf8.encode(item.name).length + EXTRA_GUESS + item.compressedSize, size))];
+  }
+
+  private send(a: Ahead): void {
+    if (a.bytes || a.done) return;
+    this.reads++;
+    this.sent++;
+    this.held += a.end - a.start;
+    this.open++;
+    this.mostOpen = Math.max(this.mostOpen, this.open);
+    a.bytes = this.src.read(a.start, a.end).finally(() => this.open--);
+    // 받아 갈 때 다시 본다(처리되지 않은 거부로 남지 않게)
+    a.bytes.catch(() => undefined);
+  }
+
+  private drop(a: Ahead): void {
+    if (a.done) return;
+    a.done = true;
+    for (const it of a.items) if (this.aheadOf.get(it) === a) this.aheadOf.delete(it);
+    a.items = [];
+    if (a.bytes && !a.kept) {
+      this.sent--;
+      this.held -= a.end - a.start;
+    }
+    a.bytes = undefined;
+  }
+
+  private pump(): void {
+    while (this.next < this.queue.length && this.sent < AHEAD_READS && this.held < AHEAD_BYTES) this.send(this.queue[this.next++]!);
+  }
+
+  /** 계획한 항목의 처음 자리 바이트(미리 읽은 것). 계획에 없거나 미리 읽기가 실패하면 null */
+  private async planned(item: ZipItem, s: number, e: number): Promise<Uint8Array | null> {
+    const a = this.aheadOf.get(item);
+    if (!a) return null;
+    this.aheadOf.delete(item);
+    // 받아 간 차례보다 앞선 읽기는 쓰지 않는다(계획과 달리 건너뛴 항목)
+    for (; this.low < a.index; this.low++) this.drop(this.queue[this.low]!);
+    this.send(a);
+    const pending = a.bytes!;
+    a.items = a.items.filter((it) => it !== item);
+    let got: Uint8Array<ArrayBuffer> | null;
+    try {
+      got = await pending;
+    } catch {
+      got = null;
+    }
+    if (!a.items.length) this.drop(a);
+    this.pump();
+    if (!got || s < a.start) return null;
+    // 받아 간 작은 항목 덩이가 지금 덩이(range와 다음 계획이 쓴다 — 하나씩 읽을 때 마지막으로 읽은 덩이와 같다)
+    if (a.window) {
+      this.win = got;
+      this.winAt = a.start;
+    }
+    return got.subarray(s - a.start, Math.min(e - a.start, got.length));
+  }
 
   /** [start, end)(파일 밖은 잘라 낸다). 작은 자리는 덩이에서 — 내는 배열은 덩이의 보기일 수 있어 고치지 않는다 */
   async range(start: number, end: number): Promise<Uint8Array> {
@@ -101,7 +237,8 @@ export class SourceItems {
   async region(item: ZipItem): Promise<{ bytes: Uint8Array; item: ZipItem }> {
     const p = item.localOffset;
     const rebased: ZipItem = { ...item, localOffset: 0 };
-    let b = await this.range(p, p + 30 + utf8.encode(item.name).length + EXTRA_GUESS + item.compressedSize);
+    const [hs, he] = this.headRange(item);
+    let b = (await this.planned(item, hs, he)) ?? (await this.range(p, p + 30 + utf8.encode(item.name).length + EXTRA_GUESS + item.compressedSize));
     let start: number;
     try {
       start = zipLocalDataOffset(b, item);
