@@ -93,7 +93,7 @@ describe('language URLs and UI presentation', () => {
     expect(translate('면 · 넓이 12.5 m² · 재질 Wood · 태그 Walls', 'en')).toBe('Face · Area 12.5 m² · Material Wood · Tag Walls');
     expect(translate('면 12 · 뒷면 4', 'en')).toBe('Face 12 · Back 4');
     expect(translate('그룹 Wall · 면 12', 'en')).toBe('Group Wall · Face 12');
-    expect(translate('그룹 3 · 컴포넌트 5 · 그림 3(모든 단계, 4단계까지).', 'en')).toBe('Group 3 · Component 5 · Picture 3 (all steps, up to step 4).');
+    expect(translate('그룹 3 · 컴포넌트 5 · 그림 3(모든 단계, 4단계까지).', 'en')).toBe('Group 3 · Component 5 · Picture 3 (all levels, up to level 4).');
     // 잡은 값(파일의 이름)은 그대로: 이름에 " · "가 들거나 이름이 앱 낱말과 같아도 바꾸지 않는다
     expect(translate('재질 나무 · 참나무', 'en')).toBe('Material 나무 · 참나무');
     expect(translate('재질 나무 · 면 88', 'en')).toBe('Material 나무 · Face 88');
@@ -260,6 +260,66 @@ describe('language URLs and UI presentation', () => {
       for (const line of ['거리 4,061 mm (dx 1,234 mm · dy -2 mm · dz 3 mm)', `거리 13' 4 1/2" (dx 1' · dy 2' · dz 0")`, '각도 45.0°'])
         expect(translate(line, code), `${code}: ${line}`).not.toMatch(/[가-힣]/);
     expect(translate('거리 4,061 mm (dx 1,234 mm · dy -2 mm · dz 3 mm)', 'en')).toBe('Distance 4,061 mm (dx 1,234 mm · dy -2 mm · dz 3 mm)');
+  });
+  it('keeps SketchUp terms, Korean homonyms, directions and negations right in every catalog (50th round)', () => {
+    const codes = ['en', 'de', 'ja', 'zh-CN'];
+    // [열쇠 정규식, 언어(*는 넷 다), 있어야 할 말(없으면 null), 없어야 할 말, 뺄 열쇠] — 50차에 이 앱 사전에서 찾은 오역의 꼴
+    const rules: [RegExp, string, RegExp | null, RegExp, RegExp?][] = [
+      // 무늬=텍스처(SketchUp 공식: Texture·Textur·テクスチャ, zh 纹理) — Pattern·Muster·柄·图案은 다른 개념
+      [/무늬/, 'en', /textur/i, /pattern/i], [/무늬/, 'de', /[Tt]extur/, /Muster/], [/무늬/, 'ja', /テクスチャ/, /パターン|柄|模様/], [/무늬/, 'zh-CN', /纹理/, /图案/],
+      // 단면=Section(SketchUp Section Plane·Schnittebene·断面平面) — Cross section·Querschnitt·Abschnitt(단락)·截面과 섞지 않는다, 단면(斷面)≠단면(單面)
+      [/단면/, 'en', null, /Cross|Single-sided/i], [/단면/, 'de', null, /Querschnitt|Abschnitt|Einseitig/], [/단면/, 'zh-CN', null, /截面|部分|分区/],
+      // 숨긴 형상=Hidden Geometry(Ausgeblendete Geometrie·非表示のジオメトリ) — features·Funktionen·特征 아님
+      [/숨긴 형상/, 'en', /geometry/i, /feature|shape/i], [/숨긴 형상/, 'de', /Geometrie/, /Funktion|Form\b/], [/숨긴 형상/, 'zh-CN', /几何体/, /特征/],
+      // 고름(고른 것)→고름(膿), 쪽(side)→쪽(page), 그물(mesh)→net·grid, 구간(range)→section, 합성(만든 시험 장면)→복합, 상자(box)→칸·네모
+      [/고름:/, '*', null, /Pus|Eiter|膿|脓|更正/], [/쪽 뒤집기/, '*', null, /\bpage\b|页面|ページ/i],
+      [/그물/, '*', null, /\bnets?\b|グリッド/], [/구간/, '*', null, /\bsections?\b|Abschnitt|部分|区間|区画/], [/합성 장면/, '*', null, /Composite|Komposition|複合/],
+      [/상자/, '*', null, /\bFeld\b|Quadrat|方框|框$/],
+      // 단계(level)→step(되돌리기 100단계·크기 단계는 step이 맞다), 풀다(decode·resolve)→solve, 쓰다(use)→write, 열(open)→column
+      [/단계/, '*', null, /\bsteps?\b|Schritt|ステップ|步骤/, /되돌리기|크기 단계/],
+      [/풀지 못|풀거나/, '*', null, /\bsolve|\blösen|\bgelöst|解く|解决/], [/씁니다/, '*', null, /\bwritten\b|geschrieben|書き込|写入/], [/^열 파일/, '*', null, /column|Spalte|列/],
+      // 머리(header)→head, 부호(code)→sign, 겹치다(nest)→overlap, 문자(글 개체)→character, 칸(slot)→cell, 집(house)→collection, 고리(loop)→Gori·ring·side
+      [/머리/, '*', null, /\bhead\b|abgeschlagen|頭|砍/], [/부호/, '*', null, /\bsigns?\b|Zeichen|記号|标志/], [/겹쳤/, '*', null, /overlap|überlapp|重叠|重なり/],
+      [/^문자/, '*', null, /character|\bZeichen|字符/], [/칸 \{|칸을|^칸$/, '*', null, /\bcell\b|Zelle|カーン|セル|单元格/], [/예제 집/, '*', null, /collection|Sammlung|集合/],
+      [/^고리/, '*', null, /Gori|\bring\b|\bRing\b|\bside\b|\bSeite\b/],
+      // 끌기 단추(왼쪽 끌기=왼쪽 단추로 끌기)를 끄는 방향으로, F 전체 보기를 온 화면으로, 두 번 눌러 들어가기를 나가기로(zh)
+      [/왼쪽 끌기/, '*', null, /Nach links ziehen|Nach rechts ziehen|向左拖动|向右拖动|Vollbild|全屏/], [/한 단계 들어/, 'zh-CN', /进入/, /返回上一级/],
+      [/윗단계로/, '*', null, /including|nächste Ebene|下一级/],
+      // 원점(origin)→출신·기원, 허용(허락)→공차, 뷰 큐브(view 명사)→查看(보다), 여는 중→개막, 올리다(GPU 올림)→들어 올림·올림 반올림, 접기→숨기기
+      [/원점/, '*', null, /Herkunft|起源/], [/^허용$/, 'zh-CN', null, /容差/], [/뷰 큐브/, 'zh-CN', /视图立方体/, /查看立方体|立方体视图/], [/뷰 큐브/, 'de', /Ansichtswürfel/, /Würfel anzeigen/],
+      [/여는 중/, 'de', null, /Eröffnung/], [/올리는 중|다 올림/, '*', null, /Anheben|提升|上へ|向上取整/], [/모두 접기/, 'de', null, /ausblenden/i],
+      // 부정·조건 뒤집힘: "읽지 못했습니다"를 "읽지 않은 것을 읽지 못함"으로, "건너뛰었다"를 "건너뛰기엔 너무 크다"로, "나가지 않습니다"를 "나가지 않았다"로
+      [/태그 폴더를 읽지 못했습니다/, '*', null, /ungelesen|未读取/], [/너무 커서 건너뛰었습니다/, 'de', null, /zum Überspringen/], [/나가지 않습니다/, 'zh-CN', /不会/, /未离开/],
+      // 예제 집 이름: 남(南)→男, 서(西)→서다, 수관(樹冠)→水管, 탁자→표, 줄기→낱말 줄기, 마루→소리 옮김, 나무(tree)→목재, 기와→기울기
+      [/^의자 남$/, '*', null, /männlich|男/], [/^의자 서$/, '*', null, /Steh|站立/], [/^수관$/, '*', null, /pipe|Wasserpfeife|水管|管轄/], [/^탁자$/, '*', null, /Tabelle|表格/],
+      [/^줄기$/, 'zh-CN', null, /词干/], [/^마루$/, '*', null, /Maru/], [/^나무$/, 'zh-CN', /树/, /木材/], [/^기와$/, '*', null, /傾斜|平铺/],
+      // 읽어 봅니다(해 보겠다)를 사용자에게 시킴(Read it·お読みください)
+      [/읽어 봅니다/, '*', null, /Read it|Lesen Sie|お読みください|阅读/],
+    ];
+    for (const [term, lang, need, ban, skip] of rules)
+      for (const code of lang === '*' ? codes : [lang])
+        for (const [key, value] of Object.entries(catalogs[code])) {
+          if (!term.test(key) || skip?.test(key)) continue;
+          if (need) expect(value, `${code}: ${key}`).toMatch(need);
+          expect(value, `${code}: ${key}`).not.toMatch(ban);
+        }
+    // 열쇠와 상관없이: 구(球)를 구(區)로, 초를 둘째(第二)로, 보이지 않는 글자, 알림의 1인칭(만든 사람 소개·1인칭 시점 걷기는 빼고)
+    const firstPerson: Record<string, RegExp> = { en: /\bI\b|\bwe\b/i, de: /\bich\b|\bwir\b/i, ja: /私|僕/, 'zh-CN': /我/ };
+    for (const code of codes)
+      for (const [key, value] of Object.entries(catalogs[code])) {
+        expect(value, `${code}: ${key}`).not.toMatch(/District|Bezirk|第二$|[​-‍﻿]/);
+        if (!/다룹니다|1인칭/.test(key)) expect(value, `${code}: ${key}`).not.toMatch(firstPerson[code]);
+        // 형식·코드 이름(STEP·DEFLATE·ZIP·TLV·createImageBitmap 등)은 옮기지 않는다
+        for (const name of key.replace(/\{\d+\}/g, '').match(/\b[A-Z][A-Z0-9_]{2,}\b|\b[a-z]+[A-Z][A-Za-z0-9]+\b/g) ?? []) expect(value, `${code}: ${key}`).toContain(name);
+      }
+    expect(codes.map((code) => translate('무늬', code))).toEqual(['Texture', 'Textur', 'テクスチャ', '纹理']);
+    expect(codes.map((code) => translate('단면', code))).toEqual(['Section', 'Schnitt', '断面', '剖面']);
+    expect(codes.map((code) => translate('(원점)', code))).toEqual(['(origin)', '(Ursprung)', '(原点)', '（原点）']);
+    expect(codes.map((code) => translate('숨긴 형상 보기', code))).toEqual(['Show hidden geometry', 'Ausgeblendete Geometrie anzeigen', '非表示のジオメトリを表示', '显示隐藏的几何体']);
+    expect(codes.map((code) => translate('3D에서 누를 때 고르는 단계', code))).toEqual(['Level selected by a click in 3D', 'Ebene, die ein Klick in 3D auswählt', '3Dでクリックしたときに選ぶ階層', '在 3D 中点击时选择的层级']);
+    expect(translate('1.25초', 'zh-CN')).toBe('1.25 秒');
+    expect(translate('허용', 'zh-CN')).toBe('允许');
+    expect(translate('누르기: 고르기(펼친 단계) · Alt+누르기: 가장 안쪽 · 두 번 누르기: 한 단계 들어가기', 'zh-CN')).toBe('单击：选择（展开的层级）· Alt+单击：最内层 · 双击：进入下一级');
   });
   it('lets the localization layer translate the recent-measurement rows (no data-i18n-skip around measureLine — 31st round) and copies them in the UI language', () => {
     for (const file of ['src/app/app.ts', 'src/app/panel.ts']) {
