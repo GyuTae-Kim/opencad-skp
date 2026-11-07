@@ -136,6 +136,12 @@ function watch(root: Node): { hits: string[]; stop: () => void } {
 const tick = async (k = 4): Promise<void> => {
   for (let i = 0; i < k; i++) await new Promise((r) => setTimeout(r, 0));
 };
+/** 처음 그릴 때 받는 조각(정보 탭·속성 사전 칸)을 시간으로 기다린다 */
+const until = async (ok: () => boolean, ms = 5000): Promise<void> => {
+  const t0 = Date.now();
+  while (!ok() && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 10));
+  await tick();
+};
 
 function host(d: SkpDoc, panel: () => Panel): PanelHost {
   const noop = (): void => {};
@@ -261,7 +267,7 @@ describe('패널의 파일 글(52차)', () => {
       for (const tab of ['tags', 'outline', 'info', 'entity'] as const) {
         d.panelTab = tab;
         panel.show(d);
-        await tick();
+        await (tab === 'info' ? until(() => !!panel.el.querySelector('.scene-card')) : tick());
       }
       d.panelTab = 'outline';
       for (let i = 0; i < (d.tree?.count ?? 0); i++) d.expanded.add(i);
@@ -286,16 +292,15 @@ describe('패널의 파일 글(52차)', () => {
       for (const s of sels) {
         d.selection = s;
         panel.rerender();
-        await tick(6);
-        await new Promise((r) => setTimeout(r, 5));
+        await until(() => !panel.el.querySelector('.pbody > div:empty'), 2000);
       }
     };
     await tour();
     // 장면 카드·정보 줄
     d.panelTab = 'info';
     panel.rerender();
-    await tick();
-    const info = [...panel.el.querySelectorAll('.prop-row')].map((r) => [r.querySelector('.k')!.textContent, r.querySelector('.v')!.textContent]);
+    await until(() => !!panel.el.querySelector('.scene-card'));
+    const info =[...panel.el.querySelectorAll('.prop-row')].map((r) => [r.querySelector('.k')!.textContent, r.querySelector('.v')!.textContent]);
     expect(info).toContainEqual([translate('이름', code), '무늬.skp']);
     expect(info).toContainEqual([translate('모형 이름', code), '무늬']);
     expect(info).toContainEqual([translate('설명', code), '이 — 면']);
@@ -305,9 +310,8 @@ describe('패널의 파일 글(52차)', () => {
     d.panelTab = 'entity';
     d.selection = d.outline.find((r) => r.name === '무늬 · 이') ? { kind: 'outline', index: d.outline.find((r) => r.name === '무늬 · 이')!.index } : null;
     panel.rerender();
-    await new Promise((r) => setTimeout(r, 20));
-    await tick();
-    const dicts = [...panel.el.querySelectorAll('.attr-dict')];
+    await until(() => !!panel.el.querySelector('.attr-dict'));
+    const dicts =[...panel.el.querySelectorAll('.attr-dict')];
     expect(dicts.map((x) => x.querySelector('summary [translate="no"]')!.textContent)).toEqual(expect.arrayContaining(['재질', XSS_B]));
     const kv = dicts.flatMap((x) => [...x.querySelectorAll('.prop-row')].map((r) => [r.querySelector('.k')!.textContent, r.querySelector('.v')!.textContent]));
     expect(kv).toEqual(expect.arrayContaining([['이', '무늬'], ['면', '이 · 면'], [XSS_IMG, XSS_IMG], ['Texture', 'Front']]));

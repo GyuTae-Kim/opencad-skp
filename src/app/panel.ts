@@ -12,10 +12,8 @@ import type { MeasureToolResult } from './measure';
 import {
   KIND_LABEL,
   MAX_SECTION_PLANES,
-  boundsSize,
   componentImage,
   definitionCounts,
-  docLabel,
   folderHidden,
   measureAxes,
   measureLine,
@@ -25,29 +23,23 @@ import {
   materialImage,
   panelTabs,
   partOfPick,
-  latLonText,
-  shadowTimeText,
-  tzText,
   selectionDefinition,
   selectionEntity,
-  releaseName,
   selectionParts,
   selectedNode,
   nodeSelection,
   unitLabel,
-  unitSummary,
   type OutlineRow,
   type PanelTab,
   type Selection,
   type SkpDoc,
   type TagRow,
 } from './doc';
-import { fmtCount, fmtNum, fmtPt, formatBytes, formatMs, rgbCss } from './format';
+import { fmtCount, fmtPt, rgbCss } from './format';
 import { entityInfo } from './entity';
-import { mmPerSceneUnit, unitsLabel } from './units';
+import { mmPerSceneUnit } from './units';
 import { NODE_HIDDEN, NODE_MORE, childrenOf, hiddenByNodes, isSplit, nodeDefinition, nodeName, nodePath, nodeTag, treeDefinitionCounts, type PickMode, type TreeView } from './tree';
 import { normalizeQuery, parentPath, searchOutline, searchTree } from './search';
-import { sunForShadow } from './sun';
 import { fileText as F, mix, nameText } from './filetext';
 import { mixNodes, mixText, uiName, uiText } from './i18n';
 
@@ -94,15 +86,16 @@ export const CHILD_LIMIT = 200;
 const TREE_ROW_LIMIT = 4000;
 
 /** 정보 줄. file: 값이 파일 글(이름·설명 등 — 번역층에서 뺀다, 52차) */
-const row = (k: string, v: string, file?: boolean): HTMLElement =>
+export const row = (k: string, v: string, file?: boolean): HTMLElement =>
   h('div', { class: 'prop-row' }, h('span', { class: 'k' }, k), h('span', { class: 'v', title: v, translate: file ? 'no' : null }, v));
 /** 앱이 지금 언어로 옮겨 넣은 속성(mixText — 파일 글을 끼운 글)을 번역층이 다시 옮기지 않게 */
-const keep = <E extends HTMLElement>(el: E, attrs = 'title'): E => (el.setAttribute('data-i18n-keep', attrs), el);
-/** 받아 둔 속성 사전 칸 조각(attrview.ts) */
+export const keep = <E extends HTMLElement>(el: E, attrs = 'title'): E => (el.setAttribute('data-i18n-keep', attrs), el);
+/** 받아 둔 속성 사전 칸·정보 탭 조각(attrview.ts·infotab.ts) */
 let attrView: typeof import('./attrview') | null = null;
+let infoTab: typeof import('./infotab') | null = null;
 /** 안내 글 · 줄 끝 꼬리표(칩) · 줄 끝 수 */
-const hint = (text: string): HTMLElement => h('p', { class: 'hint' }, text);
-const chip = (text: string, title?: string): HTMLElement => h('span', { class: 'chip', title }, text);
+export const hint = (text: string): HTMLElement => h('p', { class: 'hint' }, text);
+export const chip = (text: string, title?: string): HTMLElement => h('span', { class: 'chip', title }, text);
 const countEl = (text: string): HTMLElement => h('span', { class: 'count' }, text);
 
 /** 나무 상자(APG Tree View — ↑↓·Home·End·→·←, 줄 하나만 Tab 차례·그 줄의 보이기 체크까지). 줄을 누르거나 초점이 오면 그 줄이 Tab 차례 */
@@ -121,7 +114,7 @@ const roveTree = (box: HTMLElement): void => {
   const items = [...box.querySelectorAll<HTMLElement>('[role=treeitem]')];
   rove(items, items.find((el) => el.classList.contains('sel')) ?? items[0], true);
 };
-const section = (title: string, ...children: (Node | null)[]): HTMLElement =>
+export const section = (title: string, ...children: (Node | null)[]): HTMLElement =>
   h('section', { class: 'psec' }, h('h3', {}, title), ...children);
 
 /** 찾은 수 글 */
@@ -855,126 +848,15 @@ export class Panel {
 
   // ───────────────────────── 정보 ─────────────────────────
 
+  /** 정보 탭은 처음 그릴 때 받는 조각(infotab.ts — 52차, 속성 사전 칸처럼 첫 화면 조각에서 뗐다). 받은 뒤에는 곧바로 그린다 */
   private renderInfo(d: SkpDoc): void {
-    const s = d.scene;
-    const info = d.info;
-    const u = unitLabel(s.units);
-    const thumb = d.images?.model;
-    this.body.append(
-      section(
-        '파일',
-        thumb ? keep(h('img', { class: 'model-thumb', src: thumb.url, alt: mixText(mix`${F(d.name)} 모형 미리보기(파일 안 그림)`), decoding: 'async' }), 'alt') : null,
-        row('이름', d.name, true),
-        row('형식', docLabel(info)),
-        row('SketchUp 판', info.version ? `${info.version} (${releaseName(info.version)})` : '모름'),
-        d.modelName ? row('모형 이름', d.modelName, true) : null,
-        d.modelDescription ? row('설명', d.modelDescription, true) : null,
-        d.classifications.length ? row('분류 체계', d.classifications.join(' · '), true) : null,
-        row('단위', unitSummary(info, s.units)),
-        row('단위 형식', unitsLabel(d.units)),
-        row('크기', formatBytes(d.size)),
-        row('읽은 시간', formatMs(d.ms)),
-      ),
-    );
-    const rows: HTMLElement[] = [];
-    const add = (k: string, v: number | null): void => {
-      if (v !== null) rows.push(row(k, fmtCount(v)));
+    const slot = h('div');
+    this.body.append(slot);
+    const put = (m: typeof import('./infotab')): void => {
+      if (slot.isConnected) slot.replaceWith(...m.infoSections(d, (i) => this.host.applyPage(i)));
     };
-    add('면', info.faces);
-    add('모서리', info.edges);
-    add('컴포넌트 정의', info.definitions);
-    add('인스턴스', info.instances);
-    add('재질', info.materials);
-    add('태그', info.tags);
-    add('삼각형(펼친 뒤)', info.triangles);
-    add('선분(펼친 뒤)', info.segments);
-    const size = boundsSize(s);
-    if (size) rows.push(row('범위 크기', `${fmtNum(size[0], 1)} × ${fmtNum(size[1], 1)} × ${fmtNum(size[2], 1)} ${u}`));
-    if (s.bounds) rows.push(row('최소', fmtPt(s.bounds.min, 1)), row('최대', fmtPt(s.bounds.max, 1)));
-    this.body.append(section('모형 통계', ...rows));
-    // 위치(Model Info > 위치)·그림자 설정·옮긴 그리기 축
-    const loc = d.location;
-    const sh = d.shadow;
-    const place: HTMLElement[] = [];
-    if (loc) {
-      const name = [loc.city, loc.country].filter((x) => x && x !== 'N/A').join(', ');
-      if (name) place.push(row('장소', name, true));
-      if (loc.latitude !== undefined && loc.longitude !== undefined) place.push(row('위도·경도', latLonText(loc.latitude, loc.longitude)));
-      place.push(row('지리 참조', loc.georeferenced ? '있음(지도 위치에 맞춤)' : '없음'));
-      if (loc.northAngle !== undefined && loc.northAngle !== 0) place.push(row('북쪽 각', `${fmtNum(loc.northAngle, 2)}°`));
-      if (loc.tz !== undefined) place.push(row('시간대', tzText(loc.tz)));
-    }
-    if (sh?.time !== undefined) {
-      const t = shadowTimeText(sh.time);
-      if (t) place.push(row('그림자 날짜·시각', t));
-    }
-    if (sh && (sh.light !== undefined || sh.dark !== undefined)) place.push(row('밝음·어둠', `${sh.light ?? '?'} · ${sh.dark ?? '?'}`));
-    if (sh?.display !== undefined) place.push(row('그림자 보이기', sh.display ? '켬' : '끔'));
-    const sun = sunForShadow(sh);
-    if (sun) place.push(row('해 고도·방위', `${fmtNum(sun.elevation, 1)}° · ${fmtNum(sun.azimuth, 1)}°`));
-    if (d.axes) {
-      const u2 = unitLabel(s.units);
-      place.push(row('그리기 축 원점', `${fmtPt(d.axes.origin, 1)}${u2 ? ` ${u2}` : ''}`));
-      place.push(row('빨강·초록·파랑 축', [d.axes.x, d.axes.y, d.axes.z].map((a) => fmtPt(a, 3)).join(' · ')));
-    }
-    if (place.length)
-      this.body.append(
-        section(
-          '위치·그림자',
-          ...place,
-          sun ? hint('보기 설정의 "그림자"로 이 날짜·시각·위치의 해 그림자를 켜고 끕니다.') : null,
-          d.axes ? hint('줄자·각도기의 축 고정과 기본 평면은 옮긴 그리기 축을 따릅니다.') : null,
-        ),
-      );
-    const scenes = d.images?.scenes ?? [];
-    if (d.pages.length) {
-      // 장면(페이지): 누르면 그 장면의 카메라·숨긴 태그·숨긴 개체·단면·스타일을 적용한다
-      const thumbs = new Map(scenes.map((sc) => [sc.path, sc.url] as const));
-      const grid = h('div', { class: 'scene-grid' });
-      d.pages.slice(0, 200).forEach((pg, i) => {
-        const url = (pg.thumbnail && thumbs.get(pg.thumbnail)) || scenes.find((sc) => sc.name === pg.name)?.url || null;
-        const on = d.page === i;
-        // 도움말은 장면 이름·설명(파일 글). 이름 칸(.scene-cap)은 번역층이 건너뛰므로 앱 글(이름 없는 장면·활성)은 여기서 옮긴다
-        const card = h(
-          'button',
-          { class: `scene-card pick${on ? ' sel' : ''}`, 'aria-pressed': on ? 'true' : 'false', title: [pg.name, pg.description].filter(Boolean).join('\n'), 'data-i18n-keep': 'title' },
-          url ? h('img', { src: url, alt: '', loading: 'lazy', decoding: 'async' }) : h('span', { class: 'scene-blank', html: icon('scene', 28) }),
-          h('span', { class: 'scene-cap' }, pg.name || uiText(`장면 ${i + 1}`), d.activePage === i ? chip(uiText('활성'), uiText('파일을 저장할 때 고른 장면')) : null),
-        );
-        card.addEventListener('click', () => this.host.applyPage(i));
-        grid.append(card);
-      });
-      this.body.append(section(`장면 ${d.pages.length}개`, hint('누르면 그 장면으로 바꿉니다(카메라·숨긴 태그·숨긴 개체·단면·스타일 중 장면이 기억하는 것). PageUp·PageDown으로도 넘깁니다.'), grid));
-    } else if (scenes.length) {
-      const grid = h('div', { class: 'scene-grid' });
-      for (const sc of scenes.slice(0, 100))
-        grid.append(h('figure', { class: 'scene-card', title: sc.name, translate: 'no' }, h('img', { src: sc.url, alt: '', loading: 'lazy', decoding: 'async' }), h('figcaption', {}, sc.name)));
-      this.body.append(section(`장면 그림 ${scenes.length}개`, hint('파일 안의 장면 미리보기 그림입니다(장면 목록을 읽지 못한 파일).'), grid));
-    }
-    const warns = s.warnings ?? [];
-    this.body.append(
-      section(
-        warns.length ? `경고 ${warns.length}개` : '경고',
-        warns.length
-          ? h('ul', { class: 'warns' }, ...warns.slice(0, 300).map((w) => h('li', {}, w)))
-          : hint('해석기가 남긴 경고가 없습니다.'),
-      ),
-    );
-    this.body.append(
-      section(
-        '조작',
-        h(
-          'ul',
-          { class: 'help' },
-          h('li', {}, '왼쪽 끌기: 돌리기 · 오른쪽(가운데) 끌기: 옮기기 · 휠: 확대·축소'),
-          h('li', {}, 'F: 전체 보기 · 1~7: 앞·뒤·왼쪽·오른쪽·위·아래·등각 · F7: 격자 · Ctrl/⌘+O: 열기'),
-          h('li', {}, '누르기: 고르기(펼친 단계) · Alt+누르기: 가장 안쪽 · 두 번 누르기: 한 단계 들어가기'),
-          h('li', {}, 'Esc: 측정 점 지우기 → 한 번 더 누르면 측정 끄기 · 측정 중이 아니면 고른 것 지우기'),
-          h('li', {}, '패널 가장자리를 끌면 폭(좁은 화면은 높이)이 바뀝니다. 두 번 누르면 처음 크기로'),
-          h('li', {}, '휴대폰: 한 손가락 돌리기 · 두 손가락 옮기기·확대'),
-        ),
-      ),
-    );
+    if (infoTab) put(infoTab);
+    else void import('./infotab').then((m) => put((infoTab = m)), () => slot.remove());
   }
 
   // ───────────────────────── 아래 띠 ─────────────────────────
