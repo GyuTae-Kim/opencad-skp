@@ -92,15 +92,16 @@ export function annotationReaders(st: MfcState): Record<string, MfcReadFn> {
   };
 
   return {
-    /** 보조선: 그리기 요소, 점, 방향, 시작·끝 매개변수, 4바이트 */
+    /** 보조선: 그리기 요소, 점, 방향, 시작·끝 매개변수, 4바이트. CConstructionLine 0(SketchUp 3)은 방향에서 끝난다(끝없는 선 — C API 기대값도 시작·끝 없음) */
     CConstructionLine: () => {
       const pre = st.preamble();
       const d = st.drawing();
       const p = s.vec3();
       const dir = s.vec3();
-      const a = s.f64();
-      const b = s.f64();
-      s.skip(4);
+      const bounded = (st.schemas.get('CConstructionLine') ?? 1) >= 1;
+      const a = bounded ? s.f64() : -Infinity;
+      const b = bounded ? s.f64() : Infinity;
+      if (bounded) s.skip(4);
       if (!finite3(p) || !finite3(dir) || Number.isNaN(a) || Number.isNaN(b)) {
         st.note('자료가 깨진 보조선을 건너뛰었습니다');
         return -1;

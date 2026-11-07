@@ -1,14 +1,15 @@
 /**
  * SketchUp 2020 이하(머리 뒤 MFC CArchive 객체 직렬화) → 중간 모형(SkpModel, 2021+ 해석기와 같은 꼴).
- * SketchUp 4·5(CSketchUpModel 스키마 12 + CRenderingOptions 25·28)·6(18)·7·8·2013~2020(21~29)을 읽고, SketchUp 3은 분명한 까닭과 함께 거절한다(MfcRefused).
+ * SketchUp 3(CSketchUpModel 스키마 10 + CRenderingOptions 22)·4·5(12 + 25·28)·6(18)·7·8·2013~2020(21~29)을 읽고, 그보다 옛 판이나 모르는 스키마는
+ * 분명한 까닭과 함께 거절한다(MfcRefused).
  * 형식 지식은 MFC 직렬화 규칙(Microsoft TN002)과, 사용자가 허락한 2026-10 비공개 참조 해석기(SketchUp C API를 비교 기준으로 맞춘 해석기)의
  * legacy 부분과 문서에서 옮긴 것이다(docs/formats/skp.md). 코드는 opencad-skp 꼴로 새로 썼다.
  *
  * 차례(클래스마다 스키마는 파일의 CVersionMap이 알린다):
  *   CString "SketchUp Model", CString "{판}", 16바이트 GUID, CString 경로, u32 시각
  *   CVersionMap(클래스 이름 → 스키마, "End-Of-Version-Map"까지)
- *   CSketchUpModel 본문: 12바이트(5는 8), (스키마 26+) u64 다음 영구 번호, 미리보기 CDib, 14/15바이트(5·6은 10 — 설정 묶음부터 두 번째 CDib까지 없음), 설명, 설정 묶음,
- *     CAttributeContainer(ModelProperties 등), CDib, CCamera, 렌더링 덩어리, 뿌리 앞머리(모형 속성),
+ *   CSketchUpModel 본문: 12바이트(3~5는 8), (스키마 26+) u64 다음 영구 번호, 미리보기 CDib, 14/15바이트(4~6은 10, 3은 7 — 설정 묶음부터 두 번째 CDib까지 없음), 설명, 설정 묶음,
+ *     CAttributeContainer(ModelProperties 등), CDib, CCamera(3은 줄 안), 렌더링 덩어리, 뿌리 앞머리(모형 속성),
  *     CComponent 본문(재질·태그·(2020) 태그 폴더·정의·요소) + 꼬리(관계 0개, 활성 단면), 모형 꼬리(mfcview.ts)
  *   CComponentDefinition: CComponent 본문 + 꼬리, GUID, 이름, 설명, 경로, 시각, 동작 42/43바이트, CThumbnail
  *
@@ -71,6 +72,12 @@ const SU5_MODEL_SCHEMA = 12;
 const SU5_RENDERING_SCHEMA = 28;
 /** SketchUp 4(CSketchUpModel 12 + CRenderingOptions 25): 5의 꼴에 더해 잠김(그리기 요소 깃발·잠긴 색)·인스턴스 이름이 없고 렌더링 덩어리가 짧다 */
 const SU4_RENDERING_SCHEMA = 25;
+/**
+ * SketchUp 3(CSketchUpModel 10 + CRenderingOptions 22): 4의 꼴에 더해 앞머리(CEntity 2)가 비었고(속성 클래스가 없다), 카메라는 객체가 아니라 줄 안에
+ * 눈·보는 방향·위로 쓰며, 모형 머리·렌더링 덩어리·컴포넌트 본문 앞·태그·곡선·정의·장면·모형 꼬리가 짧다
+ */
+const SU3_MODEL_SCHEMA = 10;
+const SU3_RENDERING_SCHEMA = 22;
 /** 칸(클래스·객체) 수 한도 — 브라우저 메모리 보호 */
 export const MFC_MAX_RECORDS = 60_000_000;
 const MAX_DEFINITIONS = 1_000_000;
@@ -81,7 +88,7 @@ const DEFAULT_LAYER_NAMES = new Set(['Layer0', 'Untagged']);
 const UNSET_LAYER_COLOR: [number, number, number] = [64, 64, 64];
 const SNAP_TO = ['any', 'horizontal', 'vertical', 'sloped'] as const;
 
-/** SketchUp 3처럼 읽지 않는 옛 판 */
+/** SketchUp 3보다 옛 판이나 모르는 스키마처럼 읽지 않는 파일 */
 export class MfcRefused extends Error {
   readonly modelSchema: number;
   readonly renderingSchema: number;
@@ -166,6 +173,8 @@ class Decoder {
   private folderParent = -1;
   private folderKeep = true;
   private loop: LoopRec | null = null;
+  /** SketchUp 3: 요소 묶음마다 요소 목록의 모서리 차례(reorderEdges) */
+  private readonly edgeOrders = new Map<Collection, number[]>();
   activeLayer: number | undefined;
   damaged = false;
 
@@ -216,14 +225,15 @@ class Decoder {
     const model = this.st.schemas.get('CSketchUpModel') ?? -1;
     const rendering = this.st.schemas.get('CRenderingOptions') ?? -1;
     const su45 = model === SU5_MODEL_SCHEMA && (rendering === SU5_RENDERING_SCHEMA || rendering === SU4_RENDERING_SCHEMA);
-    const known = (model >= MIN_MODEL_SCHEMA && model <= MAX_MODEL_SCHEMA) || model === SU6_MODEL_SCHEMA || su45;
+    const su3 = model === SU3_MODEL_SCHEMA && rendering === SU3_RENDERING_SCHEMA;
+    const known = (model >= MIN_MODEL_SCHEMA && model <= MAX_MODEL_SCHEMA) || model === SU6_MODEL_SCHEMA || su45 || su3;
     if (!known || !(rendering in RENDERING_BLOCK)) {
-      // SketchUp 3(모형 10)
-      const old = model >= 0 && (model < SU5_MODEL_SCHEMA || (model === SU5_MODEL_SCHEMA && rendering >= 0 && rendering < SU4_RENDERING_SCHEMA));
+      // SketchUp 3(모형 10)보다 옛 판 — 표본이 없어 배치를 모른다
+      const old = model >= 0 && model < SU3_MODEL_SCHEMA;
       throw new MfcRefused(
         old
-          ? `SketchUp ${this.header.version} 파일은 SketchUp 3의 아주 옛 형식(모형 스키마 ${model})이라 아직 읽지 못합니다. SketchUp 4 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.`
-          : `SketchUp ${this.header.version} 파일의 형식(모형 스키마 ${model}, 렌더링 스키마 ${rendering})은 확인한 SketchUp 4~2020 형식과 달라 읽지 못합니다.`,
+          ? `SketchUp ${this.header.version} 파일은 SketchUp 3보다 옛 형식(모형 스키마 ${model})이라 아직 읽지 못합니다. SketchUp 3 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.`
+          : `SketchUp ${this.header.version} 파일의 형식(모형 스키마 ${model}, 렌더링 스키마 ${rendering})은 확인한 SketchUp 3~2020 형식과 달라 읽지 못합니다.`,
         model,
         rendering,
       );
@@ -241,6 +251,7 @@ class Decoder {
       map.set(name, v);
     }
     this.st.entityPids = (map.get('CEntity') ?? 0) >= 5;
+    this.st.entityAttrs = (map.get('CEntity') ?? 3) >= 3;
     this.st.drawingFlagBytes = (map.get('CDrawingElement') ?? 9) >= 9 ? 6 : 5;
     return true;
   }
@@ -257,10 +268,12 @@ class Decoder {
     if (schema >= 26) s.skip(8); // 다음 영구 번호
     const thumb = s.readObject(C.DIB);
     if (isDib(thumb)) this.image('model', '모형 미리보기', thumb);
-    s.skip(schema >= 26 ? 15 : schema >= MIN_MODEL_SCHEMA ? 14 : 10);
+    // SketchUp 3(모형 스키마 10)은 7바이트
+    s.skip(schema >= 26 ? 15 : schema >= MIN_MODEL_SCHEMA ? 14 : schema >= SU5_MODEL_SCHEMA ? 10 : 7);
     const description = s.cstr();
     if (schema < MIN_MODEL_SCHEMA) {
-      const camera = s.readObject(C.CAMERA) as SkpCamera | null;
+      // SketchUp 3은 CCamera 클래스가 없고 카메라를 줄 안에 쓴다
+      const camera = this.st.schemas.has('CCamera') ? (s.readObject(C.CAMERA) as SkpCamera | null) : this.view.inlineCamera();
       const block = this.view.renderingBlock(false);
       const out: ReturnType<Decoder['readModelHead']> = { description, options: new Map(), block };
       if (camera) out.camera = camera;
@@ -315,11 +328,12 @@ class Decoder {
   private componentBody(isModel: boolean): void {
     const s = this.s;
     const st = this.st;
-    // 앞 12바이트에 그리기 요소 깃발이 든다(SketchUp 4는 깃발이 5바이트라 11)
-    s.skip((st.entityPids ? 13 : 12) - (6 - st.drawingFlagBytes));
+    // 앞 12바이트에 그리기 요소 깃발이 든다(SketchUp 4는 깃발이 5바이트라 11, SketchUp 3은 9 — 재질 목록 뒤 u32도 2바이트)
+    const su3 = !st.entityAttrs;
+    s.skip(su3 ? 9 : (st.entityPids ? 13 : 12) - (6 - st.drawingFlagBytes));
     const mats = s.count(1_000_000, '재질');
     for (let i = 0; i < mats; i++) s.readObject(C.MATERIAL);
-    s.u32();
+    s.skip(su3 ? 2 : 4);
     if (st.entityPids) s.u8();
     this.modelLayerPhase = isModel;
     const layers = s.count(1_000_000, '태그');
@@ -332,7 +346,47 @@ class Decoder {
     const defs = s.count(MAX_DEFINITIONS, '정의');
     for (let i = 0; i < defs; i++) s.readObject(C.DEFINITION);
     const ents = s.count(50_000_000, '요소');
-    for (let i = 0; i < ents; i++) s.readObject();
+    // SketchUp 3(CCurve 3)은 곡선의 끝 모서리를 곡선 안에서 먼저 읽는다 — 요소 목록의 모서리 차례를 적어 두고 다 읽은 뒤 그 차례로 되돌린다(C API와 같은 차례)
+    const c = st.top;
+    const order: number[] | null = (st.schemas.get('CCurve') ?? 4) < 4 ? [] : null;
+    for (let i = 0; i < ents; i++) {
+      const v = s.readObject();
+      if (order && s.lastClass === 'CEdge' && typeof v === 'number' && cidOf(v) === c.cid) order.push(indexOf(v));
+    }
+    if (order) this.edgeOrders.set(c, order);
+  }
+
+  /**
+   * SketchUp 3: 요소 묶음마다 모서리를 요소 목록 차례로 다시 매긴다(곡선 안에서 먼저 읽은 끝 모서리를 제자리로).
+   * 면의 고리 모서리와 장면이 숨긴 모서리 참조도 함께 옮긴다. 목록에 없는 모서리는 읽은 차례로 뒤에 둔다
+   */
+  reorderEdges(): void {
+    const maps = new Map<number, Int32Array>();
+    for (const [c, order] of this.edgeOrders) {
+      const n = c.edges.length;
+      const seen = new Uint8Array(n);
+      const perm: number[] = [];
+      for (const i of order)
+        if (i < n && !seen[i]) {
+          seen[i] = 1;
+          perm.push(i);
+        }
+      for (let i = 0; i < n; i++) if (!seen[i]) perm.push(i);
+      if (perm.every((v, i) => v === i)) continue;
+      const map = new Int32Array(n);
+      perm.forEach((old, i) => (map[old] = i));
+      c.edges = perm.map((i) => c.edges[i]!);
+      c.edgeCurve = perm.map((i) => c.edgeCurve[i]!);
+      for (const f of c.faces) if (f.loopEdges) f.loopEdges = f.loopEdges.map((l) => l.map((e) => (e >= 0 && e < n ? map[e]! : e)));
+      maps.set(c.cid, map);
+    }
+    if (!maps.size) return;
+    for (const p of this.view.pages)
+      for (const h of p.hidden) {
+        const map = h.cls === 'CEdge' ? maps.get(cidOf(h.packed)) : undefined;
+        const i = indexOf(h.packed);
+        if (map && i < map.length) h.packed = pack(cidOf(h.packed), map[i]!);
+      }
   }
 
   /** 관계(CRelationship, 0개여야 한다)와 활성 단면 */
@@ -423,11 +477,12 @@ class Decoder {
     return { front: v.slice(0, 12), back: v.slice(12), frontFlags, backFlags };
   }
 
-  /** CThumbnail: 앞머리, CCamera, CDib */
+  /** CThumbnail: 앞머리, CCamera, CDib. SketchUp 3(CThumbnail 0, CCamera 클래스 없음)은 카메라를 줄 안에 쓴다 */
   private thumbnail(): DibRef | null {
     const s = this.s;
     this.st.preamble();
-    s.readObject(C.CAMERA);
+    if (this.st.schemas.has('CCamera')) s.readObject(C.CAMERA);
+    else this.view.inlineCamera();
     const d = s.readObject(C.DIB);
     return isDib(d) ? d : null;
   }
@@ -537,7 +592,8 @@ class Decoder {
     const hidden = s.u8() !== 0;
     st.preamble();
     const color = this.materialBody();
-    s.skip(4);
+    // CLayer 1(SketchUp 3)은 색 재질 칸 뒤 4바이트가 없다
+    if (st.schema('CLayer') >= 2) s.skip(4);
     let lineStyle: string | undefined;
     if (st.schema('CLayer') >= 3) {
       const ls = s.readObject(C.LINE_STYLE);
@@ -618,10 +674,13 @@ class Decoder {
     rec.description = s.cstr();
     s.cstr();
     s.u32();
-    // 동작 덩어리: CComponentBehavior 5(SketchUp 7+) 42바이트, 4(SketchUp 6) 38바이트(늘이지 않음 마스크가 없다)
-    const old = (st.schemas.get('CComponentBehavior') ?? 5) < 5;
-    const block = s.bytes((old ? 38 : 42) + (st.entityPids ? 1 : 0));
-    rec.behavior = behavior(block, st.entityPids ? 1 : 0, old);
+    // 동작 덩어리: CComponentBehavior 5(SketchUp 7+) 42바이트, 4(SketchUp 4~6) 38바이트(늘이지 않음 마스크가 없다),
+    // 3(SketchUp 3) 35바이트(붙기·구멍·붙는 면이 2 앞 — 카메라 보기·해 그림자 칸은 표준 파일이 모두 꺼져 있어 자리를 몰라 읽지 않는다)
+    const bv = st.schemas.get('CComponentBehavior') ?? 5;
+    const old = bv < 5;
+    const su3 = bv < 4;
+    const block = s.bytes((su3 ? 35 : old ? 38 : 42) + (st.entityPids ? 1 : 0));
+    rec.behavior = behavior(block, (st.entityPids ? 1 : 0) - (su3 ? 2 : 0), old, su3);
     const thumb = s.readObject(C.THUMBNAIL);
     if (isDib(thumb)) this.image('component', rec.name || `정의 ${index + 1}`, thumb);
     return index;
@@ -695,7 +754,10 @@ class Decoder {
     return packed;
   }
 
-  /** CCurve: u8 다각형, u32 모서리 수. CArcCurve는 f64×14(중심, 법선, x축(길이 = 반지름), 시작각, 끝각, y축)가 더 있다 */
+  /**
+   * CCurve: u8 다각형, u32 모서리 수. CArcCurve는 f64×14(중심, 법선, x축(길이 = 반지름), 시작각, 끝각, y축)가 더 있다.
+   * CCurve 3(SketchUp 3)은 앞에 첫 모서리·끝 모서리 포인터가 있다 — 첫 모서리는 곡선을 처음 가리킨(읽는 중인) 모서리이고, 끝 모서리는 대개 여기서 새 객체로 나온다
+   */
   private curve(slot: number, arc: boolean): number {
     const s = this.s;
     const st = this.st;
@@ -704,7 +766,15 @@ class Decoder {
     const packed = pack(c.cid, index);
     s.values[slot] = packed;
     const pre = st.preamble();
-    const raw: CurveRaw = { polygon: s.u8() !== 0 };
+    const raw: CurveRaw = { polygon: false };
+    const su3 = (st.schemas.get('CCurve') ?? 4) < 4;
+    if (su3) {
+      // 끝 모서리를 읽는 동안 다른 곡선이 같은 차례를 받지 않게 먼저 자리를 잡는다
+      c.curves.push(raw);
+      s.readObject(C.EDGE, true);
+      s.readObject(C.EDGE, true);
+    }
+    raw.polygon = s.u8() !== 0;
     s.u32();
     if (arc) {
       const v = s.doubles(14);
@@ -712,7 +782,7 @@ class Decoder {
         raw.arc = { center: [v[0]!, v[1]!, v[2]!], normal: [v[3]!, v[4]!, v[5]!], xaxis: [v[6]!, v[7]!, v[8]!], start: v[9]!, end: v[10]! };
     }
     if (pre.pid !== undefined) raw.pid = pre.pid;
-    c.curves.push(raw);
+    if (!su3) c.curves.push(raw);
     return packed;
   }
 
@@ -817,11 +887,11 @@ class Decoder {
   }
 }
 
-/** 정의 동작 덩어리: 붙기 27, 구멍 뚫기 28, 붙는 면 29, 카메라 보기·해 그림자 33(비트 0·1), 늘이지 않음 34(+1: 2017+) */
-function behavior(block: Uint8Array, shift: number, noMask = false): SkpBehavior {
+/** 정의 동작 덩어리: 붙기 27, 구멍 뚫기 28, 붙는 면 29, 카메라 보기·해 그림자 33(비트 0·1), 늘이지 않음 34(+1: 2017+, −2: SketchUp 3) */
+function behavior(block: Uint8Array, shift: number, noMask = false, noCam = false): SkpBehavior {
   const glue = block[27 + shift]!;
   const snap = block[29 + shift]!;
-  const cam = block[33 + shift]!;
+  const cam = noCam ? 0 : block[33 + shift]!;
   const out: SkpBehavior = {
     alwaysFaceCamera: (cam & 1) !== 0,
     cutsOpening: block[28 + shift] !== 0,
@@ -1214,7 +1284,7 @@ const isDamage = (e: unknown): boolean => !(e instanceof MfcError) || e.kind ===
 
 /**
  * 2020 이하 SKP 바이트 → 중간 모형. 머리가 MFC 꼴이어야 한다(readSkpHeader의 container = 'mfc').
- * SketchUp 3이나 모르는 스키마는 MfcRefused, 형상 앞에서 멈추면 그 까닭의 Error를 던진다.
+ * SketchUp 3보다 옛 판이나 모르는 스키마는 MfcRefused, 형상 앞에서 멈추면 그 까닭의 Error를 던진다.
  * onProgress는 읽은 바이트 위치로 진행(0~1)을 알린다.
  */
 export function readMfcModel(bytes: Uint8Array, header: SkpHeader, onProgress?: (fraction: number) => void): MfcResult {
@@ -1268,6 +1338,7 @@ export function readMfcModel(bytes: Uint8Array, header: SkpHeader, onProgress?: 
       `깨진 참조 ${s.badRefs.toLocaleString('en-US')}개를 건너뛰었습니다(첫 자리 ${s.firstBadRef.toLocaleString('en-US')}바이트) — 그 모서리와 그 모서리를 쓰는 면은 그리지 않습니다`,
     );
   }
+  dec.reorderEdges();
   const { model, materials } = assemble(dec, head);
   return { model, materials, styles: dec.view.styles, images: dec.st.images };
 }

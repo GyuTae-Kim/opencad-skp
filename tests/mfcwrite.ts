@@ -69,11 +69,29 @@ const V5 = {
   CTextStyle: 4,
   CTexture: 4,
 };
-/** SketchUp 3(모형 스키마 10) — 읽지 않는 판(거절 시험용, 스키마만 다르다) */
-export const SU3_SCHEMAS: Record<string, number> = { ...V5, CSketchUpModel: 10, CRenderingOptions: 22, CComponentInstance: 3, CDrawingElement: 8 };
-export const MFC_SCHEMAS: Record<'v4' | 'v5' | 'v6' | 'v7' | 'v8' | 'v15' | 'v17' | 'v18' | 'v19' | 'v20', Record<string, number>> = {
-  // SketchUp 4: 5의 것 + 그리기 요소 깃발 5바이트(잠김 없음), 인스턴스 이름 없음, 렌더링 덩어리 135바이트(장면 안 131)
-  v4: { ...V5, CRenderingOptions: 25, CComponentInstance: 3, CDrawingElement: 8 },
+// SketchUp 4: 5의 것 + 그리기 요소 깃발 5바이트(잠김 없음), 인스턴스 이름 없음, 렌더링 덩어리 135바이트(장면 안 131)
+const V4 = { ...V5, CRenderingOptions: 25, CComponentInstance: 3, CDrawingElement: 8 };
+const { CAttributeContainer: _noContainer, CAttributeNamed: _noNamed, CCamera: _noCamera, CFaceTextureCoords: _noCoords, ...V4_NO_ATTRS } = V4;
+// SketchUp 3: 4의 것 + 앞머리가 비었고(CEntity 2 — 속성·무늬 위치 클래스 없음) 카메라를 줄 안에(CCamera 없음), 모형 머리 7바이트,
+// 렌더링 덩어리 129바이트(장면 안 125), 컴포넌트 본문 앞 9바이트·재질 뒤 2바이트, 태그 끝 4바이트 없음, 곡선 앞에 첫·끝 모서리,
+// 끝없는 보조선만, 동작 35바이트, 장면 전환·지연 없음, 모형 꼬리가 짧다(활성 장면 없음)
+const V3 = {
+  ...V4_NO_ATTRS,
+  CSketchUpModel: 10,
+  CRenderingOptions: 22,
+  CEntity: 2,
+  CLayer: 1,
+  CCurve: 3,
+  CComponentBehavior: 3,
+  CThumbnail: 0,
+  CConstructionLine: 0,
+  CViewPage: 6,
+};
+/** SketchUp 3보다 옛 판(모형 스키마 8 — 표본이 없는 가상의 판, 거절 시험용. 스키마만 다르다) */
+export const PRE3_SCHEMAS: Record<string, number> = { ...V3, CSketchUpModel: 8, CRenderingOptions: 20 };
+export const MFC_SCHEMAS: Record<'v3' | 'v4' | 'v5' | 'v6' | 'v7' | 'v8' | 'v15' | 'v17' | 'v18' | 'v19' | 'v20', Record<string, number>> = {
+  v3: V3,
+  v4: V4,
   v5: V5,
   // SketchUp 6: 설정 묶음이 꼬리에, 동작 덩어리 38바이트, CAttributeNamed 끝 u32 없음, 렌더링 덩어리 189바이트
   v6: { ...BASE, CSketchUpModel: 18, CRenderingOptions: 32, CComponentInstance: 4, CViewPage: 11, CArcCurve: 1, CAttributeNamed: 0, CComponentBehavior: 4 },
@@ -114,6 +132,7 @@ export const MFC_SCHEMAS: Record<'v4' | 'v5' | 'v6' | 'v7' | 'v8' | 'v15' | 'v17
 
 /** 판 → 머리 판 글 */
 export const MFC_VERSIONS: Record<keyof typeof MFC_SCHEMAS, string> = {
+  v3: '3.0.1',
   v4: '4.0.1',
   v5: '5.0.1',
   v6: '6.0.1',
@@ -140,6 +159,11 @@ export class MfcWriter {
 
   get pids(): boolean {
     return (this.schemas.CEntity ?? 0) >= 5;
+  }
+
+  /** CEntity 3 이상: 앞머리에 속성 사전 포인터가 있다(SketchUp 3은 앞머리가 비었다) */
+  get attrs(): boolean {
+    return (this.schemas.CEntity ?? 3) >= 3;
   }
 
   schema(name: string): number {
@@ -619,10 +643,12 @@ export interface MfcSpec {
 // ── 쓰기 ──────────────────────────────────────────────────────
 
 /** 렌더링 덩어리 칸 자리(src/mfcview.ts와 같은 형식 기록에서) */
-const BLOCK_SIZE: Record<number, number> = { 25: 135, 28: 150, 32: 189, 33: 190, 35: 197, 36: 216, 37: 221, 38: 222, 39: 223 };
+const BLOCK_SIZE: Record<number, number> = { 22: 129, 25: 135, 28: 150, 32: 189, 33: 190, 35: 197, 36: 216, 37: 221, 38: 222, 39: 223 };
 const F36 = { xray: 6, background: 13, foreground: 17, texture: 32, profiles: 42, hiddenGeometry: 58, front: 63, back: 67, sky: 123, ground: 131, drawSky: 135, drawGround: 136 };
 const F38 = { ...F36, background: 14, foreground: 18, texture: 33, profiles: 43, hiddenGeometry: 59, front: 64, back: 68, sky: 124, ground: 132, drawSky: 136, drawGround: 137, sectionFill: 167 };
 const FIELDS: Record<number, Record<string, number>> = {
+  // SketchUp 3: RenderMode가 0(4의 앞 2바이트 없음), 하늘 뒤 4바이트 없음
+  22: { mode: 0, xray: 4, background: 11, foreground: 15, texture: 30, profiles: 40, front: 50, back: 54, sky: 76, ground: 80, drawSky: 84, drawGround: 85 },
   25: { xray: 6, background: 13, foreground: 17, texture: 32, profiles: 42, front: 52, back: 56, sky: 78, ground: 86, drawSky: 90, drawGround: 91 },
   28: { ...F36, sky: 89, ground: 97, drawSky: 101, drawGround: 102 },
   32: F36,
@@ -680,6 +706,8 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
 
   type TexCoords = MfcFaceSpec['textureCoords'];
   const pre = (attrs?: MfcDicts, pid?: number, texture: TexCoords = false): void => {
+    // SketchUp 3(CEntity 2): 앞머리가 비었다(속성·무늬 위치를 쓸 수 없다)
+    if (!w.attrs) return;
     if (attrs?.length || texture) container(attrs ?? [], texture);
     else w.nil();
     if (pids) {
@@ -747,7 +775,22 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
     w.raw(image);
     if (kind === 1 && w.schema('CDib') >= 3) w.u32(90);
   };
+  /** SketchUp 3(CCamera 없음): 줄 안에 눈, 보는 방향(단위), 위, 16바이트, u8 원근, 시야각, 높이, 24바이트. 없으면 기본(위에서 내려다봄) */
+  const inlineCamera = (c: MfcCameraSpec | undefined): void => {
+    const cam = c ?? { eye: [0, 0, 500] as Vec3, target: [0, 0, 0] as Vec3, up: [0, 1, 0] as Vec3 };
+    const d: Vec3 = [cam.target[0] - cam.eye[0], cam.target[1] - cam.eye[1], cam.target[2] - cam.eye[2]];
+    const l = Math.hypot(...d) || 1;
+    w.f64(...cam.eye, d[0] / l, d[1] / l, d[2] / l, ...cam.up);
+    w.f64(1, 1000);
+    w.u8(cam.perspective === false ? 0 : 1);
+    w.f64(cam.fov ?? 35, cam.height ?? 0);
+    w.zeros(24);
+  };
   const camera = (c: MfcCameraSpec | undefined): void => {
+    if (w.schemas.CCamera === undefined) {
+      inlineCamera(c);
+      return;
+    }
     if (!c) {
       w.nil();
       return;
@@ -773,7 +816,7 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
     const size = (BLOCK_SIZE[schema] ?? 216) - (insidePage ? (schema < 32 ? 4 : 8) : 0);
     const b = new Uint8Array(size);
     const f = FIELDS[schema] ?? F36;
-    new DataView(b.buffer).setUint32(2, r?.mode ?? 2, true);
+    new DataView(b.buffer).setUint32(f.mode ?? 2, r?.mode ?? 2, true);
     const put = (k: string, v: number): void => {
       if (f[k] !== undefined) b[f[k]!] = v;
     };
@@ -838,7 +881,8 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
       w.u8(l.hidden ? 1 : 0);
       pre();
       materialBody({ name: l.name, color: l.color ? [l.color[0], l.color[1], l.color[2], 255] : [0, 0, 0, 0] });
-      w.zeros(4);
+      // CLayer 1(SketchUp 3)은 끝 4바이트가 없다
+      if (w.schema('CLayer') >= 2) w.zeros(4);
       if (w.schema('CLayer') >= 3) {
         if (l.lineStyle) lineStyle(l.lineStyle);
         else w.nil();
@@ -903,7 +947,7 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
     if (known !== undefined) w.ref(known);
     else styleSlots[i] = styleObj(spec.styles![i]!);
   };
-  const shadow = (): void => {
+  const shadow = (trail = true): void => {
     const o = spec.shadow ?? {};
     pre();
     w.u32(o.time ?? 0);
@@ -914,7 +958,7 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
     w.raw([0, 1, 1, 0]);
     w.i32(o.light ?? 80);
     w.i32(o.dark ?? 20);
-    w.raw([0, 0]);
+    if (trail) w.raw([0, 0]);
   };
   const axes = (): void => {
     pre();
@@ -962,7 +1006,8 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
         w.f64(...e.vertices![i]!);
       });
     };
-    const curveRef = (i: number | undefined): void => {
+    /** 곡선(처음이면 새 객체). from은 지금 쓰는 모서리 차례 */
+    const curveRef = (i: number | undefined, from: number): void => {
       if (i === undefined) {
         w.nil();
         return;
@@ -973,8 +1018,17 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
         return;
       }
       const c = e.curves![i]!;
-      slots.curves[i] = w.obj(c.arc ? 'CArcCurve' : 'CCurve', () => {
+      w.obj(c.arc ? 'CArcCurve' : 'CCurve', (slot) => {
+        slots.curves[i] = slot;
         pre(undefined, c.pid);
+        // CCurve 3(SketchUp 3): 첫 모서리(지금 쓰는 모서리)와 끝 모서리(곡선의 마지막 모서리 — 아직 쓰지 않았으면 여기서 새 객체로)
+        if ((w.schemas.CCurve ?? 4) < 4) {
+          w.ref(slots.edges[from]!);
+          const members = (e.edges ?? []).flatMap((ed, k) => (ed.curve === i ? [k] : []));
+          const last = members[members.length - 1] ?? from;
+          if (slots.edges[last] !== undefined) w.ref(slots.edges[last]!);
+          else edgeObj(last);
+        }
         w.u8(c.polygon ? 1 : 0);
         w.u32(0);
         if (c.arc) {
@@ -984,19 +1038,27 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
         }
       });
     };
-    const edgeObj = (i: number): number => {
+    function edgeObj(i: number): number {
       const ed = e.edges![i]!;
-      return w.obj('CEdge', () => {
+      return w.obj('CEdge', (slot) => {
+        slots.edges[i] = slot;
         pre(ed.attrs, ed.pid);
         drawing(ed.material, ed, ed.layer);
         vertexRef(ed.a);
-        if (ed.brokenRef && slots.edges[0] !== undefined) w.ref(slots.edges[0]);
+        if (ed.brokenRef && i !== 0 && slots.edges[0] !== undefined) w.ref(slots.edges[0]);
         else vertexRef(ed.b);
-        curveRef(ed.curve);
+        curveRef(ed.curve, i);
       });
-    };
+    }
     const list: (() => void)[] = [];
-    (e.edges ?? []).forEach((_, i) => list.push(() => (slots.edges[i] = edgeObj(i))));
+    // SketchUp 3은 곡선 안에 끝 모서리를 먼저 쓸 수 있다 — 요소 목록에서는 그 칸을 참조한다
+    (e.edges ?? []).forEach((_, i) =>
+      list.push(() => {
+        const known = slots.edges[i];
+        if (known !== undefined) w.ref(known);
+        else edgeObj(i);
+      }),
+    );
     (e.faces ?? []).forEach((f, i) =>
       list.push(() => {
         slots.faces[i] = w.obj('CFace', () => {
@@ -1095,8 +1157,11 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
           w.f64(...g.point);
           if (g.kind === 'line') {
             w.f64(...(g.dir ?? [1, 0, 0]));
-            w.f64(...(g.range ?? [-1e30, 1e30]));
-            w.zeros(4);
+            // CConstructionLine 0(SketchUp 3)은 방향에서 끝난다(끝없는 선)
+            if ((w.schemas.CConstructionLine ?? 1) >= 1) {
+              w.f64(...(g.range ?? [-1e30, 1e30]));
+              w.zeros(4);
+            }
           } else w.zeros(25);
         });
       }),
@@ -1120,7 +1185,8 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
   };
 
   const componentBody = (isModel: boolean, e: MfcEntitiesSpec, slots: Slots, vestigial: string[] = []): void => {
-    w.zeros((pids ? 13 : 12) - (6 - flagBytes));
+    // SketchUp 3: 앞 9바이트, 재질 목록 뒤 2바이트
+    w.zeros(!w.attrs ? 9 : (pids ? 13 : 12) - (6 - flagBytes));
     if (isModel) {
       const mats = spec.materials ?? [];
       w.u32(mats.length);
@@ -1132,7 +1198,8 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
           }),
         );
     } else w.u32(0);
-    w.u32(0);
+    if (w.attrs) w.u32(0);
+    else w.zeros(2);
     if (pids) w.u8(0);
     if (isModel) {
       const layers = spec.layers ?? [{ name: 'Layer0', color: [255, 255, 255] }];
@@ -1181,20 +1248,25 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
       w.str(d.description ?? '');
       w.str('');
       w.u32(0);
-      const oldBehavior = (w.schemas.CComponentBehavior ?? 5) < 5;
-      const b = new Uint8Array((oldBehavior ? 38 : 42) + (pids ? 1 : 0));
-      const s = pids ? 1 : 0;
+      const bv = w.schemas.CComponentBehavior ?? 5;
+      const oldBehavior = bv < 5;
+      // CComponentBehavior 3(SketchUp 3): 35바이트, 붙기·구멍·붙는 면이 2 앞(카메라 보기·해 그림자 자리는 모른다 — 쓰지 않는다)
+      const su3Behavior = bv < 4;
+      const b = new Uint8Array((su3Behavior ? 35 : oldBehavior ? 38 : 42) + (pids ? 1 : 0));
+      const s = (pids ? 1 : 0) - (su3Behavior ? 2 : 0);
       const bh = d.behavior ?? {};
       b[27 + s] = bh.glue ? 1 : 0;
       b[28 + s] = bh.cuts ? 1 : 0;
       b[29 + s] = bh.snap ?? 0;
-      b[33 + s] = (bh.faceCamera ? 1 : 0) | (bh.shadowsSun ? 2 : 0);
+      if (!su3Behavior) b[33 + s] = (bh.faceCamera ? 1 : 0) | (bh.shadowsSun ? 2 : 0);
       if (!oldBehavior) b[34 + s] = bh.noScale ?? 0;
       w.raw(b);
       if (d.thumbnail)
         w.obj('CThumbnail', () => {
           pre();
-          w.nil();
+          // CThumbnail 0(SketchUp 3)은 카메라를 줄 안에 쓴다
+          if (w.schemas.CCamera === undefined) inlineCamera(undefined);
+          else w.nil();
           dib(d.thumbnail);
         });
       else w.nil();
@@ -1209,7 +1281,9 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
   dib(spec.thumbnail);
   // SketchUp 6(모형 스키마 18): 머리가 4바이트 짧고 설정 묶음·모형 속성·두 번째 그림이 없다(설정 묶음은 꼬리에)
   const su6 = modelSchema < 21;
-  w.zeros(modelSchema >= 26 ? 15 : su6 ? 10 : 14);
+  // SketchUp 3(모형 스키마 10): 7바이트
+  const su3 = !w.attrs;
+  w.zeros(modelSchema >= 26 ? 15 : !su6 ? 14 : modelSchema >= 12 ? 10 : 7);
   w.str(spec.description ?? '');
   const writeOptions = (): void => {
     const opts = spec.options ?? [];
@@ -1237,8 +1311,8 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
   componentBody(true, spec.root, rootSlots);
   componentTail(spec.root, rootSlots);
 
-  // 모형 꼬리
-  shadow();
+  // 모형 꼬리(SketchUp 3: 그림자 끝 2바이트 없음)
+  shadow(!su3);
   w.zeros(pids ? 2 : 1);
   const pages = spec.pages ?? [];
   const pageSlots: number[] = [];
@@ -1281,7 +1355,8 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
         }
         w.u8(p.include === false ? 0 : 1);
         if (oldPage) w.u8(1);
-        w.f64(p.transition ?? -1, p.delay ?? -1);
+        // CViewPage 6(SketchUp 3)은 전환·지연 시간이 없다
+        if (w.schema('CViewPage') >= 9) w.f64(p.transition ?? -1, p.delay ?? -1);
         if (oldPage) return;
         w.nil();
         if (w.schema('CViewPage') >= 12) {
@@ -1295,13 +1370,16 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
         }
       }),
     );
-  if (spec.activePage !== undefined) w.ref(pageSlots[spec.activePage]!);
+  // SketchUp 3은 활성 장면을 쓰지 않는다
+  if (su3) {
+    /* 활성 장면 없음 */
+  } else if (spec.activePage !== undefined) w.ref(pageSlots[spec.activePage]!);
   else w.nil();
   axes();
   if (su6) {
     w.zeros(63);
     writeOptions();
-    w.zeros(6);
+    w.zeros(su3 ? 4 : 6);
   } else w.zeros(pids ? 70 : 69);
   const d = spec.defaults ?? {};
   fontRef(d.dimFont);
@@ -1312,7 +1390,7 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
   dim.set([...(d.dimColor ?? [0, 0, 0]), 255], 46);
   dv.setInt32(54, d.dimTextPos ?? 1, true);
   w.raw(dim);
-  w.zeros(pids ? 3 : 2);
+  if (!su3) w.zeros(pids ? 3 : 2);
   fontRef(d.textFont);
   // CTextStyle 4(SketchUp 5): 문자 기본값 18바이트(지시선 글 색 없음), 지시선 글꼴 없음
   const leaders = (w.schemas.CTextStyle ?? 5) >= 5;
@@ -1324,7 +1402,7 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
   if (leaders) text.set([...(d.leaderColor ?? [0, 0, 0]), 255], 18);
   w.raw(text);
   if (leaders) fontRef(d.leaderFont);
-  w.zeros(pids ? 3 : 2);
+  if (!su3) w.zeros(pids ? 3 : 2);
   const fonts = spec.fonts ?? [];
   w.u32(fonts.length);
   fonts.forEach((_, i) => fontRef(i));

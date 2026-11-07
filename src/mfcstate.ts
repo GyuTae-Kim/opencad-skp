@@ -2,8 +2,9 @@
  * SketchUp 2020 이하(MFC) 해석의 공용 상태와 모든 클래스가 쓰는 앞머리 읽기.
  * 형식 지식은 2026-10 비공개 참조 해석기(SketchUp C API를 비교 기준으로 맞춘 해석기)의 legacy 부분에서 옮긴 것이다(docs/formats/skp.md).
  *
- *   CEntity 앞머리: CAttributeContainer 포인터, (CEntity 스키마 5 이상 = SketchUp 2017+) 영구 번호 = 바이트 가면 u8 + 가면이 고른 바이트(리틀 엔디언)
- *   CDrawingElement: CMaterial 포인터, 깃발 6바이트(0 숨김, 3 soft, 4 smooth, 5 잠김), CLayer 포인터
+ *   CEntity 앞머리: CAttributeContainer 포인터, (CEntity 스키마 5 이상 = SketchUp 2017+) 영구 번호 = 바이트 가면 u8 + 가면이 고른 바이트(리틀 엔디언).
+ *     CEntity 2(SketchUp 3)는 앞머리가 비었다(속성 클래스가 없다)
+ *   CDrawingElement: CMaterial 포인터, 깃발 6바이트(0 숨김, 3 soft, 4 smooth, 5 잠김 — SketchUp 3·4는 잠김 없는 5바이트), CLayer 포인터
  *   형 있는 값: u8 꼴(0 nil, 2 byte, 3 int16, 4 int32, 5 float, 6 double, 7 bool, 8 색, 9 시각, 10 글, 11 배열, 12 길이, 17 점, 18 벡터) + 값
  * 요소 묶음(모형 뿌리와 정의마다 하나)의 정점·모서리·면·인스턴스 값은 (묶음 번호, 묶음 안 차례)를 수 하나로 묶어 돌려준다(packed).
  */
@@ -127,7 +128,9 @@ export class MfcState {
   readonly schemas = new Map<string, number>();
   /** CEntity 5 이상(SketchUp 2017+): 앞머리에 영구 번호가 있다 */
   entityPids = false;
-  /** CDrawingElement 8(SketchUp 4)은 잠김이 없어 깃발이 5바이트(9 이상은 6) */
+  /** CEntity 3 이상(SketchUp 4+): 앞머리에 속성 사전 포인터가 있다(CEntity 2 = SketchUp 3은 앞머리가 비었다 — 속성 클래스가 없다) */
+  entityAttrs = true;
+  /** CDrawingElement 8(SketchUp 3·4)은 잠김이 없어 깃발이 5바이트(9 이상은 6) */
   drawingFlagBytes = 6;
   readonly warn = new Map<string, number>();
   readonly collections: Collection[] = [];
@@ -158,6 +161,7 @@ export class MfcState {
   preamble(): Preamble {
     const s = this.s;
     const out: Preamble = {};
+    if (!this.entityAttrs) return out;
     if (s.pos + 2 <= s.end && s.b[s.pos] === 0 && s.b[s.pos + 1] === 0) s.pos += 2;
     else {
       const c = s.readObject(C.ATTRIBUTE_CONTAINER) as AttrContainer | null;
