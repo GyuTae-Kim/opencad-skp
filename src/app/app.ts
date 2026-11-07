@@ -117,7 +117,7 @@ import {
 } from './layout';
 import { Panel, type PanelHost } from './panel';
 import { RecentStore, canKeepRecent, nameOfRecentId, recentTimeText, type RecentEntry } from './recent';
-import { emptySceneNotice, errorText, sceneHasGeometry } from './protocol';
+import { errorText, sceneHasGeometry } from './protocol';
 import { deviceHints, textureLimitsFor, type TextureLimits } from './texlimits';
 import { THEME_CHOICES, applyThemeChoice, readStoredTheme, resolveTheme, storeTheme, systemPrefersDark, themeChoiceOf, type ThemeChoice, type ThemeName } from './theme';
 import { childrenOf, isAncestor, isSplit, nodeBox, nodePath, normalizeRanges, type PickMode } from './tree';
@@ -132,7 +132,7 @@ import { WalkStick } from './joystick';
 import { Vcb, vcbStartKey, type VcbKind } from './vcb';
 import { FlashNote } from './flash';
 import { mixNodes, mixText, uiName, uiText } from './i18n';
-import { fileText, mix, type Mixed } from './filetext';
+import { fileText, mix, plainText, type Mixed } from './filetext';
 
 export const APP_TITLE = 'OpenCAD SketchUp 뷰어';
 const TOOLS_URL = 'https://gyutae-kim.github.io/opencad';
@@ -159,6 +159,12 @@ const RENDER_MODES: [RenderMode, string, string][] = [
 ];
 
 type NoticeKind = 'error' | 'warn' | 'info';
+/** 떠 있는 알림(제목·글은 섞은 글 — 파일 이름은 파일 글 자리, 53차) */
+interface NoticeState {
+  kind: NoticeKind;
+  title: Mixed;
+  text: Mixed;
+}
 
 /** window.opencadApp.state() 꼴 */
 export interface AppSnapshot {
@@ -424,7 +430,7 @@ export class SkpViewerApp implements PanelHost {
   private docPrint: Promise<ArrayBuffer | null> | null = null;
   /** 그래픽 문맥 잃음·되찾음 안내와 놓은 것 다시 주기(release.ts — 조각을 받으면 뷰어마다 하나), 그 안내로 띄운 알림 */
   private ctxWatch: ContextWatch | null = null;
-  private ctxNotice: AppSnapshot['notice'] = null;
+  private ctxNotice: NoticeState | null = null;
   /** 측정 도구를 받기 전에 켰을 때: 받는 동안 마지막으로 누른 도구를 받은 뒤에 켠다(다시 누르면 거둔다, 받지 못하면 알린다) */
   private readonly measureFirstUse = new FirstUse<MeasureMode>(
     () => this.ensureMeasureTool(),
@@ -444,7 +450,7 @@ export class SkpViewerApp implements PanelHost {
   private openSeq = 0;
   private busy = false;
   private ready = false;
-  private notice: AppSnapshot['notice'] = null;
+  private notice: NoticeState | null = null;
   private menu: HTMLElement | null = null;
   private dragDepth = 0;
   /** 3D 보기를 마지막으로 뗀 자리(화면 좌표)와 때 — 코어 onPick에 자리가 없어 고르기 도구가 안내를 고를 때 쓴다 */
@@ -474,6 +480,8 @@ export class SkpViewerApp implements PanelHost {
       // 파일 글을 끼워 앱이 옮겨 넣은 글(패널 줄의 도움말·상태 줄의 고른 것 — 번역층이 건너뜀, 52차)도 새 언어로
       this.panel.rerender();
       this.refreshStatus();
+      // 떠 있는 알림의 제목·글도(파일 이름을 끼워 옮겨 넣은 글 — 53차)
+      this.noticeText();
       const menu = this.menu;
       const btn = this.menuBtn;
       if (menu && btn)
@@ -939,7 +947,7 @@ export class SkpViewerApp implements PanelHost {
     if (!got) {
       this.setBusy(null);
       attempt.error('read_error');
-      this.showNotice('error', `"${e.name}" 파일을 찾지 못했습니다`, '이 브라우저에 저장해 둔 사본이 지워졌습니다. 파일을 다시 골라 여세요.');
+      this.showNotice('error', mix`"${fileText(e.name)}" 파일을 찾지 못했습니다`, '이 브라우저에 저장해 둔 사본이 지워졌습니다. 파일을 다시 골라 여세요.');
       void this.refreshRecent();
       return;
     }
@@ -1032,7 +1040,7 @@ export class SkpViewerApp implements PanelHost {
     const attempt = beginOpen('local', 'skp');
     if (file.size > MAX_FILE_BYTES) {
       attempt.error('size_limit');
-      this.showNotice('error', `"${file.name}" 파일이 너무 큽니다`, `${formatBytes(file.size)} — 이 뷰어는 ${formatBytes(MAX_FILE_BYTES)}까지 엽니다.`);
+      this.showNotice('error', mix`"${fileText(file.name)}" 파일이 너무 큽니다`, `${formatBytes(file.size)} — 이 뷰어는 ${formatBytes(MAX_FILE_BYTES)}까지 엽니다.`);
       return;
     }
     const seq = ++this.openSeq;
@@ -1054,7 +1062,7 @@ export class SkpViewerApp implements PanelHost {
     } catch (e) {
       if (seq === this.openSeq) {
         this.setBusy(null);
-        this.showNotice('error', `"${name}" 파일을 받지 못했습니다`, errorText(e));
+        this.showNotice('error', mix`"${fileText(name)}" 파일을 받지 못했습니다`, errorText(e));
         attempt.error('fetch_error');
       }
       return;
@@ -1127,13 +1135,14 @@ export class SkpViewerApp implements PanelHost {
         this.showNotice(
           'warn',
           `아직 읽지 못하는 판입니다: ${releaseName(old)} (${old})`,
-          `"${name}" 파일은 SketchUp 3보다 옛 형식으로 저장되어 있습니다. 이 뷰어는 SketchUp 3~8·2013~2026 파일을 읽습니다. SketchUp 3 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.`,
+          mix`"${fileText(name)}" 파일은 SketchUp 3보다 옛 형식으로 저장되어 있습니다. 이 뷰어는 SketchUp 3~8·2013~2026 파일을 읽습니다. SketchUp 3 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.`,
         );
         return false;
       }
       if (!sceneHasGeometry(res.scene)) {
         attempt.error('empty');
-        const n = emptySceneNotice(res.scene, name);
+        // 알림 글은 해석 워커가 만든다(53차 — worker/notice.ts emptySceneNotice)
+        const n = res.empty ?? { kind: 'error' as const, title: mix`"${fileText(name)}" 파일을 열지 못했습니다`, text: ['그릴 면이나 모서리를 찾지 못했습니다.'] };
         this.showNotice(n.kind, n.title, n.text);
         return false;
       }
@@ -1164,7 +1173,7 @@ export class SkpViewerApp implements PanelHost {
       return true;
     } catch (e) {
       if (seq !== this.openSeq) return false;
-      this.showNotice('error', `"${name}" 파일을 열지 못했습니다`, errorText(e));
+      this.showNotice('error', mix`"${fileText(name)}" 파일을 열지 못했습니다`, errorText(e));
       attempt.error('parse_error');
       return false;
     } finally {
@@ -3419,8 +3428,12 @@ export class SkpViewerApp implements PanelHost {
     }
   }
 
-  private showNotice(kind: NoticeKind, title: string, text: string): void {
-    this.notice = { kind, title, text };
+  /**
+   * 알림 띠. 53차: 제목·글은 섞은 글(filetext.ts)로 받아 파일 이름·꾸러미 항목 이름은 그대로, 앱 글만 지금 언어로 옮겨 넣는다
+   * (번역층이 건너뛰게 data-i18n-skip — 사전 틀이 맞지 않아 글을 조각내 옮길 때 이름 조각까지 바뀌던 것을 막는다). 언어를 바꾸면 다시 옮긴다(noticeText)
+   */
+  private showNotice(kind: NoticeKind, title: string | Mixed, text: string | Mixed): void {
+    this.notice = { kind, title: typeof title === 'string' ? [title] : title, text: typeof text === 'string' ? [text] : text };
     const n = this.els.notice;
     n.className = `notice ${kind}`;
     n.innerHTML = '';
@@ -3432,10 +3445,21 @@ export class SkpViewerApp implements PanelHost {
     });
     n.append(
       h('span', { class: 'notice-icon', html: icon(kind === 'info' ? 'info' : 'warn', 22) }),
-      h('div', { class: 'notice-text' }, h('b', {}, title), h('span', {}, text)),
+      h('div', { class: 'notice-text', 'data-i18n-skip': '' }, h('b', {}), h('span', {})),
       close,
     );
+    this.noticeText();
     n.hidden = false;
+  }
+
+  /** 알림 제목·글을 지금 언어로(파일 글 자리는 그대로) */
+  private noticeText(): void {
+    const nt = this.notice;
+    const box = this.els.notice.querySelector('.notice-text');
+    if (!nt || !box) return;
+    // 제목(b)·글(span)은 상자의 두 자식 — 제목 안에도 파일 글 span이 들므로 자식 차례로 고른다
+    box.children[0]?.replaceChildren(...mixNodes(nt.title));
+    box.children[1]?.replaceChildren(...mixNodes(nt.text));
   }
 
   private closeNotice(): void {
@@ -3661,7 +3685,7 @@ export class SkpViewerApp implements PanelHost {
       tags: d?.tags.length ?? 0,
       materials: d?.materials.length ?? 0,
       outline: d?.outline.length ?? 0,
-      notice: this.notice ? { ...this.notice } : null,
+      notice: this.notice ? { kind: this.notice.kind, title: plainText(this.notice.title), text: plainText(this.notice.text) } : null,
       theme: this.theme,
       panelOpen: this.panelOpen,
       renderMode: this.renderMode,
@@ -3776,7 +3800,7 @@ export class SkpViewerApp implements PanelHost {
     if (!data) {
       this.setBusy(null);
       attempt.error('read_error');
-      this.showNotice('error', `"${name}" 파일을 찾지 못했습니다`, '공유 받은 사본이 지워졌습니다. 다시 공유하거나 "열기"로 골라 주세요.');
+      this.showNotice('error', mix`"${fileText(name)}" 파일을 찾지 못했습니다`, '공유 받은 사본이 지워졌습니다. 다시 공유하거나 "열기"로 골라 주세요.');
       return;
     }
     await this.openBlob(name, data, seq, attempt);

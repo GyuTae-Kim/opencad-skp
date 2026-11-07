@@ -11,7 +11,8 @@ import { skpToScene } from '../../src/index';
 import { createDoc, selectionParts, selectionText, type Selection, type SkpDoc } from '../../src/app/doc';
 import { entityInfo, type EntityInput } from '../../src/app/entity';
 import { DEFAULT_UNITS } from '../../src/app/units';
-import { fileText, isAppName, joinMixed, mix, nameText, plainText } from '../../src/app/filetext';
+import { fileText, fillSlots, isAppName, joinMixed, mix, nameText, plainText, slotText } from '../../src/app/filetext';
+import { warningParts } from '../../src/app/warntext';
 import { installLocalization, mixNodes, mixText, uiName } from '../../src/app/i18n';
 import { Panel, type PanelHost } from '../../src/app/panel';
 import { translate } from '../../site/i18n.mjs';
@@ -208,6 +209,37 @@ describe('파일 글을 앱 글과 섞기(filetext·mixText)', () => {
     expect([...box.querySelectorAll('[translate="no"]')].map((e) => e.textContent)).toEqual(['을', '무늬', '이 — 면']);
     // 사용 영역 글자를 품은 이름도 그대로
     expect(mixText(mix`태그 ${fileText('x')}`)).toBe('Tag x');
+  });
+
+  it('해석기 경고·알림의 꾸러미 항목 이름(재질·스타일 폴더)과 파일 이름은 그대로, 앱 글은 옮긴다(53차)', async () => {
+    const BAD = '무늬 · 면 · 이';
+    expect(warningParts(`재질 파일을 읽지 못했습니다: materials/${BAD}/material.xml`)).toEqual(['재질 파일을 읽지 못했습니다: ', { file: `materials/${BAD}/material.xml` }]);
+    expect(warningParts(`SketchUp 파일을 읽지 못했습니다: ZIP 항목이 잘렸습니다: materials/${BAD}/a.png`)).toEqual([
+      'SketchUp 파일을 읽지 못했습니다: ZIP 항목이 잘렸습니다: ',
+      { file: `materials/${BAD}/a.png` },
+    ]);
+    expect(warningParts('model.dat를 끝까지 풀지 못해 앞부분만 읽었습니다(ZIP 항목이 잘렸습니다: model.dat)')).toEqual([
+      'model.dat를 끝까지 풀지 못해 앞부분만 읽었습니다(ZIP 항목이 잘렸습니다: ',
+      { file: 'model.dat' },
+      ')',
+    ]);
+    expect(warningParts('지원하지 않는 ZIP 압축 방식 9: styles/면.style')).toEqual(['지원하지 않는 ZIP 압축 방식 9: ', { file: 'styles/면.style' }]);
+    expect(warningParts('삼각형으로 나누지 못한 면 3개를 건너뛰었습니다(면적이 0인 면 등)')).toEqual(['삼각형으로 나누지 못한 면 3개를 건너뛰었습니다(면적이 0인 면 등)']);
+    // 예전 꼴(한 글)은 나눔 글로 조각낸 이름의 "면"까지 옮겼다
+    const w = `재질 파일을 읽지 못했습니다: materials/${BAD}/material.xml`;
+    expect(translate(w, 'en')).not.toContain(BAD);
+    for (const code of ['en', 'de', 'ja', 'zh-CN']) {
+      const tr = (s: string): string => translate(s, code);
+      const got = fillSlots(...slotText(warningParts(w), tr));
+      expect(got).toContain(`materials/${BAD}/material.xml`);
+      expect(got.replace(BAD, '')).not.toMatch(/[가-힣]/);
+      const title = fillSlots(...slotText(mix`"${fileText(`${BAD}.skp`)}" 파일을 열지 못했습니다`, tr));
+      expect(title).toContain(`${BAD}.skp`);
+      expect(title.replace(BAD, '')).not.toMatch(/[가-힣]/);
+    }
+    history.replaceState(null, '', '/opencad-skp/de/');
+    dispose = await installLocalization(document.body);
+    expect(mixText(warningParts(w))).toBe(fillSlots(...slotText(warningParts(w), (s) => translate(s, 'de'))));
   });
 
   it('번역층: data-i18n-keep 속성과 translate="no" 이름은 두고, 다른 언어 사전의 번역 글과 같은 이름도 되찾아 바꾸지 않는다', async () => {

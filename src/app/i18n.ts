@@ -4,7 +4,7 @@ import { VIEW_LABELS } from 'opencad-viewer3d/camera';
 import { CUBE_FACES } from 'opencad-viewer3d/viewcube';
 /** Localize only presentation DOM. CAD data, input values and command keys stay intact. */
 import { currentLanguage, languages, languageUrl, metadataForLanguage, registerCatalog, sourceMessage, translate } from '../../site/i18n-core.mjs';
-import { isAppName, type Mixed } from './filetext';
+import { isAppName, slotText, type Mixed } from './filetext';
 
 const loaders: Record<string, () => Promise<{default: Record<string,string>}>> = {
   en: () => import('../../site/locales/en.json'), ja: () => import('../../site/locales/ja.json'),
@@ -27,8 +27,7 @@ export function uiText(text: string): string { return translate(text, active); }
  * 옮긴 글을 넣은 속성은 data-i18n-keep에, 마디를 담은 요소는 data-i18n-skip으로 번역층에서 빼고, 언어를 바꾸면 다시 그린다(app.ts)
  */
 function mixed(parts: Mixed): [string, string[]] {
-  const files: string[] = [];
-  return [translate(parts.map(p => typeof p === 'string' ? p : String.fromCharCode(0xe000 + files.push(p.ui ? translate(p.file, active) : p.file) - 1)).join(''), active), files];
+  return slotText(parts, text => translate(text, active));
 }
 export function mixText(parts: Mixed): string {
   const [text, files] = mixed(parts);
