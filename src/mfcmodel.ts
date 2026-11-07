@@ -55,6 +55,7 @@ import {
   type MfcImageRef,
   MfcState,
 } from './mfcstate';
+import { MendBuffer, textRoundTrip, type TextRoundTrip } from './mfcmend';
 import { MfcError, MfcStream } from './mfcstream';
 import { HIDDEN_CLASSES, MfcView, RENDERING_BLOCK, type MfcPage } from './mfcview';
 import { animationFromOptions, ifcGuid, lengthUnitCode, unitsFromOptions, type SkpOptions } from './vffcommon';
@@ -140,6 +141,10 @@ interface LoopRec {
   rev: number[];
   outer: boolean;
   used: boolean;
+  /** 고쳐 읽기: CR로 되돌린 참조나 확신할 수 없는 구간의 모서리 사용이 있다(그 면은 끝에 면 평면으로 확인) */
+  mended?: boolean;
+  /** 고쳐 읽기: 모서리 사용 차례 → 참조 꼬리표의 LF를 CR로 되돌리면 가리킬 다른 모서리들 */
+  alts?: Map<number, number[]>;
 }
 
 interface DibRef {
@@ -157,6 +162,76 @@ const baseName = (path: string): string => path.replace(/\\/g, '/').split('/').p
 function put<T>(o: Record<string, T>, k: string, v: T): void {
   Object.defineProperty(o, k, { value: v, enumerable: true, writable: true, configurable: true });
 }
+
+/** 글 왕복 손상 고쳐 읽기(mfcmend.ts)의 상태 */
+interface Mend {
+  buf: MendBuffer;
+  sig: TextRoundTrip;
+  /** 시험 읽는 중(안쪽 목록은 고쳐 읽지 않고 던진다) */
+  inTrial: boolean;
+  /** 메운 곳 수, 시험 수, 시험으로 다시 읽은 바이트 */
+  mended: number;
+  trials: number;
+  trialBytes: number;
+  /** 시험 바이트 한도(파일 크기의 몇 배 — 아주 큰 정의를 거듭 다시 읽지 않게) */
+  trialBudget: number;
+  /** 넣을 자리·낱자가 여럿 맞아 바이트를 확신할 수 없는 구간(사본 자리) — 그 안의 정점·면·고리는 끝에 면 평면으로 확인한다 */
+  span: [number, number] | null;
+  /** 그 구간을 만든 굳힌 넣기 자리와, 벌점이 같았던 넣기들(굳히기 전 자리) */
+  kept: number;
+  ties: { q: number; unit: number }[];
+  /** 확인할 정점(묶은 번호)과 같은 벌점의 넣기마다 읽혔을 좌표(첫째가 굳힌 것) — 되돌리기는 길이로 */
+  verts: { v: number; alts: number[][] }[];
+  faces: SkpFace[];
+  edges: SkpEdge[];
+  /** 끝 정점 참조의 LF를 CR로 되돌리면 다른 정점이 되는 모서리(시작·끝 정점 후보, 묶음 번호) */
+  vertAlts: [SkpEdge, number[], number[], number][];
+  /** 면마다 고리의 모서리 사용 뒤집힘(끝에 모서리 끝을 바꿔 면 정점을 다시 만들 때) */
+  revs: Map<SkpFace, number[][]>;
+  /** 시험 읽기가 더한 정의 종류(되돌리기) */
+  kinds: [DefRec, 'component' | 'group' | 'image'][];
+}
+
+/** 고쳐 읽기에서 목록 항목 하나를 다시 읽을 자리(그때까지 쌓인 것의 길이) */
+interface Mark {
+  index: number;
+  pos: number;
+  slots: number;
+  badRefs: number;
+  firstBadRef: number;
+  crFixed: number;
+  crLog: number;
+  suspect: number;
+  notes: number;
+  colls: number;
+  stack: number;
+  defs: number;
+  mats: number;
+  layers: number;
+  images: number;
+  fonts: number;
+  top: Collection | undefined;
+  lens: number[];
+  side: number;
+  loop: LoopRec | null;
+  verts: number;
+  faces: number;
+  edges: number;
+  vertAlts: number;
+  kinds: number;
+}
+
+/** 고쳐 읽기: 멈춘 자리에서 거꾸로 볼 바이트, 멈춘 자리 뒤 볼 바이트(참조 꼬리표 7FFF 뒤 u32 안), 시험으로 더 읽을 항목 수, 나아갔다고 볼 바이트 */
+const MEND_BACK = 96;
+const MEND_AHEAD = 6;
+const MEND_LOOKAHEAD = 4;
+const MEND_GAIN = 64;
+/** 시험으로 다시 읽을 바이트 한도 = 파일 크기 × 이 값(실제 파일 하나는 10.4 MB에 1 MB를 다시 읽었다 — 정의 목록 항목은 정의 전체를 다시 읽으므로 넉넉히) */
+const MEND_BUDGET = 8;
+/** 메워 볼 낱자: U+2028, U+2029(지워진 줄·문단 나눔), U+000D(CRLF의 CR — 짝수 자리 LF 앞에만) */
+const MEND_UNITS = [0x2028, 0x2029] as const;
+/** 이미 고쳐 보다 못한 멈춤(바깥 목록이 같은 자리를 다시 시험하지 않게) */
+const unmendable = new WeakSet<object>();
 
 class Decoder {
   readonly st: MfcState;
@@ -177,11 +252,37 @@ class Decoder {
   private readonly edgeOrders = new Map<Collection, number[]>();
   activeLayer: number | undefined;
   damaged = false;
+  /** 글 왕복 손상 고쳐 읽기(두 번째 읽기에서만) */
+  readonly mend: Mend | null;
 
-  constructor(bytes: Uint8Array, header: SkpHeader) {
+  constructor(bytes: Uint8Array, header: SkpHeader, mend: { buf: MendBuffer; sig: TextRoundTrip } | null = null) {
     this.header = header;
-    this.s = new MfcStream(bytes, header.bodyOffset, MFC_MAX_RECORDS);
+    this.mend = mend
+      ? {
+          buf: mend.buf,
+          sig: mend.sig,
+          inTrial: false,
+          mended: 0,
+          trials: 0,
+          trialBytes: 0,
+          trialBudget: MEND_BUDGET * bytes.length,
+          span: null,
+          kept: -1,
+          ties: [],
+          verts: [],
+          faces: [],
+          edges: [],
+          vertAlts: [],
+          revs: new Map(),
+          kinds: [],
+        }
+      : null;
+    this.s = new MfcStream(mend ? mend.buf.view() : bytes, header.bodyOffset, MFC_MAX_RECORDS);
     this.st = new MfcState(this.s);
+    if (mend) {
+      this.s.crFix = true;
+      this.st.notes = [];
+    }
     this.view = new MfcView(this.st);
     const r = this.s.readers;
     const add = (o: Record<string, (slot: number) => unknown>): void => {
@@ -344,16 +445,289 @@ class Decoder {
     // SketchUp 2020 태그 폴더: 태그 관리자가 뿌리 폴더를 줄 안에 쓴다
     if (st.schema('CLayerManager') >= 7) this.folderBody(-1, isModel, true);
     const defs = s.count(MAX_DEFINITIONS, '정의');
-    for (let i = 0; i < defs; i++) s.readObject(C.DEFINITION);
+    if (this.mend) this.items(defs, () => s.readObject(C.DEFINITION));
+    else for (let i = 0; i < defs; i++) s.readObject(C.DEFINITION);
+    const entsAt = s.pos;
     const ents = s.count(50_000_000, '요소');
     // SketchUp 3(CCurve 3)은 곡선의 끝 모서리를 곡선 안에서 먼저 읽는다 — 요소 목록의 모서리 차례를 적어 두고 다 읽은 뒤 그 차례로 되돌린다(C API와 같은 차례)
     const c = st.top;
     const order: number[] | null = (st.schemas.get('CCurve') ?? 4) < 4 ? [] : null;
-    for (let i = 0; i < ents; i++) {
+    const one = (): void => {
       const v = s.readObject();
       if (order && s.lastClass === 'CEdge' && typeof v === 'number' && cidOf(v) === c.cid) order.push(indexOf(v));
-    }
+    };
+    if (this.mend) {
+      this.items(ents, one, order ?? undefined);
+      this.moreItems(entsAt, ents, one, order ?? undefined);
+    } else for (let i = 0; i < ents; i++) one();
     if (order) this.edgeOrders.set(c, order);
+  }
+
+  /**
+   * 고쳐 읽기: 요소 수(u32)에 걸친 짝수 자리 LF가 CR이었다면 글 왕복이 수를 줄였다(실제 파일 하나에서 0D8E → 0A8E).
+   * 요소 목록 뒤에 꼬리(관계 수 0)가 바로 오지 않으면 LF를 CR로 되돌린 수까지 더 읽어 본다 — 시험으로(고치지 않고) 더 읽어
+   * 꼬리가 오거나 몇 항목 넘게 읽히면, 되돌려서 고쳐 가며 다시 읽고 수 바이트를 CR로 고친다
+   */
+  private moreItems(countAt: number, n: number, one: () => void, side?: number[]): void {
+    const s = this.s;
+    const m = this.mend!;
+    const tailAhead = (): boolean => s.pos + 4 <= s.end && s.dv.getUint32(s.pos, true) === 0;
+    if (tailAhead()) return;
+    for (const alt of crAlternatives(s.b, countAt, 4)) {
+      const more = s.dv.getUint32(countAt, true) === n ? alt.value - n : -1;
+      if (more <= 0 || more > 50_000_000) continue;
+      const k = this.mark(n, side);
+      const outer = m.inTrial;
+      m.inTrial = true;
+      let ok = false;
+      let read = 0;
+      try {
+        for (; read < more; read++) one();
+        ok = tailAhead();
+      } catch {
+        ok = read >= Math.min(8, more);
+      } finally {
+        m.inTrial = outer;
+        this.rollback(k, side);
+      }
+      if (!ok) continue;
+      for (const p of alt.patch) {
+        s.b[p] = 0x0d;
+        s.crLog.push(p);
+      }
+      s.crFixed++;
+      this.items(more, one, side);
+      return;
+    }
+  }
+
+  // ── 글 왕복 손상 고쳐 읽기(mfcmend.ts) ──────────────────────────────────
+
+  /**
+   * 고쳐 읽기의 목록 읽기: 항목마다 되돌릴 자리를 두고, 항목을 읽다 멈추면(mendItems) 멈춘 자리 둘레 짝수 자리에 지워진 낱자를 넣어 보아
+   * 그 항목과 뒤 몇 항목이 가장 깨끗하게 읽히는 것을 굳힌 뒤 거기서부터 다시 읽는다. 고치지 못하면 예전처럼 던진다
+   */
+  private items(n: number, one: () => void, side?: number[]): void {
+    let prev: Mark | null = null;
+    for (let i = 0; i < n; ) {
+      const cur = this.mark(i, side);
+      try {
+        one();
+        prev = cur;
+        i++;
+      } catch (e) {
+        const base = this.mendItems(e, prev, cur, n, one, side);
+        if (!base) {
+          if (e && typeof e === 'object') unmendable.add(e);
+          throw e;
+        }
+        i = base.index;
+        prev = null;
+      }
+    }
+  }
+
+  private mark(index: number, side?: number[]): Mark {
+    const s = this.s;
+    const st = this.st;
+    const m = this.mend!;
+    const top = st.stack[st.stack.length - 1];
+    return {
+      index,
+      pos: s.pos,
+      slots: s.values.length,
+      badRefs: s.badRefs,
+      firstBadRef: s.firstBadRef,
+      crFixed: s.crFixed,
+      crLog: s.crLog.length,
+      suspect: s.suspect,
+      notes: st.notes!.length,
+      colls: st.collections.length,
+      stack: st.stack.length,
+      defs: this.defs.length,
+      mats: this.materials.length,
+      layers: this.layers.length,
+      images: st.images.length,
+      fonts: st.fonts.size,
+      top,
+      lens: top
+        ? [top.pos.length, top.edges.length, top.edgeCurve.length, top.faces.length, top.curves.length, top.instances.length, top.texts.length, top.dimensions.length, top.guides.length, top.sections.length]
+        : [],
+      side: side?.length ?? 0,
+      loop: this.loop,
+      verts: m.verts.length,
+      faces: m.faces.length,
+      edges: m.edges.length,
+      vertAlts: m.vertAlts.length,
+      kinds: m.kinds.length,
+    };
+  }
+
+  /** 목록 항목 하나를 읽기 전으로 되돌린다(시험 읽기가 고친 CR 바이트도 되돌린다) */
+  private rollback(k: Mark, side?: number[]): void {
+    const s = this.s;
+    const st = this.st;
+    const m = this.mend!;
+    for (let j = s.crLog.length - 1; j >= k.crLog; j--) s.b[s.crLog[j]!] = 0x0a;
+    s.crLog.length = k.crLog;
+    s.pos = k.pos;
+    s.names.length = k.slots;
+    s.values.length = k.slots;
+    s.badRefs = k.badRefs;
+    s.firstBadRef = k.firstBadRef;
+    s.crFixed = k.crFixed;
+    s.suspect = k.suspect;
+    s.lastClass = '';
+    st.undoNotes(k.notes);
+    for (let j = st.collections.length - 1; j >= k.colls; j--) this.edgeOrders.delete(st.collections[j]!);
+    st.collections.length = k.colls;
+    st.stack.length = k.stack;
+    if (k.top) st.stack[k.stack - 1] = k.top;
+    this.defs.length = k.defs;
+    for (const r of this.materials.splice(k.mats)) this.materialKeys.delete(r.key);
+    if (this.layers.length > k.layers) {
+      this.layers.length = k.layers;
+      for (const [name, i] of this.layerByName) if (i >= k.layers) this.layerByName.delete(name);
+    }
+    st.images.length = k.images;
+    if (st.fonts.size > k.fonts) for (const slot of [...st.fonts.keys()]) if (slot >= k.slots) st.fonts.delete(slot);
+    const t = k.top;
+    if (t) {
+      const l = k.lens;
+      t.pos.length = l[0]!;
+      t.edges.length = l[1]!;
+      t.edgeCurve.length = l[2]!;
+      t.faces.length = l[3]!;
+      t.curves.length = l[4]!;
+      t.instances.length = l[5]!;
+      t.texts.length = l[6]!;
+      t.dimensions.length = l[7]!;
+      t.guides.length = l[8]!;
+      t.sections.length = l[9]!;
+    }
+    if (side) side.length = k.side;
+    this.loop = k.loop;
+    m.verts.length = k.verts;
+    m.faces.length = k.faces;
+    m.edges.length = k.edges;
+    m.vertAlts.length = k.vertAlts;
+    for (const [d, kind] of m.kinds.splice(k.kinds)) d.kinds.delete(kind);
+  }
+
+  /**
+   * 목록 항목을 읽다 멈춘 자리(e.offset = F)에서: 앞 항목 시작(없으면 이 항목 시작)과 F − MEND_BACK 가운데 뒤쪽부터 F + MEND_AHEAD까지의
+   * 짝수 자리 q마다 U+2028·U+2029(그 자리 낱자가 LF면 CR도)를 넣고, 되돌린 자리부터 이 항목과 뒤 MEND_LOOKAHEAD 항목을 다시 읽어 본다.
+   * 끝까지(또는 F + MEND_GAIN 너머까지) 읽힌 것 가운데 벌점(맞지 않는 참조·경고·그럴듯하지 않은 값·이어지지 않는 고리)이 가장 적은 것을 굳힌다.
+   * 벌점이 같은 것이 여럿이면 가장 앞 자리를 굳히고, 그 자리들이 걸친 구간을 확신할 수 없는 구간(span)으로 둔다(끝에 면 평면으로 확인).
+   * 굳힌 뒤 다시 읽을 자리를 돌려준다(고치지 못하면 null)
+   */
+  private mendItems(e: unknown, prev: Mark | null, cur: Mark, n: number, one: () => void, side?: number[]): Mark | null {
+    const m = this.mend!;
+    const s = this.s;
+    const st = this.st;
+    if (!(e instanceof MfcError) || e.kind === 'too_large' || m.inTrial || unmendable.has(e)) return null;
+    if (!m.buf.roomLeft || m.trialBytes > m.trialBudget) return null;
+    const F = e.offset;
+    const first = prev ?? cur;
+    let lo = Math.max(first.pos, F - MEND_BACK);
+    lo += lo & 1;
+    let hi = Math.min(F + MEND_AHEAD, s.end - 2);
+    hi -= hi & 1;
+    const stop = Math.min(n, cur.index + 1 + MEND_LOOKAHEAD);
+    interface Try {
+      q: number;
+      unit: number;
+      score: number;
+      reach: number;
+    }
+    const tried: Try[] = [];
+    m.inTrial = true;
+    try {
+      for (let q = hi; q >= lo; q -= 2) {
+        const base = q >= cur.pos ? cur : prev;
+        if (!base) continue;
+        const units: number[] = [...MEND_UNITS];
+        if (m.buf.byteAt(q) === 0x0a && m.buf.byteAt(q + 1) === 0) units.push(0x000d);
+        for (const unit of units) {
+          this.rollback(base, side);
+          m.buf.put(q, unit);
+          s.useBuffer(m.buf.view());
+          m.trials++;
+          let reach = Infinity;
+          try {
+            for (let j = base.index; j < stop; j++) one();
+          } catch (e2) {
+            reach = e2 instanceof MfcError ? e2.offset : -1;
+          }
+          m.trialBytes += Math.max(0, (Number.isFinite(reach) ? reach : s.pos) - base.pos);
+          if (reach <= F + MEND_GAIN) continue;
+          const score = s.badRefs - base.badRefs + (s.suspect - base.suspect) + (st.notes!.length - base.notes);
+          tried.push({ q, unit, score, reach });
+        }
+        if (m.trialBytes > m.trialBudget) break;
+      }
+    } finally {
+      m.inTrial = false;
+      this.rollback(first, side);
+      m.buf.drop();
+      s.useBuffer(m.buf.view());
+    }
+    if (!tried.length) return null;
+    // 벌점이 적고, 끝까지 읽혔고(또는 더 멀리), 앞 자리인 것
+    let best = tried[0]!;
+    for (const t of tried) {
+      if (t.score < best.score || (t.score === best.score && (t.reach > best.reach || (t.reach === best.reach && t.q < best.q)))) best = t;
+    }
+    const ties = tried.filter((t) => t.score === best.score && t.reach === best.reach);
+    // 시험이 앞 항목을 여러 바이트로 다시 읽었으므로 앞 항목(없으면 이 항목)부터 다시 읽는다(finally가 그 자리로 되돌려 두었다)
+    m.buf.put(best.q, best.unit);
+    m.buf.keep();
+    s.useBuffer(m.buf.view());
+    m.mended++;
+    if (ties.length > 1) {
+      let a = best.q;
+      let b = best.q + 2;
+      for (const t of ties) {
+        a = Math.min(a, t.q);
+        b = Math.max(b, t.q + 4);
+      }
+      m.span = [a, b];
+      m.kept = best.q;
+      m.ties = [best, ...ties.filter((t) => t !== best)].map((t) => ({ q: t.q, unit: t.unit }));
+    } else m.span = null;
+    return first;
+  }
+
+  /**
+   * 확신할 수 없는 구간에 걸친 정점 좌표(지금 사본 자리 at부터 24바이트)를 벌점이 같았던 넣기마다 다시 풀어 본다(첫째가 굳힌 것).
+   * 좌표가 굳힌 넣기 자리보다 앞에서 시작할 때만(그 뒤면 굳힌 것 하나)
+   */
+  private altPositions(at: number, chosen: number[]): number[][] {
+    const m = this.mend!;
+    const b = this.s.b;
+    const k = m.kept;
+    const out = [chosen];
+    if (!(at < k)) return out;
+    const tmp = new Uint8Array(24);
+    const dv = new DataView(tmp.buffer);
+    // 굳히기 전 바이트(자리 i) = 지금 사본에서 굳힌 2바이트를 뺀 것
+    const before = (i: number): number => b[i < k ? i : i + 2]!;
+    for (const t of m.ties.slice(1)) {
+      if (t.q < at) continue;
+      for (let i = 0; i < 24; i++) {
+        const j = at + i;
+        tmp[i] = j < t.q ? before(j) : j === t.q ? t.unit & 0xff : j === t.q + 1 ? t.unit >> 8 : before(j - 2);
+      }
+      const p = [dv.getFloat64(0, true), dv.getFloat64(8, true), dv.getFloat64(16, true)];
+      if (p.every(plausible)) out.push(p);
+    }
+    return out;
+  }
+
+  /** 고쳐 읽기에서 확신할 수 없는 구간에 걸친 바이트인지 */
+  private inSpan(from: number, to: number): boolean {
+    const sp = this.mend?.span;
+    return !!sp && from < sp[1] && to > sp[0];
   }
 
   /**
@@ -700,6 +1074,11 @@ class Decoder {
     // CComponentInstance 3(SketchUp 4)은 이름이 없다
     const name = (st.schemas.get('CComponentInstance') ?? 4) >= 4 ? s.cstr() : '';
     const guid = st.schema('CComponentInstance') >= 5 ? ifcGuid(s.bytes(16)) : undefined;
+    const m = this.mend;
+    if (m) {
+      if (!rows.every(plausible)) s.suspect++;
+      if (!this.defs[def]!.kinds.has(kind)) m.kinds.push([this.defs[def]!, kind]);
+    }
     this.defs[def]!.kinds.add(kind);
     const inst: SkpInstance = { definition: def, matrix: matrixFrom13(rows), flags: elementFlags(d.flags), kind };
     if (d.material >= 0) inst.material = d.material;
@@ -723,7 +1102,14 @@ class Decoder {
     if (!(Number.isFinite(p[0]) && Number.isFinite(p[1]) && Number.isFinite(p[2]))) throw new MfcError('corrupt', '정점 위치가 수가 아닙니다', at);
     const c = this.st.top;
     c.pos.push(p[0], p[1], p[2]);
-    return pack(c.cid, c.pos.length / 3 - 1);
+    const packed = pack(c.cid, c.pos.length / 3 - 1);
+    const m = this.mend;
+    if (m) {
+      // 어긋나게 읽은 좌표는 지수 바이트가 뒤섞여 아주 크거나 아주 작다
+      if (!p.every(plausible)) s.suspect++;
+      if (this.inSpan(at, at + 24)) m.verts.push({ v: packed, alts: this.altPositions(at, p) });
+    }
+    return packed;
   }
 
   /** CEdge: 그리기 요소, 시작·끝 CVertex, CCurve/CArcCurve. 칸 값을 먼저 정한다(곡선이 되가리킬 수 있다) */
@@ -740,8 +1126,20 @@ class Decoder {
     const pre = st.preamble();
     const d = st.drawing();
     // 정점 참조 하나가 깨진 모서리는 버리고(a·b = -1 — 그 모서리를 쓰는 면도 건너뜀) 이어 읽는다
+    const m = this.mend;
+    const refAt = s.pos;
+    const cr = s.crFixed;
     const a = st.localOrNone(s.readObject(C.VERTEX, true), '모서리 정점');
+    const bAt = s.pos;
     const b = st.localOrNone(s.readObject(C.VERTEX, true), '모서리 정점');
+    if (m) {
+      // 고쳐 읽기: CR로 되돌린 참조나 확신할 수 없는 구간의 참조를 쓴 모서리는 끝에 면 평면으로 확인한다
+      if (s.crFixed !== cr || this.inSpan(refAt, s.pos)) m.edges.push(e);
+      // 맞는 참조여도 LF를 CR로 되돌리면 다른 정점을 가리키는 끝 — 면이 평평하지 않을 때 끝에 바꿔 본다
+      const altA = a >= 0 ? this.crRefAlternatives(refAt, 'CVertex', a) : [];
+      const altB = b >= 0 ? this.crRefAlternatives(bAt, 'CVertex', b) : [];
+      if (altA.length || altB.length) m.vertAlts.push([e, altA, altB, c.cid]);
+    }
     const curve = s.readObject(C.CURVE, true);
     e.a = a < 0 || b < 0 ? -1 : a;
     e.b = a < 0 || b < 0 ? -1 : b;
@@ -792,6 +1190,8 @@ class Decoder {
     const st = this.st;
     st.preamble();
     // 모서리 참조가 깨지면 -1(면을 만들 때 그 면을 건너뛴다)
+    const refAt = s.pos;
+    const cr = s.crFixed;
     const edge = st.localOrNone(s.readObject(C.EDGE, true), '고리 모서리');
     const rev = s.u8();
     const owner = s.readObject(C.LOOP);
@@ -799,7 +1199,77 @@ class Decoder {
     if (!loop || owner !== loop) throw new MfcError('corrupt', '고리 밖에서 모서리 사용을 만났습니다', s.pos);
     loop.edges.push(edge);
     loop.rev.push(rev ? 1 : 0);
+    if (this.mend) {
+      if (rev > 1) s.suspect++;
+      if (s.crFixed !== cr || this.inSpan(refAt, s.pos)) loop.mended = true;
+      // 맞는 참조여도 글 왕복이 CR을 LF로 바꿔 다른 모서리를 가리키게 됐을 수 있다 — CR로 되돌린 모서리를 적어 두고
+      // 고리가 이어지지 않을 때 face()에서 바꿔 본다
+      const alts = this.crEdgeAlternatives(refAt, edge);
+      if (alts.length) (loop.alts ??= new Map()).set(loop.edges.length - 1, alts);
+    }
     return true;
+  }
+
+  /**
+   * 고쳐 읽기: 고리에서 앞뒤 모서리 사용과 이어지지 않는(또는 모르는) 모서리 사용을, 참조의 LF를 CR로 되돌린 모서리로 바꿔
+   * 앞뒤가 모두 이어지면 그것으로 둔다(글 왕복이 맞는 참조를 다른 모서리로 바꾼 곳)
+   */
+  private mendChain(l: LoopRec, edges: readonly SkpEdge[]): void {
+    const n = l.edges.length;
+    const known = (i: number): SkpEdge | undefined => {
+      const e = edges[l.edges[(i + n) % n]!];
+      return e && e.a >= 0 ? e : undefined;
+    };
+    /** i번째와 그다음이 이어지는지(둘 중 모르는 것이 있으면 i가 바꿔 볼 자리면 false, 아니면 true) */
+    const joins = (i: number, at: number): boolean => {
+      const e = known(i);
+      const f = known(i + 1);
+      if (!e || !f) return i !== at && (i + 1) % n !== at;
+      return (l.rev[(i + n) % n] ? e.a : e.b) === (l.rev[(i + 1) % n] ? f.b : f.a);
+    };
+    for (const [k, alts] of l.alts!) {
+      if (joins(k - 1, k) && joins(k, k)) continue;
+      const orig = l.edges[k]!;
+      let fixed = false;
+      for (const a of alts) {
+        l.edges[k] = a;
+        if (joins(k - 1, k) && joins(k, k)) {
+          fixed = true;
+          break;
+        }
+      }
+      if (fixed) {
+        l.mended = true;
+        this.s.crFixed++;
+      } else l.edges[k] = orig;
+    }
+  }
+
+  /** 고쳐 읽기: 자리 at의 모서리 참조 꼬리표에서 짝수 자리 LF를 CR로 되돌린, 같은 길이·같은 묶음의 다른 모서리들(묶음 안 차례) */
+  private crEdgeAlternatives(at: number, now: number): number[] {
+    return this.crRefAlternatives(at, 'CEdge', now);
+  }
+
+  /**
+   * 고쳐 읽기: 자리 at의 참조 꼬리표(새 객체가 아닌 것)에서 짝수 자리 LF를 CR로 되돌리면 가리킬, 같은 묶음의 cls 객체들(묶음 안 차례, now는 뺌)
+   */
+  private crRefAlternatives(at: number, cls: string, now: number): number[] {
+    const s = this.s;
+    const b = s.b;
+    const tag = b[at]! | (b[at + 1]! << 8);
+    if (tag === 0 || (tag >= 0x8000 && tag !== 0x7fff) || tag === 0xffff) return [];
+    const big = tag === 0x7fff;
+    if (big && (b[at + 5]! & 0x80) !== 0) return [];
+    const out: number[] = [];
+    for (const alt of crAlternatives(b, big ? at + 2 : at, big ? 4 : 2)) {
+      const slot = alt.value;
+      if (big ? slot >= 0x80000000 : slot >= 0x7fff) continue;
+      if (slot <= 0 || slot >= s.names.length || s.names[slot] !== cls) continue;
+      const v = s.values[slot];
+      if (typeof v !== 'number' || cidOf(v) !== this.st.top.cid || indexOf(v) === now) continue;
+      out.push(indexOf(v));
+    }
+    return out;
   }
 
   /** CLoop: 앞머리, u8 바깥 고리, u8, CEdgeUse … 없음까지 */
@@ -824,6 +1294,7 @@ class Decoder {
     const c = st.top;
     const pre = st.preamble();
     const d = st.drawing();
+    const planeAt = s.pos;
     const plane = s.doubles(4);
     const n = s.count(1_000_000, '고리');
     const loops: LoopRec[] = [];
@@ -838,6 +1309,7 @@ class Decoder {
       }
     }
     const back = s.readObject(C.MATERIAL);
+    if (this.mend) for (const l of loops) if (l.alts) this.mendChain(l, c.edges);
     if (!bad && !loops.length) bad = '고리가 없는 면을 건너뛰었습니다';
     if (!bad && loops.some((l) => l.edges.length < 3)) bad = '모서리가 셋보다 적은 고리를 가진 면을 건너뛰었습니다';
     if (!bad && !plane.slice(0, 3).every(Number.isFinite)) bad = '평면이 수가 아닌 면을 건너뛰었습니다';
@@ -858,11 +1330,25 @@ class Decoder {
         }
         vloops.push(vs);
       }
+    const m = this.mend;
+    if (m) {
+      // 고쳐 읽기 시험의 벌점: 단위가 아닌 법선, 이어지지 않는 고리
+      if (!(Math.abs(Math.hypot(plane[0]!, plane[1]!, plane[2]!) - 1) < 1e-6)) s.suspect++;
+      for (const l of loops) s.suspect += chainBreaks(l, c.edges);
+    }
     if (bad) {
       st.note(bad);
       return -1;
     }
     const f: SkpFace = { loops: vloops, normal: [plane[0]!, plane[1]!, plane[2]!], flags: d.flags[0] ? FLAG_HIDDEN : 0, loopEdges: loops.map((l) => l.edges) };
+    // 법선(평면 앞 세 값)이나 고리의 모서리 사용을 확신할 수 없으면 끝에 면 평면으로 확인한다(d는 쓰지 않는다)
+    if (m) {
+      if (this.inSpan(planeAt, planeAt + 24) || loops.some((l) => l.mended)) m.faces.push(f);
+      m.revs.set(
+        f,
+        loops.map((l) => l.rev),
+      );
+    }
     if (d.material >= 0) f.front = d.material;
     if (typeof back === 'number' && back >= 0) f.back = back;
     if (d.layer >= 0) f.layer = d.layer;
@@ -885,6 +1371,41 @@ class Decoder {
     c.faces.push(f);
     return pack(c.cid, c.faces.length - 1);
   }
+}
+
+/**
+ * 고쳐 읽기: 자리 at부터 len바이트 u32(리틀 엔디언)에 걸친 짝수 자리 LF 낱자(0A 00)를 CR(0D 00)로 되돌린 값들(작은 것부터, 바꿀 바이트 자리와 함께).
+ * 낱자의 둘째 바이트(00)는 칸 밖이어도 된다
+ */
+function crAlternatives(b: Uint8Array, at: number, len: number): { value: number; patch: number[] }[] {
+  const units: number[] = [];
+  for (let p = at + (at & 1); p < at + len; p += 2) if (b[p] === 0x0a && b[p + 1] === 0) units.push(p);
+  const out: { value: number; patch: number[] }[] = [];
+  for (let mask = 1; mask < 1 << units.length; mask++) {
+    const patch = units.filter((_, i) => mask & (1 << i));
+    let value = 0;
+    for (let i = len - 1; i >= 0; i--) value = value * 256 + (patch.includes(at + i) ? 0x0d : b[at + i]!);
+    out.push({ value, patch });
+  }
+  return out.sort((x, y) => x.value - y.value);
+}
+
+/** 고쳐 읽기: 그럴듯한 좌표·변환 값(0 또는 1e-30 < |v| < 1e9 — 어긋나게 읽은 f64는 지수 바이트가 뒤섞여 이 밖으로 나간다) */
+const plausible = (v: number): boolean => v === 0 || (Math.abs(v) > 1e-30 && Math.abs(v) < 1e9);
+
+/** 고리에서 앞 모서리 사용의 끝 정점과 다음 모서리 사용의 시작 정점이 다른 곳 수(모르는 모서리는 빼고) */
+function chainBreaks(l: LoopRec, edges: readonly SkpEdge[]): number {
+  let k = 0;
+  const n = l.edges.length;
+  for (let i = 0; i < n; i++) {
+    const e = edges[l.edges[i]!];
+    const f = edges[l.edges[(i + 1) % n]!];
+    if (!e || !f || e.a < 0 || f.a < 0) continue;
+    const end = l.rev[i] ? e.a : e.b;
+    const start = l.rev[(i + 1) % n] ? f.b : f.a;
+    if (end !== start) k++;
+  }
+  return k;
 }
 
 /** 정의 동작 덩어리: 붙기 27, 구멍 뚫기 28, 붙는 면 29, 카메라 보기·해 그림자 33(비트 0·1), 늘이지 않음 34(+1: 2017+, −2: SketchUp 3) */
@@ -1044,7 +1565,11 @@ function buildCurves(c: Collection): SkpCurve[] {
   });
 }
 
-function assemble(dec: Decoder, head: ReturnType<Decoder['readModelHead']>): { model: SkpModel; materials: Map<string, SkpMaterialInfo> } {
+function assemble(
+  dec: Decoder,
+  head: ReturnType<Decoder['readModelHead']>,
+  drop?: ReadonlySet<SkpFace>,
+): { model: SkpModel; materials: Map<string, SkpMaterialInfo> } {
   const st = dec.st;
   const view = dec.view;
   // 태그: 기본 태그(Layer0·Untagged)를 맨 앞으로, 나머지는 읽은 차례
@@ -1192,10 +1717,16 @@ function assemble(dec: Decoder, head: ReturnType<Decoder['readModelHead']>): { m
     if (view.activePage !== undefined) model.activePage = view.activePage;
   }
   model.warnings = [...st.warn].map(([m, k]) => (k > 1 ? `${m} (${k}개)` : m));
-  // 읽는 동안 쓴 면·모서리 객체를 표로 옮기고 놓는다(큰 모형에서 객체가 heap을 크게 잡는다)
+  // 읽는 동안 쓴 면·모서리 객체를 표로 옮기고 놓는다(큰 모형에서 객체가 heap을 크게 잡는다).
+  // 고쳐 읽기에서 면 평면과 맞지 않은 면(drop)은 장면 마무리(숨긴 개체 찾기)가 끝난 여기서 뺀다
   st.collections.forEach((c, i) => {
     const ents = built[i];
     if (!ents) return;
+    if (drop?.size) {
+      const kept = c.faces.filter((f) => !drop.has(f));
+      counts.faces -= c.faces.length - kept.length;
+      c.faces = kept;
+    }
     ents.faces = facesFrom(c.faces);
     ents.edges = edgesFrom(c.edges);
     c.faces = [];
@@ -1272,9 +1803,9 @@ function finishPages(dec: Decoder, raws: MfcPage[], final: Int32Array, animation
   return pages;
 }
 
-/** 멈춘 까닭 → 사람이 읽는 글 */
-function why(e: unknown): string {
-  if (e instanceof MfcError) return `${e.message}(${e.offset.toLocaleString('en-US')}바이트 자리)`;
+/** 멈춘 까닭 → 사람이 읽는 글(at: 고쳐 읽기 사본 자리 → 원래 파일 자리) */
+function why(e: unknown, at: (p: number) => number = (p) => p): string {
+  if (e instanceof MfcError) return `${e.message}(${Math.max(0, at(e.offset)).toLocaleString('en-US')}바이트 자리)`;
   if (e instanceof RangeError) return '객체가 너무 깊게 겹쳤습니다';
   return e instanceof Error ? e.message : String(e);
 }
@@ -1288,39 +1819,74 @@ const isDamage = (e: unknown): boolean => !(e instanceof MfcError) || e.kind ===
  * onProgress는 읽은 바이트 위치로 진행(0~1)을 알린다.
  */
 export function readMfcModel(bytes: Uint8Array, header: SkpHeader, onProgress?: (fraction: number) => void): MfcResult {
-  const dec = new Decoder(bytes, header);
-  const s = dec.s;
-  let k = 0;
   let last = 0;
-  if (onProgress)
-    s.onObject = () => {
-      if (++k % 4096) return;
-      const f = s.pos / Math.max(1, bytes.length);
-      if (f <= last) return;
-      last = f;
-      try {
-        onProgress(f);
-      } catch {
-        /* 알림 쪽 오류는 무시 */
+  const progress = onProgress
+    ? (s: MfcStream): void => {
+        let k = 0;
+        s.onObject = () => {
+          if (++k % 4096) return;
+          const f = s.pos / Math.max(1, bytes.length);
+          if (f <= last) return;
+          last = f;
+          try {
+            onProgress(f);
+          } catch {
+            /* 알림 쪽 오류는 무시 */
+          }
+        };
       }
-    };
+    : undefined;
+  let pass = readPass(bytes, header, null, progress);
+  // 형상을 읽다 멈췄거나 맞지 않는 참조를 버렸고, 파일이 글 왕복 꼴이면(mfcmend.ts) 빠진 2바이트를 메우고 LF를 CR로 되돌려 가며 한 번 더 읽는다 —
+  // 더 멀리 읽었거나(같은 데까지면 버린 참조가 줄었을 때) 그것을 쓴다
+  const stop = pass.stop;
+  const stopped = stop instanceof MfcError && stop.kind !== 'too_large';
+  if (stopped || (stop === null && pass.dec.s.badRefs)) {
+    const sig = textRoundTrip(bytes);
+    if (sig)
+      try {
+        const second = readPass(bytes, header, { buf: new MendBuffer(bytes), sig }, progress);
+        const m = second.dec.mend!;
+        const reach = (p: Pass, at: (o: number) => number): number => (p.stop === null ? Infinity : p.stop instanceof MfcError ? at(p.stop.offset) : -1);
+        const r1 = reach(pass, (o) => o);
+        const r2 = reach(second, (o) => m.buf.toOriginal(o));
+        if ((m.mended || second.dec.s.crFixed) && (r2 > r1 || (r2 === r1 && second.dec.s.badRefs < pass.dec.s.badRefs))) pass = second;
+      } catch {
+        /* 처음 읽은 것을 쓴다 */
+      }
+  }
+  return finishPass(pass);
+}
+
+/** 한 번 읽기(보통 읽기, 또는 고쳐 읽기)의 결과 */
+interface Pass {
+  dec: Decoder;
+  head: ReturnType<Decoder['readModelHead']>;
+  /** 형상을 읽다 멈춘 까닭(끝까지 읽었으면 null) */
+  stop: unknown;
+}
+
+function readPass(bytes: Uint8Array, header: SkpHeader, mend: { buf: MendBuffer; sig: TextRoundTrip } | null, progress: ((s: MfcStream) => void) | undefined): Pass {
+  const dec = new Decoder(bytes, header, mend);
+  progress?.(dec.s);
+  const at = mend ? (p: number): number => mend.buf.toOriginal(p) : undefined;
   let head: ReturnType<Decoder['readModelHead']>;
   try {
     dec.readHead();
     head = dec.readModelHead();
   } catch (e) {
     if (e instanceof MfcRefused) throw e;
-    throw new Error(`형상 앞에서 읽기를 멈췄습니다: ${why(e)}`, { cause: e });
+    throw new Error(`형상 앞에서 읽기를 멈췄습니다: ${why(e, at)}`, { cause: e });
   }
-  let geometry = false;
+  let stop: unknown = null;
   try {
     dec.readRoot();
-    geometry = true;
   } catch (e) {
+    stop = e;
     if (isDamage(e)) dec.damaged = true;
-    dec.st.note(`형상을 읽다 멈췄습니다 — 그 앞까지만 그립니다: ${why(e)}`);
+    dec.st.note(`형상을 읽다 멈췄습니다 — 그 앞까지만 그립니다: ${why(e, at)}`);
   }
-  if (geometry)
+  if (stop === null)
     try {
       // SketchUp 6은 설정 묶음(단위·장면 넘기기)을 머리가 아니라 꼬리(축 뒤)에 쓴다
       dec.view.readTail(dec.st.schema('CSketchUpModel') < MIN_MODEL_SCHEMA ? () => (head.options = dec.options()) : undefined);
@@ -1329,18 +1895,262 @@ export function readMfcModel(bytes: Uint8Array, header: SkpHeader, onProgress?: 
       dec.view.pages.length = 0;
       dec.view.activePage = undefined;
       if (e instanceof MfcError && e.kind === 'truncated') dec.damaged = true;
-      dec.st.note(`형상 뒤의 장면·스타일을 읽지 못했습니다(형상은 다 읽었습니다): ${why(e)}`);
+      dec.st.note(`형상 뒤의 장면·스타일을 읽지 못했습니다(형상은 다 읽었습니다): ${why(e, at)}`);
     }
+  return { dec, head, stop };
+}
+
+function finishPass(pass: Pass): MfcResult {
+  const { dec, head } = pass;
+  const s = dec.s;
+  const m = dec.mend;
+  let drop: Set<SkpFace> | undefined;
+  if (m) {
+    dec.damaged = true;
+    const v = verifyMended(dec);
+    drop = v.drop;
+    dec.st.note(
+      `글로 한 번 저장되며 깨진 파일을 고쳐 읽었습니다 — 빠진 2바이트 ${m.mended.toLocaleString('en-US')}곳을 메우고 바뀐 참조 ${(s.crFixed + v.repointed).toLocaleString('en-US')}개를 되돌렸습니다(면 평면과 맞지 않아 뺀 면 ${v.drop.size.toLocaleString('en-US')}개, 정점 ${v.lost.toLocaleString('en-US')}개)`,
+    );
+  }
   if (s.badRefs) {
     // 칸 번호가 깨진 참조(바이트 하나가 바뀐 파일 등): 그 모서리·면만 빼고 끝까지 읽었다
     dec.damaged = true;
+    const first = m ? Math.max(0, m.buf.toOriginal(s.firstBadRef)) : s.firstBadRef;
     dec.st.note(
-      `깨진 참조 ${s.badRefs.toLocaleString('en-US')}개를 건너뛰었습니다(첫 자리 ${s.firstBadRef.toLocaleString('en-US')}바이트) — 그 모서리와 그 모서리를 쓰는 면은 그리지 않습니다`,
+      `깨진 참조 ${s.badRefs.toLocaleString('en-US')}개를 건너뛰었습니다(첫 자리 ${first.toLocaleString('en-US')}바이트) — 그 모서리와 그 모서리를 쓰는 면은 그리지 않습니다`,
     );
   }
   dec.reorderEdges();
-  const { model, materials } = assemble(dec, head);
-  return { model, materials, styles: dec.view.styles, images: dec.st.images };
+  const { model, materials } = assemble(dec, head, drop);
+  let images = dec.st.images;
+  if (m) {
+    // 그림 자리를 원래 파일 자리로(메운 바이트가 든 그림은 버린다)
+    images = [];
+    for (const r of dec.st.images) {
+      const start = m.buf.toOriginal(r.start);
+      const end = m.buf.toOriginal(r.end - 1) + 1;
+      if (start >= 0 && end - start === r.end - r.start) images.push({ ...r, start, end });
+    }
+  }
+  return { model, materials, styles: dec.view.styles, images };
+}
+
+/** 고쳐 읽기 끝 확인의 면 평면 허용 거리(인치 — SketchUp 길이 허용 오차 0.001인치) */
+const MEND_PLANE_TOL = 1e-3;
+/**
+ * 고쳐 읽은 파일에서 고치지 않은 면의 허용 거리(인치). 실제 파일의 작은 곡면 삼각형은 저장된 평면에서 0.0015인치쯤 벗어나기도 해
+ * 그보다 넉넉히 둔다(틀린 정점 참조는 보통 0.1인치 넘게 벗어난다)
+ */
+const MEND_LOOSE_TOL = 1e-2;
+
+/**
+ * 고쳐 읽기에서 확신할 수 없는 바이트로 읽은 면·정점·모서리를 면 평면으로 확인한다.
+ * 면: 고리의 모든 정점이 그 면 법선 방향으로 MEND_PLANE_TOL 안에 있고(평평함), 바깥 고리가 도는 방향의 법선이 저장된 법선과 같은 쪽이어야 한다.
+ * 정점: 그 정점을 쓰는 면이 하나 이상 있고 모두 맞아야 한다(아니면 그 정점을 쓰는 모서리를 버린다).
+ * 고치지 않은 면은 저장된 평면에서 MEND_LOOSE_TOL 넘게 벗어날 때만 뺀다. 맞지 않는 면은 drop에 넣어 그리지 않는다
+ */
+function verifyMended(dec: Decoder): { drop: Set<SkpFace>; lost: number; checked: number; picked: number; repointed: number } {
+  const m = dec.mend!;
+  const drop = new Set<SkpFace>();
+  /** 묶음마다 확인할 정점 → 같은 벌점의 넣기마다 읽혔을 좌표 */
+  const verts = new Map<number, Map<number, number[][]>>();
+  for (const { v, alts } of m.verts) {
+    const map = verts.get(cidOf(v)) ?? new Map<number, number[][]>();
+    map.set(indexOf(v), alts);
+    verts.set(cidOf(v), map);
+  }
+  const faces = new Set(m.faces);
+  const edges = new Set(m.edges);
+  const altsOf = new Map<number, [SkpEdge, number[], number[], number][]>();
+  for (const r of m.vertAlts) {
+    const list = altsOf.get(r[3]) ?? [];
+    list.push(r);
+    altsOf.set(r[3], list);
+  }
+  let checked = 0;
+  let lost = 0;
+  let picked = 0;
+  let repointed = 0;
+  for (const c of dec.st.collections) {
+    const vs = verts.get(c.cid);
+    // 확신할 수 없는 정점: 그 정점을 쓰는 면들이 가장 평평해지는 좌표를 고른다(다른 확신할 수 없는 정점이 고쳐지면 다시 — 몇 바퀴)
+    const uses = new Map<number, SkpFace[]>();
+    const settled = new Set<number>();
+    if (vs) {
+      for (const f of c.faces)
+        for (const l of f.loops)
+          for (const v of l)
+            if (vs.has(v)) {
+              const list = uses.get(v) ?? [];
+              if (!list.includes(f)) list.push(f);
+              uses.set(v, list);
+            }
+      // 후보 좌표 p가 면 f의 평면에서 떨어진 거리: 평면 높이는 f의 믿을 수 있는 정점(확인할 정점이 아니거나 이미 정한 것)에서 잰다(없으면 NaN)
+      const off = (f: SkpFace, v: number, p: readonly number[]): number => {
+        const [nx, ny, nz] = f.normal;
+        const len = Math.hypot(nx, ny, nz) || 1;
+        for (const l of f.loops)
+          for (const u of l)
+            if (u !== v && (!vs.has(u) || settled.has(u)))
+              return Math.abs(nx * (p[0]! - c.pos[3 * u]!) + ny * (p[1]! - c.pos[3 * u + 1]!) + nz * (p[2]! - c.pos[3 * u + 2]!)) / len;
+        return NaN;
+      };
+      for (let round = 0; round < 8; round++) {
+        let moved = false;
+        for (const [v, alts] of vs) {
+          if (settled.has(v)) continue;
+          const fs = uses.get(v) ?? [];
+          // 후보마다 쓰는 면 평면에서 가장 먼 거리(잴 면이 없으면 -1)
+          const fits = alts.map((p) => {
+            let worst = -1;
+            for (const f of fs) {
+              const d = off(f, v, p);
+              if (!Number.isNaN(d)) worst = Math.max(worst, d);
+            }
+            return worst;
+          });
+          let best = -1;
+          fits.forEach((w, k) => {
+            if (w >= 0 && w <= MEND_PLANE_TOL && (best < 0 || w < fits[best]!)) best = k;
+          });
+          if (best < 0) continue;
+          // 다른 자리의 후보(1e-6인치 넘게 떨어진 것)가 가장 맞는 것의 100배 안으로 맞으면 면들이 정점 자리를 가르지 못한 것 — 믿지 않는다
+          // (손상 없는 SketchUp 면은 정점이 평면에서 1e-10인치 안이다)
+          const p = alts[best]!;
+          const near = Math.max(100 * fits[best]!, 1e-9);
+          const far = (q: readonly number[]): boolean => Math.hypot(q[0]! - p[0]!, q[1]! - p[1]!, q[2]! - p[2]!) > 1e-6;
+          if (alts.some((q, k) => k !== best && fits[k]! >= 0 && fits[k]! <= near && far(q))) continue;
+          c.pos[3 * v] = p[0]!;
+          c.pos[3 * v + 1] = p[1]!;
+          c.pos[3 * v + 2] = p[2]!;
+          settled.add(v);
+          moved = true;
+          if (best > 0) picked++;
+        }
+        if (!moved) break;
+      }
+    }
+    // 끝 정점 참조의 LF를 CR로 되돌리면 다른 정점이 되는 모서리: 그 모서리를 쓰는 면이 평평하지 않으면 끝을 바꿔 보고,
+    // 쓰는 면이 모두 평평해지면 그것으로 둔다(글 왕복이 맞는 정점 참조를 다른 정점으로 바꾼 곳)
+    const alts = altsOf.get(c.cid);
+    if (alts) {
+      const index = new Map<SkpEdge, number>();
+      c.edges.forEach((e, i) => index.set(e, i));
+      const facesOf = new Map<number, SkpFace[]>();
+      for (const f of c.faces)
+        for (const l of f.loopEdges ?? [])
+          for (const e of l) {
+            const list = facesOf.get(e) ?? [];
+            if (!list.includes(f)) list.push(f);
+            facesOf.set(e, list);
+          }
+      const rebuild = (f: SkpFace): void => {
+        const revs = m.revs.get(f);
+        if (!revs || !f.loopEdges) return;
+        f.loops = f.loopEdges.map((l, j) => l.map((e, k) => (revs[j]![k] ? (c.edges[e]?.b ?? -1) : (c.edges[e]?.a ?? -1))));
+      };
+      const worst = (fs: readonly SkpFace[]): number => Math.max(...fs.map((f) => (f.loops.every((l) => l.every((v) => v >= 0)) ? faceFit(f, c.pos) : Infinity)));
+      for (const [e, altA, altB] of alts) {
+        const fs = facesOf.get(index.get(e)!) ?? [];
+        if (!fs.length || worst(fs) <= MEND_PLANE_TOL) continue;
+        const a0 = e.a;
+        const b0 = e.b;
+        let fit = Infinity;
+        let pick: [number, number] | null = null;
+        for (const a of [a0, ...altA])
+          for (const b of [b0, ...altB]) {
+            if ((a === a0 && b === b0) || a === b) continue;
+            e.a = a;
+            e.b = b;
+            fs.forEach(rebuild);
+            const w = worst(fs);
+            if (w < fit) {
+              fit = w;
+              pick = [a, b];
+            }
+          }
+        if (pick && fit <= MEND_PLANE_TOL) {
+          [e.a, e.b] = pick;
+          edges.add(e);
+          for (const f of fs) faces.add(f);
+          repointed++;
+        } else {
+          e.a = a0;
+          e.b = b0;
+        }
+        fs.forEach(rebuild);
+      }
+    }
+    /** 맞지 않는 면이 쓰는 확인할 정점 */
+    const bad = new Set<number>();
+    for (const f of c.faces) {
+      let touch = faces.has(f);
+      if (!touch && vs) touch = f.loops.some((l) => l.some((v) => vs.has(v)));
+      if (!touch && edges.size && f.loopEdges) touch = f.loopEdges.some((l) => l.some((e) => e >= 0 && edges.has(c.edges[e]!)));
+      if (!touch) {
+        // 고치지 않은 면도 글 왕복이 같은 길이로 바꾼 참조(알아볼 수 없는 CR → LF)로 정점이 틀렸을 수 있다 — 저장된 평면에서 크게 벗어난 면은 그리지 않는다
+        if (faceFit(f, c.pos, false) > MEND_LOOSE_TOL) drop.add(f);
+        continue;
+      }
+      checked++;
+      const ok = faceFit(f, c.pos) <= MEND_PLANE_TOL;
+      if (!ok) drop.add(f);
+      if (vs && !ok) for (const l of f.loops) for (const v of l) if (vs.has(v)) bad.add(v);
+    }
+    if (!vs) continue;
+    // 정점은 면 평면으로 하나로 정해졌고(settled) 그 정점을 쓰는 면이 모두 맞을 때만 믿는다
+    const gone = new Set<number>();
+    for (const v of vs.keys()) if (bad.has(v) || !settled.has(v)) gone.add(v);
+    lost += gone.size;
+    if (!gone.size) continue;
+    for (const f of c.faces) if (!drop.has(f) && f.loops.some((l) => l.some((v) => gone.has(v)))) drop.add(f);
+    for (const e of c.edges)
+      if (gone.has(e.a) || gone.has(e.b)) {
+        e.a = -1;
+        e.b = -1;
+      }
+  }
+  return { drop, lost, checked, picked, repointed };
+}
+
+/**
+ * 면이 저장된 평면에 맞는 정도: 정점들의 법선 방향 퍼짐(인치). 바깥 고리 방향(뉴웰 법선)이 저장된 법선과 다른 쪽이거나
+ * 넓이가 없으면 Infinity
+ */
+function faceFit(f: SkpFace, pos: readonly number[], orient = true): number {
+  const [nx, ny, nz] = f.normal;
+  const len = Math.hypot(nx, ny, nz);
+  if (!(len > 0.5)) return orient ? Infinity : 0;
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const l of f.loops)
+    for (const v of l) {
+      const x = pos[3 * v];
+      const y = pos[3 * v + 1];
+      const z = pos[3 * v + 2];
+      if (x === undefined || y === undefined || z === undefined) return Infinity;
+      const t = (nx * x + ny * y + nz * z) / len;
+      lo = Math.min(lo, t);
+      hi = Math.max(hi, t);
+    }
+  if (!orient) return hi - lo;
+  if (!(hi - lo <= MEND_PLANE_TOL)) return hi - lo || Infinity;
+  const outer = f.loops[0]!;
+  let ax = 0;
+  let ay = 0;
+  let az = 0;
+  for (let i = 0; i < outer.length; i++) {
+    const a = outer[i]!;
+    const b = outer[(i + 1) % outer.length]!;
+    const [x1, y1, z1] = [pos[3 * a]!, pos[3 * a + 1]!, pos[3 * a + 2]!];
+    const [x2, y2, z2] = [pos[3 * b]!, pos[3 * b + 1]!, pos[3 * b + 2]!];
+    ax += (y1 - y2) * (z1 + z2);
+    ay += (z1 - z2) * (x1 + x2);
+    az += (x1 - x2) * (y1 + y2);
+  }
+  const area = Math.hypot(ax, ay, az);
+  return area > 0 && (ax * nx + ay * ny + az * nz) / (area * len) > 0.99 ? hi - lo : Infinity;
 }
 
 // ── 그림(readSkpImages가 다시 풀지 않게, 장면을 만들 때 모은 자리를 잠깐 둔다) ─────────────

@@ -137,6 +137,8 @@ export class MfcState {
   readonly stack: Collection[] = [];
   readonly fonts = new Map<number, SkpFont>();
   readonly images: MfcImageRef[] = [];
+  /** 고쳐 읽기(mfcmend.ts)에서만: note를 적어 두어 되돌릴 수 있게(시험 읽기를 거둘 때 undoNotes) */
+  notes: string[] | null = null;
 
   constructor(s: MfcStream) {
     this.s = s;
@@ -148,6 +150,19 @@ export class MfcState {
 
   note(msg: string): void {
     this.warn.set(msg, (this.warn.get(msg) ?? 0) + 1);
+    this.notes?.push(msg);
+  }
+
+  /** notes를 n개로 되돌린다(그 뒤 note를 거둔다 — 수가 0이 된 글은 빼서 처음 나온 차례도 되돌린다) */
+  undoNotes(n: number): void {
+    const log = this.notes;
+    if (!log) return;
+    while (log.length > n) {
+      const msg = log.pop()!;
+      const k = (this.warn.get(msg) ?? 1) - 1;
+      if (k > 0) this.warn.set(msg, k);
+      else this.warn.delete(msg);
+    }
   }
 
   /** 지금 읽는 요소 묶음 */
