@@ -109,6 +109,8 @@ export interface MaterialRow {
   /** 이 재질 면의 넓이 합(장면 단위², 모르면 null) */
   area: number | null;
   meshIds: string[];
+  /** 재질 속성 사전의 meta.attributes 차례(없으면 null) */
+  attrs?: number | null;
 }
 
 export interface OutlineRow {
@@ -429,6 +431,7 @@ export function materialRows(scene: Scene3d): MaterialRow[] {
         backFaces: num(o.backFaces) ?? 0,
         area: num(o.area),
         meshIds,
+        attrs: num(o.attrs),
       });
     }
   } else {
@@ -1444,6 +1447,8 @@ export function selectionEntity(d: SkpDoc): EntityInput {
           // 무늬를 3D에 입혔는지는 목록 칩(무늬 · 무늬 · 평균색)과 같은 기준(입힌 무늬 id가 장면에 있는지)으로 적는다
           ...(m.textured ? [{ label: '무늬', value: m.texture ? '그림 재질(3D에 무늬를 입힘)' : '그림 재질(3D는 평균색)' }] : []),
         ],
+        // 재질 속성 사전(모형·정의·인스턴스와 같은 속성 사전 칸 — "이 항목"). 차례가 없으면 -1 → 없음
+        attrs: d.attributes[m.attrs ?? -1],
       };
   }
   const attrs = d.modelAttrs !== null ? (d.attributes[d.modelAttrs] ?? null) : null;

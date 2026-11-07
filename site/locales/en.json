@@ -577,6 +577,7 @@
   "설치 없이 SketchUp(.skp) 모형을 열어 돌려 보고, 태그를 켜고 끄고, 재질과 그룹·컴포넌트를 살펴보세요.": "Open and run SketchUp (.skp) models without installation, turn tags on and off, and look at materials, groups, and components.",
   "세로 시야각(도)": "Vertical field of view (degrees)",
   "소스 코드": "Source code",
+  "속성": "Attributes",
   "속성 배열 항목": "Attribute array item",
   "속성 배열이 너무 깊게 겹쳤습니다": "Attribute array overlaps too deeply",
   "속성 사전": "Attribute Dictionary",

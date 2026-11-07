@@ -125,6 +125,23 @@ FF FE FF nn  "{주.부.빌드}"(UTF-16LE), 예: {8.0.1}, {17.2.2555}, {21.0.339}
 - 투명: `useTrans="1"`일 때 `trans`가 불투명도로 보인다(유리 0.04~0.52). 그런데 `trans="0" useTrans="1"`인 재질(firstaid의 Material__1~5)이 내장 미리보기에서 불투명하게 보여서, 해석기는 0<trans<1일 때만 알파로 쓴다(**확실하지 않음**).
 - 태그 색은 `Layer_<태그 이름>` 재질로 들어 있다.
 - `model.dat`의 재질 이름(32CC)은 꾸러미 폴더 이름과 같고, XML의 `name`은 원래 이름이다(예: `<Black>` → 폴더·model.dat는 `_Black_`, `*` → `_`, `<auto>` → `_auto_`). 해석기는 폴더 이름으로 먼저, XML 이름으로도 찾는다 — 표본 11개의 재질 240개가 모두 이어졌다. 화면 이름은 XML의 원래 이름을 쓴다.
+- **재질 속성 사전**(2026-11-07 46차 읽음): 속성 사전이 있는 재질은 `<mat:material … xmlns:n0="http://sketchup.google.com/schemas/1.0/types">`이고
+  `</mat:material>` 바로 앞에 블록이 있다(관찰한 594개 재질 모두). `model.dat`의 재질 항목(32C8)에는 속성 사전이 없다.
+
+  ```xml
+  <n0:AttributeDictionaries count="1">
+    <n0:AttributeDictionary name="material_dict" count="2">
+      <n0:Attribute key="sku" type="10"><![CDATA[M-1]]></n0:Attribute>
+      <n0:Attribute key="list" type="11" count="2"><value type="4">14</value><value type="6">2.5</value></n0:Attribute>
+    </n0:AttributeDictionary>
+  </n0:AttributeDictionaries>
+  ```
+
+  `type`은 2020 이하 형 있는 값(`CAttributeNamed`의 꼴 바이트)과 같은 번호다. 관찰한 꼴: 10 글(CDATA, 2,099개), 4 정수(143), 6 실수(78), 7 참·거짓 `0`·`1`(99),
+  11 배열(40개 — `count` = `<value type>` 수, 안의 값은 4·6, 17,398개). 사전 `count` = 열쇠 수(사전 777개 모두). 그 밖의 꼴(바이트·색·시각·길이·점 등)은 표본에 없어
+  해석기는 적힌 글을 그대로 둔다. 근거: 이 컴퓨터의 2021~2026 실제 파일 33개(2021 2·2024 5·2025 1·2026 25)의 재질 594개, 그리고 C API 표준 파일
+  `attributes.skp`(판 4~8·2013~2020·2026)의 재질 `material_dict.sku = "M-1"`이 해석 결과와 같다(2020 이하는 `CMaterial` 앞머리의 `CAttributeContainer` — 아래).
+  사전 이름은 렌더러·플러그인 이름(V-Ray·Enscape·Twilight·Podium·Maxwell·D5 등)이 많고, 글 값에 렌더러 설정 XML이 통째로 든 것도 있다.
 
 ### model.dat의 TLV 문법
 
@@ -248,7 +265,7 @@ FF FE FF nn  "{주.부.빌드}"(UTF-16LE), 예: {8.0.1}, {17.2.2555}, {21.0.339}
 | `vffroot.ts` | 뿌리 절: 카메라·태그·태그 폴더·선 종류·스타일·렌더링 레코드·장면·글꼴·문자/치수 기본값·모형 속성 |
 | `vffannot.ts` | 요소 묶음의 곡선·호·문자·치수·보조선·단면 |
 | `styles.ts` | 렌더링 레코드 + `styles/<이름>/style.xml` → 화면용 스타일 |
-| `materials.ts` | material.xml → 색·무늬(크기·그림 이름·평균색·색 바꾸기) |
+| `materials.ts` | material.xml → 색·무늬(크기·그림 이름·평균색·색 바꾸기)·재질 속성 사전 |
 | `projection.ts` | 면 평면 틀·무늬 투영 행렬·원근 q |
 | `colorize.ts` | 색 바꾼 무늬의 화소 색 바꾸기(HLS) |
 | `scene.ts` | 인스턴스 펼치기(변환 곱), earcut 삼각화, (태그, 재질)별 Mesh3d·태그별 LineSet3d, 선택: 여러 단계 나무·부드러운/숨긴 형상 |
@@ -264,7 +281,7 @@ FF FE FF nn  "{주.부.빌드}"(UTF-16LE), 예: {8.0.1}, {17.2.2555}, {21.0.339}
 - 기본으로는 숨긴 요소, 부드러운/매끈한 모서리를 그리지 않는다. `extras` 선택이면 따로 묶어 넣는다(아래). 자기 자신을 품는 정의는 64겹에서 끊는다.
 - 펼친 면 정점이 1,200만 개를 넘으면 면을, 선분이 300만 개를 넘으면 모서리를 그만 그리고 경고한다. v23_server 표본(인스턴스 26,256번 배치)은 펼쳐서 삼각형 573만 개·선분 281만 개로 다 그려진다(약 0.6초).
 - 인스턴스 배치가 200만 번을 넘으면 멈추고 경고한다(서로를 두 번씩 품는 정의가 깊게 이어지면 배치가 기하급수로 불어나 끝나지 않는 것을 막는다 — 표본에서 본 적은 없고 깨진 파일 대비).
-- 아직 안 읽는 것: 무늬 위치 핀(2717 — 행렬로 충분), PBR 그림(법선·거칠기 등), 요소 차례(138E), 워터마크(style.xml 항목 5001), 환경(0210, 2025+), 재질 속성 사전.
+- 아직 안 읽는 것: 무늬 위치 핀(2717 — 행렬로 충분), PBR 그림(법선·거칠기 등), 요소 차례(138E), 워터마크(style.xml 항목 5001), 환경(0210, 2025+).
   PBR 그림(2026-11-06 셈): 이 컴퓨터의 2021+ 표본 810개 가운데 782개의 material.xml에 `<mat:pbrMR>`가 있고, 그림을 가리키는 것은 9개 파일
   (`normal_texture` 56·`roughness_texture` 45·`metallic_texture` 7 — `path="./…"`로 같은 재질 폴더의 그림, `enable_normal`·`normalScale`·`normalMapStyle`·`roughness_texture_invert`).
   코어 0.37.0은 무늬를 그물마다 앞·뒷면 하나씩만 받아(법선·거칠기 그림 없음) 읽지 않는다.
@@ -286,13 +303,18 @@ FF FE FF nn  "{주.부.빌드}"(UTF-16LE), 예: {8.0.1}, {17.2.2555}, {21.0.339}
   | 733C → 7378 f64(0.65·0.5), style.xml 2008 | 792(40개가 0.5) | 모름 |
   | 0210 환경 7918 → 7919 → 7B0C | 781(실제 환경은 1개) | 읽지 않음 — HDR 환경은 코어가 그리지 못한다 |
   | 7148 → 715B 장면 환경, 7153 장면 이름표?, 7157·7159·715C | 6~8 | 읽지 않음 |
-  | material.xml `<n0:AttributeDictionaries>` 재질 속성 사전 | 31 | 읽지 않음 |
+  | material.xml `<n0:AttributeDictionaries>` 재질 속성 사전 | 31 | **읽는다**(46차, 위 "material.xml") |
   | material.xml `<mat:pbrMR>`·`workflow`·`pbrPromoState` | 787 | 코어 필요(PBR) |
   | 2717 → 2718 무늬 핀 | 65 | 행렬로 충분 |
 
   렌더링 레코드 7383~738B(2025+)는 C API 표준 파일 20개의 값(AmbientOcclusion 거짓, 거리 10.0, 세기 0.0, 배수 1.0, 색 0,0,0,255, 색 쓰기 거짓)과 꼴·값이 맞아
   주변 가림(Ambient Occlusion) 설정으로 보인다(◐ — 7383 bool 0, 7385 f32 10, 7386 f32 0, 7389 f32 1, 738A 색, 738B bool 0. style.xml 8100~8107이 같은 값). 코어 0.37.0은 주변 가림을 그리지 않아 읽지 않는다.
   꾸러미 항목: `classifications/*.skc` 90개, `environments/<이름>/`(HDR·environment.xml·thumbnail.jpg) 1개, 다른 프로그램이 넣은 JSON 항목 114개는 읽지 않는다.
+- **동적 컴포넌트 속성 사전 셈**(2026-11-07 46차, 훑기 표본 1,287개를 앱 해석 길로): `dynamic_attributes` 사전(철자는 모두 소문자)을 가진 파일 40개
+  (2026 29·7~2020판 11), 정의 사전 38·인스턴스 사전 35·모형·재질 0. 값 열쇠(밑줄 없는 열쇠)는 사전마다 가운데값 5개·많아야 6개, 178개 가운데 140개에
+  `_<열쇠>_label`이 있다(대소문자를 살린 이름 — 값 열쇠는 소문자). SketchUp 도움말의 Component Attributes "Details" 칸(Display rule·Display label)에 해당하는
+  `_<열쇠>_formlabel`·`_access`, 단위 `_units`는 한 파일(`_inst_`로 시작하는 열쇠 — `_formula`·`_formulaunits`·`_options`도 함께)에만 있고, `_name`·`_formatversion`·`_lengthunits`(CENTIMETERS)는 3개 파일.
+  화면은 지금 다른 속성 사전처럼 열쇠·값을 그대로 보인다(사람이 읽을 이름으로 바꾸는 꼴은 Display label을 쓴 표본이 더 있어야 정할 수 있다 — 식은 계산하지 않는다).
 - 그림자·위치(0204 → 6590, 장면 714E → 6590, 2026-10-21 읽음): 6591 u32 시각(그곳 시각을 UTC 초처럼), 6593 도시, 6594 나라, 6595 경도, 6596 위도, 6597 시간대(f64 시간),
   6598 북쪽 f64×3, 6599 그림자 보이기, 659B 면에, 659C 지면에, 659E·659F 밝음·어둠 i32, 65A0 해로 음영(엔진의 그림자 꼬리표 기록과 같다). 지리 참조 여부는 모형 속성 GeoReference.UsesGeoReferencing.
 
@@ -537,7 +559,7 @@ shift는 h' = h + (h_C − h_A), tint는 h' = h_C, l' = clamp(l + l_C − l_A), 
 | `CCurve`·`CArcCurve` | u8 다각형, u32 모서리 수; 호는 f64×14 더: 중심, 법선, x축(길이 = 반지름), 시작각, 끝각, y축. 곡선에는 모서리 목록이 없다(모서리가 곡선을 가리킨다) |
 | `CFace` | 그리는 요소(앞면 재질), 평면(a, b, c, d), 고리 수 × `CLoop`, 뒷면 `CMaterial` |
 | `CLoop` → `CEdgeUse` | u8 바깥 고리, u8, 모서리 사용 … 없음까지. 모서리 사용 = `CEdge`, u8 뒤집힘, 든 `CLoop`(지금 고리여야 한다) |
-| `CMaterial` | 이름, u8 무늬, [`CTexture`: 앞머리, `CDib`, 너비, 높이(인치 — 2021+ xScale·yScale, 0 이하는 1), 경로, 평균 RGBA], u8, RGBA 색, 표시 이름, u32 꼴(0 색 · 1 무늬 · 2 색을 바꾼 무늬), u32 색 입히기(0 shift · 1 tint), f64 투명도, u8 알파 쓰기 |
+| `CMaterial` | 앞머리(`CAttributeContainer` — 재질 속성 사전, 46차부터 남김. 판 4~8·2013~2020 표준 파일의 C API 값과 같음), 이름, u8 무늬, [`CTexture`: 앞머리, `CDib`, 너비, 높이(인치 — 2021+ xScale·yScale, 0 이하는 1), 경로, 평균 RGBA], u8, RGBA 색, 표시 이름, u32 꼴(0 색 · 1 무늬 · 2 색을 바꾼 무늬), u32 색 입히기(0 shift · 1 tint), f64 투명도, u8 알파 쓰기 |
 | `CLayer` | 이름, u8 숨김, 앞머리 + 색 재질 칸(줄 안), 4바이트, (`CLayer` 3+) `CCustomLineStyle` |
 | `CLayerGroup` | 이름, 하위 폴더, 든 `CLayer`들, u8 숨김 |
 | `CAttributeContainer` | `CAttributeNamed`·`CFaceTextureCoords` … 없음까지. 이름 붙은 사전 = u32, 이름, 열쇠 + 형 있는 값 … 빈 열쇠, u32. 값 꼴: 0 nil, 2 byte, 3 int16, 4 int32, 5 float, 6 double, 7 bool, 8 색, 9 시각, 10 글, 11 배열, 12 길이, 17 점, 18 벡터 |

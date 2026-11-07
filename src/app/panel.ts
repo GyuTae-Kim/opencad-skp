@@ -92,6 +92,10 @@ export const CHILD_LIMIT = 200;
 const TREE_ROW_LIMIT = 4000;
 
 const row = (k: string, v: string): HTMLElement => h('div', { class: 'prop-row' }, h('span', { class: 'k' }, k), h('span', { class: 'v', title: v }, v));
+/** 안내 글 · 줄 끝 꼬리표(칩) · 줄 끝 수 */
+const hint = (text: string): HTMLElement => h('p', { class: 'hint' }, text);
+const chip = (text: string, title?: string): HTMLElement => h('span', { class: 'chip', title }, text);
+const countEl = (text: string): HTMLElement => h('span', { class: 'count' }, text);
 
 /** 나무 상자(APG Tree View — ↑↓·Home·End·→·←, 줄 하나만 Tab 차례·그 줄의 보이기 체크까지). 줄을 누르거나 초점이 오면 그 줄이 Tab 차례 */
 const treeBox = (cls: string, label: string): HTMLElement => {
@@ -240,7 +244,7 @@ export class Panel {
       cb.disabled = disabled;
       cb.addEventListener('change', () => set(cb.checked));
       // opt: 앱 글(모형 이름이 아님)이라 자르지 않고 줄을 바꾼다(44차 — 독일어 "Versteckte Funktionen anzeigen"이 말줄임으로 잘렸다)
-      return h('label', { class: `prow opt${disabled ? ' off' : ''}`, title }, cb, h('span', { class: 'name' }, label), h('span', { class: 'count' }, count));
+      return h('label', { class: `prow opt${disabled ? ' off' : ''}`, title }, cb, h('span', { class: 'name' }, label), countEl(count));
     };
     const view: HTMLElement[] = [];
     if (x)
@@ -288,9 +292,9 @@ export class Panel {
           { class: `prow pick${on ? ' sel' : ''}`, type: 'button', 'aria-pressed': on ? 'true' : 'false', title: on ? '누르면 이 단면을 끕니다' : '누르면 이 단면으로 자릅니다(같은 그룹의 다른 단면은 꺼짐)' },
           h('span', { class: 'swatch sec', 'aria-hidden': 'true' }),
           h('span', { class: 'name' }, sp.name || `단면 ${i + 1}`),
-          sp.active ? h('span', { class: 'chip', title: '파일에서 활성인 단면' }, '활성') : null,
-          sp.node >= 0 ? h('span', { class: 'chip', title: '그룹·컴포넌트 안의 단면 — 그 그룹 안쪽만 자릅니다' }, '그룹 안') : null,
-          sp.tag ? h('span', { class: 'count' }, sp.tag) : null,
+          sp.active ? chip('활성', '파일에서 활성인 단면') : null,
+          sp.node >= 0 ? chip('그룹 안', '그룹·컴포넌트 안의 단면 — 그 그룹 안쪽만 자릅니다') : null,
+          sp.tag ? countEl(sp.tag) : null,
         );
         b.addEventListener('click', () => this.host.setFileSection(sp.index));
         list.append(b);
@@ -314,7 +318,7 @@ export class Panel {
                 })(),
               )
             : null,
-          ...notes.map((t) => h('p', { class: 'hint' }, t)),
+          ...notes.map(hint),
         ),
       );
     }
@@ -343,10 +347,10 @@ export class Panel {
         cb,
         t.color ? h('span', { class: 'swatch tag', style: `background:${rgbCss(t.color)}`, title: '태그 색' }) : null,
         h('span', { class: 'name', translate: 'no' }, t.name),
-        t.default ? h('span', { class: 'chip' }, '기본') : null,
-        t.lineStyle ? h('span', { class: 'chip', title: `선 종류: ${t.lineStyle} — 이 태그의 모서리를 점선으로 그립니다` }, '점선') : null,
-        !t.visible ? h('span', { class: 'chip', title: '파일에서 숨긴 태그' }, '숨김') : null,
-        h('span', { class: 'count' }, t.hasGeometry ? count : '비어 있음'),
+        t.default ? chip('기본') : null,
+        t.lineStyle ? chip('점선', `선 종류: ${t.lineStyle} — 이 태그의 모서리를 점선으로 그립니다`) : null,
+        !t.visible ? chip('숨김', '파일에서 숨긴 태그') : null,
+        countEl(t.hasGeometry ? count : '비어 있음'),
       );
     };
     for (const t of tags) if (t.folder < 0 || t.folder >= d.tagFolders.length) list.append(tagRow(t, 0));
@@ -367,13 +371,13 @@ export class Panel {
           cb,
           h('span', { class: 'fold-ico', html: icon('folder', 14) }),
           h('span', { class: 'name', translate: 'no' }, f.name || '(이름 없는 폴더)'),
-          h('span', { class: 'count' }, `태그 ${fmtCount(folderTags(d, i).length)}`),
+          countEl(`태그 ${fmtCount(folderTags(d, i).length)}`),
         ),
       );
       for (const t of tags) if (t.folder === i) list.append(tagRow(t, depth + 1));
     });
     this.body.append(
-      section(`태그 ${tags.length}개`, tags.length ? h('div', { class: 'pbar' }, allOn, allOff) : null, tags.length ? list : h('p', { class: 'hint' }, '태그가 없습니다.')),
+      section(`태그 ${tags.length}개`, tags.length ? h('div', { class: 'pbar' }, allOn, allOff) : null, tags.length ? list : hint('태그가 없습니다.')),
     );
 
     const mats = d.materials;
@@ -390,19 +394,13 @@ export class Panel {
         swatch,
         h('span', { class: 'name', translate: 'no' }, m.name),
         m.textured
-          ? h(
-              'span',
-              {
-                class: 'chip',
-                title: m.texture
-                  ? '무늬(텍스처) 재질 — 3D에 무늬 그림을 입혔습니다'
-                  : '무늬(텍스처) 재질 — 무늬 그림을 쓸 수 없어(없거나 한도를 넘음) 3D에서는 무늬의 평균색으로 보입니다',
-              },
-              m.texture ? '무늬' : '무늬 · 평균색',
-            )
+          ? m.texture
+            ? chip('무늬', '무늬(텍스처) 재질 — 3D에 무늬 그림을 입혔습니다')
+            : chip('무늬 · 평균색', '무늬(텍스처) 재질 — 무늬 그림을 쓸 수 없어(없거나 한도를 넘음) 3D에서는 무늬의 평균색으로 보입니다')
           : null,
-        m.color[3] < 0.999 ? h('span', { class: 'chip', title: '반투명 재질' }, '투명') : null,
-        h('span', { class: 'count' }, materialCount(m)),
+        m.color[3] < 0.999 ? chip('투명', '반투명 재질') : null,
+        m.attrs != null && chip('속성', '속성 사전'),
+        countEl(materialCount(m)),
       );
       b.addEventListener('click', () => this.host.select(selKey(d.selection) === selKey(sel) ? null : sel));
       mlist.append(b);
@@ -410,8 +408,8 @@ export class Panel {
     this.body.append(
       section(
         `재질 ${mats.length}개`,
-        mats.length ? mlist : h('p', { class: 'hint' }, '재질이 없습니다.'),
-        mats.length > LIST_LIMIT ? h('p', { class: 'hint' }, `처음 ${LIST_LIMIT}개만 보입니다.`) : null,
+        mats.length ? mlist : hint('재질이 없습니다.'),
+        mats.length > LIST_LIMIT ? hint(`처음 ${LIST_LIMIT}개만 보입니다.`) : null,
       ),
     );
   }
@@ -427,7 +425,7 @@ export class Panel {
       this.body.append(
         section(
           '그룹·컴포넌트',
-          h('p', { class: 'hint' }, `모형 바로 아래 그룹·컴포넌트가 ${fmtCount(d.outlineSkipped)}개로 많아, 화면이 느려지지 않게 하나씩 고르기를 껐습니다. 태그와 재질로 나눠 보세요.`),
+          hint(`모형 바로 아래 그룹·컴포넌트가 ${fmtCount(d.outlineSkipped)}개로 많아, 화면이 느려지지 않게 하나씩 고르기를 껐습니다. 태그와 재질로 나눠 보세요.`),
         ),
       );
       return;
@@ -457,7 +455,7 @@ export class Panel {
         `모형 바로 아래 ${fmtCount(d.outline.length)}개`,
         this.pickBar(d),
         this.searchBox(d, fill),
-        h('p', { class: 'hint' }, `그룹 ${fmtCount(groups)} · 컴포넌트 ${fmtCount(comps)}. 누르면 강조하고, 두 번 누르면 그쪽으로 확대합니다.`),
+        hint(`그룹 ${fmtCount(groups)} · 컴포넌트 ${fmtCount(comps)}. 누르면 강조하고, 두 번 누르면 그쪽으로 확대합니다.`),
         found,
         list,
         cut,
@@ -481,7 +479,7 @@ export class Panel {
       cb,
       h('span', { class: `kind k-${r.kind}` }, KIND_LABEL[r.kind]),
       h('span', { class: 'name', translate: 'no' }, r.name, sub ? h('small', {}, ` ${sub}`) : null),
-      h('span', { class: 'count' }, `면 ${fmtCount(r.faces)}`),
+      countEl(`면 ${fmtCount(r.faces)}`),
     );
     this.bindPick(item, d, sel);
     return item;
@@ -606,7 +604,7 @@ export class Panel {
     else if (t.splitDepth < t.listedDepth)
       notes.push(`그리기가 느려지지 않게 ${t.splitDepth}단계까지만 따로 그물을 나누고, 더 깊은 항목은 그물 안 구간으로 숨기고 강조합니다.`);
     if (t.runsDropped) notes.push('항목이 너무 많아 3D에서 깊은 단계를 눌러 고르지는 못합니다.');
-    this.body.append(section(`그룹·컴포넌트 ${fmtCount(t.count)}개`, bar, this.searchBox(d, fill), h('p', { class: 'hint' }, notes.join(' ')), found, list, cutNote));
+    this.body.append(section(`그룹·컴포넌트 ${fmtCount(t.count)}개`, bar, this.searchBox(d, fill), hint(notes.join(' ')), found, list, cutNote));
     this.renderDefinitions(d, treeDefinitionCounts(t), '컴포넌트 정의별 개수(모든 단계)');
   }
 
@@ -658,7 +656,7 @@ export class Panel {
       cb,
       h('span', { class: `kind k-${kind}` }, KIND_LABEL[kind]),
       h('span', { class: 'name' }, name, sub ? h('small', {}, ` ${sub}`) : null, path ? h('small', { class: 'path' }, path) : null),
-      h('span', { class: 'count' }, `면 ${fmtCount(t.faces[n]!)}`),
+      countEl(`면 ${fmtCount(t.faces[n]!)}`),
     );
     // 찾은 항목을 고르면 나무에서도 보이게(찾기를 지웠을 때) 조상을 펼친다
     item.addEventListener('click', () => {
@@ -716,8 +714,8 @@ export class Panel {
       cb,
       h('span', { class: `kind k-${kind}` }, KIND_LABEL[kind]),
       h('span', { class: 'name' }, name, sub ? h('small', {}, ` ${sub}`) : null),
-      hiddenInModel ? h('span', { class: 'chip', title: '모형에서 숨긴 항목 — "숨긴 형상 보기"를 켜면 보입니다' }, '숨김') : null,
-      h('span', { class: 'count' }, `면 ${fmtCount(t.faces[n]!)}`),
+      hiddenInModel ? chip('숨김', '모형에서 숨긴 항목 — "숨긴 형상 보기"를 켜면 보입니다') : null,
+      countEl(`면 ${fmtCount(t.faces[n]!)}`),
     );
     this.bindPick(item, d, sel, (e) => {
       if (e.key === 'ArrowRight' && hasKids && !open) {
@@ -756,7 +754,7 @@ export class Panel {
     this.body.append(
       section(
         title,
-        h('p', { class: 'hint' }, '줄을 누르면 그 정의의 인스턴스를 모두 고르고, 두 번 누르면 그것들에 맞춰 봅니다.'),
+        hint('줄을 누르면 그 정의의 인스턴스를 모두 고르고, 두 번 누르면 그것들에 맞춰 봅니다.'),
         h('table', { class: 'ptable' }, h('thead', {}, h('tr', {}, h('th', {}, '정의'), h('th', { class: 'num' }, '개수'))), tbody),
       ),
     );
@@ -792,7 +790,7 @@ export class Panel {
         this.pickBar(d),
         ...rows,
         pickPart || allOfDef ? h('div', { class: 'pbar' }, pickPart, allOfDef) : null,
-        !d.selection ? h('p', { class: 'hint' }, '3D나 구성 목록에서 그룹·컴포넌트·재질을 고르면 그 정보를 보입니다. "면·모서리"로 누르면 면 하나의 넓이·모서리 하나의 길이를 봅니다.') : null,
+        !d.selection ? hint('3D나 구성 목록에서 그룹·컴포넌트·재질을 고르면 그 정보를 보입니다. "면·모서리"로 누르면 면 하나의 넓이·모서리 하나의 길이를 봅니다.') : null,
       ),
     );
     if (e.dicts.length) {
@@ -800,12 +798,12 @@ export class Panel {
         h(
           'details',
           { class: 'attr-dict', open: e.dicts.length <= 3 ? true : undefined },
-          h('summary', {}, dict.name, h('span', { class: 'chip' }, dict.source === 'definition' ? '정의' : '이 항목'), h('span', { class: 'count' }, `${fmtCount(dict.entries.length)}개`)),
+          h('summary', {}, dict.name, chip(dict.source === 'definition' ? '정의' : '이 항목'), countEl(`${fmtCount(dict.entries.length)}개`)),
           ...dict.entries.map(([k, v]) => row(k, v)),
-          dict.more ? h('p', { class: 'hint' }, `열쇠 ${fmtCount(dict.more)}개는 더 있어 줄였습니다.`) : null,
+          dict.more ? hint(`열쇠 ${fmtCount(dict.more)}개는 더 있어 줄였습니다.`) : null,
         ),
       );
-      this.body.append(section('속성 사전', ...blocks, e.moreDicts ? h('p', { class: 'hint' }, `사전 ${fmtCount(e.moreDicts)}개는 줄였습니다.`) : null));
+      this.body.append(section('속성 사전', ...blocks, e.moreDicts ? hint(`사전 ${fmtCount(e.moreDicts)}개는 줄였습니다.`) : null));
     }
   }
 
@@ -878,8 +876,8 @@ export class Panel {
         section(
           '위치·그림자',
           ...place,
-          sun ? h('p', { class: 'hint' }, '보기 설정의 "그림자"로 이 날짜·시각·위치의 해 그림자를 켜고 끕니다.') : null,
-          d.axes ? h('p', { class: 'hint' }, '줄자·각도기의 축 고정과 기본 평면은 옮긴 그리기 축을 따릅니다.') : null,
+          sun ? hint('보기 설정의 "그림자"로 이 날짜·시각·위치의 해 그림자를 켜고 끕니다.') : null,
+          d.axes ? hint('줄자·각도기의 축 고정과 기본 평면은 옮긴 그리기 축을 따릅니다.') : null,
         ),
       );
     const scenes = d.images?.scenes ?? [];
@@ -894,17 +892,17 @@ export class Panel {
           'button',
           { class: `scene-card pick${on ? ' sel' : ''}`, type: 'button', 'aria-pressed': on ? 'true' : 'false', title: [pg.name, pg.description].filter(Boolean).join('\n') },
           url ? h('img', { src: url, alt: '', loading: 'lazy', decoding: 'async' }) : h('span', { class: 'scene-blank', html: icon('scene', 28) }),
-          h('span', { class: 'scene-cap' }, pg.name || `장면 ${i + 1}`, d.activePage === i ? h('span', { class: 'chip', title: '파일을 저장할 때 고른 장면' }, '활성') : null),
+          h('span', { class: 'scene-cap' }, pg.name || `장면 ${i + 1}`, d.activePage === i ? chip('활성', '파일을 저장할 때 고른 장면') : null),
         );
         card.addEventListener('click', () => this.host.applyPage(i));
         grid.append(card);
       });
-      this.body.append(section(`장면 ${d.pages.length}개`, h('p', { class: 'hint' }, '누르면 그 장면으로 바꿉니다(카메라·숨긴 태그·숨긴 개체·단면·스타일 중 장면이 기억하는 것). PageUp·PageDown으로도 넘깁니다.'), grid));
+      this.body.append(section(`장면 ${d.pages.length}개`, hint('누르면 그 장면으로 바꿉니다(카메라·숨긴 태그·숨긴 개체·단면·스타일 중 장면이 기억하는 것). PageUp·PageDown으로도 넘깁니다.'), grid));
     } else if (scenes.length) {
       const grid = h('div', { class: 'scene-grid' });
       for (const sc of scenes.slice(0, 100))
         grid.append(h('figure', { class: 'scene-card', title: sc.name }, h('img', { src: sc.url, alt: '', loading: 'lazy', decoding: 'async' }), h('figcaption', { translate: 'no' }, sc.name)));
-      this.body.append(section(`장면 그림 ${scenes.length}개`, h('p', { class: 'hint' }, '파일 안의 장면 미리보기 그림입니다(장면 목록을 읽지 못한 파일).'), grid));
+      this.body.append(section(`장면 그림 ${scenes.length}개`, hint('파일 안의 장면 미리보기 그림입니다(장면 목록을 읽지 못한 파일).'), grid));
     }
     const warns = s.warnings ?? [];
     this.body.append(
@@ -912,7 +910,7 @@ export class Panel {
         warns.length ? `경고 ${warns.length}개` : '경고',
         warns.length
           ? h('ul', { class: 'warns' }, ...warns.slice(0, 300).map((w) => h('li', {}, w)))
-          : h('p', { class: 'hint' }, '해석기가 남긴 경고가 없습니다.'),
+          : hint('해석기가 남긴 경고가 없습니다.'),
       ),
     );
     this.body.append(

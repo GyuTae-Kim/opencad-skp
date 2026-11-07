@@ -5,8 +5,13 @@
  * 무늬(텍스처) 재질도 colorRed/Green/Blue를 갖고 있어(무늬 평균색으로 보임) 그 색을 쓴다.
  * type 2(색을 바꾼 무늬)는 colorRed…가 바꾼 색이고 avgColor가 원래 그림 평균색이다(화면이 그림 화소의 색을 바꿔 칠한다 — colorize.ts).
  * 워커에서도 돌게 DOMParser 없이 시작 꼬리표의 속성만 정규식으로 읽는다.
+ *
+ * 재질 속성 사전: <mat:material> 끝에 <n0:AttributeDictionaries count><n0:AttributeDictionary name count><n0:Attribute key type>값</n0:Attribute>…
+ * (n0 = http://sketchup.google.com/schemas/1.0/types). type은 2020 이하 형 있는 값과 같은 꼴 번호다 — 관찰한 꼴(실제 파일 31개·표준 파일):
+ * 10 글(CDATA), 4 정수, 6 실수, 7 참·거짓(0·1), 11 배열(count + <value type>…). 그 밖의 꼴은 적힌 글 그대로 둔다.
  */
 
+import type { SkpAttr, SkpAttrDicts } from './model';
 import type { Rgba } from 'opencad-viewer3d/types';
 
 /** 재질 무늬(material.xml의 texture 꼬리표) */
@@ -28,6 +33,8 @@ export interface SkpMaterialInfo {
   texture?: SkpMaterialTexture;
   /** 색을 바꾼 무늬(type 2)면 바꾸는 방식: shift(colorizeType 0, 기본) · tint(1) */
   colorize?: 'shift' | 'tint';
+  /** 재질 속성 사전(2021+ material.xml의 n0:AttributeDictionaries, 2020 이하 CMaterial 앞머리) — 있을 때만 */
+  attrs?: SkpAttrDicts;
 }
 
 const XML_ENT: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
@@ -68,6 +75,86 @@ function imageFile(path: string | undefined): string | undefined {
   return f || undefined;
 }
 
+/** 속성 사전 블록의 요소(이름 공간 앞붙이를 뗀 이름, 글 = CDATA·글을 이은 것) */
+interface XmlEl {
+  name: string;
+  attrs: Map<string, string>;
+  text: string;
+  kids: XmlEl[];
+}
+
+/** CDATA · 주석 · 처리 지시 · 꼬리표(1 닫음, 2 이름, 3 속성, 4 빈 요소) · 글(5) */
+const XML_TOKEN = /<!\[CDATA\[([\s\S]*?)\]\]>|<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<(\/?)(?:[\w.-]+:)?([\w.-]+)((?:\s+[\w:.-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>|([^<]+)|</g;
+/** 배열 안 배열 깊이 한도(2020 이하 형 있는 값과 같게) */
+const MAX_ATTR_DEPTH = 32;
+
+/** __proto__ 같은 열쇠도 보통 칸으로 */
+function put<T>(o: Record<string, T>, k: string, v: T): void {
+  Object.defineProperty(o, k, { value: v, enumerable: true, writable: true, configurable: true });
+}
+
+/** xml의 from에서 시작하는 요소 하나를 나무로(닫히지 않으면 끝까지 읽은 데까지) */
+function xmlElement(xml: string, from: number): XmlEl | undefined {
+  const top: XmlEl = { name: '', attrs: new Map(), text: '', kids: [] };
+  const stack = [top];
+  const re = new RegExp(XML_TOKEN.source, 'g');
+  re.lastIndex = from;
+  for (let m = re.exec(xml); m; m = re.exec(xml)) {
+    const cur = stack[stack.length - 1]!;
+    if (m[1] !== undefined) cur.text += m[1];
+    else if (m[3] !== undefined) {
+      if (m[2]) {
+        // 닫는 꼬리표: 같은 이름의 열린 요소까지 닫는다(어긋난 닫음은 건너뛴다)
+        let i = stack.length - 1;
+        while (i > 0 && stack[i]!.name !== m[3]) i--;
+        if (i > 0) stack.length = i;
+      } else {
+        const el: XmlEl = { name: m[3], attrs: new Map(), text: '', kids: [] };
+        for (const a of m[4]!.matchAll(/([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) el.attrs.set(a[1]!, unescapeXml(a[2] ?? a[3] ?? ''));
+        cur.kids.push(el);
+        if (!m[5]) stack.push(el);
+      }
+      if (stack.length === 1) break;
+    } else if (m[6] !== undefined) cur.text += unescapeXml(m[6]);
+  }
+  return top.kids[0];
+}
+
+/** n0:Attribute·value 하나의 값(꼴 번호는 2020 이하 형 있는 값과 같다 — 모르는 꼴·맞지 않는 글은 글 그대로) */
+function attrValue(el: XmlEl, depth: number): SkpAttr {
+  const s = el.text;
+  const v = s.trim();
+  switch (el.attrs.get('type')) {
+    case '4':
+      return /^[-+]?\d+$/.test(v) && Number.isSafeInteger(Number(v)) ? Number(v) : s;
+    case '6':
+      return v && Number.isFinite(Number(v)) ? Number(v) : s;
+    case '7':
+      return v === '1' ? true : v === '0' ? false : s;
+    case '11':
+      return depth >= MAX_ATTR_DEPTH ? [] : el.kids.filter((k) => k.name === 'value').map((k) => attrValue(k, depth + 1));
+    default:
+      return s;
+  }
+}
+
+/** material.xml 글 → 재질 속성 사전(사전 이름 → 열쇠 → 값, 같은 이름은 뒤 것이 이긴다). 없으면 undefined */
+export function parseMaterialAttrs(xml: string): SkpAttrDicts | undefined {
+  const at = xml.search(/<(?:[\w.-]+:)?AttributeDictionaries\b/);
+  const block = at >= 0 ? xmlElement(xml, at) : undefined;
+  let out: SkpAttrDicts | undefined;
+  for (const d of block?.kids ?? []) {
+    if (d.name !== 'AttributeDictionary') continue;
+    const entries: Record<string, SkpAttr> = {};
+    for (const a of d.kids) {
+      const key = a.attrs.get('key');
+      if (a.name === 'Attribute' && key !== undefined) put(entries, key, attrValue(a, 0));
+    }
+    put((out ??= {}), d.attrs.get('name') ?? '', entries);
+  }
+  return out;
+}
+
 /** material.xml 글 → 재질 정보(없으면 null) */
 export function parseMaterialXml(xml: string): SkpMaterialInfo | null {
   const attrs = tagAttrs(xml, 'material');
@@ -105,5 +192,7 @@ export function parseMaterialXml(xml: string): SkpMaterialInfo | null {
     info.texture = t;
     if (attrs.get('type') === '2') info.colorize = attrs.get('colorizeType') === '1' ? 'tint' : 'shift';
   }
+  const dicts = parseMaterialAttrs(xml);
+  if (dicts) info.attrs = dicts;
   return info;
 }
