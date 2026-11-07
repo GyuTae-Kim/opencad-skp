@@ -131,7 +131,7 @@ import { fogFor, lightingForShadow, shadowOrDefault, sunForShadow, usesSun } fro
 import { WalkStick } from './joystick';
 import { Vcb, vcbStartKey, type VcbKind } from './vcb';
 import { FlashNote } from './flash';
-import { mixNodes, mixText, uiName, uiText } from './i18n';
+import { mixNodes, mixText, uiName, uiReady, uiText } from './i18n';
 import { fileText, mix, plainText, type Mixed } from './filetext';
 
 export const APP_TITLE = 'OpenCAD SketchUp 뷰어';
@@ -1080,7 +1080,9 @@ export class SkpViewerApp implements PanelHost {
     try {
       // 예제 만들기 도구는 누를 때만 받는다(첫 화면 묶음을 작게)
       const sample = await import('./sample');
-      // 53차: 예제는 앱이 만든 파일이라 안의 이름(태그·재질·장면 등)과 파일 이름도 화면 언어로 만든다(파일 글은 번역층이 옮기지 않으므로 — 52차)
+      // 53차: 예제는 앱이 만든 파일이라 안의 이름(태그·재질·장면 등)과 파일 이름도 화면 언어로 만든다(파일 글은 번역층이 옮기지 않으므로 — 52차).
+      // 주소로 바로 열면(?sample) 화면 언어 사전을 받기 전일 수 있어 기다린다
+      await uiReady();
       name = uiText(sample.SAMPLE_NAME);
       bytes = await sample.createSampleSkp(uiText);
     } catch (e) {
@@ -1143,8 +1145,9 @@ export class SkpViewerApp implements PanelHost {
       if (!sceneHasGeometry(res.scene)) {
         attempt.error('empty');
         // 알림 글은 해석 워커가 만든다(53차 — worker/notice.ts emptySceneNotice)
-        const n = res.empty ?? { kind: 'error' as const, title: mix`"${fileText(name)}" 파일을 열지 못했습니다`, text: ['그릴 면이나 모서리를 찾지 못했습니다.'] };
-        this.showNotice(n.kind, n.title, n.text);
+        // (워커가 같은 sceneHasGeometry로 가려 그릴 것이 없는 장면이면 늘 단다)
+        const n = res.empty;
+        if (n) this.showNotice(n.kind, n.title, n.text);
         return false;
       }
       // GPU에 올리기: 작은 모형은 한 번에(그 전에 단계 글을 한 번 그린다), 큰 모형은 프레임마다 나눠 올리며 실제 진행을 보인다

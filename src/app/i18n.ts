@@ -20,6 +20,9 @@ let active = 'ko';
  * (31차 — 번역 전 한국어 크기로 놓여 휴대폰 폭에서 잘렸다). 한국어면 그대로
  */
 export function uiText(text: string): string { return translate(text, active); }
+/** 첫 화면 언어 사전을 받아 uiText가 그 언어로 옮기게 될 때(53차 — 주소로 바로 연 예제(?sample)는 이것을 기다린 뒤 화면 언어 이름으로 만든다) */
+let installed: Promise<void> = Promise.resolve();
+export const uiReady = (): Promise<void> => installed.catch(() => undefined);
 
 /**
  * 파일 글이 섞인 글(filetext.ts)을 지금 언어로(52차): 파일 글 자리를 번역기가 보지 않는 사용 영역 글자(U+E000~)로 바꿔 옮긴 뒤 되돌린다
@@ -51,8 +54,7 @@ type RecordValue = { source: string; rendered: string };
 const SKIP = '[data-static-languages], [translate="no"], [data-i18n-skip], script, style, [contenteditable]:not([contenteditable="false"]), textarea, input, code, pre, canvas, svg, .anno-layer, .pmi-layer, .docname, .doc-name, .code-list, .cmd-input, .file-name, .tree .name, .tree-name, .boot-recent-list button, .plist .name, .def-cell, .scene-tabs .scene-tab, .scene-cap, .group-item:not(.opt) .name';
 export async function installLocalization(root: HTMLElement): Promise<() => void> {
   let language = currentLanguage(location.href);
-  await loadLanguage(language);
-  active = language;
+  await (installed = loadLanguage(language).then(() => { active = language; }));
   const originalViews = Object.entries(VIEW_LABELS);
   const originalFaces = CUBE_FACES.map(face => face.label);
   function canvasLabels(): void {
