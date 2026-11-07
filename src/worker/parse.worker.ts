@@ -21,6 +21,7 @@ import { damageNotice } from './notice';
 import { packBigScene } from './pack';
 import { filePrint } from './print';
 import { splitLongAttrs } from './attrlong';
+import { progressFor } from './progress';
 import type { SkpAttrDictsMeta } from '../meta';
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
@@ -29,18 +30,6 @@ function post(msg: ParseResponse, transfer: Transferable[] = []): void {
   ctx.postMessage(msg, transfer);
 }
 
-/** 진행 알림(40 ms마다, 뒤로 가지 않는다 — 2020 이하는 그림을 꺼내며 모형을 먼저 다 읽고, 해석기는 그 모형을 이어 쓰며 앞 단계 값을 다시 알린다) */
-function progressFor(id: number): (fraction: number, stage: string) => void {
-  let last = 0;
-  let high = 0;
-  return (fraction, stage) => {
-    const now = performance.now();
-    if (fraction < 1 && now - last < 40) return;
-    last = now;
-    high = Math.max(high, Math.max(0, Math.min(1, fraction)));
-    post({ id, type: 'progress', fraction: high, stage });
-  };
-}
 
 /**
  * 파일 → 장면과 그림. 그림을 먼저 꺼내고(개수·한 장·전체 크기 한도는 readSkpImages 기본값 — 없어도 된다. 2020 이하는 여기서 모형을 다 읽고 해석기가 이어 쓴다)
@@ -56,7 +45,8 @@ function readScene(file: Blob, rawName: string, progress: (fraction: number, sta
 }
 
 async function open(req: ParseRequest): Promise<ParseResult> {
-  const progress = progressFor(req.id);
+  // 진행 알림(같은 단계 글은 40 ms마다, 첫 알림·나아간 새 단계 글은 곧바로 — progress.ts)
+  const progress = progressFor((fraction, stage) => post({ id: req.id, type: 'progress', fraction, stage }));
   const t0 = performance.now();
   const read = await readScene(req.file, req.name, progress);
   const scene = read.scene;

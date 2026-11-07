@@ -11,6 +11,8 @@
  * (recolorTextures — 그림 크기는 해석기처럼 그림 머리에서 읽는다. 처음 손질이 장면 무늬의 크기를 올린 그림 크기로 바꿔 두므로).
  * 33차: 처음 열 때 이 손질이 해석 끝의 큰 몫이었다(165 MB 표본 1.7초 — 색 바꾸기 계산과 그림 풀기를 기다리는 동안). 색 바꾸기는 같은 색 화소를
  * 기억해 다시 쓰고(colorize.ts), 무늬를 손질하는 동안 다음 무늬를 미리 하나 풀며, 견본 PNG 굳히기는 끝에 모아 기다린다(결과 그림·견본은 같다).
+ * 48차: 165 MB 표본에서 손질 0.73초 가운데 0.29초가 다음 무늬 풀기를 기다리는 몫이었다 — 작은 무늬는 푼 화소 합 한도 안에서 여럿을 앞서 푼다
+ * (DECODE_AHEAD·DECODE_PIXELS — 큰 무늬는 예전처럼 다음 하나만).
  */
 import type { Scene3d, Texture3d } from 'opencad-viewer3d/types';
 import { fitSize, imageInfo } from 'opencad-viewer3d/texture';
@@ -22,6 +24,18 @@ import type { HeldTexture, RecolorResult } from '../app/protocol';
 const ALPHA_CUT = 250;
 /** 색을 바꾼 무늬의 견본 그림 긴 변(화소) */
 const SWATCH_SIDE = 128;
+/** 손질 중인 무늬 다음으로 앞서 푸는 무늬 수의 위 한도(48차) */
+export const DECODE_AHEAD = 4;
+/** 손질 중인 무늬와 앞서 푸는 무늬의 푼 화소 합의 위 한도(한도 크기 limit² 몇 장 — 33차가 함께 들던 많은 쪽, 다음 하나만 앞서 풀 때와 같다) */
+export const DECODE_PIXELS = 2;
+
+/** 무늬 하나를 푼 화소 수 어림(그림 머리 크기를 긴 변 limit 안으로 줄인 것, 크기를 모르면 limit²) */
+export function decodedPixels(t: Pick<Texture3d, 'width' | 'height'>, limit: number): number {
+  const w = t.width ?? 0, h = t.height ?? 0;
+  if (!(w > 0 && h > 0)) return limit * limit;
+  const f = fitSize(w, h, limit);
+  return f ? f.width * f.height : w * h;
+}
 
 export interface TexturePrepResult {
   /** 워커에서 푼 그림 수 */
@@ -146,7 +160,7 @@ export async function prepareSceneTextures(
   const list = [...(scene.textures ?? [])].filter((t) => needsDecode(infos.get(t.id)));
   const swatches = opts.swatches !== false;
   const ok = canDecode();
-  // 33차: 무늬를 손질하는 동안 다음 무늬를 미리 하나 풀어 두고(그림 풀기는 다른 스레드), 견본 PNG는 끝에 모아 기다린다 — 무늬마다 하는 일·결과는 같다
+  // 33차: 무늬를 손질하는 동안 다음 무늬를 미리 풀어 두고(그림 풀기는 다른 스레드), 견본 PNG는 끝에 모아 기다린다 — 무늬마다 하는 일·결과는 같다
   const decode = (t: Texture3d | undefined): Promise<ImageBitmap> | null => {
     if (!ok || !t?.data) return null;
     const p = decodeTexture(t, limit);
@@ -155,13 +169,25 @@ export async function prepareSceneTextures(
     return p;
   };
   const swatchOf: { folder: string; png: Promise<Uint8Array | undefined> }[] = [];
-  let next = decode(list[0]);
+  // 48차: 앞서 푸는 무늬를 하나에서 DECODE_AHEAD개까지로. 손질 중인 무늬와 앞서 푸는 무늬의 푼 화소(어림) 합이 한도 크기 DECODE_PIXELS장 안일
+  // 때만 더 연다 — 작은 무늬는 여럿을 함께 풀어 기다림을 줄이고, 큰 무늬는 예전처럼 다음 하나만 앞서 푼다(푼 그림을 함께 드는 많은 쪽이 예전과 같다)
+  const px = list.map((t) => decodedPixels(t, limit));
+  const budget = DECODE_PIXELS * limit * limit;
+  const ahead: (Promise<ImageBitmap> | null)[] = [];
+  let opened = 0;
+  let openPx = 0;
   let done = 0;
   for (let i = 0; i < list.length; i++) {
     const t = list[i]!;
     const info = infos.get(t.id)!;
-    const cur = next;
-    next = decode(list[i + 1]);
+    // 지금 무늬(i)와 다음 무늬는 늘 열고, 그 뒤는 개수·화소 한도 안에서
+    while (opened < list.length && opened <= i + DECODE_AHEAD && (opened <= i + 1 || openPx + px[opened]! <= budget)) {
+      ahead[opened] = decode(list[opened]);
+      openPx += px[opened]!;
+      opened++;
+    }
+    const cur = ahead[i] ?? null;
+    ahead[i] = null;
     if (!cur) {
       if (info.colorize) {
         dropTexture(scene, t.id);
@@ -186,6 +212,7 @@ export async function prepareSceneTextures(
         dropTexture(scene, t.id);
         res.dropped++;
       }
+    openPx -= px[i]!;
     onEach?.(++done, list.length);
   }
   // 견본은 무늬 차례대로 넣는다(굳히기가 끝난 차례와 상관없이)

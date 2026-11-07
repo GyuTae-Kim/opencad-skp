@@ -164,9 +164,16 @@ export function readSkpImages(bytes: Uint8Array, opts: SkpImageOptions = {}): Sk
 
 /**
  * 2021+ 꾸러미 목록에서 그림을 꺼낸다(readSkpImages의 꾸러미 쪽). 항목 내용은 내어(yield) 받는다 — 파일 전체 바이트로도(runZipReads),
- * 필요한 자리만 읽는 곳으로도(src/range.ts) 같은 차례·같은 결과로 돈다
+ * 필요한 자리만 읽는 곳으로도(src/range.ts) 같은 차례·같은 결과로 돈다.
+ * plan을 주면 곧 내어 받을 항목 차례를 미리 알린다(48차 — 자리만 읽는 곳이 읽기를 앞질러 보내 둔다). 알린 차례는 어림이라(그림을 받아 봐야 아는
+ * 한도·꼴은 그림 머리의 크기로 어림한다) 실제로 내어 받는 차례와 다를 수 있고, 그래도 결과는 같다
  */
-export function* zipImageReads(dir: readonly ZipItem[], opts: SkpImageOptions = {}, out: SkpImages = { materials: [], components: [], scenes: [], skipped: 0, warnings: [] }): ZipReads<SkpImages> {
+export function* zipImageReads(
+  dir: readonly ZipItem[],
+  opts: SkpImageOptions = {},
+  out: SkpImages = { materials: [], components: [], scenes: [], skipped: 0, warnings: [] },
+  plan?: (items: readonly ZipItem[]) => void,
+): ZipReads<SkpImages> {
   const maxCount = opts.maxCount ?? MAX_IMAGE_COUNT;
   const maxEach = opts.maxBytesEach ?? MAX_IMAGE_BYTES;
   const maxTotal = opts.maxTotalBytes ?? MAX_IMAGE_TOTAL;
@@ -201,12 +208,15 @@ export function* zipImageReads(dir: readonly ZipItem[], opts: SkpImageOptions = 
   }
   // 재질 폴더마다 그림 하나: 여럿이면 material.xml의 무늬 그림 이름과 같은 것
   const text = new TextDecoder('utf-8');
+  const pickXml = (f: { images: ZipItem[]; xml?: ZipItem }): ZipItem | undefined => (f.images.length > 1 && f.xml && f.xml.size < 1 << 20 ? f.xml : undefined);
+  plan?.([...folders.values()].map(pickXml).filter((x): x is ZipItem => !!x));
   for (const [folder, f] of folders) {
     if (!f.images.length) continue;
     let pick = f.images[0]!;
-    if (f.images.length > 1 && f.xml && f.xml.size < 1 << 20)
+    const xml = pickXml(f);
+    if (xml)
       try {
-        const file = parseMaterialXml(text.decode(yield f.xml))?.texture?.file;
+        const file = parseMaterialXml(text.decode(yield xml))?.texture?.file;
         const hit = file ? f.images.find((it) => it.name.slice(it.name.lastIndexOf('/') + 1) === file) : undefined;
         if (hit) pick = hit;
       } catch {
@@ -217,11 +227,26 @@ export function* zipImageReads(dir: readonly ZipItem[], opts: SkpImageOptions = 
   // 한도 안에서 먼저 넣을 차례: 모형 → 장면 → 재질 → 컴포넌트
   const order: Record<Kind, number> = { model: 0, preview: 1, scene: 2, material: 3, component: 4 };
   want.sort((a, b) => order[a.kind] - order[b.kind]);
+  const over = (w: (typeof want)[number], count: number, total: number): boolean =>
+    count >= maxCount || w.item.size > maxEach || w.item.compressedSize > maxEach || total + w.item.size > maxTotal || !!w.item.truncated;
+  if (plan) {
+    // 아래 차례 어림: 그림마다 목록의 크기만큼 받는다고 보고 같은 한도를 건다
+    const list: ZipItem[] = [];
+    let model = !!out.model;
+    let sum = 0;
+    for (const w of want) {
+      if ((w.kind === 'preview' && model) || over(w, list.length, sum)) continue;
+      list.push(w.item);
+      sum += w.item.size;
+      if (w.kind === 'model' || w.kind === 'preview') model = true;
+    }
+    plan(list);
+  }
   let count = 0;
   let total = 0;
   for (const w of want) {
     if (w.kind === 'preview' && out.model) continue;
-    if (count >= maxCount || w.item.size > maxEach || w.item.compressedSize > maxEach || total + w.item.size > maxTotal || w.item.truncated) {
+    if (over(w, count, total)) {
       out.skipped++;
       continue;
     }
