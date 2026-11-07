@@ -4,6 +4,7 @@ import { VIEW_LABELS } from 'opencad-viewer3d/camera';
 import { CUBE_FACES } from 'opencad-viewer3d/viewcube';
 /** Localize only presentation DOM. CAD data, input values and command keys stay intact. */
 import { currentLanguage, languages, languageUrl, metadataForLanguage, registerCatalog, sourceMessage, translate } from '../../site/i18n-core.mjs';
+import { isAppName, type Mixed } from './filetext';
 
 const loaders: Record<string, () => Promise<{default: Record<string,string>}>> = {
   en: () => import('../../site/locales/en.json'), ja: () => import('../../site/locales/ja.json'),
@@ -19,6 +20,32 @@ let active = 'ko';
  * (31차 — 번역 전 한국어 크기로 놓여 휴대폰 폭에서 잘렸다). 한국어면 그대로
  */
 export function uiText(text: string): string { return translate(text, active); }
+
+/**
+ * 파일 글이 섞인 글(filetext.ts)을 지금 언어로(52차): 파일 글 자리를 번역기가 보지 않는 사용 영역 글자(U+E000~)로 바꿔 옮긴 뒤 되돌린다
+ * (사전 틀의 {0}이 그 글자를 그대로 잡고, 나눔 글로 조각낼 때도 한글이 없는 조각이라 그대로 둔다).
+ * 옮긴 글을 넣은 속성은 data-i18n-keep에, 마디를 담은 요소는 data-i18n-skip으로 번역층에서 빼고, 언어를 바꾸면 다시 그린다(app.ts)
+ */
+function mixed(parts: Mixed): [string, string[]] {
+  const files: string[] = [];
+  return [translate(parts.map(p => typeof p === 'string' ? p : String.fromCharCode(0xe000 + files.push(p.ui ? translate(p.file, active) : p.file) - 1)).join(''), active), files];
+}
+export function mixText(parts: Mixed): string {
+  const [text, files] = mixed(parts);
+  return text.replace(/[-]/g, c => files[c.charCodeAt(0) - 0xe000] ?? c);
+}
+/** 섞은 글 → 화면 마디(파일 글은 translate="no" 묶음). 담는 요소에 data-i18n-skip을 둔다 */
+export function mixNodes(parts: Mixed): (string | Node)[] {
+  const [text, files] = mixed(parts);
+  return text.split(/([-])/).filter(Boolean).map(x => {
+    const file = files[x.charCodeAt(0) - 0xe000];
+    if (x.length > 1 || file === undefined) return x;
+    const el = document.createElement('span'); el.setAttribute('translate', 'no'); el.textContent = file;
+    return el;
+  });
+}
+/** 이름 칸 글: 앱 자리 글("(이름 없음)" 등)만 지금 언어로, 파일 글은 그대로(번역층이 건너뛰는 칸에 넣을 때) */
+export const uiName = (name: string): string => isAppName(name) ? uiText(name) : name;
 
 type RecordValue = { source: string; rendered: string };
 // Scene names come from the model; playback controls beside them are authored UI.
@@ -47,8 +74,10 @@ export async function installLocalization(root: HTMLElement): Promise<() => void
   function element(el: Element): void {
     if ((el.matches(SKIP) && !el.matches('input, textarea, canvas, [contenteditable]')) || el.closest('[translate="no"], [data-i18n-skip]')) return;
     const records = attributes.get(el) ?? new Map<string, RecordValue>(); attributes.set(el, records);
+    // data-i18n-keep: 파일 글이거나 앱이 이미 옮겨 넣은 속성(mixText — 52차)
+    const keep = el.getAttribute('data-i18n-keep')?.split(' ');
     for (const name of ['title','aria-label','aria-description','placeholder','alt']) {
-      if (!el.hasAttribute(name)) continue;
+      if (!el.hasAttribute(name) || keep?.includes(name)) continue;
       const record = value(el.getAttribute(name)!, records.get(name)); records.set(name, record);
       if (el.getAttribute(name) !== record.rendered) el.setAttribute(name, record.rendered);
     }

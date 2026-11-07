@@ -23,6 +23,7 @@ import type {
   SkpTreeInfo,
 } from '../meta';
 import { nodeEntity, type EntityInput } from './entity';
+import { fileText, joinMixed, mix, nameText, plainText, type Mixed } from './filetext';
 import { definitionNodes } from './search';
 import { edgeGeometry, faceBox, faceGeometry, faceOfTriangle, readFaceIndex, segmentsBox, triangleCount, type FaceIndex, type PartBox } from './faces';
 import type { MeasureToolResult } from './measure';
@@ -1210,63 +1211,68 @@ export function nodePathText(d: SkpDoc, node: number): string {
 }
 
 /** 고른 것 설명의 재질 조각: 재질이 없는 면(앱이 붙인 이름 "기본 재질")은 그 이름만("재질 기본 재질"로 겹치지 않고, 다른 언어에서도 바뀌게) */
-const materialPart = (name: string): string => (name === '기본 재질' ? name : `재질 ${name}`);
+const materialPart = (name: string): Mixed => (name === '기본 재질' ? [nameText(name)] : mix`재질 ${nameText(name)}`);
 
-/** 고른 것 한 줄 설명(상태 막대·패널 아래) */
-export function selectionText(d: SkpDoc, sel: Selection | null, pick: Pick3d | null = null): string {
-  if (!sel) return '';
+/**
+ * 고른 것 한 줄 설명(상태 막대·패널 아래). 이름·정의·위치·태그·재질은 파일 글로 둔다(52차 — 이름이 사전 열쇠와 같거나 " · "를 품으면
+ * 통째로 옮기던 번역층이 이름까지 바꿨다: "태그 무늬 · 이" → "Tag 무늬 · This"). 화면은 i18n.ts mixNodes·mixText로 옮긴다
+ */
+export function selectionParts(d: SkpDoc, sel: Selection | null, pick: Pick3d | null = null): Mixed {
+  if (!sel) return [];
   const pickedMat = pick && pick.kind === 'mesh' ? d.meshMaterial.get(pick.id) : undefined;
+  const of = (def: string | null, name: string): Mixed => (def && def !== name ? mix` (${fileText(def)})` : []);
   if (sel.kind === 'outline') {
     const r = d.outline[sel.index];
-    if (!r) return '';
+    if (!r) return [];
     // 모형에 바로 놓인 형상은 이름이 곧 설명이다("형상 모형에 바로 놓인 형상"처럼 겹치지 않게)
-    const parts = [r.kind === 'loose' ? r.name : `${KIND_LABEL[r.kind]} ${r.name}${r.definition && r.definition !== r.name ? ` (${r.definition})` : ''}`];
-    if (r.kind !== 'loose' && r.tag) parts.push(`태그 ${r.tag}`);
+    const parts = [r.kind === 'loose' ? [nameText(r.name)] : mix`${KIND_LABEL[r.kind]} ${nameText(r.name)}${of(r.definition, r.name)}`];
+    if (r.kind !== 'loose' && r.tag) parts.push(mix`태그 ${fileText(r.tag)}`);
     if (pickedMat) parts.push(materialPart(pickedMat));
-    parts.push(`면 ${r.faces.toLocaleString('ko-KR')}`);
-    return parts.join(' · ');
+    parts.push([`면 ${r.faces.toLocaleString('ko-KR')}`]);
+    return joinMixed(parts);
   }
   if (sel.kind === 'node') {
     const t = d.tree;
-    if (!t || sel.index < 0 || sel.index >= t.count) return '';
+    if (!t || sel.index < 0 || sel.index >= t.count) return [];
     const i = sel.index;
     const name = nodeName(t, i);
-    const def = nodeDefinition(t, i);
-    const parts = [`${treeKindLabel(t.kind[i]!)} ${name}${def && def !== name ? ` (${def})` : ''}`];
-    if (t.parent[i]! >= 0) parts.push(`위치 ${nodePathText(d, t.parent[i]!)}`);
+    const parts = [mix`${treeKindLabel(t.kind[i]!)} ${nameText(name)}${of(nodeDefinition(t, i), name)}`];
+    if (t.parent[i]! >= 0) parts.push(mix`위치 ${fileText(nodePathText(d, t.parent[i]!))}`);
     const tag = nodeTag(t, i);
-    if (tag) parts.push(`태그 ${tag}`);
+    if (tag) parts.push(mix`태그 ${fileText(tag)}`);
     if (pickedMat) parts.push(materialPart(pickedMat));
-    parts.push(`면 ${t.faces[i]!.toLocaleString('ko-KR')}`);
-    return parts.join(' · ');
+    parts.push([`면 ${t.faces[i]!.toLocaleString('ko-KR')}`]);
+    return joinMixed(parts);
   }
   if (sel.kind === 'material') {
     const m = d.materials.find((x) => x.name === sel.name);
-    return m ? `재질 ${m.name}${m.faces !== null ? ` · 면 ${m.faces.toLocaleString('ko-KR')}` : ''}` : '';
+    return m ? mix`재질 ${nameText(m.name)}${m.faces !== null ? ` · 면 ${m.faces.toLocaleString('ko-KR')}` : ''}` : [];
   }
   if (sel.kind === 'definition') {
     const n = d.tree ? selectedDefinitionNodes(d, sel).length : d.outline.filter((r) => r.definition === sel.name && r.kind === 'component').length;
-    return `컴포넌트 정의 ${sel.name} · 놓인 수 ${n.toLocaleString('ko-KR')}개`;
+    return mix`컴포넌트 정의 ${fileText(sel.name)} · 놓인 수 ${n.toLocaleString('ko-KR')}개`;
   }
   if (sel.kind === 'face' || sel.kind === 'edge') {
     const e = selectionEntity(d);
     const k = mmPerSceneUnit(d.scene.units);
-    const parts: string[] = [];
-    if (e.kind === 'face') parts.push(`면 · 넓이 ${formatArea((e.area ?? 0) * k * k, d.units)}`);
+    const parts: Mixed[] = [];
+    if (e.kind === 'face') parts.push([`면 · 넓이 ${formatArea((e.area ?? 0) * k * k, d.units)}`]);
     else {
-      parts.push(`${e.segments && e.segments > 1 ? '곡선' : '모서리'} · 길이 ${formatLength((e.length ?? 0) * k, d.units)}`);
-      if (e.radius) parts.push(`반지름 ${formatLength(e.radius * k, d.units)}`);
+      parts.push([`${e.segments && e.segments > 1 ? '곡선' : '모서리'} · 길이 ${formatLength((e.length ?? 0) * k, d.units)}`]);
+      if (e.radius) parts.push([`반지름 ${formatLength(e.radius * k, d.units)}`]);
     }
     if (e.material) parts.push(materialPart(e.material));
-    if (e.tag) parts.push(`태그 ${e.tag}`);
-    return parts.join(' · ');
+    if (e.tag) parts.push(mix`태그 ${fileText(e.tag)}`);
+    return joinMixed(parts);
   }
   const mesh = d.scene.meshes.find((m) => m.id === sel.id);
   const line = mesh ? undefined : d.scene.lines.find((l) => l.id === sel.id);
   const item = mesh ?? line;
-  if (!item) return sel.id;
-  return `${item.name ?? item.id}`;
+  return [fileText(item ? `${item.name ?? item.id}` : sel.id)];
 }
+
+/** 고른 것 한 줄 설명의 원문(한국어 — 상태 보내기·시험) */
+export const selectionText = (d: SkpDoc, sel: Selection | null, pick: Pick3d | null = null): string => plainText(selectionParts(d, sel, pick));
 
 /** 범위 크기(x, y, z) */
 export function boundsSize(s: Scene3d): [number, number, number] | null {

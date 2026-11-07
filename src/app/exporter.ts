@@ -245,7 +245,8 @@ export function printImage(b: Blob, title: string): void {
   const sheet = h(
     'div',
     { class: 'print-sheet', 'aria-hidden': 'true' },
-    h('img', { src: url, alt: title }),
+    // 문서 이름(파일 글)은 번역하지 않는다
+    h('img', { src: url, alt: title, translate: 'no' }),
     h('p', { class: 'print-cap', 'data-i18n-skip': '' }, `${title} · ${new Date().toLocaleDateString()}`),
   );
   document.body.append(sheet);

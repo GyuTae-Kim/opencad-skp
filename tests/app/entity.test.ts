@@ -69,7 +69,7 @@ describe('엔티티 정보 행', () => {
 
   it('그룹은 정의 이름·정의 GUID를 보이지 않고, 없는 칸은 행을 만들지 않는다', () => {
     const info = entityInfo({ kind: 'group', name: '벽', definition: 'Group#3', definitionGuid: 'x' }, DEFAULT_UNITS, 1);
-    expect(info.rows).toEqual([{ label: '인스턴스', value: '벽' }]);
+    expect(info.rows).toEqual([{ label: '인스턴스', value: '벽', file: true }]);
     // 재질 칸이 없으면 재질 행도 없다(재질을 모르는 것과 기본값은 다르다)
     expect(info.rows.some((r) => r.label === '재질')).toBe(false);
   });

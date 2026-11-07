@@ -8,6 +8,8 @@ import { h } from './dom';
 import type { SkpDoc } from './doc';
 import type { EntityInfo } from './entity';
 import { fmtCount } from './format';
+import { fileText, mix } from './filetext';
+import { mixText } from './i18n';
 import type { AttrLong, AttrLongRef } from './protocol';
 
 type Dict = Record<string, SkpAttrValueMeta>;
@@ -40,14 +42,21 @@ export function attrSection(d: SkpDoc, e: EntityInfo): HTMLElement {
   const long = d.attrLong;
   const refs = long ? longRefs(long, (d.scene.meta as { attributes?: unknown[] } | undefined)?.attributes) : null;
   const hint = (text: string): HTMLElement => h('p', { class: 'hint' }, text);
+  // 사전 이름·열쇠·값은 파일 글이라 번역층에서 뺀다(52차 — 열쇠 "면"이 "Face"로, 값 "무늬"가 "Texture"로 바뀌었다). 앱 글(칩·개수·단추)은 옮긴다
   const blocks = e.dicts.map((dict) => {
     const keys = dict.src && refs?.get(dict.src);
     return h(
       'details',
       { class: 'attr-dict', open: e.dicts.length <= 3 ? true : undefined },
-      h('summary', {}, dict.name, h('span', { class: 'chip' }, dict.source === 'definition' ? '정의' : '이 항목'), h('span', { class: 'count' }, `${fmtCount(dict.entries.length)}개`)),
+      h(
+        'summary',
+        {},
+        h('span', { translate: 'no' }, dict.name),
+        h('span', { class: 'chip' }, dict.source === 'definition' ? '정의' : '이 항목'),
+        h('span', { class: 'count' }, `${fmtCount(dict.entries.length)}개`),
+      ),
       ...dict.entries.map(([k, v]) => {
-        const v1 = h('span', { class: 'v', title: v }, v);
+        const v1 = h('span', { class: 'v' }, h('span', { title: v, translate: 'no' }, v));
         const r = keys?.get(k);
         if (r && long) {
           const more = h('button', { class: 'mini-btn attr-more' }, `전체 값 보기(${fmtCount(r.chars)}자)`);
@@ -55,7 +64,7 @@ export function attrSection(d: SkpDoc, e: EntityInfo): HTMLElement {
             more.disabled = true;
             readLong(long, r).then(
               (text) => {
-                const box = h('textarea', { class: 'attr-full', readonly: true, rows: 8, spellcheck: 'false', 'aria-label': `${k} 전체 값` });
+                const box = h('textarea', { class: 'attr-full', readonly: true, rows: 8, spellcheck: 'false', 'aria-label': mixText(mix`${fileText(k)} 전체 값`), 'data-i18n-keep': 'aria-label' });
                 box.value = text;
                 more.replaceWith(box);
                 box.focus();
@@ -65,7 +74,7 @@ export function attrSection(d: SkpDoc, e: EntityInfo): HTMLElement {
           });
           v1.append(more);
         }
-        return h('div', { class: 'prop-row' }, h('span', { class: 'k' }, k), v1);
+        return h('div', { class: 'prop-row' }, h('span', { class: 'k', translate: 'no' }, k), v1);
       }),
       dict.more ? hint(`열쇠 ${fmtCount(dict.more)}개는 더 있어 줄였습니다.`) : null,
     );
