@@ -82,7 +82,9 @@ describe('속성 사전 칸: 전체 값 보기', () => {
     expect(btns[0]!.textContent).toBe(`전체 값 보기(${original.length.toLocaleString('ko-KR')}자)`);
     expect(btns[0]!.type).toBe('button');
     // 줄 글은 예전처럼 2,000자 + …
-    expect(el.querySelector('.prop-row .v')!.getAttribute('title')).toBe(attributeText(original));
+    // 값(파일 글)은 번역층에서 뺀 묶음 안에(52차), 단추는 그 밖이라 옮겨진다
+    expect(el.querySelector('.prop-row .v [translate="no"]')!.getAttribute('title')).toBe(attributeText(original));
+    expect(btns[0]!.closest('[translate="no"]')).toBeNull();
     btns[0]!.click();
     await new Promise((r) => setTimeout(r, 0));
     const box = el.querySelector<HTMLTextAreaElement>('textarea.attr-full')!;

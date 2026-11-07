@@ -9,6 +9,7 @@
 import type { SkpAttrDictsMeta, SkpAttrValueMeta, SkpTreeInfo } from '../meta';
 import { formatArea, formatLength, formatVolume, withLengthUnit, type UnitsDisplay } from './units';
 import { nodeDefinition, nodeName, nodePath, nodeTag, type TreeData } from './tree';
+import { isAppName } from './filetext';
 
 /** 속성 값 글은 이 글자 수에서 자른다 */
 export const ATTR_VALUE_CHARS = 2000;
@@ -85,6 +86,8 @@ export interface InfoRow {
   value: string;
   /** 도움말(전체 글·단위를 붙인 글) */
   title?: string;
+  /** 값이 파일 글(이름·정의·경로·태그·재질·설명·GUID — 화면 번역에서 뺀다, 52차) */
+  file?: boolean;
 }
 
 export interface AttrDictView {
@@ -166,21 +169,29 @@ const INSTANCE_KINDS = new Set<EntityKind>(['group', 'component', 'image']);
 export function entityInfo(e: EntityInput, units: UnitsDisplay, mmPerUnit: number): EntityInfo {
   const k = isNum(mmPerUnit) && mmPerUnit > 0 ? mmPerUnit : 1;
   const rows: InfoRow[] = [];
-  const add = (label: string, value: string, title?: string): void => {
+  const add = (label: string, value: string, title?: string, file?: boolean): void => {
     if (!value) return;
-    rows.push(title && title !== value ? { label, value, title } : { label, value });
+    const r: InfoRow = title && title !== value ? { label, value, title } : { label, value };
+    if (file) r.file = true;
+    rows.push(r);
   };
+  /** 파일 글 행(이름 칸의 앱 자리 글 — "모형에 바로 놓인 형상" 등 — 은 앱 글로) */
+  const fileRow = (label: string, value: string, title?: string): void => add(label, value, title, !isAppName(value));
   const length = (v: number): string => formatLength(v * k, units);
   const instance = INSTANCE_KINDS.has(e.kind);
   const name = text(e.name);
   const definition = text(e.definition);
-  add(instance ? '인스턴스' : '이름', name);
+  fileRow(instance ? '인스턴스' : '이름', name);
   // 그룹 정의 이름("Group#3")은 SketchUp도 보이지 않는다
-  if (definition && e.kind !== 'group' && (instance || definition !== name)) add('정의', definition);
+  if (definition && e.kind !== 'group' && (instance || definition !== name)) fileRow('정의', definition);
   if (e.kind === 'component' && isNum(e.instances) && e.instances >= 0) add('놓인 수', `${Math.floor(e.instances).toLocaleString('ko-KR')}개`);
-  add('위치', text(e.path));
-  add('태그', text(e.tag));
-  if ('material' in e && e.material !== undefined) add('재질', text(e.material) || '기본값');
+  fileRow('위치', text(e.path));
+  fileRow('태그', text(e.tag));
+  // 재질이 없으면 앱 글 "기본값"
+  if ('material' in e && e.material !== undefined) {
+    if (text(e.material)) fileRow('재질', text(e.material));
+    else add('재질', '기본값');
+  }
   if (Array.isArray(e.size) && e.size.length >= 3 && e.size.slice(0, 3).every(isNum)) {
     const parts = e.size.slice(0, 3).map((v) => length(Math.abs(v)));
     const value = parts.join(' × ');
@@ -201,12 +212,12 @@ export function entityInfo(e: EntityInput, units: UnitsDisplay, mmPerUnit: numbe
   if (isNum(e.faces) && e.faces >= 0) add('면', Math.floor(e.faces).toLocaleString('ko-KR'));
   if (isNum(e.edges) && e.edges >= 0) add('모서리', Math.floor(e.edges).toLocaleString('ko-KR'));
   const description = text(e.description);
-  add('설명', description, description);
-  add('GUID', text(e.guid));
-  if (e.kind !== 'group' && text(e.definitionGuid) !== text(e.guid)) add('정의 GUID', text(e.definitionGuid));
+  add('설명', description, description, true);
+  add('GUID', text(e.guid), undefined, true);
+  if (e.kind !== 'group' && text(e.definitionGuid) !== text(e.guid)) add('정의 GUID', text(e.definitionGuid), undefined, true);
   // 불러온 파일: 줄에는 파일 이름, 도움말에 전체 경로(경로는 그 파일을 만든 컴퓨터의 것이라 길다)
   const from = text(e.definitionPath);
-  add('불러온 파일', from.replace(/.*[\\/]/, ''), from);
+  add('불러온 파일', from.replace(/.*[\\/]/, ''), from, true);
   const state = [e.hidden === true ? '숨김' : '', e.locked === true ? '잠김' : ''].filter(Boolean).join(' · ');
   add('상태', state);
   for (const r of e.extra ?? []) if (r && r.label && r.value) rows.push({ ...r });

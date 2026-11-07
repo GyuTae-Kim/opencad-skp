@@ -83,6 +83,7 @@ import {
   selectionIds,
   selectionRanges,
   selectionSegments,
+  selectionParts,
   selectionText,
   selectionEntity,
   measureAxes,
@@ -130,7 +131,8 @@ import { fogFor, lightingForShadow, shadowOrDefault, sunForShadow, usesSun } fro
 import { WalkStick } from './joystick';
 import { Vcb, vcbStartKey, type VcbKind } from './vcb';
 import { FlashNote } from './flash';
-import { uiText } from './i18n';
+import { mixNodes, mixText, uiName, uiText } from './i18n';
+import { fileText, mix, type Mixed } from './filetext';
 
 export const APP_TITLE = 'OpenCAD SketchUp 뷰어';
 const TOOLS_URL = 'https://gyutae-kim.github.io/opencad';
@@ -469,6 +471,9 @@ export class SkpViewerApp implements PanelHost {
     this.root.addEventListener('languagechange', () => {
       if (this.viewer) this.viewer.setViewCubeSize(this.viewer.viewCubeSize);
       this.overlay?.invalidate();
+      // 파일 글을 끼워 앱이 옮겨 넣은 글(패널 줄의 도움말·상태 줄의 고른 것 — 번역층이 건너뜀, 52차)도 새 언어로
+      this.panel.rerender();
+      this.refreshStatus();
       const menu = this.menu;
       const btn = this.menuBtn;
       if (menu && btn)
@@ -587,7 +592,7 @@ export class SkpViewerApp implements PanelHost {
     // 가운데
     const viewHost = h('div', { class: 'view-host' });
     const notice = h('div', { class: 'notice', role: 'alert', hidden: true });
-    const busyTitle = h('div', { class: 'busy-title' });
+    const busyTitle = h('div', { class: 'busy-title', 'data-i18n-skip': '' });
     const busyBar = h('i');
     const busyStage = h('div', { class: 'busy-stage' });
     const cancelBtn = h('button', { class: 'mini-btn' }, '취소');
@@ -3406,7 +3411,8 @@ export class SkpViewerApp implements PanelHost {
     if (name !== null) {
       this.closeMenu();
       const pct = Math.round(Math.max(0, Math.min(1, fraction)) * 100);
-      e.busyTitle.textContent = `${name} 여는 중…`;
+      // 파일 이름은 그대로(52차 — "무늬 · 이.skp 여는 중…"이 "Texture · Opening 이.skp…"로 바뀌었다)
+      e.busyTitle.replaceChildren(...mixNodes(mix`${fileText(name)} 여는 중…`));
       e.busyBar.style.width = `${Math.max(2, pct)}%`;
       e.busyBar.parentElement!.setAttribute('aria-valuenow', String(pct));
       e.busyStage.textContent = `${stage} · ${pct}%`;
@@ -3515,21 +3521,23 @@ export class SkpViewerApp implements PanelHost {
     e.stWarn.hidden = !w;
     e.stWarn.textContent = `경고 ${w}`;
     let sel = '';
-    let picked = false;
+    let picked: Mixed = [];
     if (d.measure) sel = measureText(d.measure, d.units, mmPerSceneUnit(d.scene.units));
     else if (this.measuring) sel = this.measureHint ?? '측정: 점을 누르세요';
     else if (this.measureFirstUse.wanted) sel = '측정 도구를 받는 중…';
     else {
-      sel = this.measureTool?.guidePickText(!!this.coarseQuery?.matches) ?? selectionText(d, d.selection, d.pick);
-      picked = !!sel;
+      const guide = this.measureTool?.guidePickText(!!this.coarseQuery?.matches);
+      picked = guide ? [guide] : selectionParts(d, d.selection, d.pick);
     }
     // 측정 잠금 안내는 안내 글과 따로 둔다(번역이 안내 글 전체를 한 덩어리로 찾게)
     const lock = this.measuring ? this.measureLockHint() : null;
-    // "고른 것"과 설명은 따로 둔다: 한 글로 두면 다른 언어에서 "고른 것: {0}"이 설명 전체를 그대로 잡아 한국어로 남는다
-    if (picked) e.stSel.replaceChildren(h('span', {}, '고른 것'), ': ', h('span', {}, sel));
+    // "고른 것"과 설명은 따로 둔다: 한 글로 두면 다른 언어에서 "고른 것: {0}"이 설명 전체를 그대로 잡아 한국어로 남는다.
+    // 설명의 이름·태그 같은 파일 글은 그대로, 앱 글만 지금 언어로(52차 — 언어를 바꾸면 다시 그린다)
+    if (picked.length) e.stSel.replaceChildren(h('span', {}, '고른 것'), ': ', h('span', { 'data-i18n-skip': '' }, ...mixNodes(picked)));
     else if (lock) e.stSel.replaceChildren(h('span', {}, sel), ' · ', h('span', { class: 'st-lock' }, lock));
     else e.stSel.textContent = sel;
-    e.stSel.title = sel;
+    e.stSel.title = mixText(picked.length ? picked : [sel]);
+    e.stSel.setAttribute('data-i18n-keep', 'title');
     this.refreshMeasureBar();
     this.refreshSelBar();
   }
@@ -3551,9 +3559,9 @@ export class SkpViewerApp implements PanelHost {
     if (!on || !d) return;
     const info = entityInfo(selectionEntity(d), d.units, mmPerSceneUnit(d.scene.units));
     const name = cardName(info);
-    // 이름·태그 같은 파일 글은 번역하지 않는다
-    const head = h('b', { class: 'mb-value' }, info.title, name ? h('span', { class: 'mb-name', 'data-i18n-skip': '' }, name) : null);
-    const facts = cardRows(info).map((r) => h('span', { class: 'mb-fact' }, h('span', { class: 'mb-k' }, r.label), h('span', { 'data-i18n-skip': '' }, r.value)));
+    // 이름·태그 같은 파일 글은 번역하지 않는다(이름 칸의 앱 자리 글과 "3개" 같은 앱 글 값은 옮긴다 — 52차)
+    const head = h('b', { class: 'mb-value' }, info.title, name ? h('span', { class: 'mb-name', 'data-i18n-skip': '' }, uiName(name)) : null);
+    const facts = cardRows(info).map((r) => h('span', { class: 'mb-fact' }, h('span', { class: 'mb-k' }, r.label), h('span', { translate: r.file ? 'no' : null }, r.value)));
     e.selText.replaceChildren(head, ...(facts.length ? [h('span', { class: 'mb-sub' }, ...facts)] : []));
     const part = partOfPick(d);
     e.selPart.hidden = !part;
