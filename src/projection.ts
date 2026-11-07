@@ -85,24 +85,27 @@ const invAt = [0, 0, 0, 0, 0, 0, 0, 0, 0];
 /**
  * 면 한쪽의 투영 행렬을 out(12칸, 3×4 행 우선)에 적는다(faceUvq와 같은 값 — 배열을 새로 잡지 않는다). 뒤집지 못한 투영이면 true.
  * 저장된 투영은 t[o, o + 14)(entities.ts 무늬 투영 표 꼴: 종류, 방향이 있는지, 행렬 9칸 열 우선, 방향 3칸) — t가 없거나 o < 0이면 기본 투영.
- * 법선은 normal[0, 3), w·h는 무늬 한 장 가로·세로(인치)
+ * 법선은 normal[0, 3), w·h는 무늬 한 장 가로·세로(인치).
+ * axes: 부르는 쪽이 이미 구한 normal의 평면 틀(planeAxesInto(normal, 0, …)과 같은 값 — 53차, 장면 만들기가 면마다 앞·뒤 무늬와 물려받기 평면 좌표에 한 번만 구한다)
  */
-export function faceUvqInto(normal: ArrayLike<number>, t: ArrayLike<number> | undefined, o: number, w: number, h: number, out: Float64Array): boolean {
+export function faceUvqInto(normal: ArrayLike<number>, t: ArrayLike<number> | undefined, o: number, w: number, h: number, out: Float64Array, axes?: ArrayLike<number>): boolean {
   const stored = !!t && o >= 0;
   let dirAt = -1;
   if (stored && (t[o] === 2 || t[o] === 3) && t[o + 1]) {
     const l = hypot3(t[o + 11]!, t[o + 12]!, t[o + 13]!);
     if (l > 1e-12 && Number.isFinite(l)) dirAt = o + 11;
   }
+  let A: ArrayLike<number> = axesAt;
   if (dirAt >= 0) planeAxesInto(t!, dirAt, axesAt);
+  else if (axes) A = axes;
   else planeAxesInto(normal, 0, axesAt);
   const P = planeP;
-  P[0] = axesAt[0]!;
-  P[1] = axesAt[1]!;
-  P[2] = axesAt[2]!;
-  P[4] = axesAt[3]!;
-  P[5] = axesAt[4]!;
-  P[6] = axesAt[5]!;
+  P[0] = A[0]!;
+  P[1] = A[1]!;
+  P[2] = A[2]!;
+  P[4] = A[3]!;
+  P[5] = A[4]!;
+  P[6] = A[5]!;
   let inv = false;
   if (stored) {
     // 열 우선 저장 → 행 우선 M[r][c] = s[c * 3 + r]
@@ -167,12 +170,14 @@ export function applyFaceUvqAt(m: ArrayLike<number>, points: ArrayLike<number>, 
   const end = at + 3 * count;
   let qlo = Infinity, qhi = -Infinity;
   const linearQ = m[8] !== 0 || m[9] !== 0 || m[10] !== 0;
+  // 53차: 행렬 값은 정점마다 다시 읽지 않는다(out과 같은 형식 배열 꼴이라 V8이 고리 밖으로 꺼내지 못했다 — 같은 식·같은 값)
+  const m0 = m[0]!, m1 = m[1]!, m2 = m[2]!, m3 = m[3]!, m4 = m[4]!, m5 = m[5]!, m6 = m[6]!, m7 = m[7]!, m8 = m[8]!, m9 = m[9]!, m10 = m[10]!, m11 = m[11]!;
   for (let i = 0, w = base; i < count; i++, w += 3) {
     const o = (start + i) * 3;
     const px = points[o]!, py = points[o + 1]!, pz = points[o + 2]!;
-    const U = m[0]! * px + m[1]! * py + m[2]! * pz + m[3]!;
-    const V = m[4]! * px + m[5]! * py + m[6]! * pz + m[7]!;
-    const Q = m[8]! * px + m[9]! * py + m[10]! * pz + m[11]!;
+    const U = m0 * px + m1 * py + m2 * pz + m3;
+    const V = m4 * px + m5 * py + m6 * pz + m7;
+    const Q = m8 * px + m9 * py + m10 * pz + m11;
     out[w] = U;
     out[w + 1] = V;
     out[w + 2] = Q;
