@@ -28,10 +28,18 @@ export const READ_BLOCK = 1 << 20;
 export interface RangeReader {
   readonly length: number;
   read(start: number, end: number): Promise<Uint8Array>;
+  /** 이 바이트가 파일(Blob)의 [start, start + length) 자리이면 그 파일 — 다른 워커가 파일에서 직접 읽어 풀 수 있다(49차 src/inflatepipe.ts) */
+  readonly file?: { readonly blob: Blob; readonly start: number };
 }
 
 /** 풀 압축 바이트: 한 버퍼, 또는 덩이씩 읽어 줄 곳(파일 전체를 들지 않는다) */
 export type InflateInput = Uint8Array | RangeReader;
+
+/**
+ * 압축 바이트를 풀며 풀린 조각을 차례로 onChunk에 넘기는 곳(pumpInflate의 약속 — 같은 스레드, 또는 풀기 워커 src/inflatepipe.ts).
+ * 끝까지 풀면 true, 풀기가 실패하거나 onChunk가 false를 내면 false, onChunk가 던진 예외는 그대로 던진다
+ */
+export type InflatePump = (data: InflateInput, onChunk: (chunk: Uint8Array) => boolean) => Promise<boolean>;
 
 /** 조각으로 읽을 수 없는 꼴(깨지거나 잘린 뿌리·정의 목록, 받은 길이가 다름) — 한 버퍼로 다시 읽는다 */
 export class StreamFallback extends Error {}
@@ -219,24 +227,32 @@ export async function inflateNative(data: Uint8Array, expected: number): Promise
 }
 
 /**
- * 압축 바이트를 작은 조각으로 내장 풀기에 넣으며 풀린 조각을 onChunk로 넘긴다(받는 쪽이 읽으면 다음 조각을 넣는다).
+ * 압축 바이트를 작은 조각(INPUT_STEP)으로 넣는 내장 풀기의 읽는 쪽 — 받는 쪽이 읽으면 다음 조각을 넣는다(풀린 조각이 쌓이지 않는다).
+ * 내장 풀기를 만들지 못하면 던진다(pumpInflate·풀기 워커가 같이 쓴다)
+ */
+export function inflateReader(data: InflateInput): ReadableStreamDefaultReader<Uint8Array> {
+  const next = data instanceof Uint8Array ? bufferChunks(data) : rangeChunks(data);
+  const src = new ReadableStream<Uint8Array>(
+    {
+      async pull(c) {
+        const chunk = await next();
+        if (chunk) c.enqueue(chunk);
+        else c.close();
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  return src.pipeThrough(new DecompressionStream('deflate-raw') as unknown as ReadableWritablePair<Uint8Array, Uint8Array>).getReader();
+}
+
+/**
+ * 같은 스레드에서 풀기(InflatePump): 압축 바이트를 작은 조각으로 내장 풀기에 넣으며 풀린 조각을 onChunk로 넘긴다(받는 쪽이 읽으면 다음 조각을 넣는다).
  * 풀기가 끝까지 되면 true, 내장 풀기가 실패하거나(깨진 흐름) onChunk가 false를 내면 false. onChunk가 던진 예외는 그대로 던진다
  */
-async function pumpInflate(data: InflateInput, onChunk: (chunk: Uint8Array) => boolean): Promise<boolean> {
+export async function pumpInflate(data: InflateInput, onChunk: (chunk: Uint8Array) => boolean): Promise<boolean> {
   let reader: ReadableStreamDefaultReader<Uint8Array>;
   try {
-    const next = data instanceof Uint8Array ? bufferChunks(data) : rangeChunks(data);
-    const src = new ReadableStream<Uint8Array>(
-      {
-        async pull(c) {
-          const chunk = await next();
-          if (chunk) c.enqueue(chunk);
-          else c.close();
-        },
-      },
-      { highWaterMark: 0 },
-    );
-    reader = src.pipeThrough(new DecompressionStream('deflate-raw') as unknown as ReadableWritablePair<Uint8Array, Uint8Array>).getReader();
+    reader = inflateReader(data);
   } catch {
     return false;
   }
@@ -309,13 +325,15 @@ function rangeChunks(src: RangeReader): () => Promise<Uint8Array | null> {
  * 꾸러미의 압축된 model.dat(원시 DEFLATE)를 내장 풀기로 풀면서 읽는다 → 모형.
  * 'inflate': 내장 풀기가 없거나 실패했거나 풀린 길이가 expected와 다르다(예전에 미리 풀기가 실패했을 때처럼 해석기가 직접 푼다).
  * 'shape': 풀기는 되지만 조각으로 읽을 수 없는 꼴(깨진 뿌리 등) — 통째로 풀어 한 버퍼로 읽는다.
- * 모형과 함께 held(정의 절을 하나씩 읽지 못하고 통째로 들고 읽었는지)를 낸다. onProgress는 풀린 바이트 비율(0~1)
+ * 모형과 함께 held(정의 절을 하나씩 읽지 못하고 통째로 들고 읽었는지)를 낸다. onProgress는 풀린 바이트 비율(0~1).
+ * pump는 풀기를 맡을 곳(기본은 같은 스레드 — 앱 해석 워커는 풀기 워커에 맡긴다. 받는 바이트·차례가 같아 결과도 같다)
  */
 export async function streamModelDat(
   data: InflateInput,
   expected: number,
   opts: ReadModelOptions = {},
   onProgress?: (fraction: number) => void,
+  pump: InflatePump = pumpInflate,
 ): Promise<{ model: SkpModel; held: boolean } | 'inflate' | 'shape'> {
   if (typeof DecompressionStream === 'undefined' || !(expected > 0)) return 'inflate';
   let stream: ModelDatStream;
@@ -332,7 +350,7 @@ export async function streamModelDat(
   let shape = false;
   let ok: boolean;
   try {
-    ok = await pumpInflate(data, (chunk) => {
+    ok = await pump(data, (chunk) => {
       got += chunk.length;
       if (got > expected) return false;
       stream.push(chunk);

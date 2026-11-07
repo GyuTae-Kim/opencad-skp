@@ -18,6 +18,8 @@ export interface SkpSource {
   readonly size: number;
   /** [start, end) 바이트 — 파일 밖은 잘라 낸다. 부르는 쪽이 고쳐도 되는 새 배열(버퍼 전체를 보는 배열)을 낸다 */
   read(start: number, end: number): Promise<Uint8Array<ArrayBuffer>>;
+  /** 읽는 파일이 Blob이면 그 Blob(49차 — 압축된 model.dat를 풀기 워커가 직접 읽게 넘긴다) */
+  readonly blob?: Blob;
 }
 
 const EMPTY: Uint8Array<ArrayBuffer> = new Uint8Array(0);
@@ -28,6 +30,7 @@ export function blobSource(blob: Blob): SkpSource {
   const size = blob.size;
   return {
     size,
+    blob,
     async read(start, end) {
       const a = clamp(start, size);
       const b = Math.max(a, clamp(end, size));
@@ -257,7 +260,10 @@ export class SourceItems {
     return readZipItem(r.bytes, r.item);
   }
 
-  /** 압축된 내용을 덩이씩 읽어 줄 곳(zipItemData와 같은 검사 — 깨진 머리·파일 끝을 넘는 내용은 Error) */
+  /**
+   * 압축된 내용을 덩이씩 읽어 줄 곳(zipItemData와 같은 검사 — 깨진 머리·파일 끝을 넘는 내용은 Error).
+   * 파일이 Blob이면 그 자리(file)도 알려 풀기 워커가 직접 읽을 수 있게 한다(49차 — 그쪽 읽기는 reads에 세지 않는다)
+   */
   async data(item: ZipItem): Promise<RangeReader> {
     const p = item.localOffset;
     const head = await this.range(p, p + 30);
@@ -271,6 +277,7 @@ export class SourceItems {
         this.reads++;
         return src.read(start + a, start + Math.min(b, item.compressedSize));
       },
+      ...(src.blob ? { file: { blob: src.blob, start } } : {}),
     };
   }
 }
