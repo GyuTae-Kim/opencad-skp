@@ -7,6 +7,7 @@
  * 노드가 아주 많아도 화면이 느려지지 않게 자식은 처음 CHILD_LIMIT개만 그리고 "더 보기"로 늘린다.
  */
 import { h, icon } from './dom';
+import { focusSpot, listKeys, refocus, rove, treeKeys } from './kbd';
 import type { MeasureToolResult } from './measure';
 import {
   KIND_LABEL,
@@ -91,6 +92,23 @@ export const CHILD_LIMIT = 200;
 const TREE_ROW_LIMIT = 4000;
 
 const row = (k: string, v: string): HTMLElement => h('div', { class: 'prop-row' }, h('span', { class: 'k' }, k), h('span', { class: 'v', title: v }, v));
+
+/** 나무 상자(APG Tree View — ↑↓·Home·End·→·←, 줄 하나만 Tab 차례·그 줄의 보이기 체크까지). 줄을 누르거나 초점이 오면 그 줄이 Tab 차례 */
+const treeBox = (cls: string, label: string): HTMLElement => {
+  const box = h('div', { class: cls, role: 'tree', 'aria-label': label });
+  box.addEventListener('keydown', (e) => treeKeys(e, box));
+  box.addEventListener('focusin', (e) => {
+    const it = (e.target as HTMLElement).closest<HTMLElement>('[role=treeitem]');
+    if (it) rove([...box.querySelectorAll<HTMLElement>('[role=treeitem]')], it, true);
+  });
+  return box;
+};
+
+/** 다 그린 나무: 고른 줄(없으면 첫 줄)만 Tab 차례 */
+const roveTree = (box: HTMLElement): void => {
+  const items = [...box.querySelectorAll<HTMLElement>('[role=treeitem]')];
+  rove(items, items.find((el) => el.classList.contains('sel')) ?? items[0], true);
+};
 const section = (title: string, ...children: (Node | null)[]): HTMLElement =>
   h('section', { class: 'psec' }, h('h3', {}, title), ...children);
 
@@ -111,11 +129,13 @@ export class Panel {
 
   constructor(private readonly host: PanelHost) {
     this.tabsEl = h('div', { class: 'ptabs', role: 'tablist', 'aria-label': '패널 탭' });
+    // APG Tabs(손으로 고르기): ←→·Home·End는 초점만, Enter·Space가 고른다. 고른 탭만 Tab 차례
+    this.tabsEl.addEventListener('keydown', (e) => listKeys(e, [...this.tabsEl.querySelectorAll<HTMLElement>('[role=tab]')], 'ArrowLeft', 'ArrowRight'));
     const close = h('button', { class: 'icon-btn', type: 'button', title: '패널 닫기', 'aria-label': '패널 닫기', html: icon('close') });
     close.addEventListener('click', () => this.host.closePanel());
-    this.body = h('div', { class: 'pbody', role: 'tabpanel' });
+    this.body = h('div', { class: 'pbody', role: 'tabpanel', id: 'pbody' });
     this.foot = h('div', { class: 'pfoot', hidden: true, 'aria-live': 'polite' });
-    this.el = h('aside', { class: 'panel', 'aria-label': '모형 패널', hidden: true }, h('div', { class: 'phead' }, this.tabsEl, close), this.body, this.foot);
+    this.el = h('aside', { class: 'panel', id: 'side-panel', 'aria-label': '모형 패널', hidden: true }, h('div', { class: 'phead' }, this.tabsEl, close), this.body, this.foot);
   }
 
   show(d: SkpDoc | null): void {
@@ -135,8 +155,10 @@ export class Panel {
     const d = this.doc;
     if (!d) return;
     if (d.panelTab === 'entity') {
+      const spot = focusSpot(this.body);
       this.body.innerHTML = '';
       this.renderEntity(d);
+      refocus(this.body, spot);
     }
     const key = selKey(d.selection);
     for (const el of this.body.querySelectorAll<HTMLElement>('[data-sel]')) {
@@ -179,15 +201,18 @@ export class Panel {
   private render(keepScroll = false): void {
     const d = this.doc;
     const top = keepScroll ? this.body.scrollTop : 0;
+    // 다시 그려도 키보드 초점은 같은 자리로(탭·줄·체크 — 지우면 body로 사라졌다)
+    const spot = focusSpot(this.el);
     this.tabsEl.innerHTML = '';
     this.body.innerHTML = '';
     if (!d) {
       this.renderFoot();
       return;
     }
+    this.body.setAttribute('aria-labelledby', `ptab-${d.panelTab}`);
     for (const [k, label] of panelTabs(d)) {
       const on = k === d.panelTab;
-      const b = h('button', { class: `ptab${on ? ' on' : ''}`, type: 'button', role: 'tab', 'aria-selected': on ? 'true' : 'false' }, label);
+      const b = h('button', { class: `ptab${on ? ' on' : ''}`, type: 'button', role: 'tab', id: `ptab-${k}`, 'aria-controls': 'pbody', tabindex: on ? '0' : '-1', 'aria-selected': on ? 'true' : 'false' }, label);
       b.addEventListener('click', () => {
         if (d.panelTab === k) return;
         d.panelTab = k as PanelTab;
@@ -202,6 +227,7 @@ export class Panel {
     this.refreshSelection();
     this.refreshVisibility();
     if (keepScroll) this.body.scrollTop = top;
+    refocus(this.el, spot);
   }
 
   // ───────────────────────── 태그·재질 ─────────────────────────
@@ -213,7 +239,8 @@ export class Panel {
       cb.checked = on;
       cb.disabled = disabled;
       cb.addEventListener('change', () => set(cb.checked));
-      return h('label', { class: `prow${disabled ? ' off' : ''}`, title }, cb, h('span', { class: 'name' }, label), h('span', { class: 'count' }, count));
+      // opt: 앱 글(모형 이름이 아님)이라 자르지 않고 줄을 바꾼다(44차 — 독일어 "Versteckte Funktionen anzeigen"이 말줄임으로 잘렸다)
+      return h('label', { class: `prow opt${disabled ? ' off' : ''}`, title }, cb, h('span', { class: 'name' }, label), h('span', { class: 'count' }, count));
     };
     const view: HTMLElement[] = [];
     if (x)
@@ -405,7 +432,8 @@ export class Panel {
       );
       return;
     }
-    const list = h('div', { class: 'plist' });
+    // 나무가 없는 파일도 한 단계 나무로(줄 안 보이기 체크가 단추 안에 들지 않게 — 44차)
+    const list = treeBox('plist', '그룹·컴포넌트');
     const found = h('p', { class: 'hint search-note', hidden: true, 'aria-live': 'polite' });
     const cut = h('p', { class: 'hint', hidden: true }, `처음 ${LIST_LIMIT}개만 보입니다.`);
     const fill = (): void => {
@@ -419,6 +447,7 @@ export class Panel {
       cut.hidden = !!res || d.outline.length <= LIST_LIMIT;
       this.refreshSelection();
       this.refreshVisibility();
+      roveTree(list);
     };
     fill();
     const groups = d.outline.filter((r) => r.kind === 'group').length;
@@ -447,7 +476,7 @@ export class Panel {
     const sub = [r.definition && r.definition !== r.name ? r.definition : null, r.kind !== 'loose' ? r.tag : null].filter(Boolean).join(' · ');
     const item = h(
       'div',
-      { class: 'prow pick', role: 'button', tabindex: '0', 'data-sel': selKey(sel), title: '누르면 강조, 두 번 누르면 확대' },
+      { class: 'prow pick', role: 'treeitem', 'aria-level': '1', tabindex: '0', 'data-sel': selKey(sel), title: '누르면 강조, 두 번 누르면 확대' },
       d.tree ? h('span', { class: 'twisty-space' }) : null,
       cb,
       h('span', { class: `kind k-${r.kind}` }, KIND_LABEL[r.kind]),
@@ -467,7 +496,8 @@ export class Panel {
       this.host.zoomToSelection();
     });
     item.addEventListener('keydown', (e) => {
-      if (extraKeys?.(e)) return;
+      // 줄 안 보이기 체크의 Space는 체크 몫(44차 — 줄이 가로채 고르기만 되고 체크는 그대로였다)
+      if (e.target !== item || extraKeys?.(e)) return;
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
         choose();
@@ -508,7 +538,7 @@ export class Panel {
   private renderTree(d: SkpDoc, t: TreeView): void {
     const bar = this.pickBar(d, true);
 
-    const list = h('div', { class: 'plist tree', role: 'tree', 'aria-label': '그룹·컴포넌트 나무' });
+    const list = treeBox('plist tree', '그룹·컴포넌트 나무');
     const found = h('p', { class: 'hint search-note', hidden: true, 'aria-live': 'polite' });
     const cutNote = h('p', { class: 'hint', hidden: true }, `처음 ${fmtCount(TREE_ROW_LIMIT)}줄만 보입니다. 펼친 노드를 접어 보세요.`);
     let rows = 0;
@@ -522,7 +552,12 @@ export class Panel {
           return;
         }
         if (k >= limit) {
-          const more = h('button', { class: 'mini-btn more-btn', type: 'button', style: `margin-left:${indent(t.depth[kids[k]!]!) + 22}px` }, `… ${fmtCount(kids.length - k)}개 더 보기`);
+          // 나무 안 줄이라 treeitem(단추라 Enter·Space는 그대로 누르기)
+          const more = h(
+            'button',
+            { class: 'mini-btn more-btn', type: 'button', role: 'treeitem', 'aria-level': String(t.depth[kids[k]!]!), style: `margin-left:${indent(t.depth[kids[k]!]!) + 22}px` },
+            `… ${fmtCount(kids.length - k)}개 더 보기`,
+          );
           more.addEventListener('click', () => {
             d.childLimit.set(parent, limit + CHILD_LIMIT * 5);
             this.rerender();
@@ -541,15 +576,14 @@ export class Panel {
       list.innerHTML = '';
       rows = 0;
       cut = false;
+      // 찾은 노드도 한 단계 나무 줄(같은 키로 오르내린다)
       if (normalizeQuery(d.outlineQuery)) {
         const res = searchTree(t, d.outlineQuery);
-        list.setAttribute('role', 'list');
         for (const n of res.nodes) list.append(this.searchRow(d, t, n));
         found.hidden = false;
         found.textContent = foundText(res.total, res.nodes.length);
         cutNote.hidden = true;
       } else {
-        list.setAttribute('role', 'tree');
         found.hidden = true;
         const loose = d.outline.find((r) => r.kind === 'loose');
         if (loose) list.append(this.outlineRow(d, loose));
@@ -558,6 +592,7 @@ export class Panel {
       }
       this.refreshSelection();
       this.refreshVisibility();
+      roveTree(list);
     };
     fill();
 
@@ -619,7 +654,7 @@ export class Panel {
     cb.addEventListener('click', (e) => e.stopPropagation());
     const item = h(
       'div',
-      { class: 'prow pick trow search-row', role: 'listitem', tabindex: '0', 'data-sel': selKey(sel), 'data-node': String(n), title: `${name}${path ? ` — ${path}` : ''}` },
+      { class: 'prow pick trow search-row', role: 'treeitem', 'aria-level': '1', tabindex: '0', 'data-sel': selKey(sel), 'data-node': String(n), title: `${name}${path ? ` — ${path}` : ''}` },
       cb,
       h('span', { class: `kind k-${kind}` }, KIND_LABEL[kind]),
       h('span', { class: 'name' }, name, sub ? h('small', {}, ` ${sub}`) : null, path ? h('small', { class: 'path' }, path) : null),
@@ -708,10 +743,11 @@ export class Panel {
       const img = componentImage(d, x.name);
       // 누르면 이 정의의 인스턴스를 모두 고른다(SketchUp 컴포넌트 창의 "인스턴스 고르기"), 두 번 누르면 그것들에 맞춰 본다
       const sel: Selection = { kind: 'definition', name: x.name };
+      // 키보드·화면 읽기는 줄 안 단추(44차 — 초점 받는 줄은 역할이 "행"뿐이었다). 마우스는 줄 어디를 눌러도(단추 누르기도 줄로 올라간다)
       const tr = h(
         'tr',
-        { class: 'pick', tabindex: '0', 'data-sel': selKey(sel), title: `누르면 "${x.name}" 인스턴스 ${fmtCount(x.count)}개를 모두 고릅니다 · 두 번 누르면 맞춰 보기` },
-        h('td', {}, h('span', { class: 'def-cell' }, img ? h('img', { class: 'thumb', src: img, alt: '', loading: 'lazy', decoding: 'async', title: `${x.name} 미리보기` }) : null, x.name)),
+        { class: 'pick', 'data-sel': selKey(sel), title: `누르면 "${x.name}" 인스턴스 ${fmtCount(x.count)}개를 모두 고릅니다 · 두 번 누르면 맞춰 보기` },
+        h('td', {}, h('button', { class: 'def-cell', type: 'button' }, img ? h('img', { class: 'thumb', src: img, alt: '', loading: 'lazy', decoding: 'async', title: `${x.name} 미리보기` }) : null, x.name)),
         h('td', { class: 'num' }, fmtCount(x.count)),
       );
       this.bindPick(tr, d, sel);

@@ -52,6 +52,16 @@ export const SHORTCUTS: readonly ShortcutGroup[] = [
     ],
   },
   {
+    // 44차: 탭 줄·메뉴·나무·가르개의 키(APG 탭·메뉴·나무·창 가르개 패턴 — kbd.ts)
+    title: '목록·메뉴·패널',
+    items: [
+      { keys: ['←', '→'], label: '장면 탭·패널 탭 사이 옮기기(Enter·Space로 고르기)' },
+      { keys: ['↑', '↓', 'Home', 'End'], label: '메뉴 항목·그룹·컴포넌트 나무 줄 사이 옮기기(Tab은 메뉴를 닫고 다음으로)' },
+      { keys: ['→', '←'], label: '그룹·컴포넌트 나무: 펼치기 → 첫 아이로, 접기 → 부모로' },
+      { keys: ['Enter', 'Home', 'End'], label: '패널 크기 가르개: 다음 크기 단계 · 가장 작게 · 가장 크게(화살표는 조금씩, 마우스·손가락은 한 번 누르기)' },
+    ],
+  },
+  {
     title: '걷기(1인칭)',
     items: [
       { keys: ['W', 'S', '↑', '↓'], label: '앞 · 뒤로' },
@@ -82,7 +92,8 @@ export function openShortcutsDialog(parent: HTMLElement, onClose: () => void): (
   const opener = document.activeElement as HTMLElement | null;
   const titleId = 'sc-title';
   const closeBtn = h('button', { class: 'icon-btn', type: 'button', title: '닫기', 'aria-label': '닫기', html: icon('close') });
-  const body = h('div', { class: 'sc-body' });
+  // 키보드로 굴리려고 초점을 받는 본문은 이름 있는 영역으로(44차 — 화면 읽기에 이름 없는 묶음이었다)
+  const body = h('div', { class: 'sc-body', role: 'region', 'aria-labelledby': titleId });
   for (const g of SHORTCUTS) {
     const dl = h('dl', { class: 'sc-list' });
     for (const it of g.items) dl.append(h('dt', {}, keyChips(it.keys)), h('dd', {}, it.label));

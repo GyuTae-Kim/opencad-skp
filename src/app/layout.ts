@@ -15,6 +15,17 @@ export const VIEW_MIN_PX = 80;
 
 export const LAYOUT_KEY = 'opencad-skp.layout';
 
+/**
+ * 가르개를 끌지 않고 눌러 고르는 크기 단계(44차 — WCAG 2.5.7 끌기 대신 한 번 누르기, 키보드는 Enter): 패널 폭(px)·시트 높이(비율).
+ * 지금보다 큰 첫 단계로, 가장 크면 가장 작은 단계로 돌아간다(창에 맞춘 제한은 부르는 쪽이 clamp로)
+ */
+export const PANEL_WIDTH_STEPS = [PANEL_WIDTH_MIN, PANEL_WIDTH_DEFAULT, 480] as const;
+export const SHEET_STEPS = [0.3, SHEET_DEFAULT, 0.7] as const;
+
+export function nextSize(cur: number, steps: readonly number[], eps: number): number {
+  return steps.find((s) => s > cur + eps) ?? steps[0]!;
+}
+
 /** 패널 폭: 240~720px, 그리고 창 폭의 70%를 넘지 않게 */
 export function clampPanelWidth(w: number, viewportW: number): number {
   const max = Math.max(PANEL_WIDTH_MIN, Math.min(PANEL_WIDTH_MAX, Math.floor(viewportW * 0.7)));
