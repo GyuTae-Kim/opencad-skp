@@ -7,6 +7,7 @@
  * 같은 값·같은 오류(깨진 머리, 파일 끝에서 잘린 내용)가 난다. 작은 항목은 꾸러미 안에 이어 놓여 있어 WINDOW씩 읽어 둔 덩이에서 낸다.
  * 파일 내용 지문(SHA-256)도 덩이씩 읽으며 구한다(sourceSha256 — 내장 crypto.subtle.digest는 한 버퍼만 받는다).
  */
+import { freeTyped } from './grow';
 import { READ_BLOCK, type RangeReader } from './modelstream';
 import { Sha256 } from './sha256';
 import { findZipEnd, readZipDirectory, readZipItem, ZIP_END_SEARCH, zipLocalDataOffset, type ZipItem } from './zip';
@@ -144,7 +145,9 @@ const DIGEST_BLOCK = 4 * READ_BLOCK;
 
 /**
  * 파일 내용 SHA-256(32바이트) — 파일 전체 바이트로 구한 값과 같다. 작은 파일은 내장 crypto.subtle로 한 번에, 큰 파일(또는 내장이 없을 때 —
- * 보안 연결이 아닌 쪽)은 DIGEST_BLOCK씩 읽으며 sha256.ts로 구해 많아야 덩이 둘을 든다. nativeMax로 문턱을 바꾼다(시험)
+ * 보안 연결이 아닌 쪽)은 DIGEST_BLOCK씩 읽으며 sha256.ts로 구해 많아야 덩이 둘을 든다. nativeMax로 문턱을 바꾼다(시험).
+ * 다 읽은 덩이는 GC를 기다리지 않고 곧바로 놓는다(41차 — read는 부르는 쪽 것인 새 배열을 준다. 165 MB 파일의 지문 워커가
+ * 다 쓴 덩이를 GC까지 쥐어 ArrayBuffer가 60~70 MB까지 쌓였다 — 화면이 장면을 올리는 동안이라 렌더러 프로세스 최고치 무렵과 겹친다)
  */
 export async function sourceSha256(src: SkpSource, nativeMax = NATIVE_DIGEST_MAX): Promise<Uint8Array> {
   const size = src.size;
@@ -167,6 +170,7 @@ export async function sourceSha256(src: SkpSource, nativeMax = NATIVE_DIGEST_MAX
     ahead = next(pos);
     ahead?.catch(() => undefined);
     h.update(b);
+    freeTyped(b);
   }
   return h.digest();
 }

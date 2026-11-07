@@ -3,6 +3,8 @@
  * 색을 바꾼 무늬의 바이트는 장면에서 빼 Blob으로 쥐기, 손질 워커 한 번 쓰고 끝내기, 잃으면 안내·되찾으면 거두고 가림 판정 다시 하기,
  * 쥐어 둔 무늬만 다시 손질해 코어에 주기(파일을 읽지 않음 — 실패·또 잃음·여러 번 잃음·새 문서·새 파일 여는 동안 멈춤),
  * 30차부터 안내는 코어 끝 알림(0.29.0 onContextRestoreDone — 코어가 무늬까지 다 풀어 올림)에 거두기.
+ * 41차부터 놓기는 무늬 원본 모두(그림 바이트도): 바이트가 있는 무늬는 모두 Blob으로 쥐고(나머지 무늬는 raw — 견본 주소도 그 Blob으로),
+ * 되찾을 때 raw는 손질 워커 없이 바이트를 그대로 코어에 다시 준다(한 번에 넷까지 — 또 잃음·새 문서·멈춤·읽지 못함).
  * 가짜 뷰어(코어 Viewer3d의 일부 — 끝 알림은 코어처럼 되찾음 알림들 뒤, 앱이 다 주고 코어가 풀 무늬가 없을 때)와 가짜 Worker로 차례를 본다.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,9 +12,11 @@ import type { ContextRestoreNeed, TextureSource } from 'opencad-viewer3d';
 import type { Scene3d } from 'opencad-viewer3d/types';
 import type { SkpTextureInfo } from '../../src/index';
 import type { HeldTexture, RecolorRequest, RecolorResult } from '../../src/app/protocol';
+import type { DocImages } from '../../src/app/doc';
 import {
   CONTEXT_LOST_TITLE,
   ContextWatch,
+  RAW_RESTORE_LANES,
   RELEASE_OPTIONS,
   RESTORE_FAIL_TITLE,
   RESTORE_TITLE,
@@ -109,7 +113,7 @@ class FakeViewer implements WatchViewer {
   emitDone(): void {
     this.doneCb?.();
   }
-  private checkDone(): void {
+  protected checkDone(): void {
     if (!this.pending || this.decoding || this.restoreNeed) return;
     this.pending = false;
     this.doneCb?.();
@@ -170,33 +174,93 @@ afterEach(() => {
 });
 
 describe('놓기 준비', () => {
-  it('놓기는 푼 무늬 그림만(법선·무늬 좌표·그림 바이트는 장면에 둔다 — 되찾을 때 코어가 그대로 다시 올린다)', () => {
-    expect(RELEASE_OPTIONS).toEqual({ textures: 'bitmap' });
+  it('놓기는 무늬 원본 모두(41차 — 푼 그림과 그림 바이트. 법선·무늬 좌표는 장면에 둔다 — 되찾을 때 코어가 그대로 다시 올린다)', () => {
+    expect(RELEASE_OPTIONS).toEqual({ textures: true });
+    expect(RAW_RESTORE_LANES).toBe(4);
   });
 
-  it('색을 바꾼 무늬(워커가 그림을 바꾼 것)만 그림 바이트를 장면에서 빼 Blob으로 쥐고, 알파만 잰 무늬·바이트뿐인 무늬는 둔다', async () => {
+  it('바이트가 있는 무늬는 모두 Blob으로 쥔다: 색을 바꾼 무늬(워커가 그림을 바꾼 것)는 바이트를 장면에서 빼고, 알파만 잰 무늬·바이트뿐인 무늬는 raw로 두고 장면에도 둔다', async () => {
     const pic = {} as ImageBitmap;
     const c = new Uint8Array([1, 2, 3, 4]);
     const scene: Pick<Scene3d, 'textures' | 'meta'> = {
       textures: [
         { id: 'c', bitmap: pic, data: c, mime: 'image/jpeg' },
         { id: 'a', bitmap: pic, data: new Uint8Array([2]), alpha: true },
-        { id: 'p', data: new Uint8Array([3]) },
+        { id: 'p', data: new Uint8Array([3]), mime: 'image/png' },
         { id: 'n', data: new Uint8Array([4]) },
+        { id: 'e', data: new Uint8Array(0) },
+        { id: 'x', data: new Uint8Array([5]) },
       ],
-      meta: { textures: [info('c', true), { ...info('a', false), alphaPossible: true }, info('p', false), info('n', true)] },
+      meta: { textures: [info('c', true), { ...info('a', false), alphaPossible: true }, info('p', false), info('n', true), info('e', false)] },
     };
-    const got = prepareRelease(scene);
-    expect(got.map((h) => [h.id, h.blob.type, h.blob.size, h.info.colorize?.type])).toEqual([['c', 'image/jpeg', 4, 'shift']]);
+    const got = prepareRelease({ scene });
+    // 색 바꿈 정보가 있어도 워커가 손질한 그림이 없으면(n) 코어가 바이트로 푼 그대로 — raw. 빈 바이트(e)·정보 없는 무늬(x)는 쥐지 않는다
+    expect(got.map((h) => [h.id, h.blob.type, h.blob.size, h.info.colorize?.type, !!h.raw])).toEqual([
+      ['c', 'image/jpeg', 4, 'shift', false],
+      ['a', '', 1, undefined, true],
+      ['p', 'image/png', 1, undefined, true],
+      ['n', '', 1, 'shift', true],
+    ]);
     expect([...new Uint8Array(await got[0]!.blob.arrayBuffer())]).toEqual([1, 2, 3, 4]);
+    expect([...new Uint8Array(await got[2]!.blob.arrayBuffer())]).toEqual([3]);
     expect(got[0]!.info).toBe((scene.meta!.textures as SkpTextureInfo[])[0]);
     expect(scene.textures!.map((t) => [t.id, !!t.data, !!t.bitmap])).toEqual([
       ['c', false, true],
       ['a', true, true],
       ['p', true, false],
       ['n', true, false],
+      ['e', true, false],
+      ['x', true, false],
     ]);
-    expect(prepareRelease({})).toEqual([]);
+    expect(prepareRelease({ scene: {} })).toEqual([]);
+  });
+
+  it('raw 무늬의 재질 목록 견본 주소는 쥔 Blob의 주소로 바꾸고 앞 주소는 푼다(닫을 때 풀 목록도) — 색 바꾼 무늬의 견본(바꾼 색 PNG)은 그대로', async () => {
+    const revoked: string[] = [];
+    const real = URL.revokeObjectURL.bind(URL);
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation((u: string) => {
+      revoked.push(u);
+      real(u);
+    });
+    try {
+      const pic = {} as ImageBitmap;
+      const scene: Pick<Scene3d, 'textures' | 'meta'> = {
+        textures: [
+          { id: 'c', bitmap: pic, data: new Uint8Array([1, 2]), mime: 'image/jpeg' },
+          { id: 'p', data: new Uint8Array([7, 8, 9]), mime: 'image/png' },
+          { id: 'q', data: new Uint8Array([6]), mime: 'image/png' },
+        ],
+        meta: { textures: [info('c', true), info('p', false), info('q', false)] },
+      };
+      const images: DocImages = {
+        model: null,
+        materials: new Map([
+          ['c', { name: 'c.png', url: 'blob:old-c' }],
+          ['p', { name: 'p.png', url: 'blob:old-p' }],
+        ]),
+        components: new Map(),
+        scenes: [],
+        skipped: 0,
+        urls: ['blob:model', 'blob:old-c', 'blob:old-p'],
+      };
+      const got = prepareRelease({ scene, images });
+      const p = images.materials.get('p')!;
+      expect(p.url).not.toBe('blob:old-p');
+      expect(p.url.startsWith('blob:')).toBe(true);
+      expect(images.materials.get('c')!.url).toBe('blob:old-c');
+      expect(images.urls).toEqual(['blob:model', 'blob:old-c', p.url]);
+      expect(revoked).toEqual(['blob:old-p']);
+      // 새 주소가 가리키는 것은 쥔 Blob(같은 바이트)
+      const { resolveObjectURL } = await import('node:buffer');
+      const b = resolveObjectURL(p.url)!;
+      expect([...new Uint8Array(await b.arrayBuffer())]).toEqual([7, 8, 9]);
+      expect(got.find((h) => h.id === 'p')!.blob.size).toBe(3);
+      // 견본이 없는 무늬(q)는 주소를 만들지 않는다
+      expect(images.urls).toHaveLength(3);
+      real(p.url);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });
 
@@ -472,5 +536,177 @@ describe('그래픽 문맥 잃음·되찾음', () => {
     v.lose();
     expect(ui.shown).toEqual([]);
     expect(w.state).toBe('ok');
+  });
+});
+
+/**
+ * 바이트(Uint8Array)로 받는 무늬는 코어처럼 풀어 올리는 동안 기다리게 하는 가짜 뷰어(한 번에 몇 장을 받는지 본다).
+ * 풀어 올릴 때 그 무늬가 아직 기다리는 중이면 받고, 그 사이 잃었거나 이미 받았으면 false(코어 restoreTexture — 다시 기다린다)
+ */
+class GatedViewer extends FakeViewer {
+  inflight = 0;
+  maxInflight = 0;
+  lostNow = false;
+  private gates: (() => void)[] = [];
+  override restoreTexture(id: string, src: TextureSource): Promise<boolean> {
+    if (!(src instanceof Uint8Array)) return super.restoreTexture(id, src);
+    if (!this.missTex.has(id) || this.lostNow) return Promise.resolve(false);
+    this.inflight++;
+    this.maxInflight = Math.max(this.maxInflight, this.inflight);
+    return new Promise<boolean>((res) =>
+      this.gates.push(() => {
+        this.inflight--;
+        if (this.lostNow || !this.missTex.delete(id)) return res(false);
+        this.gotTex.push([id, src]);
+        res(true);
+        void Promise.resolve().then(() => this.checkDone());
+      }),
+    );
+  }
+  /** 기다리는 것 n개(기본 모두)를 풀어 올린다 */
+  open(n = Infinity): number {
+    const g = this.gates.splice(0, n);
+    for (const f of g) f();
+    return g.length;
+  }
+  override lose(): void {
+    this.lostNow = true;
+    super.lose();
+    // 잃는 동안 풀던 것은 받지 못한다(다시 기다린다)
+    this.open();
+  }
+  override restore(wait: string[] = [], decode = 0): void {
+    this.lostNow = false;
+    super.restore(wait, decode);
+  }
+}
+
+const rawHeld = (id: string, bytes: number[]): HeldTexture => ({ id, blob: new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' }), info: info(id, false), raw: true });
+/** Blob 읽기·약속이 몇 번 돌 때까지 */
+const settle = async (): Promise<void> => {
+  for (let i = 0; i < 12; i++) await new Promise((r) => setTimeout(r, 0));
+};
+/** 다 줄 때까지 열어 준다 */
+const drain = async (v: GatedViewer): Promise<void> => {
+  for (let i = 0; i < 20; i++) {
+    await settle();
+    if (!v.open()) break;
+  }
+  await settle();
+};
+
+/** 놓아 올린 문서(raw 무늬 r1~r6, 색 바꾼 무늬 t1) */
+function setupRaw(): { v: GatedViewer; ui: FakeUi; w: ContextWatch; s: Scene3d; textures: HeldTexture[] } {
+  const v = new GatedViewer();
+  const ui = new FakeUi();
+  const w = new ContextWatch(v, ui, make);
+  const s = sceneOf();
+  const textures = [1, 2, 3, 4, 5, 6].map((k) => rawHeld(`r${k}`, [k, k])).concat([held('t1')]);
+  v.scene = s;
+  w.setSource({ scene: s, textures, textureLimit: 1024 });
+  return { v, ui, w, s, textures };
+}
+const RAW = ['r1', 'r2', 'r3', 'r4', 'r5', 'r6'];
+
+describe('되찾을 때 바이트 그대로 다시 주기(41차 — raw)', () => {
+  it('raw는 손질 워커 없이 쥔 바이트를 그대로 코어에 준다(한 번에 넷까지), 색 바꾼 무늬는 손질 워커로 — 둘 다 끝나고 코어 끝 알림에 거둔다', async () => {
+    const { v, ui, w } = setupRaw();
+    v.lose();
+    v.restore([...RAW, 't1']);
+    expect(w.state).toBe('restoring');
+    expect(ui.open).toBe(RESTORE_TITLE);
+    // 손질 워커에는 색 바꾼 무늬만
+    expect(FakeWorker.all).toHaveLength(1);
+    expect(FakeWorker.all[0]!.posted[0]!.msg.textures.map((t) => t.id)).toEqual(['t1']);
+    await settle();
+    expect(v.inflight).toBe(RAW_RESTORE_LANES);
+    FakeWorker.all[0]!.emit({ id: 1, type: 'recolored', result: result('t1') });
+    await settle();
+    // 손질한 무늬를 줬어도 raw가 남았으면 그대로
+    expect(w.state).toBe('restoring');
+    await drain(v);
+    expect(v.maxInflight).toBe(RAW_RESTORE_LANES);
+    const got = new Map(v.gotTex);
+    expect([...got.keys()].sort()).toEqual([...RAW, 't1']);
+    for (const [k, id] of RAW.entries()) {
+      const src = got.get(id) as Uint8Array;
+      expect(src).toBeInstanceOf(Uint8Array);
+      expect([...src]).toEqual([k + 1, k + 1]);
+    }
+    expect(w.last).toMatchObject({ textures: 7, left: 0 });
+    expect(w.state).toBe('ok');
+    expect(ui.open).toBeNull();
+  });
+
+  it('raw만 바라면 워커를 띄우지 않는다', async () => {
+    const { v, w } = setupRaw();
+    v.restore(['r2', 'r5']);
+    await drain(v);
+    expect(FakeWorker.all).toHaveLength(0);
+    expect(v.gotTex.map(([id]) => id).sort()).toEqual(['r2', 'r5']);
+    expect(w.state).toBe('ok');
+    expect(w.last).toMatchObject({ textures: 2, left: 0 });
+  });
+
+  it('주는 동안 또 잃으면 멈추고, 되찾으면 남은 것을 다시 준다(같은 무늬를 두 번 받지 않는다)', async () => {
+    const { v, ui, w } = setupRaw();
+    v.restore([...RAW]);
+    await settle();
+    v.open(2);
+    await settle();
+    expect(v.gotTex.map(([id]) => id)).toEqual(['r1', 'r2']);
+    v.lose();
+    await settle();
+    expect(w.state).toBe('lost');
+    expect(ui.open).toBe(CONTEXT_LOST_TITLE);
+    // 잃은 동안에는 더 주지 않는다
+    expect(v.inflight).toBe(0);
+    v.restore();
+    await drain(v);
+    expect(v.gotTex.map(([id]) => id).sort()).toEqual(RAW);
+    expect(w.state).toBe('ok');
+    expect(ui.open).toBeNull();
+  });
+
+  it('새 파일을 여는 동안 멈추고, 열지 못하면 남은 것을 잇는다', async () => {
+    const { v, w } = setupRaw();
+    v.restore([...RAW]);
+    await settle();
+    w.pause();
+    // 멈춘 뒤 받은 것은 앞 몫이라 셈하지 않고, 더 주지 않는다
+    v.open();
+    await settle();
+    expect(v.inflight).toBe(0);
+    expect(w.state).toBe('restoring');
+    w.resume();
+    await drain(v);
+    expect(v.gotTex.map(([id]) => id).sort()).toEqual(RAW);
+    expect(w.state).toBe('ok');
+  });
+
+  it('쥔 바이트를 읽지 못하면 그 무늬는 남아 평균색으로 그린다고 알린다', async () => {
+    const { v, ui, w } = setupRaw();
+    const broken = { size: 3, type: 'image/png', arrayBuffer: () => Promise.reject(new Error('읽지 못함')) } as unknown as Blob;
+    w.setSource({ scene: v.scene!, textures: [rawHeld('r1', [1]), { ...rawHeld('r2', [2]), blob: broken }], textureLimit: 1024 });
+    v.restore(['r1', 'r2']);
+    await drain(v);
+    expect(v.gotTex.map(([id]) => id)).toEqual(['r1']);
+    expect(w.state).toBe('partial');
+    expect(ui.open).toBe(RESTORE_FAIL_TITLE);
+    expect(w.last).toMatchObject({ textures: 1, left: 1 });
+  });
+
+  it('새 문서로 바꾸면 주던 것을 거둔다(앞 문서 몫은 끝을 알리지 않는다)', async () => {
+    const { v, ui, w } = setupRaw();
+    v.restore([...RAW]);
+    await settle();
+    v.scene = sceneOf();
+    w.setSource(null);
+    v.open();
+    await settle();
+    expect(v.inflight).toBe(0);
+    expect(w.state).toBe('ok');
+    expect(w.last).toBeNull();
+    expect(ui.shown.filter((s) => s.startsWith('warn'))).toEqual([]);
   });
 });
