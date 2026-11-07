@@ -40,6 +40,20 @@ export function joinMixed(list: readonly Mixed[], sep = ' · '): Mixed {
 /** 섞은 글의 원문(한국어 화면·복사·시험) */
 export const plainText = (m: Mixed): string => m.map((p) => (typeof p === 'string' ? p : p.file)).join('');
 
+/**
+ * 섞은 글 → (옮긴 글, 파일 글 목록): 파일 글 자리를 번역기가 보지 않는 사용 영역 글자(U+E000~)로 바꿔 tr로 옮긴다(앱 자리 글(ui)은 그것만 tr로 옮겨 끼운다).
+ * 사전 틀의 {0}이 그 글자를 그대로 잡고, 나눔 글로 조각낼 때도 한글이 없는 조각이라 그대로 둔다. i18n.ts mixText·mixNodes가 지금 언어로 쓰고,
+ * 시험은 언어를 정해 쓴다(53차 — 이 모듈은 번역기를 받기만 한다)
+ */
+export function slotText(parts: Mixed, tr: (text: string) => string): [string, string[]] {
+  const files: string[] = [];
+  const text = tr(parts.map((p) => (typeof p === 'string' ? p : String.fromCharCode(0xe000 + files.push(p.ui ? tr(p.file) : p.file) - 1))).join(''));
+  return [text, files];
+}
+
+/** slotText로 옮긴 글의 자리 글자를 파일 글로 되돌린다 */
+export const fillSlots = (text: string, files: readonly string[]): string => text.replace(/[-]/g, (c) => files[c.charCodeAt(0) - 0xe000] ?? c);
+
 /** 해석기·앱이 이름 칸에 넣는 자리 글(이름이 없는 것) — 파일 글이 아니라 화면 언어로 옮긴다 */
 export const isAppName = (name: string): boolean =>
   name === '기본 재질' || name === '모형에 바로 놓인 형상' || name === '(이름 없음)' || name === '(이름 없는 폴더)' || /^재질 \d+$/.test(name);

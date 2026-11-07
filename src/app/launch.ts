@@ -5,6 +5,7 @@
  *   ?shared=<열쇠>          홈 화면 앱이 공유 받은 파일(서비스 워커가 최근 문서 IndexedDB에 넣은 것)을 연다 —
  *                           최근 문서 id(이름:크기), 한 번 쓸 자리(shared:…), 실패(:none 파일 없음 · :error 저장 실패)
  */
+import { fileText, mix, type Mixed } from './filetext';
 import { baseName } from './format';
 
 export type LaunchRequest =
@@ -12,7 +13,8 @@ export type LaunchRequest =
   | { kind: 'sample' }
   | { kind: 'url'; url: string; name: string }
   | { kind: 'shared'; key: string }
-  | { kind: 'error'; message: string };
+  /** message: 알림 글(주소 인자 글은 파일 글 자리 — 53차) */
+  | { kind: 'error'; message: Mixed };
 
 export function parseLaunch(search: string, base: string): LaunchRequest {
   let params: URLSearchParams;
@@ -23,17 +25,17 @@ export function parseLaunch(search: string, base: string): LaunchRequest {
   }
   const open = params.get('open');
   if (open !== null) {
-    if (!open.trim()) return { kind: 'error', message: 'open 인자에 열 파일 주소가 없습니다.' };
+    if (!open.trim()) return { kind: 'error', message: ['open 인자에 열 파일 주소가 없습니다.'] };
     let url: URL;
     let here: URL;
     try {
       here = new URL(base);
       url = new URL(open, here);
     } catch {
-      return { kind: 'error', message: `열 파일 주소를 읽지 못했습니다: ${open}` };
+      return { kind: 'error', message: mix`열 파일 주소를 읽지 못했습니다: ${fileText(open)}` };
     }
     if (url.origin !== here.origin || !/^https?:$/.test(url.protocol))
-      return { kind: 'error', message: '같은 출처(이 사이트)의 주소만 열 수 있습니다.' };
+      return { kind: 'error', message: ['같은 출처(이 사이트)의 주소만 열 수 있습니다.'] };
     let name = baseName(url.pathname);
     try {
       name = decodeURIComponent(name);
@@ -43,7 +45,7 @@ export function parseLaunch(search: string, base: string): LaunchRequest {
     return { kind: 'url', url: url.href, name: name || 'model.skp' };
   }
   const shared = params.get('shared');
-  if (shared !== null) return shared ? { kind: 'shared', key: shared } : { kind: 'error', message: '공유 받은 파일을 찾지 못했습니다.' };
+  if (shared !== null) return shared ? { kind: 'shared', key: shared } : { kind: 'error', message: ['공유 받은 파일을 찾지 못했습니다.'] };
   if (params.has('sample')) return { kind: 'sample' };
   return { kind: 'none' };
 }

@@ -13,6 +13,7 @@ import type { Scene3d } from 'opencad-viewer3d/types';
 import type { SkpImages } from '../images';
 import type { SkpTextureInfo } from '../index';
 import type { PackStats } from '../worker/pack';
+import type { Mixed } from './filetext';
 
 export interface ParseRequest {
   id: number;
@@ -85,6 +86,8 @@ export interface ParseResult {
   packed?: PackStats;
   /** 일부만 읽었거나(고쳐 읽었거나) 한도에 걸린 파일의 알림(worker/notice.ts — 41차, 글을 첫 화면 JS에 두지 않으려고 워커가 만든다) */
   notice?: ParseNotice;
+  /** 그릴 것이 없는 장면이면 그 알림(53차 — worker/notice.ts emptySceneNotice, 같은 까닭으로 워커가 만든다) */
+  empty?: EmptyNotice;
   /** 앞부분만 넘긴 아주 긴 속성 글 값의 원래 글(47차 — worker/attrlong.ts, 펼칠 때 app/attrview.ts가 잘라 읽는다) */
   attrLong?: AttrLong;
 }
@@ -109,10 +112,15 @@ export interface AttrLong {
   refs: AttrLongRef[];
 }
 
-/** 열고 나서 보일 알림(경고 띠의 제목·글) */
+/** 열고 나서 보일 알림(경고 띠의 제목·글). 53차: 파일 이름·꾸러미 항목 이름은 파일 글 자리로(filetext.ts — 화면이 mixNodes로 옮긴다) */
 export interface ParseNotice {
-  title: string;
-  text: string;
+  title: Mixed;
+  text: Mixed;
+}
+
+/** 그릴 것이 없는 장면의 알림(53차 — 해석 워커가 만든다, worker/notice.ts emptySceneNotice) */
+export interface EmptyNotice extends ParseNotice {
+  kind: 'error' | 'info';
 }
 
 /**
@@ -186,25 +194,6 @@ export function sceneHasGeometry(s: Scene3d): boolean {
     s.lines.some((l) => l.positions.length >= 6) ||
     (s.points ?? []).some((p) => p.positions.length >= 3)
   );
-}
-
-/**
- * 그릴 것이 없는 장면의 알림. 해석기가 까닭(경고)을 남겼거나 깨진 파일이면 "열지 못했습니다"와 첫 경고,
- * 깨지지 않은 SketchUp 파일인데 형상이 없으면 빈 모형이라고 알린다(SketchUp도 빈 화면으로 연다 —
- * 정의만 있고 놓인 것이 없으면 그 수를 함께)
- */
-export function emptySceneNotice(s: Scene3d, name: string): { kind: 'error' | 'info'; title: string; text: string } {
-  const meta = (s.meta ?? {}) as { damaged?: boolean; version?: string; definitions?: number };
-  const why = s.warnings?.[0];
-  if (why || meta.damaged || !meta.version) return { kind: 'error', title: `"${name}" 파일을 열지 못했습니다`, text: why ?? '그릴 면이나 모서리를 찾지 못했습니다.' };
-  const defs = meta.definitions ?? 0;
-  return {
-    kind: 'info',
-    title: `"${name}" 모형이 비어 있습니다`,
-    text: defs
-      ? `SketchUp 파일은 맞지만 모형에 놓인 형상이 없습니다(컴포넌트 정의 ${defs.toLocaleString('en-US')}개는 있지만 하나도 놓이지 않았습니다).`
-      : 'SketchUp 파일은 맞지만 그릴 면·모서리가 없습니다. SketchUp에서 형상을 넣고 저장했는지 확인해 주세요.',
-  };
 }
 
 /** 오류 값 → 사람이 읽는 글 */

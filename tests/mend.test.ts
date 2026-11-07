@@ -7,6 +7,8 @@ import { MendBuffer, MIN_ODD_CR, textRoundTrip } from '../src/mfcmend';
 import { readMfcModel } from '../src/mfcmodel';
 import { MfcStream } from '../src/mfcstream';
 import { damageNotice, MENDED_HEAD } from '../src/worker/notice';
+import { fillSlots, plainText, slotText, type Mixed } from '../src/app/filetext';
+import type { ParseNotice } from '../src/app/protocol';
 import type { SkpModel } from '../src/model';
 import { mfcFile, type MfcEdgeSpec, type MfcEntitiesSpec, type MfcFaceSpec, type MfcSpec, type Vec3 } from './mfcwrite';
 
@@ -297,6 +299,11 @@ describe('글 왕복 손상 고쳐 읽기', () => {
   });
 });
 
+/** 알림의 원문(53차부터 제목·글은 섞은 글) */
+const plain = (n: ParseNotice | null): { title: string; text: string } | null => n && { title: plainText(n.title), text: plainText(n.text) };
+/** 섞은 글을 한 언어로(화면 mixText와 같은 길 — 파일 글 자리는 그대로) */
+const inLang = (m: Mixed, code: string): string => fillSlots(...slotText(m, (s) => translate(s, code)));
+
 describe('일부만 읽은 파일의 알림(41차 — 해석 워커가 만든다, worker/notice.ts)', () => {
   it('고쳐 읽은 파일은 고쳐 읽었다고, 멈춘 파일은 예전처럼 일부만 보인다고 알린다(글은 언어 사전으로 옮겨진다)', () => {
     const planted = buildAligned((description) => ({ description, root: terrain(5) }));
@@ -308,20 +315,23 @@ describe('일부만 읽은 파일의 알림(41차 — 해석 워커가 만든다
     expect(damageNotice(skpToScene(planted), 'a.skp')).toBeNull();
     const mended = skpToScene(textTrip(planted));
     expect(mended.meta?.damaged).toBe(true);
-    const n = damageNotice(mended, 'a.skp')!;
+    const n = plain(damageNotice(mended, 'a.skp'))!;
     expect(n.title).toBe('"a.skp" 파일을 고쳐 읽었습니다');
     expect(n.text.startsWith(MENDED_HEAD)).toBe(true);
     expect(n.text).toBe(mended.warnings!.find((w) => w.startsWith(MENDED_HEAD)));
+    // 53차: 파일 이름은 파일 글 자리(화면이 앱 글만 옮긴다)
+    const m = damageNotice(mended, 'a.skp')!;
+    expect(m.title).toEqual(['"', { file: 'a.skp' }, '" 파일을 고쳐 읽었습니다']);
     for (const code of ['en', 'ja', 'zh-CN', 'de']) {
-      expect(translate(n.title, code)).not.toMatch(/[가-힣]/);
-      expect(translate(n.title, code)).toContain('a.skp');
-      expect(translate(n.text, code)).not.toMatch(/[가-힣]/);
+      expect(inLang(m.title, code)).not.toMatch(/[가-힣]/);
+      expect(inLang(m.title, code)).toContain('a.skp');
+      expect(inLang(m.text, code)).not.toMatch(/[가-힣]/);
     }
     // 글 왕복 꼴이 아닌 깨진 파일: 예전 글 그대로(멈춘 까닭을 붙인다)
     const bytes = mfcFile({ root: terrain(4) });
     const at = indexOfBytes(bytes, f64(6, 6));
     const cut = skpToScene(Uint8Array.from([...bytes.subarray(0, at + 2), ...bytes.subarray(at + 4)]));
-    const c = damageNotice(cut, 'b.skp')!;
+    const c = plain(damageNotice(cut, 'b.skp'))!;
     expect(c.title).toBe('"b.skp" 파일의 일부만 보입니다');
     expect(c.text).toMatch(/^파일이 잘렸거나 깨진 곳이 있어 읽을 수 있는 부분만 그렸습니다\. 형상을 읽다 멈췄습니다/);
   });
@@ -329,21 +339,32 @@ describe('일부만 읽은 파일의 알림(41차 — 해석 워커가 만든다
   it('고쳐 읽고도 멈추거나 건너뛴 곳이 남으면 일부만 보인다고, 한도에 걸린 모형은 한도 경고와 함께', () => {
     const mend = `${MENDED_HEAD} — 빠진 2바이트 1곳을 메우고 바뀐 참조 0개를 되돌렸습니다(면 평면과 맞지 않아 뺀 면 0개, 정점 0개)`;
     const stop = '형상을 읽다 멈췄습니다 — 그 앞까지만 그립니다: x';
-    expect(damageNotice({ warnings: [mend, stop], meta: { damaged: true } }, 'c.skp')).toEqual({
+    const dn = (warnings: string[] | undefined, meta: Record<string, unknown>, name: string): { title: string; text: string } | null =>
+      plain(damageNotice({ ...(warnings ? { warnings } : {}), meta }, name));
+    expect(dn([mend, stop], { damaged: true }, 'c.skp')).toEqual({
       title: '"c.skp" 파일의 일부만 보입니다',
       text: `파일이 잘렸거나 깨진 곳이 있어 읽을 수 있는 부분만 그렸습니다. ${mend}`,
     });
-    expect(damageNotice({ warnings: [stop, mend], meta: { damaged: true } }, 'c.skp')!.title).toBe('"c.skp" 파일의 일부만 보입니다');
+    expect(dn([stop, mend], { damaged: true }, 'c.skp')!.title).toBe('"c.skp" 파일의 일부만 보입니다');
     const skipped = '깨진 참조 3개를 건너뛰었습니다(첫 자리 9바이트) — 그 모서리와 그 모서리를 쓰는 면은 그리지 않습니다';
-    expect(damageNotice({ warnings: [mend, skipped], meta: { damaged: true } }, 'c.skp')!.title).toBe('"c.skp" 파일의 일부만 보입니다');
-    expect(damageNotice({ warnings: [mend], meta: { damaged: true } }, 'c.skp')!.title).toBe('"c.skp" 파일을 고쳐 읽었습니다');
+    expect(dn([mend, skipped], { damaged: true }, 'c.skp')!.title).toBe('"c.skp" 파일의 일부만 보입니다');
+    expect(dn([mend], { damaged: true }, 'c.skp')!.title).toBe('"c.skp" 파일을 고쳐 읽었습니다');
     // 까닭 글이 없으면 첫 경고, 그것도 없으면 빈 글
-    expect(damageNotice({ warnings: ['무엇'], meta: { damaged: true } }, 'd.skp')!.text).toBe('파일이 잘렸거나 깨진 곳이 있어 읽을 수 있는 부분만 그렸습니다. 무엇');
-    expect(damageNotice({ meta: { damaged: true } }, 'd.skp')!.text).toBe('파일이 잘렸거나 깨진 곳이 있어 읽을 수 있는 부분만 그렸습니다. ');
-    expect(damageNotice({ warnings: ['a', '인스턴스 배치 한도 2,000,000에 걸렸습니다'], meta: { limited: true } }, 'e.skp')).toEqual({
+    expect(dn(['무엇'], { damaged: true }, 'd.skp')!.text).toBe('파일이 잘렸거나 깨진 곳이 있어 읽을 수 있는 부분만 그렸습니다. 무엇');
+    expect(dn(undefined, { damaged: true }, 'd.skp')!.text).toBe('파일이 잘렸거나 깨진 곳이 있어 읽을 수 있는 부분만 그렸습니다. ');
+    expect(dn(['a', '인스턴스 배치 한도 2,000,000에 걸렸습니다'], { limited: true }, 'e.skp')).toEqual({
       title: '모형이 너무 커서 일부만 그렸습니다',
       text: '인스턴스 배치 한도 2,000,000에 걸렸습니다',
     });
-    expect(damageNotice({ warnings: ['한도 아님'], meta: {} }, 'f.skp')).toBeNull();
+    expect(dn(['한도 아님'], {}, 'f.skp')).toBeNull();
+    // 53차: 까닭 글 끝의 꾸러미 항목 이름(재질 폴더)은 파일 글 자리로
+    const zip = damageNotice({ warnings: ['SketchUp 파일을 읽지 못했습니다: ZIP 항목이 잘렸습니다: materials/면 · 이/a.png'], meta: { damaged: true } }, '무늬 · 면.skp')!;
+    expect(zip.title).toEqual(['"', { file: '무늬 · 면.skp' }, '" 파일의 일부만 보입니다']);
+    expect(zip.text.at(-1)).toEqual({ file: 'materials/면 · 이/a.png' });
+    for (const code of ['en', 'ja', 'zh-CN', 'de']) {
+      expect(inLang(zip.title, code)).toContain('무늬 · 면.skp');
+      expect(inLang(zip.title, code).replace('무늬 · 면.skp', '')).not.toMatch(/[가-힣]/);
+      expect(inLang(zip.text, code)).toContain('materials/면 · 이/a.png');
+    }
   });
 });

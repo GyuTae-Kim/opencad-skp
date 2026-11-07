@@ -102,34 +102,36 @@ export function cornerNormals(ents: SkpEntities): CornerNormals | null {
   }
   const dotF = (a: number, b: number): number => fn[3 * a]! * fn[3 * b]! + fn[3 * a + 1]! * fn[3 * b + 1]! + fn[3 * a + 2]! * fn[3 * b + 2]!;
 
-  // 이어 칠할 모서리의 두 면을 고른다
+  // 이어 칠할 모서리의 두 면을 고른다(53차: 고른 면·모서리는 크기를 아는 형식 배열에 — JS 배열 push가 자라며 옮기던 것을 줄인다, 차례·값은 같다)
   const faceIndex = new Int32Array(F).fill(-1);
-  const picked: number[] = [];
-  const joins: number[] = [];
+  const picked = new Int32Array(F);
+  let nPicked = 0;
+  const joins = new Int32Array(E);
+  let nJoins = 0;
   for (let e = 0; e < E; e++) {
     if (uses[e] !== 2) continue;
     const a = f0[e]!;
     const b = f1[e]!;
     if (dotF(a, b) < SMOOTH_MIN_DOT) continue;
-    joins.push(e);
+    joins[nJoins++] = e;
     // 두 면 차례로(모서리마다 작은 배열을 만들지 않는다 — 33차)
     if (faceIndex[a]! < 0) {
-      faceIndex[a] = picked.length;
-      picked.push(a);
+      faceIndex[a] = nPicked;
+      picked[nPicked++] = a;
     }
     if (faceIndex[b]! < 0) {
-      faceIndex[b] = picked.length;
-      picked.push(b);
+      faceIndex[b] = nPicked;
+      picked[nPicked++] = b;
     }
   }
-  if (!joins.length) return null;
+  if (!nJoins) return null;
   // 고른 면의 꼭짓점 수 = 면의 꼭짓점 구간 길이(고리를 이어 붙인 차례 — faceCorners와 같은 자리)
-  const start = new Uint32Array(picked.length + 1);
-  for (let i = 0; i < picked.length; i++) {
+  const start = new Uint32Array(nPicked + 1);
+  for (let i = 0; i < nPicked; i++) {
     const f = picked[i]!;
     start[i + 1] = start[i]! + (CS[LS[f + 1]!]! - CS[LS[f]!]!);
   }
-  const C = start[picked.length]!;
+  const C = start[nPicked]!;
   const parent = new Int32Array(C);
   for (let c = 0; c < C; c++) parent[c] = c;
   const find = (x: number): number => {
@@ -155,7 +157,8 @@ export function cornerNormals(ents: SkpEntities): CornerNormals | null {
     const r1 = find(c1);
     if (r0 !== r1) parent[r0] = r1;
   };
-  for (const e of joins) {
+  for (let j = 0; j < nJoins; j++) {
+    const e = joins[j]!;
     join(e, edges.a[e]!);
     join(e, edges.b[e]!);
   }
@@ -166,7 +169,7 @@ export function cornerNormals(ents: SkpEntities): CornerNormals | null {
   for (let c = 0; c < C; c++) root[c] = find(c);
   const normals = new Float32Array(C * 3);
   const sum = new Float64Array(C * 3);
-  for (let i = 0; i < picked.length; i++) {
+  for (let i = 0; i < nPicked; i++) {
     const f = picked[i]!;
     for (let c = start[i]!; c < start[i + 1]!; c++) {
       const r = root[c]!;

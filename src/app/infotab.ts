@@ -7,10 +7,11 @@ import { h, icon } from './dom';
 import { boundsSize, docLabel, latLonText, releaseName, shadowTimeText, tzText, unitLabel, unitSummary, type SkpDoc } from './doc';
 import { fileText as F, mix } from './filetext';
 import { fmtCount, fmtNum, fmtPt, formatBytes, formatMs } from './format';
-import { mixText, uiText } from './i18n';
+import { mixNodes, mixText, uiText } from './i18n';
 import { chip, hint, keep, row, section } from './panel';
 import { sunForShadow } from './sun';
 import { unitsLabel } from './units';
+import { warningParts } from './warntext';
 
 /** 정보 탭의 칸들. applyPage: 장면 카드를 누르면 그 장면으로 */
 export function infoSections(d: SkpDoc, applyPage: (index: number) => void): HTMLElement[] {
@@ -113,7 +114,10 @@ export function infoSections(d: SkpDoc, applyPage: (index: number) => void): HTM
   out.push(
     section(
       warns.length ? `경고 ${warns.length}개` : '경고',
-      warns.length ? h('ul', { class: 'warns' }, ...warns.slice(0, 300).map((w) => h('li', {}, w))) : hint('해석기가 남긴 경고가 없습니다.'),
+      // 53차: 경고 끝의 꾸러미 항목 이름(재질·스타일 폴더)은 파일 글로 — 앱 글만 옮겨 넣고 번역층은 건너뛴다(언어를 바꾸면 패널이 다시 그린다)
+      warns.length
+        ? h('ul', { class: 'warns' }, ...warns.slice(0, 300).map((w) => h('li', { 'data-i18n-skip': '' }, ...mixNodes(warningParts(w)))))
+        : hint('해석기가 남긴 경고가 없습니다.'),
     ),
     section(
       '조작',

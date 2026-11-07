@@ -376,7 +376,8 @@ function freeTables(e: SkpEntities): void {
 /**
  * 면 표의 면 k를 삼각화해 (위치, 삼각형)을 쌓기에 더한다. 실패하면 false(쌓기는 그대로).
  * earcut 입력(2D 좌표·구멍 시작)은 면마다 꼭 맞는 길이로 새로 잡는다(51차 — 36차의 다시 쓰는 배열은 면마다 length = 0으로 비울 때 V8이
- * 뒷받침 저장소를 놓아 push가 다시 잡았다. 165 MB 표본에서 비우기·채우기가 earcut 자신보다 오래 걸렸다). 넘기는 값·차례는 같다
+ * 뒷받침 저장소를 놓아 push가 다시 잡았다. 165 MB 표본에서 비우기·채우기가 earcut 자신보다 오래 걸렸다). 넘기는 값·차례는 같다.
+ * (53차에 다시 쓰는 Float64Array의 보기(subarray)로 넘겨 보았지만 같은 값에 165 MB 표본 면 돌기가 28 ms 느려 그대로 둔다)
  */
 export function triangulateFace(points: Float64Array, faces: SkpFaces, k: number, pos: F64, idx: U32): boolean {
   const N = faces.normal;
@@ -548,6 +549,9 @@ export function prepare(
   const groups = new Map<string, FaceGroup>();
   const hidden = new Map<string, FaceGroup>();
   const cn = smooth ? cornerNormals(ents) : null;
+  const cnFace = cn ? cn.faceIndex : null;
+  const cnStart = cn ? cn.start : null;
+  const cnNormals = cn ? cn.normals : null;
   const fu = new Float64Array(3);
   const F = ents.faces;
   /** 면 평면 법선(면마다 다시 채워 쓰는 자리 — 받는 함수는 붙들지 않는다) */
@@ -683,10 +687,10 @@ export function prepare(
       nr.reserve(3 * corners);
       const A = nr.a;
       let n = nr.n;
-      const ci = cn ? cn.faceIndex[fi]! : -1;
+      const ci = cnFace ? cnFace[fi]! : -1;
       if (ci >= 0) {
-        const s = 3 * cn!.start[ci]!;
-        const cnn = cn!.normals;
+        const s = 3 * cnStart![ci]!;
+        const cnn = cnNormals!;
         for (let c = 0; c < 3 * corners; c++) A[n++] = cnn[s + c]!;
         g.smoothed = true;
       } else
@@ -700,23 +704,24 @@ export function prepare(
     // 무늬 좌표: 자기 무늬 재질이면 저장된 투영(없으면 기본), 물려받을 수 있으면 기본 투영 평면 좌표(인치)
     const v0 = before / 3;
     const nv = corners;
-    // 투영 행렬·평면 틀은 면마다 다시 쓰는 자리에(faceUvqInto·planeAxesInto — faceUvq·planeAxes와 같은 값, 면마다 배열을 잡지 않는다)
+    // 투영 행렬·평면 틀은 면마다 다시 쓰는 자리에(faceUvqInto·planeAxesInto — faceUvq·planeAxes와 같은 값, 면마다 배열을 잡지 않는다).
+    // 53차: 면 평면 틀은 면마다 한 번만 구해 앞·뒤 무늬의 기본 틀과 물려받기 평면 좌표가 함께 쓴다(같은 법선 → 같은 값 — 예전에는 셋이 따로 구했다)
+    if (g.uv || g.buv || g.plane) planeAxesInto(normal, 0, planeAt);
     if (g.uv) {
       const t = tex!.tile(mat)!;
       const fm = F.frontMaps;
       const mi = fm ? fm.at[fi]! : -1;
-      if (faceUvqInto(normal, fm?.data, mi >= 0 ? mi * MAP_STRIDE : -1, t.w, t.h, uvMatrix)) tex!.singular++;
+      if (faceUvqInto(normal, fm?.data, mi >= 0 ? mi * MAP_STRIDE : -1, t.w, t.h, uvMatrix, planeAt)) tex!.singular++;
       if (applyUv(uvMatrix, g.pos.a, v0, nv, g.uv)) tex!.flat++;
     }
     if (g.buv) {
       const t = tex!.tile(back)!;
       const bm = F.backMaps;
       const mi = bm ? bm.at[fi]! : -1;
-      if (faceUvqInto(normal, bm?.data, mi >= 0 ? mi * MAP_STRIDE : -1, t.w, t.h, uvMatrix)) tex!.singular++;
+      if (faceUvqInto(normal, bm?.data, mi >= 0 ? mi * MAP_STRIDE : -1, t.w, t.h, uvMatrix, planeAt)) tex!.singular++;
       if (applyUv(uvMatrix, g.pos.a, v0, nv, g.buv)) tex!.flat++;
     }
     if (g.plane) {
-      planeAxesInto(normal, 0, planeAt);
       const x0 = planeAt[0]!, x1 = planeAt[1]!, x2 = planeAt[2]!;
       const y0 = planeAt[3]!, y1 = planeAt[4]!, y2 = planeAt[5]!;
       const P = g.pos.a;
@@ -788,23 +793,41 @@ export function prepare(
   const hiddenLines = new Map<number, LineGroup>();
   const p = ents.points;
   const E = ents.edges;
-  // 36차: 갈래·태그마다 모서리 수를 먼저 세어 꼭 맞게 잡는다(면 묶음과 같은 까닭 — 낸 값·차례는 같다)
+  // 36차: 갈래·태그마다 모서리 수를 먼저 세어 꼭 맞게 잡는다(면 묶음과 같은 까닭 — 낸 값·차례는 같다).
+  // 53차: 같은 갈래·태그의 모서리는 이어지므로(165 MB 표본 모서리 106만 개에 구간 8만 개) 구간마다 한 번만 Map에 더하고, 둘째 돌기도
+  // 바로 앞 모서리와 갈래·태그가 같으면 Map에서 다시 찾지 않는다(셈한 수·묶음을 처음 만드는 차례는 같다)
   const lineCount = new Map<number, number>();
   const softCount = new Map<number, number>();
   const hiddenCount = new Map<number, number>();
-  for (let ei = 0; ei < E.length; ei++) {
-    const flags = E.flags[ei]!;
-    let count: Map<number, number>;
-    if (flags & FLAG_HIDDEN) {
-      if (!extras) continue;
-      count = hiddenCount;
-    } else if (flags & FLAG_SOFT_SMOOTH) {
-      if (!extras) continue;
-      count = softCount;
-    } else count = lineCount;
-    const layer = layerKey(opt(E.layer[ei]!));
-    count.set(layer, (count.get(layer) ?? 0) + 1);
+  {
+    let runMap: Map<number, number> | null = null;
+    let runLayer = 0;
+    let run = 0;
+    for (let ei = 0; ei < E.length; ei++) {
+      const flags = E.flags[ei]!;
+      let count: Map<number, number>;
+      if (flags & FLAG_HIDDEN) {
+        if (!extras) continue;
+        count = hiddenCount;
+      } else if (flags & FLAG_SOFT_SMOOTH) {
+        if (!extras) continue;
+        count = softCount;
+      } else count = lineCount;
+      const layer = layerKey(opt(E.layer[ei]!));
+      if (count === runMap && layer === runLayer) {
+        run++;
+        continue;
+      }
+      if (runMap) runMap.set(runLayer, (runMap.get(runLayer) ?? 0) + run);
+      runMap = count;
+      runLayer = layer;
+      run = 1;
+    }
+    if (runMap) runMap.set(runLayer, (runMap.get(runLayer) ?? 0) + run);
   }
+  let lastMap: Map<number, LineGroup> | null = null;
+  let lastLayer = 0;
+  let lastGroup: LineGroup | null = null;
   for (let ei = 0; ei < E.length; ei++) {
     const flags = E.flags[ei]!;
     let map: Map<number, LineGroup>;
@@ -822,10 +845,18 @@ export function prepare(
       count = lineCount;
     }
     const layer = layerKey(opt(E.layer[ei]!));
-    let g = map.get(layer);
-    if (!g) {
-      const total = count.get(layer)!;
-      map.set(layer, (g = { pos: new F64(6 * total), curve: null, mat: edgeMats && map === lineGroups ? new F64(total) : null, total }));
+    let g: LineGroup;
+    if (map === lastMap && layer === lastLayer) g = lastGroup!;
+    else {
+      let found = map.get(layer);
+      if (!found) {
+        const total = count.get(layer)!;
+        map.set(layer, (found = { pos: new F64(6 * total), curve: null, mat: edgeMats && map === lineGroups ? new F64(total) : null, total }));
+      }
+      g = found;
+      lastMap = map;
+      lastLayer = layer;
+      lastGroup = g;
     }
     g.mat?.push(E.material[ei]!);
     const k = E.curve[ei]! >= 0 ? E.curve[ei]! : -1;
@@ -1754,7 +1785,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
           }
       localBoxes.set(p, lb);
     }
-    const out = Float64Array.from([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]);
+    // 53차: 구석마다 [X, Y, Z].entries() 배열·반복자를 만들지 않고 바로 견준다(닫힌 입체 배치마다 — 같은 값)
+    let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
     for (let c = 0; c < 8; c++) {
       const x = lb[c & 1 ? 3 : 0]!, y = lb[c & 2 ? 4 : 1]!, z = lb[c & 4 ? 5 : 2]!;
       let w = m[3]! * x + m[7]! * y + m[11]! * z + m[15]!;
@@ -1762,18 +1794,27 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       const X = (m[0]! * x + m[4]! * y + m[8]! * z + m[12]!) / w;
       const Y = (m[1]! * x + m[5]! * y + m[9]! * z + m[13]!) / w;
       const Z = (m[2]! * x + m[6]! * y + m[10]! * z + m[14]!) / w;
-      for (const [k, v] of [X, Y, Z].entries()) {
-        if (v < out[k]!) out[k] = v;
-        if (v > out[3 + k]!) out[3 + k] = v;
-      }
+      if (X < x0) x0 = X;
+      if (X > x1) x1 = X;
+      if (Y < y0) y0 = Y;
+      if (Y > y1) y1 = Y;
+      if (Z < z0) z0 = Z;
+      if (Z > z1) z1 = Z;
     }
+    const out = new Float64Array(6);
+    out[0] = x0;
+    out[1] = y0;
+    out[2] = z0;
+    out[3] = x1;
+    out[4] = y1;
+    out[5] = z1;
     return out;
   };
   const capSets = new Map<number, BoxSet[]>();
   const capBudget = { left: opts.maxCapTests ?? MAX_CAP_TESTS };
   /** 닫힌 입체 배치의 채우기 묶음 번호: 범위 상자가 겹치지 않는 첫 묶음(없거나 비교 한도를 넘으면 0 — 예전과 같다) */
   const capOf = (slot: number, box: Float64Array): number => {
-    if (!box.every(Number.isFinite)) return 0;
+    for (let k = 0; k < 6; k++) if (!Number.isFinite(box[k])) return 0;
     let sets = capSets.get(slot);
     if (!sets) capSets.set(slot, (sets = []));
     for (let g = 0; g < MAX_CAP_SPLITS; g++) {
@@ -1797,15 +1838,19 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     const ox = origin ? origin[0] : 0;
     const oy = origin ? origin[1] : 0;
     const oz = origin ? origin[2] : 0;
+    // 53차: 행렬 값과 장면 범위는 정점마다 배열에서 다시 읽지 않고 지역 값으로(같은 식·같은 차례라 값은 같다)
+    const m0 = m[0]!, m1 = m[1]!, m2 = m[2]!, m3 = m[3]!, m4 = m[4]!, m5 = m[5]!, m6 = m[6]!, m7 = m[7]!;
+    const m8 = m[8]!, m9 = m[9]!, m10 = m[10]!, m11 = m[11]!, m12 = m[12]!, m13 = m[13]!, m14 = m[14]!, m15 = m[15]!;
+    let x0 = min[0], y0 = min[1], z0 = min[2], x1 = max[0], y1 = max[1], z1 = max[2];
     for (let i = 0; i < src.length; i += 3) {
       const x = src[i]!;
       const y = src[i + 1]!;
       const z = src[i + 2]!;
-      let X = m[0]! * x + m[4]! * y + m[8]! * z + m[12]!;
-      let Y = m[1]! * x + m[5]! * y + m[9]! * z + m[13]!;
-      let Z = m[2]! * x + m[6]! * y + m[10]! * z + m[14]!;
+      let X = m0 * x + m4 * y + m8 * z + m12;
+      let Y = m1 * x + m5 * y + m9 * z + m13;
+      let Z = m2 * x + m6 * y + m10 * z + m14;
       if (!affine) {
-        const w = m[3]! * x + m[7]! * y + m[11]! * z + m[15]!;
+        const w = m3 * x + m7 * y + m11 * z + m15;
         if (w !== 0) {
           X /= w;
           Y /= w;
@@ -1817,12 +1862,20 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       a[n++] = Y - oy;
       a[n++] = Z - oz;
       if (!bounds) continue;
-      if (X < min[0]) min[0] = X;
-      if (Y < min[1]) min[1] = Y;
-      if (Z < min[2]) min[2] = Z;
-      if (X > max[0]) max[0] = X;
-      if (Y > max[1]) max[1] = Y;
-      if (Z > max[2]) max[2] = Z;
+      if (X < x0) x0 = X;
+      if (Y < y0) y0 = Y;
+      if (Z < z0) z0 = Z;
+      if (X > x1) x1 = X;
+      if (Y > y1) y1 = Y;
+      if (Z > z1) z1 = Z;
+    }
+    if (bounds) {
+      min[0] = x0;
+      min[1] = y0;
+      min[2] = z0;
+      max[0] = x1;
+      max[1] = y1;
+      max[2] = z1;
     }
     dst.n = n;
   };
@@ -1931,17 +1984,22 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     let n = dst.n;
     const a = dst.a;
     const sx = src?.scale?.[0] ?? 1, sy = src?.scale?.[1] ?? 1;
-    for (let i = 0; i < nv; i++) {
-      if (!src) {
+    if (!src)
+      for (let i = 0; i < nv; i++) {
         a[n++] = 0;
         a[n++] = 0;
         if (st === 3) a[n++] = 1;
-        continue;
       }
-      const o = i * src.stride;
-      a[n++] = src.arr[o]! * sx;
-      a[n++] = src.arr[o + 1]! * sy;
-      if (st === 3) a[n++] = src.stride === 3 ? src.arr[o + 2]! : 1;
+    else {
+      // 53차: 원본 배열·간격은 정점마다 다시 읽지 않는다(같은 값)
+      const arr = src.arr;
+      const ss = src.stride;
+      for (let i = 0; i < nv; i++) {
+        const o = i * ss;
+        a[n++] = arr[o]! * sx;
+        a[n++] = arr[o + 1]! * sy;
+        if (st === 3) a[n++] = ss === 3 ? arr[o + 2]! : 1;
+      }
     }
     dst.n = n;
   };
@@ -1983,13 +2041,15 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     let n = dst.n;
     const k = L.k;
     const sg = L.det < 0 ? -1 : 1;
+    // 53차: 여인수 행렬 값은 지역 값으로(put과 같은 까닭 — 같은 식)
+    const k0 = k[0]!, k1 = k[1]!, k2 = k[2]!, k3 = k[3]!, k4 = k[4]!, k5 = k[5]!, k6 = k[6]!, k7 = k[7]!, k8 = k[8]!;
     for (let i = 0; i < src.length; i += 3) {
       const x = src[i]!;
       const y = src[i + 1]!;
       const z = src[i + 2]!;
-      const X = k[0]! * x + k[3]! * y + k[6]! * z;
-      const Y = k[1]! * x + k[4]! * y + k[7]! * z;
-      const Z = k[2]! * x + k[5]! * y + k[8]! * z;
+      const X = k0 * x + k3 * y + k6 * z;
+      const Y = k1 * x + k4 * y + k7 * z;
+      const Z = k2 * x + k5 * y + k8 * z;
       const l = hypot3(X, Y, Z);
       const f = l > 0 ? sg / l : 0;
       a[n++] = X * f;

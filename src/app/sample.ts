@@ -41,6 +41,23 @@ export const SAMPLE_NAME = 'OpenCAD 예제 집.skp';
 /** 예제 파일 머리에 적는 판 */
 export const SAMPLE_VERSION = '26.1.194';
 
+/**
+ * 예제 안 이름(태그·재질·정의·인스턴스·장면·속성 사전·글·모형 정보)을 옮기는 함수(53차). 52차부터 파일에서 온 글은 화면 번역층이 옮기지 않아
+ * 다른 언어 화면에서 예제 이름이 한국어로 남았다. 예제는 사용자의 파일이 아니라 앱이 만든 것이므로 이름도 앱 글로 보고, 화면 언어로 만들 때
+ * (createSampleSkp·sampleSkpBytes의 tr) 만드는 동안만 이 함수를 바꾼다. 기본은 그대로(한국어 — 예전과 같은 바이트).
+ * 이름을 열쇠로 쓰는 곳(재질 번호·무늬 그림·미리보기 그림 모양)은 한국어 이름 그대로 찾고, 파일에 적을 때만 옮긴다
+ */
+let T: (text: string) => string = (text) => text;
+const withNames = <R>(tr: ((text: string) => string) | undefined, run: () => R): R => {
+  const was = T;
+  if (tr) T = tr;
+  try {
+    return run();
+  } finally {
+    T = was;
+  }
+};
+
 type V3 = [number, number, number];
 
 const MM = 1 / 25.4;
@@ -135,6 +152,9 @@ interface InstOpt {
   attrs?: AttrDictsSpec;
   guid?: Uint8Array;
 }
+
+/** 인스턴스 이름을 옮긴 선택(속성 사전은 만들 때 옮긴다) */
+const named = (o: InstOpt): InstOpt => (o.name !== undefined ? { ...o, name: T(o.name) } : o);
 
 interface FaceOpt {
   material?: number;
@@ -249,11 +269,11 @@ class Ents {
   }
 
   group(def: number, m13: number[], o: InstOpt = {}): void {
-    this.groups.push(instance(this.ids.next(), def, m13, o));
+    this.groups.push(instance(this.ids.next(), def, m13, named(o)));
   }
 
   component(def: number, m13: number[], o: InstOpt = {}): void {
-    this.comps.push(instance(this.ids.next(), def, m13, o));
+    this.comps.push(instance(this.ids.next(), def, m13, named(o)));
   }
 
   bytes(id: number | undefined): Uint8Array {
@@ -434,7 +454,7 @@ function chair(ids: Ids, leg: Def): Def {
   for (const [name, x, y] of legs) e.component(leg.id, placement(x, y, 0), { name });
   e.box([-s, s - 40, 470], [s, s, 920], { skip: ['bottom'] });
   // 정의 속성 사전(SketchUp 확장이 붙이는 꼴): 엔티티 정보의 "정의" 사전으로 보인다
-  e.attrs = [['제품', [['이름', val.str('식탁 의자')], ['가격', val.i32(120000)], ['폭', val.length(450 * MM)], ['쌓을 수 있음', val.bool(true)]]]];
+  e.attrs = [[T('제품'), [[T('이름'), val.str(T('식탁 의자'))], [T('가격'), val.i32(120000)], [T('폭'), val.length(450 * MM)], [T('쌓을 수 있음'), val.bool(true)]]]];
   return { id: ids.next(), name: '의자', ents: e, description: '네 다리 나무 의자(인스턴스마다 재질을 바꿔 놓았다)' };
 }
 
@@ -544,7 +564,7 @@ export function sampleModelDat(): Uint8Array {
   const tx = 3000;
   const ty = 2300;
   root.component(tableDef.id, placement(tx, ty, 0), { layer: TAG.furniture, material: MAT['원목']! });
-  root.component(chairDef.id, placement(tx, ty + 650, 0, 0), { name: '의자 북', layer: TAG.furniture, material: MAT['원목']!, attrs: [['배치', [['자리', val.str('북쪽')], ['주인', val.str('집주인')]]]] });
+  root.component(chairDef.id, placement(tx, ty + 650, 0, 0), { name: '의자 북', layer: TAG.furniture, material: MAT['원목']!, attrs: [[T('배치'), [[T('자리'), val.str(T('북쪽'))], [T('주인'), val.str(T('집주인'))]]]] });
   root.component(chairDef.id, placement(tx, ty - 650, 0, 180), { name: '의자 남', layer: TAG.furniture, material: MAT['원목']! });
   root.component(chairDef.id, placement(tx + 850, ty, 0, -90), { name: '의자 동', layer: TAG.furniture, material: MAT['파란 천']! });
   root.component(chairDef.id, placement(tx - 850, ty, 0, 90), { name: '의자 서', layer: TAG.furniture, material: MAT['파란 천']! });
@@ -559,8 +579,8 @@ export function sampleModelDat(): Uint8Array {
   const pt = (x: number, y: number, z: number): [number, number, number] => [x * MM, y * MM, z * MM];
   root.extra.push(
     texts([
-      { id: ids.next(), text: '현관', point: dimPoint(1, pt(3000, 0, 2100)), leader: pt(-1400, -1600, 900), leaderType: 2, layer: TAG.dims },
-      { id: ids.next(), text: 'OpenCAD 예제 집', point: dimPoint(0, [0, 0, 0]), screen: [0.62, 0.92] },
+      { id: ids.next(), text: T('현관'), point: dimPoint(1, pt(3000, 0, 2100)), leader: pt(-1400, -1600, 900), leaderType: 2, layer: TAG.dims },
+      { id: ids.next(), text: T('OpenCAD 예제 집'), point: dimPoint(0, [0, 0, 0]), screen: [0.62, 0.92] },
     ]),
     linearDims([
       { id: ids.next(), start: dimPoint(1, pt(0, 0, 0)), end: dimPoint(1, pt(6000, 0, 0)), xaxis: [1, 0, 0], alignment: 1, offset: -900 * MM, layer: TAG.dims, arrow: 3 },
@@ -570,7 +590,7 @@ export function sampleModelDat(): Uint8Array {
   );
   // 집을 x = 4200 mm에서 세로로 자르는 단면(x ≤ 4200 쪽이 남는다). 평소에는 끄고 "단면" 장면에서만 켠다
   const sectionId = ids.next();
-  root.extra.push(sectionPlanes([{ id: sectionId, plane: [-1, 0, 0, 4200 * MM], name: '집 단면', symbol: 'A' }]));
+  root.extra.push(sectionPlanes([{ id: sectionId, plane: [-1, 0, 0, 4200 * MM], name: T('집 단면'), symbol: 'A' }]));
 
   const cam = (eye: V3, target: V3, o: Partial<CamOpts> = {}): CamOpts => {
     // SketchUp은 위 벡터를 시선과 직교로 적는다
@@ -583,22 +603,22 @@ export function sampleModelDat(): Uint8Array {
   const front = cam([-4000, -11000, 6200], [3000, 2000, 1200]);
   const pageIds = [ids.next(), ids.next(), ids.next(), ids.next()];
   return modelDat({
-    materials: MATERIALS.map(([id, name]) => [id, name]),
+    materials: MATERIALS.map(([id, name]) => [id, T(name)]),
     tags: LAYERS.map(([id, name]) => {
       const color = TAG_COLORS.find(([t]) => t === id);
-      return color ? { id, name, color: color[1] } : { id, name };
+      return color ? { id, name: T(name), color: color[1] } : { id, name: T(name) };
     }),
     // 태그 폴더: 건물(벽·지붕), 주석(치수)
     tagFolders: [
-      { id: ids.next(), name: '건물', tags: [TAG.walls, TAG.roof] },
-      { id: ids.next(), name: '주석', tags: [TAG.dims] },
+      { id: ids.next(), name: T('건물'), tags: [TAG.walls, TAG.roof] },
+      { id: ids.next(), name: T('주석'), tags: [TAG.dims] },
     ],
     defaultLayer: TAG.untagged,
     definitions: defs.map((d) => ({
-      name: d.name,
+      name: T(d.name),
       entities: d.ents.bytes(d.id),
       ...(d.kind !== undefined ? { kind: d.kind } : {}),
-      ...(d.description !== undefined ? { description: d.description } : {}),
+      ...(d.description !== undefined ? { description: T(d.description) } : {}),
     })),
     root: root.bytes(undefined),
     options: [
@@ -616,15 +636,15 @@ export function sampleModelDat(): Uint8Array {
       ],
       ['PageOptions', [['ShowTransition', val.bool(true)], ['TransitionTime', val.f64(1)]]],
     ],
-    properties: [['ModelProperties', [['Name', val.str('예제 집')], ['Description', val.str('브라우저에서 만든 작은 집 모형(장면·치수·단면 시험용)')]]]],
+    properties: [['ModelProperties', [['Name', val.str(T('예제 집'))], ['Description', val.str(T('브라우저에서 만든 작은 집 모형(장면·치수·단면 시험용)'))]]]],
     camera: front,
     pages: {
-      // use 깃발: 0x01 카메라, 0x20 숨긴 태그, 0x40 단면
+      // use 깃발: 0x01 카메라, 0x20 숨긴 태그, 0x40 단면(장면 미리보기 그림 자리는 파일 안 경로라 그대로)
       list: [
-        { id: pageIds[0]!, name: '앞마당', description: '집 앞에서 본 모습', flags: 0x21, camera: front, thumbnail: 'scene_thumbnails/앞마당.png' },
-        { id: pageIds[1]!, name: '식탁', description: '지붕을 숨기고 위에서 본 식탁', flags: 0x21, camera: cam([3000, -2600, 7600], [3000, 2300, 500]), tags: [TAG.roof], thumbnail: 'scene_thumbnails/식탁.png' },
-        { id: pageIds[2]!, name: '단면', description: 'x = 4.2 m에서 자른 집', flags: 0x61, camera: cam([9000, -8000, 4600], [3000, 2000, 1200]), sections: [sectionId] },
-        { id: pageIds[3]!, name: '위에서', description: '평행 투영 평면도', flags: 0x21, camera: { eye: pt(3750, 2000, 30000), target: pt(3750, 2000, 0), up: [0, 1, 0], perspective: false, height: 15000 * MM } },
+        { id: pageIds[0]!, name: T('앞마당'), description: T('집 앞에서 본 모습'), flags: 0x21, camera: front, thumbnail: 'scene_thumbnails/앞마당.png' },
+        { id: pageIds[1]!, name: T('식탁'), description: T('지붕을 숨기고 위에서 본 식탁'), flags: 0x21, camera: cam([3000, -2600, 7600], [3000, 2300, 500]), tags: [TAG.roof], thumbnail: 'scene_thumbnails/식탁.png' },
+        { id: pageIds[2]!, name: T('단면'), description: T('x = 4.2 m에서 자른 집'), flags: 0x61, camera: cam([9000, -8000, 4600], [3000, 2000, 1200]), sections: [sectionId] },
+        { id: pageIds[3]!, name: T('위에서'), description: T('평행 투영 평면도'), flags: 0x21, camera: { eye: pt(3750, 2000, 30000), target: pt(3750, 2000, 0), up: [0, 1, 0], perspective: false, height: 15000 * MM } },
       ],
       // 활성 장면은 장면의 영구 번호로 가리킨다
       active: pageIds[0]!,
@@ -752,8 +772,9 @@ function componentThumb(name: string): Uint8Array {
 /** 꾸러미에 넣는 그림 항목(조사 기록에서 본 자리) */
 function sampleImages(): ZipEntry[] {
   const out: ZipEntry[] = [{ name: 'meta/model_thumbnail.png', data: houseView(96, 64).png() }];
-  for (const [, name, rgb] of MATERIALS) if (TEXTURED.has(name)) out.push({ name: `materials/${name}/${name}.png`, data: textureImage(name, rgb) });
-  for (const name of ['의자', '탁자', '나무']) out.push({ name: `thumbnails/${name}.png`, data: componentThumb(name) });
+  for (const [, name, rgb] of MATERIALS) if (TEXTURED.has(name)) out.push({ name: `materials/${T(name)}/${T(name)}.png`, data: textureImage(name, rgb) });
+  // 컴포넌트 미리보기는 정의 이름으로 찾는다(옮긴 이름)
+  for (const name of ['의자', '탁자', '나무']) out.push({ name: `thumbnails/${T(name)}.png`, data: componentThumb(name) });
   out.push({ name: 'scene_thumbnails/앞마당.png', data: houseView(80, 50).png() }, { name: 'scene_thumbnails/식탁.png', data: diningView(80, 50).png() });
   // 직접 만든 PNG는 압축하지 않은 zlib 흐름이라, 압축 함수가 있으면 꾸러미에서 DEFLATE로 줄인다
   for (const e of out) e.deflate = true;
@@ -765,12 +786,12 @@ function sampleFile(model: Uint8Array, compress?: Compressor): Uint8Array {
     version: SAMPLE_VERSION,
     materials: [
       ...MATERIALS.map(([, name, rgb, alpha]): [string, string] => [
-        name,
+        T(name),
         alpha !== undefined
-          ? materialXml(name, rgb, alpha, 1)
+          ? materialXml(T(name), rgb, alpha, 1)
           : TEXTURED.has(name)
-            ? materialXml(name, rgb, 1, 0, true, { file: `${name}.png`, width: TEXTURE_TILE[name]! / 25.4, height: TEXTURE_TILE[name]! / 25.4, average: rgb })
-            : materialXml(name, rgb),
+            ? materialXml(T(name), rgb, 1, 0, true, { file: `${T(name)}.png`, width: TEXTURE_TILE[name]! / 25.4, height: TEXTURE_TILE[name]! / 25.4, average: rgb })
+            : materialXml(T(name), rgb),
       ]),
       // 태그 색 재질(재질 목록에는 없고 태그 안에서만 가리킨다)
       ...TAG_COLORS.map(([, name, rgb]): [string, string] => [name, materialXml(name, rgb)]),
@@ -781,9 +802,9 @@ function sampleFile(model: Uint8Array, compress?: Compressor): Uint8Array {
   return skpFile(model, opts);
 }
 
-/** 예제 파일 전체(동기). compress가 없으면 저장 방식 ZIP */
-export function sampleSkpBytes(compress?: Compressor): Uint8Array {
-  return sampleFile(sampleModelDat(), compress);
+/** 예제 파일 전체(동기). compress가 없으면 저장 방식 ZIP. tr을 주면 예제 안 이름을 그것으로 옮겨 적는다(53차 — 화면 언어) */
+export function sampleSkpBytes(compress?: Compressor, tr?: (text: string) => string): Uint8Array {
+  return withNames(tr, () => sampleFile(sampleModelDat(), compress));
 }
 
 /** 원시 DEFLATE(CompressionStream 'deflate-raw'). 브라우저가 모르면 null */
@@ -798,9 +819,9 @@ export async function deflateRawAsync(data: Uint8Array): Promise<Uint8Array | nu
   }
 }
 
-/** 예제 파일(model.dat는 되면 DEFLATE로 압축하고, 재질 XML은 저장 방식) */
-export async function createSampleSkp(): Promise<Uint8Array> {
-  const model = sampleModelDat();
+/** 예제 파일(model.dat는 되면 DEFLATE로 압축하고, 재질 XML은 저장 방식). tr: 예제 안 이름을 옮길 함수(53차 — 화면 언어, 없으면 한국어) */
+export async function createSampleSkp(tr?: (text: string) => string): Promise<Uint8Array> {
+  const model = withNames(tr, sampleModelDat);
   const packed = await deflateRawAsync(model);
-  return sampleFile(model, packed ? (d) => (d === model ? packed : null) : undefined);
+  return withNames(tr, () => sampleFile(model, packed ? (d) => (d === model ? packed : null) : undefined));
 }
