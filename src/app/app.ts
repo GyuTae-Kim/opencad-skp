@@ -2446,8 +2446,12 @@ export class SkpViewerApp implements PanelHost {
     this.refreshCamBar();
   }
 
-  /** 카메라 띠 열기(보기 설정 메뉴) */
+  /**
+   * 카메라 띠 열기(보기 설정 메뉴). 측정 띠를 쓰는 화면(휴대폰·손가락 기기)은 두 띠가 3D 보기 아래 같은 자리라
+   * 카메라 띠가 측정 띠를 덮지 않게 측정 도구를 끈다(걷기를 켤 때처럼 — 43차. 켜져 있지 않으면 바뀌는 것이 없다 — 받는 중인 바람만 거둔다)
+   */
   openCamBar(): void {
+    if (this.bandQuery?.matches) this.setMeasureMode(null);
     this.els.camBar.hidden = false;
     this.refreshCamBar();
     this.refreshSelBar();
@@ -2468,43 +2472,40 @@ export class SkpViewerApp implements PanelHost {
     if (!e) return;
     const touch = !!this.coarseQuery?.matches;
     this.stick?.setVisible(this.walking && touch && !!this.doc);
-    // 조이스틱은 카메라 띠 위에(띠 높이는 화면 폭·글 줄 수에 따라 다르다)
-    if (this.stick && !this.stick.el.hidden) this.stick.el.style.bottom = `${(e.camBar.hidden ? 0 : e.camBar.offsetHeight) + 22}px`;
-    if (e.camBar.hidden || !v) return;
-    const fov = v.fov;
-    e.fovRange.value = String(Math.round(fov));
-    e.fovValue.textContent = `${Math.round(fov)}°`;
-    const persp = v.getProjection() === 'perspective';
-    e.fovRange.disabled = !persp;
-    e.walkBtn.classList.toggle('on', this.walking);
-    e.walkBtn.setAttribute('aria-pressed', this.walking ? 'true' : 'false');
-    e.twoPointBtn.classList.toggle('on', this.twoPointOn);
-    e.twoPointBtn.setAttribute('aria-pressed', this.twoPointOn ? 'true' : 'false');
-    for (const [b, on] of [
-      [e.gravityBtn, this.walkGravity],
-      [e.collideBtn, this.walkCollide],
-    ] as const) {
-      b.hidden = !this.walking;
-      b.classList.toggle('on', on);
-      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (!e.camBar.hidden && v) {
+      const fov = v.fov;
+      e.fovRange.value = String(Math.round(fov));
+      e.fovValue.textContent = `${Math.round(fov)}°`;
+      const persp = v.getProjection() === 'perspective';
+      e.fovRange.disabled = !persp;
+      press(e.walkBtn, this.walking);
+      press(e.twoPointBtn, this.twoPointOn);
+      for (const [b, on] of [
+        [e.gravityBtn, this.walkGravity],
+        [e.collideBtn, this.walkCollide],
+      ] as const) {
+        b.hidden = !this.walking;
+        press(b, on);
+      }
+      e.camText.replaceChildren(
+        h('b', { class: 'mb-value' }, this.walking ? '걷기' : '카메라'),
+        h(
+          'span',
+          { class: 'mb-sub' },
+          this.walking
+            ? touch
+              ? '한 손가락 끌기: 둘러보기 · 조이스틱: 걷기 · 두 손가락: 벌려 앞으로·끌어 옆/위아래 · 두 번 누르기: 그 자리에 서기'
+              : this.walkGravity
+                ? '끌기: 둘러보기 · W/S·↑/↓: 앞뒤 · A/D: 옆 · ←/→: 돌기 · Shift: 빠르게 · 두 번 누르기: 그 자리에 서기 · Esc: 끝내기(중력을 끄면 Q/E로 위아래)'
+                : '끌기: 둘러보기 · W/S·↑/↓: 앞뒤 · A/D: 옆 · ←/→: 돌기 · Q/E: 위아래 · Shift: 빠르게 · 두 번 누르기: 그 자리에 서기 · Esc: 끝내기'
+            : persp
+              ? '시야각을 바꾸거나 걷기·2점 투시를 켭니다'
+              : '평행 투영에서는 시야각을 쓰지 않습니다',
+        ),
+      );
     }
-    e.camText.replaceChildren(
-      h('b', { class: 'mb-value' }, this.walking ? '걷기' : '카메라'),
-      h(
-        'span',
-        { class: 'mb-sub' },
-        this.walking
-          ? touch
-            ? '한 손가락 끌기: 둘러보기 · 조이스틱: 걷기 · 두 손가락: 벌려 앞으로·끌어 옆/위아래 · 두 번 누르기: 그 자리에 서기'
-            : this.walkGravity
-              ? '끌기: 둘러보기 · W/S·↑/↓: 앞뒤 · A/D: 옆 · ←/→: 돌기 · Shift: 빠르게 · 두 번 누르기: 그 자리에 서기 · Esc: 끝내기(중력을 끄면 Q/E로 위아래)'
-              : '끌기: 둘러보기 · W/S·↑/↓: 앞뒤 · A/D: 옆 · ←/→: 돌기 · Q/E: 위아래 · Shift: 빠르게 · 두 번 누르기: 그 자리에 서기 · Esc: 끝내기'
-          : persp
-            ? '시야각을 바꾸거나 걷기·2점 투시를 켭니다'
-            : '평행 투영에서는 시야각을 쓰지 않습니다',
-      ),
-    );
-    if (this.stick && !this.stick.el.hidden) this.stick.el.style.bottom = `${e.camBar.offsetHeight + 22}px`;
+    // 조이스틱은 카메라 띠 위에(띠 높이는 화면 폭·글 줄 수에 따라 다르다 — 글을 바꾼 뒤에 잰다)
+    if (this.stick && !this.stick.el.hidden) this.stick.el.style.bottom = `${(e.camBar.hidden ? 0 : e.camBar.offsetHeight) + 22}px`;
   }
 
   // ───────────────────────── 해 조명·그림자·안개 ─────────────────────────
@@ -2679,7 +2680,8 @@ export class SkpViewerApp implements PanelHost {
       this.refreshStatus();
       return;
     }
-    // 측정은 궤도 보기에서(걷기의 끌기는 둘러보기다)
+    // 측정은 궤도 보기에서(걷기의 끌기는 둘러보기다). 측정 띠를 쓰는 화면은 카메라 띠가 측정 띠를 덮으므로 닫는다(43차 — 걷기도 끝남)
+    if (mode && this.bandQuery?.matches) this.closeCamBar();
     if (mode && this.walking) this.setWalk(false);
     t.setMode(mode);
     if (!mode) this.doc.measure = null;
@@ -3320,10 +3322,6 @@ export class SkpViewerApp implements PanelHost {
     if (!e) return;
     const has = !!this.doc;
     for (const b of e.toolbar.querySelectorAll('button')) b.disabled = !has;
-    const press = (b: HTMLButtonElement, on: boolean): void => {
-      b.classList.toggle('on', on);
-      b.setAttribute('aria-pressed', on ? 'true' : 'false');
-    };
     for (const [p, b] of e.projBtns) press(b, this.projection === p);
     for (const [m, b] of e.modeBtns) press(b, this.renderMode === m);
     press(e.gridBtn, this.gridOn);
@@ -3492,12 +3490,9 @@ export class SkpViewerApp implements PanelHost {
     const locked = !!tool.inferenceLock;
     e.measureLock.hidden = !directing;
     e.measureCopy.hidden = directing;
-    e.measureLock.setAttribute('aria-pressed', String(locked));
-    e.measureLock.classList.toggle('on', locked);
+    press(e.measureLock, locked);
     e.measureLock.title = locked ? '방향 잠금 풀기' : '지금 방향 잠그기(다시 누르면 풀기)';
-    const guide = tool.guideMode;
-    e.measureGuide.setAttribute('aria-pressed', String(guide));
-    e.measureGuide.classList.toggle('on', guide);
+    press(e.measureGuide, tool.guideMode);
     e.measureLogBtn.disabled = !this.measureLog.length;
     e.measureLogBtn.title = this.measureLog.length ? `최근 측정 기록 ${this.measureLog.length}개` : '최근 측정 기록';
     if (!this.measureLog.length) e.measureLog.hidden = true;
@@ -3676,4 +3671,10 @@ function revokeImages(d: SkpDoc): void {
     } catch {
       /* 이미 닫혔다 */
     }
+}
+
+/** 켜고 끄는 단추(도구 막대·카메라 띠·측정 띠)의 눌림: 강조와 aria-pressed */
+function press(b: HTMLElement, on: boolean): void {
+  b.classList.toggle('on', on);
+  b.setAttribute('aria-pressed', String(on));
 }

@@ -2738,3 +2738,165 @@ html:lang(zh-CN) { --font: -apple-system, "PingFang SC", "Microsoft YaHei", sans
   font-size: 12px;
   line-height: 1.5;
 }
+
+/*
+ * ---------------------------------------------------------------- 휴대폰 점검(43차)
+ * 카메라 띠 단추 줄: 320px 휴대폰에서 걷는 동안 다섯 단추(걷기·중력·부딪힘·2점 투시·닫기)가 띠보다 넓어 닫기가 화면 밖으로 나갔다.
+ * 줄이 모자라면 단추 줄 안에서 줄을 바꾼다(넓으면 예전처럼 한 줄 — 늘어나지 않고 줄어들기만 한다)
+ */
+.cam-bar .mb-acts {
+  flex-shrink: 1;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/*
+ * 측정 띠 안 측정값 칸: 안내 되돌리기·지우기·안내 수 단추가 다 서면 영어 320px에서 칸이 22px로 줄어 친 값이 보이지 않았다.
+ * 칸은 6em 아래로 줄이지 않고, 모자라면 뒤 단추를 다음 줄로 보낸다
+ */
+.measure-bar .vcb {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.measure-bar .vcb-input {
+  flex: 1 1 6em;
+  min-width: 6em;
+}
+
+/*
+ * 좁은 화면의 패널 탭: 넷이 한 줄에 다 보이게 남는 폭을 나눠 갖고, 긴 다른 언어 이름("Tags & Materials" 등)은 탭 안에서 줄을 바꾼다.
+ * 그래도 모자라면(320px 영어·독일어) 탭 줄을 두 줄로 — 고른 탭이 가로 스크롤 밖으로 숨지 않는다
+ */
+@media (max-width: 759.98px) {
+  .ptabs {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+
+  .ptab {
+    flex: 1 1 0;
+    height: auto;
+    min-height: 38px;
+    padding: 4px 8px;
+    line-height: 1.2;
+  }
+}
+
+/*
+ * 손가락 표적(WCAG 2.5.8 — 24×24 CSS px 아래면 둘레 24px 원이 다른 표적과 겹치지 않게, 2.5.5 — 44×44).
+ * 메뉴·목록·시트·카드 안 단추는 높이 44px로 키우고, 3D 보기를 덮는 막대(제목·도구·측정·측정값 칸)의 단추는
+ * 보이는 크기·자리를 그대로 두고 막대 안쪽 여백까지 누르기 자리를 넓힌다(투명 ::after — 이웃 단추와는 겹치지 않는다).
+ * 장면 탭은 글을 줄이는 overflow 안이라 넓히지 못한다(3D 보기를 덜 덮으려고 38px 그대로)
+ */
+@media (pointer: coarse) {
+  .menu-item {
+    height: auto;
+  }
+
+  .menu-item,
+  .language-list button,
+  .prow,
+  .ptab,
+  .btn,
+  .mini-btn,
+  .seg-btn,
+  .ml-copy-btn {
+    min-height: 44px;
+  }
+
+  .mini-btn,
+  .seg-btn,
+  .ml-copy-btn {
+    height: auto;
+  }
+
+  .icon-btn,
+  .ml-copy-btn {
+    min-width: 44px;
+  }
+
+  .icon-btn {
+    height: 44px;
+  }
+
+  .measure-history > summary {
+    padding-block: 13px;
+  }
+
+  /* 슬라이더: 보이는 줄은 가운데 그대로, 누르기 높이만(단면 위치는 도구 막대 단추 줄과 같은 38px) */
+  .sec-range {
+    height: 38px;
+  }
+
+  .cam-bar .fov-range {
+    height: 44px;
+  }
+
+  /*
+   * 나무·윗단계 줄 안의 펼치기·보이기는 줄(누르면 고르기) 안의 작은 표적이라 더 넓게: 펼치기는 줄 높이·사이 틈까지, 보이기 체크는 24px
+   * (태그 줄은 줄 전체가 체크의 라벨이라 그대로)
+   */
+  .trow .twisty {
+    position: relative;
+  }
+
+  .trow .twisty::after {
+    content: '';
+    position: absolute;
+    inset: -13px -3px;
+  }
+
+  .prow.pick > input[type='checkbox'] {
+    width: 24px;
+    height: 24px;
+  }
+
+  .titlebar .tbtn,
+  .language-trigger,
+  .toolbar .tbtn,
+  .scene-play,
+  .mb-btn,
+  .vcb-btn {
+    position: relative;
+  }
+
+  /* inset은 테두리 안쪽(padding 상자)에서 잰다: 테두리 1px 단추는 1px 더(위아래 3px·옆 1px — 단추 사이 2px 틈을 반씩, 측정 띠는 4px 틈을 반씩) */
+  .titlebar .tbtn::after,
+  .language-trigger::after,
+  .toolbar .tbtn::after,
+  .vcb-btn::after,
+  .scene-play::after,
+  .mb-btn::after {
+    content: '';
+    position: absolute;
+    inset: -4px -2px;
+  }
+
+  .scene-play::after {
+    inset: -3px -1px;
+  }
+
+  .mb-btn::after {
+    inset: -4px -3px;
+  }
+
+  /* 패널 크기 손잡이(시트 위 가장자리 14px — 바로 위가 3D 보기)를 24px로: 3D 보기 쪽으로 10px 더 잡고, 그리는 손잡이 막대는 그 자리 그대로 */
+  @media (max-width: 759.98px) {
+    .resizer {
+      flex-basis: 24px;
+      margin-top: -10px;
+    }
+
+    .resizer::after {
+      top: 14px;
+    }
+  }
+
+  /* 320px 휴대폰: 제목 막대 단추(폭 40px)에 밀려 로고 옆 글이 "O…"로 잘리므로 로고만 둔다(이름은 링크 제목 풍선) */
+  @media (max-width: 359.98px) {
+    .brand-text {
+      display: none;
+    }
+  }
+}

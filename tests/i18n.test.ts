@@ -13,6 +13,7 @@ import { SHORTCUTS } from '../src/app/shortcuts';
 import { chunkFailText } from '../src/app/core';
 import { CONTEXT_LOST_TEXT, CONTEXT_LOST_TITLE, RESTORE_FAIL_TEXT, RESTORE_FAIL_TITLE, RESTORE_TEXT, RESTORE_TITLE } from '../src/app/release';
 import { catalogs, currentLanguage, languageUrl, languages, translate } from '../site/i18n.mjs';
+import { DEFAULT_UNITS, unitsLabel } from '../src/app/units';
 
 let dispose: (() => void) | undefined;
 afterEach(() => { dispose?.(); vi.unstubAllGlobals(); });
@@ -61,6 +62,20 @@ describe('language URLs and UI presentation', () => {
     const example = template.replace(/\{\d+\}/g, 'FILE_A.skp');
     expect(translate(example,'en')).toContain('FILE_A.skp');
     expect(translate(example,'en')).not.toBe(example);
+  });
+  it('translates the unit format row of the Info tab in every format and length unit (43rd round: "십진" stayed Korean)', () => {
+    // "{0} · {1} · 소수 {2}자리"는 잡은 값을 그대로 넣어 형식 이름(십진)·단위 이름(인치·피트·야드)·공학 이름이 한국어로 남았다
+    const labels: string[] = [];
+    for (const lengthUnit of ['mm', 'cm', 'm', 'inch', 'feet', 'yard'] as const) labels.push(unitsLabel({ ...DEFAULT_UNITS, lengthFormat: 'decimal', lengthUnit, lengthPrecision: 2 }));
+    for (const lengthFormat of ['architectural', 'engineering', 'fractional'] as const) labels.push(unitsLabel({ ...DEFAULT_UNITS, lengthFormat, lengthUnit: 'inch', lengthPrecision: 3 }));
+    expect(labels).toContain('mm · 십진 · 소수 2자리');
+    expect(labels).toContain('공학(소수 피트) · 소수 3자리');
+    for (const {code} of languages.filter(item => item.code !== 'ko'))
+      for (const label of labels) expect(translate(label, code), `${code}: ${label}`).not.toMatch(/[가-힣]/);
+    expect(translate('mm · 십진 · 소수 0자리', 'en')).toBe('mm · Decimal · 0 decimal places');
+    expect(translate('인치 · 십진 · 소수 2자리', 'en')).toBe('Inch · Decimal · 2 decimal places');
+    expect(translate('공학(소수 피트) · 소수 2자리', 'de')).toBe('Ingenieurwesen (Dezimalfuß) · Dezimalstellen 2');
+    expect(translate('mm · 소수 2자리', 'ja')).toBe('mm・小数点以下2桁');
   });
   it('translates each line of a multi-line message, even when a trailing {0} would swallow the next line', () => {
     // 경고 둘을 줄바꿈으로 이은 글: "…: {0}"의 {0}이 다음 줄까지 잡아 둘째 줄이 한국어로 남던 것(공용 번역기 맞춤)
