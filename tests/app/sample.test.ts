@@ -5,6 +5,7 @@ import { readZipDirectory } from '../../src/zip';
 import { createSampleSkp, deflateRawAsync, loopNormal, placement, sampleSkpBytes, SAMPLE_VERSION } from '../../src/app/sample';
 import { crc32 } from '../../src/app/skpwrite';
 import { nodeDeflate } from '../build';
+import { translate } from '../../site/i18n.mjs';
 
 describe('예제 모형', () => {
   it('2026 판 꼴의 작은 파일이고 경고 없이 읽힌다', () => {
@@ -26,6 +27,42 @@ describe('예제 모형', () => {
     expect(s.bounds!.max[1] - s.bounds!.min[1]).toBeCloseTo(11_000, 3);
     expect(s.bounds!.max[2]).toBeGreaterThan(4300);
     expect(s.bounds!.max[2]).toBeLessThan(4700);
+  });
+
+  it('화면 언어로 만들면 안의 이름이 그 언어로 들고, 한국어는 예전과 같은 바이트(53차)', async () => {
+    const ko = sampleSkpBytes();
+    expect(sampleSkpBytes(undefined, (t) => t)).toEqual(ko);
+    expect(await createSampleSkp((t) => translate(t, 'ko'))).toEqual(await createSampleSkp());
+    const want = skpToScene(ko, { name: '예제', outline: true, extras: true, smooth: true });
+    const wm = want.meta as Record<string, any>;
+    for (const code of ['en', 'de', 'ja', 'zh-CN']) {
+      const tr = (t: string): string => translate(t, code);
+      const s = skpToScene(sampleSkpBytes(undefined, tr), { name: '예제', outline: true, extras: true, smooth: true });
+      const m = s.meta as Record<string, any>;
+      expect(s.warnings).toEqual([]);
+      // 같은 모형: 기하·개수는 같고, 이름은 옮긴 것(한글 없음)
+      expect(s.bounds).toEqual(want.bounds);
+      expect([m.faces, m.edges, m.materials, m.definitions]).toEqual([wm.faces, wm.edges, wm.materials, wm.definitions]);
+      const names = [
+        ...(m.tags as string[]),
+        ...m.materialStats.map((x: { name: string }) => x.name),
+        ...m.pages.flatMap((p: { name: string; description: string }) => [p.name, p.description]),
+        ...m.tree.names,
+        ...m.tree.definitionNames,
+        ...m.texts.map((x: { text: string }) => x.text),
+        ...m.sectionPlanes.map((x: { name: string }) => x.name),
+        ...m.tagFolders.map((x: { name: string }) => x.name),
+        m.modelName,
+        m.modelDescription,
+        JSON.stringify(m.attributes),
+      ];
+      expect(names.filter((x) => /[가-힣]/.test(x))).toEqual([]);
+      expect(m.pages.map((p: { name: string }) => p.name)).toEqual(['앞마당', '식탁', '단면', '위에서'].map(tr));
+      // 재질 이름은 서로 달라 꾸러미 폴더가 겹치지 않고, 무늬 재질 셋은 무늬 그림을 찾는다
+      expect(new Set(m.materialStats.map((x: { name: string }) => x.name)).size).toBe(wm.materialStats.length);
+      expect(m.materialStats.filter((x: { textured: boolean }) => x.textured).length).toBe(3);
+      expect((s.textures ?? []).length).toBe((want.textures ?? []).length);
+    }
   });
 
   it('장면·카메라·글·치수·단면·태그 폴더·속성이 읽힌다', () => {

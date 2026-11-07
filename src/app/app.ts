@@ -1080,8 +1080,9 @@ export class SkpViewerApp implements PanelHost {
     try {
       // 예제 만들기 도구는 누를 때만 받는다(첫 화면 묶음을 작게)
       const sample = await import('./sample');
-      name = sample.SAMPLE_NAME;
-      bytes = await sample.createSampleSkp();
+      // 53차: 예제는 앱이 만든 파일이라 안의 이름(태그·재질·장면 등)과 파일 이름도 화면 언어로 만든다(파일 글은 번역층이 옮기지 않으므로 — 52차)
+      name = uiText(sample.SAMPLE_NAME);
+      bytes = await sample.createSampleSkp(uiText);
     } catch (e) {
       if (seq === this.openSeq) {
         this.setBusy(null);
