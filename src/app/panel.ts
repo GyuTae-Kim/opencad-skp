@@ -825,6 +825,7 @@ export class Panel {
         row('SketchUp 판', info.version ? `${info.version} (${releaseName(info.version)})` : '모름'),
         d.modelName ? row('모형 이름', d.modelName) : null,
         d.modelDescription ? row('설명', d.modelDescription) : null,
+        d.classifications.length ? row('분류 체계', d.classifications.join(' · ')) : null,
         row('단위', unitSummary(info, s.units)),
         row('단위 형식', unitsLabel(d.units)),
         row('크기', formatBytes(d.size)),

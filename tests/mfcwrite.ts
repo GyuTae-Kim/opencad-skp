@@ -476,6 +476,8 @@ export interface MfcEntitiesSpec {
 export interface MfcDefinitionSpec {
   name: string;
   description?: string;
+  /** 불러온 파일 경로(없으면 빈 글) */
+  path?: string;
   guid?: Uint8Array;
   entities: MfcEntitiesSpec;
   behavior?: { glue?: boolean; cuts?: boolean; snap?: number; faceCamera?: boolean; shadowsSun?: boolean; noScale?: number };
@@ -1246,7 +1248,7 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
       w.raw(d.guid ?? new Uint8Array(16));
       w.str(d.name);
       w.str(d.description ?? '');
-      w.str('');
+      w.str(d.path ?? '');
       w.u32(0);
       const bv = w.schemas.CComponentBehavior ?? 5;
       const oldBehavior = bv < 5;

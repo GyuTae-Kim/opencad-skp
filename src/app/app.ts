@@ -98,7 +98,7 @@ import {
   type SkpDoc,
 } from './doc';
 import { MAX_FILE_BYTES, SKP_ACCEPT, baseName, fmtCount, formatBytes, formatMs, rgbCss } from './format';
-import { AnnotationMarks } from './dimmarks';
+import type { AnnotationMarks } from './dimmarks';
 import { VIEW_KEY_OF, VIEW_MENU, isEditableTarget, isViewKey, keyAction } from './keys';
 import type { LaunchRequest } from './launch';
 import {
@@ -647,16 +647,19 @@ export class SkpViewerApp implements PanelHost {
     });
     const measureLogEl = h('div', { class: 'measure-log', hidden: true });
     const measureFlash = h('div', { class: 'measure-flash', role: 'status', hidden: true });
+    // 띠는 이름 붙은 묶음이고 알림 영역은 안의 결과 글(mb-text) 하나와 잠깐 알림(measure-flash)뿐이다(45차 — 띠가 role=status였을 때는
+    // 결과 글의 aria-live가 그 안에 겹쳐 두 번 읽힐 수 있었고, 휴대폰에서 띠 안으로 옮긴 VCB 알림도 겹쳤다. WAI-ARIA 1.2 status는 암묵 polite·atomic)
     const measureBar = h(
       'div',
-      { class: 'measure-bar', role: 'status', hidden: true },
+      { class: 'measure-bar', role: 'group', 'aria-label': '측정', hidden: true },
       measureText,
       h('div', { class: 'mb-acts' }, measureGuide, measureLock, measureCopy, measureLogBtn, measureClear, measureClose),
       measureLogEl,
       measureFlash,
     );
     // 고른 것 카드(휴대폰·터치): 패널을 열지 않고 고른 그룹·컴포넌트의 크기·태그를 보이고, 자세히(선택 탭)·선택 해제 단추를 둔다
-    const selText = h('div', { class: 'mb-text' });
+    // 카드도 측정 띠처럼 이름 붙은 묶음 + 알림 영역은 글 하나(45차 — 카드가 role=status(atomic)일 때는 글이 바뀔 때마다 단추 이름까지 읽혔다)
+    const selText = h('div', { class: 'mb-text', 'aria-live': 'polite' });
     // 그룹을 고른 뒤 누른 면·모서리 하나만(면 넓이·모서리 길이) — 휴대폰에서 패널을 열지 않고
     const selPart = h('button', { class: 'mb-btn', type: 'button', title: '누른 면 하나의 넓이(모서리면 길이)만 보기', hidden: true, html: `${icon('face', 16)}<span class="mb-part">면만</span>` });
     selPart.addEventListener('click', () => this.selectPickedPart());
@@ -668,7 +671,7 @@ export class SkpViewerApp implements PanelHost {
       this.applySelection(null, false);
       focusIfLost(this.viewer?.canvas, selBar);
     });
-    const selBar = h('div', { class: 'measure-bar sel-bar', role: 'status', hidden: true }, selText, h('div', { class: 'mb-acts' }, selPart, selMore, selClose));
+    const selBar = h('div', { class: 'measure-bar sel-bar', role: 'group', 'aria-label': '고른 것', hidden: true }, selText, h('div', { class: 'mb-acts' }, selPart, selMore, selClose));
     // 카메라 띠: 걷기(1인칭)·시야각·2점 투시(보기 설정 메뉴로 연다, 걸으면 늘 보인다). 휴대폰은 걷는 동안 왼쪽 아래에 조이스틱
     const camText = h('div', { class: 'mb-text cam-text' });
     const fovRange = h('input', { class: 'fov-range', type: 'range', min: '10', max: '120', step: '1', value: '35', 'aria-label': '시야각(도)', title: '세로 시야각(도)' });
@@ -1318,8 +1321,19 @@ export class SkpViewerApp implements PanelHost {
       this.labels = new AnnotationLabels(this.overlay);
       // 형상 뒤의 글·치수는 숨긴다(카메라가 멈추면 라벨 기준점에서 코어 고르기로 판정)
       this.labels.setOcclusion((p, x, y, f) => this.labelOccluded(p, x, y, f));
-      this.marks = new AnnotationMarks(this.overlay);
-      this.marks.setOcclusion((p, x, y, f) => this.labelOccluded(p, x, y, f));
+      // 치수·지시선 끝 표시는 조각을 받는 대로(45차 — 첫 화면 조각에서 뺐다. 받은 뒤 지금 문서의 표시를 넣고 다시 그린다)
+      const ov = this.overlay;
+      void import('./dimmarks').then(
+        ({ AnnotationMarks }) => {
+          if (this.overlay !== ov) return;
+          const m = new AnnotationMarks(ov);
+          m.setOcclusion((p, x, y, f) => this.labelOccluded(p, x, y, f));
+          this.marks = m;
+          if (this.doc) m.setData(this.doc.annotationMarks);
+          this.refreshMarks();
+        },
+        () => undefined,
+      );
       // 측정 도구는 조각을 받는 대로 만든다(문서를 열 때 받기 시작했다 — 받지 못했으면 처음 켤 때 다시 받고 알린다)
       void this.ensureMeasureTool().catch(() => undefined);
       // 그래픽 문맥 잃음·되찾음 안내도 조각을 받는 대로(받지 못하면 안내 없이 코어가 스스로 다시 그린다)

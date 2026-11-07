@@ -21,6 +21,10 @@ export const TAG = {
   PROPS_SECTION: 0x0209,
   AXES_SECTION: 0x01fc,
   SHADOW_SECTION: 0x0204,
+  /** 분류 체계(Model Info > 분류): 6784마다 6785 원래 파일 경로, 6786 이름(IFC 2x3 등), 6787 꾸러미 안 경로(classifications/<이름>.skc) */
+  CLASSIFICATION_SECTION: 0x0205,
+  CLASSIFICATION: 0x6784,
+  CLASSIFICATION_NAME: 0x6786,
 
   // ── 그리기 축(01fc → 4650, 장면 714f → 4650): 원점, x·y·z 축(f64×3씩, 이름은 참조 해석기 기록과 같다) ──
   AXES: 0x4650,
@@ -109,7 +113,15 @@ export const TAG = {
   DEF_GUID: 0x157d,
   DEF_NAME: 0x157e,
   DEF_DESCRIPTION: 0x157f,
+  /** 정의를 불러온 파일 경로(글, 빈 글 = 모형 안에서 만든 정의) — SketchUp 컴포넌트 창의 "불러온 곳" */
+  DEF_PATH: 0x1580,
   DEF_KIND: 0x1583,
+  /** 정의 미리보기: 1585 → 251c → 251d 카메라(34bc) · 251e 그림 → 2328(2329 꼴 1 JPEG · 4 그림 파일, 232a ZIP 경로, 232c JPEG 품질) */
+  DEF_PREVIEW: 0x1585,
+  PREVIEW: 0x251c,
+  PREVIEW_IMAGE: 0x251e,
+  IMAGE_REF: 0x2328,
+  IMAGE_REF_PATH: 0x232a,
   BEHAVIOR: 0x1b58,
   BEHAVIOR_SNAP_TO: 0x1b59,
   BEHAVIOR_NO_SCALE: 0x1b5a,

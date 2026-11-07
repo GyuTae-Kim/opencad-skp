@@ -53,6 +53,8 @@ export interface EntityInput {
   guid?: string | null;
   /** 정의 GUID(컴포넌트) */
   definitionGuid?: string | null;
+  /** 정의를 불러온 파일 경로(SketchUp 컴포넌트 창의 "불러온 곳") */
+  definitionPath?: string | null;
   description?: string | null;
   /** 가로·세로·높이(장면 단위) */
   size?: readonly number[] | null;
@@ -199,6 +201,9 @@ export function entityInfo(e: EntityInput, units: UnitsDisplay, mmPerUnit: numbe
   add('설명', description, description);
   add('GUID', text(e.guid));
   if (e.kind !== 'group' && text(e.definitionGuid) !== text(e.guid)) add('정의 GUID', text(e.definitionGuid));
+  // 불러온 파일: 줄에는 파일 이름, 도움말에 전체 경로(경로는 그 파일을 만든 컴퓨터의 것이라 길다)
+  const from = text(e.definitionPath);
+  add('불러온 파일', from.replace(/.*[\\/]/, ''), from);
   const state = [e.hidden === true ? '숨김' : '', e.locked === true ? '잠김' : ''].filter(Boolean).join(' · ');
   add('상태', state);
   for (const r of e.extra ?? []) if (r && r.label && r.value) rows.push({ ...r });
@@ -276,6 +281,7 @@ export function nodeEntity(
     // 정의 GUID는 컴포넌트 정의에만 뜻이 있다(그룹은 entityInfo가 행을 만들지 않는다)
     if (info.definitionGuid && typeof info.definitionGuid[def] === 'string') e.definitionGuid = info.definitionGuid[def] || null;
     if (info.definitionAttrs && def < info.definitionAttrs.length) e.definitionAttrs = dictsAt(attributes, info.definitionAttrs[def]);
+    e.definitionPath = info.definitionPath?.[def] || null;
   }
   return e;
 }

@@ -749,6 +749,7 @@ function extrasMeta(
   if (model.tagFolders?.length) out.tagFolders = model.tagFolders.map((f) => ({ name: f.name, visible: f.visible !== false, parent: f.parent }));
   if (model.name) out.modelName = model.name;
   if (model.description) out.modelDescription = model.description;
+  if (model.classifications?.length) out.classifications = [...model.classifications];
   if (parts.texts) out.texts = parts.texts;
   if (parts.dimensions) out.dimensions = parts.dimensions;
   if (parts.sectionPlanes) out.sectionPlanes = parts.sectionPlanes;
