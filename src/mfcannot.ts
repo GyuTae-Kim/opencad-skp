@@ -69,11 +69,12 @@ export function annotationReaders(st: MfcState): Record<string, MfcReadFn> {
     return p;
   };
 
-  /** 치수 머리(CDimension): 앞머리, 그리기 요소, 글, 글꼴, u8 글 정렬, u32 끝 표시 */
+  /** 치수 머리(CDimension): 앞머리, 그리기 요소, 글, 글꼴, u8 글 정렬, u32 끝 표시. CDimension 0(SketchUp 5)은 글에서 끝난다 */
   const dimHead = (kind: SkpDimension['kind']): SkpDimension => {
     const pre = st.preamble();
     const d = st.drawing();
     const text = s.cstr();
+    if ((st.schemas.get('CDimension') ?? 1) < 1) return { ...common(pre, d), kind, text };
     const font = s.readObject(C.FONT);
     const aligned = s.u8() !== 0;
     const arrow = arrowName(s.u32());
@@ -182,7 +183,10 @@ export function annotationReaders(st: MfcState): Record<string, MfcReadFn> {
       return push((x) => x.texts, t);
     },
 
-    /** 선형 치수: 머리, 붙는 점 둘, 법선·x축 f64×3, i32 정렬, f64 위치 x·y(y = 치수선 거리), i32 글 자리(2021+ 23503..23508 차례) */
+    /**
+     * 선형 치수: 머리, 붙는 점 둘, 법선·x축 f64×3, i32 정렬, f64 위치 x·y(y = 치수선 거리), i32 글 자리(2021+ 23503..23508 차례).
+     * CDimensionLinear 4(SketchUp 5)는 글 자리가 없다
+     */
     CDimensionLinear: () => {
       const dim = dimHead('linear');
       const start = anchor();
@@ -192,7 +196,7 @@ export function annotationReaders(st: MfcState): Record<string, MfcReadFn> {
       const alignment = s.i32();
       s.f64();
       const distance = s.f64();
-      const pos = textAlignmentName(s.i32());
+      const pos = (st.schemas.get('CDimensionLinear') ?? 6) >= 5 ? textAlignmentName(s.i32()) : undefined;
       dim.start = start;
       dim.end = end;
       const n = unit3(normal);

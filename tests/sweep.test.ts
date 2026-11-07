@@ -11,7 +11,7 @@ import { classify, compareRuns, editionOf, exceptionCode, formatCompare, parseAr
 import { headerInfo, probeSkp, sceneDigest } from '../scripts/sweep/probe';
 import { skpToScene } from '../src/index';
 import { edge, entities, face, modelDat, skpFile, vertex } from './build';
-import { mfcFile, squareEntities } from './mfcwrite';
+import { SU3_SCHEMAS, mfcFile, squareEntities } from './mfcwrite';
 
 const root = resolve(__dirname, '..');
 
@@ -194,8 +194,8 @@ describe('probe: 앱 워커와 같은 해석 길', () => {
     expect(none.header).toBeNull();
     expect(headerInfo(new Uint8Array(8))).toBeNull();
     expect(classify({ ...none, metrics: none.metrics })).toBe('not-skp');
-    const v4 = await probeSkp(mfcFile({ schemas: 'v4', root: squareEntities() }));
-    expect(v4.flags).toContain('unsupported');
+    const v3 = await probeSkp(mfcFile({ schemas: SU3_SCHEMAS, version: '3.0.1', root: squareEntities() }));
+    expect(v3.flags).toContain('unsupported');
   });
 
   it('mem: 단계별 최대·끝 heap과 장면 배열 크기', async () => {
@@ -247,7 +247,7 @@ describe('훑기·비교 명령(합성 표본 폴더)', () => {
     writeFileSync(join(samples, 'grid.skp'), grid);
     writeFileSync(join(samples, 'sub', 'grid copy.skp'), grid);
     writeFileSync(join(samples, 'sub', 'old.SKP'), mfcFile({ schemas: 'v17', root: squareEntities() }));
-    writeFileSync(join(samples, 'sub', 'v4.skp'), mfcFile({ schemas: 'v4', root: squareEntities() }));
+    writeFileSync(join(samples, 'sub', 'v3.skp'), mfcFile({ schemas: SU3_SCHEMAS, version: '3.0.1', root: squareEntities() }));
     writeFileSync(join(samples, 'broken.skp'), new Uint8Array([1, 2, 3]));
     writeFileSync(join(samples, 'notes.txt'), 'x');
     writeFileSync(join(samples, 'sub', 'node_modules', 'skipped.skp'), grid);
@@ -269,14 +269,14 @@ describe('훑기·비교 명령(합성 표본 폴더)', () => {
     const records = readJsonl(join(out, 'records.jsonl'));
     expect(records).toHaveLength(4);
     const byEdition = Object.fromEntries(records.map((x) => [x.edition, x]));
-    expect(Object.keys(byEdition).sort()).toEqual(['2017', '2026', '4', '?']);
+    expect(Object.keys(byEdition).sort()).toEqual(['2017', '2026', '3', '?']);
     const grid = byEdition['2026'];
     expect(grid).toMatchObject({ class: 'ok', count: 2, inflated: false });
     expect(grid.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(grid.paths).toHaveLength(2);
     expect(byEdition['2017'].class).toBe('ok');
     expect(byEdition['?'].class).toBe('not-skp');
-    expect(byEdition['4'].class).toBe('unsupported');
+    expect(byEdition['3'].class).toBe('unsupported');
     const summary = JSON.parse(readFileSync(join(out, 'summary.json'), 'utf8'));
     expect(summary).toMatchObject({ done: true, files: { found: 5, unique: 4, duplicates: 1, processed: 4 } });
     expect(summary.byEdition['2017']).toEqual({ ok: 1 });

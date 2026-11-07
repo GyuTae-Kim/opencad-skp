@@ -6,7 +6,7 @@ import { MfcError, MfcStream } from '../src/mfcstream';
 import type { SkpModel } from '../src/model';
 import { styleFor } from '../src/scene-meta';
 import { pngRgb } from './build';
-import { ID13, MFC_SCHEMAS, mfcFile, move13, mv, squareEntities, type MfcEntitiesSpec, type MfcSpec } from './mfcwrite';
+import { ID13, MFC_SCHEMAS, SU3_SCHEMAS, mfcFile, move13, mv, squareEntities, type MfcEntitiesSpec, type MfcSpec } from './mfcwrite';
 import { edgeAt, edgeList, faceAt } from '../src/entities';
 
 const read = (spec: MfcSpec): ReturnType<typeof readMfcModel> => {
@@ -15,7 +15,7 @@ const read = (spec: MfcSpec): ReturnType<typeof readMfcModel> => {
 };
 const model = (spec: MfcSpec): SkpModel => read(spec).model;
 const tiny = pngRgb(2, 2, (x, y) => [x * 255, y * 255, 0]);
-const ALL = ['v6', 'v7', 'v8', 'v15', 'v17', 'v18', 'v19', 'v20'] as const;
+const ALL = ['v4', 'v5', 'v6', 'v7', 'v8', 'v15', 'v17', 'v18', 'v19', 'v20'] as const;
 
 /** 가운데에 구멍이 난 정사각형(구멍 고리를 먼저 쓰고 바깥 고리를 둘째로 쓴다) */
 const holed = (): MfcEntitiesSpec => ({
@@ -148,19 +148,27 @@ describe('MFC 바이트 커서', () => {
 });
 
 describe('판 거르기', () => {
-  it('SketchUp 3~5는 까닭을 적어 거절하고, 장면은 meta.unsupported', () => {
-    const bytes = mfcFile({ schemas: 'v4', root: squareEntities() });
+  it('SketchUp 3은 까닭을 적어 거절하고, 장면은 meta.unsupported', () => {
+    const bytes = mfcFile({ schemas: SU3_SCHEMAS, version: '3.0.1', root: squareEntities() });
     expect(() => readMfcModel(bytes, readSkpHeader(bytes)!)).toThrow(MfcRefused);
     const s = skpToScene(bytes);
     expect(s.meshes.length).toBe(0);
-    expect(s.warnings![0]).toContain('SketchUp 3~5');
+    expect(s.warnings![0]).toContain('SketchUp 3의 아주 옛 형식(모형 스키마 10)');
+    expect(s.warnings![0]).toContain('SketchUp 4 이상');
     expect(s.meta?.unsupported).toBe(true);
     expect(s.meta?.container).toBe('mfc');
+    // 모형 스키마 12에 4보다 낮은 렌더링 스키마도 옛 판 안내
+    const older = mfcFile({ schemas: { ...MFC_SCHEMAS.v4, CRenderingOptions: 22 }, root: squareEntities() });
+    expect(() => readMfcModel(older, readSkpHeader(older)!)).toThrow(/SketchUp 3의 아주 옛 형식\(모형 스키마 12\)/);
   });
 
-  it('모르는 스키마(2020 뒤 같은 값)도 거절한다', () => {
+  it('모르는 스키마(2020 뒤 같은 값, 4·5의 모형 스키마에 모르는 렌더링 스키마)도 거절한다', () => {
     const bytes = mfcFile({ schemas: { ...MFC_SCHEMAS.v20, CSketchUpModel: 30 }, root: squareEntities() });
-    expect(() => readMfcModel(bytes, readSkpHeader(bytes)!)).toThrow(/확인한 SketchUp 6~2020 형식과 달라/);
+    expect(() => readMfcModel(bytes, readSkpHeader(bytes)!)).toThrow(/확인한 SketchUp 4~2020 형식과 달라/);
+    for (const rendering of [26, 30]) {
+      const odd = mfcFile({ schemas: { ...MFC_SCHEMAS.v5, CRenderingOptions: rendering }, root: squareEntities() });
+      expect(() => readMfcModel(odd, readSkpHeader(odd)!)).toThrow(/확인한 SketchUp 4~2020 형식과 달라/);
+    }
   });
 
   it.each(ALL)('%s: 면·모서리·고리·재질·태그를 같은 중간 모형으로', (v) => {
@@ -443,6 +451,25 @@ describe('주석', () => {
     expect(dia!.attach![1]).toBeCloseTo(7.5);
   });
 
+  it('SketchUp 5: 치수 머리에 글꼴·글 정렬·끝 표시가, 선형 치수에 글 자리가 없다(그리기는 모형 기본값)', () => {
+    const m = model({ schemas: 'v5', root: ents() });
+    expect(m.warnings).toEqual([]);
+    const [lin, dia] = m.root.dimensions!;
+    expect(lin).toMatchObject({ kind: 'linear', start: [0, 0, 0], end: [10, 0, 0], measureAxis: [1, 0, 0] });
+    expect([lin!.arrow, lin!.alignedText, lin!.textAlignment, lin!.font]).toEqual([undefined, undefined, undefined, undefined]);
+    expect(lin!.offset![1]).toBeCloseTo(-4);
+    expect(dia!.kind).toBe('diameter');
+    expect(dia!.attach![1]).toBeCloseTo(7.5);
+    // 문자(CText 9)는 6과 같다
+    const [pin, screen] = m.root.texts!;
+    expect(pin).toMatchObject({ text: '모서리 · Corner', leaderType: 'pushpin', point: [10, 10, 0], leader: [5, 5, 10] });
+    expect(screen).toMatchObject({ leaderType: 'none', screen: [0.1, 0.2] });
+    expect(m.root.sections!.map((s) => [s.name, s.active])).toEqual([
+      ['Section 1', false],
+      ['Section 2', true],
+    ]);
+  });
+
   it('보조선(끝 있음·끝없음)·보조점, 단면 평면(활성·이름)', () => {
     const m = model({ schemas: 'v20', root: ents() });
     const [bounded, infinite, point] = m.root.guides!;
@@ -466,7 +493,7 @@ describe('주석', () => {
 });
 
 describe('장면·스타일·설정', () => {
-  const pageSpec = (schemas: 'v6' | 'v15' | 'v17' | 'v20'): MfcSpec => ({
+  const pageSpec = (schemas: 'v4' | 'v5' | 'v6' | 'v15' | 'v17' | 'v20'): MfcSpec => ({
     schemas,
     layers: [{ name: 'Layer0' }, { name: '지붕' }],
     definitions: [{ name: '상자', entities: squareEntities({ sections: [{ plane: [0, 0, 1, -1], pid: 51 }] }) }],
@@ -539,6 +566,91 @@ describe('장면·스타일·설정', () => {
     expect(m.definitions.get(0)!.behavior).toEqual({ alwaysFaceCamera: true, cutsOpening: false, shadowsFaceSun: false, snapTo: 'horizontal' });
     expect(m.root.instances).toHaveLength(2);
     expect(m.annotationDefaults).toMatchObject({ dimColor: [7, 8, 9], textColor: [1, 2, 3] });
+  });
+
+  it('SketchUp 5: 머리·카메라·렌더링 덩어리·장면·글꼴·문자 기본값이 짧고, 스타일이 없어 SketchUp 기본 스타일로 보인다', () => {
+    const base = pageSpec('v5');
+    const r = read({
+      ...base,
+      rootAttrs: [['모형', [['수', mv.i32(3)]]]],
+      rendering: { background: null, foreground: null, front: [10, 20, 30], back: [40, 50, 60], sky: [1, 2, 3], ground: [4, 5, 6], drawSky: true },
+      definitions: [{ ...base.definitions![0]!, behavior: { glue: true, snap: 1, faceCamera: true, noScale: 5 } }],
+    });
+    const m = r.model;
+    expect(m.warnings).toEqual([]);
+    expect(m.lengthUnit).toBe(2);
+    expect(m.animation).toEqual({ showTransition: true, transitionTime: 1.5, sceneDelay: 2, loop: true });
+    // 카메라 4: 2점 투시 칸이 없다
+    expect(m.camera).toMatchObject({ eye: [100, -100, 80], target: [20, 15, 10], fov: 35, twoPoint: false });
+    expect(m.root.attrs).toEqual({ 모형: { 수: 3 } });
+    expect(m.definitions.get(0)!.behavior).toEqual({ alwaysFaceCamera: true, cutsOpening: false, shadowsFaceSun: false, snapTo: 'horizontal' });
+    // 장면 9: 스타일 객체·미리보기가 없고 재생 넣기 뒤 1바이트가 더 있다
+    const [a, b] = m.pages!;
+    expect([a!.name, a!.hiddenTags, a!.includeInAnimation]).toEqual(['원근', [1], true]);
+    expect(b!.camera).toMatchObject({ perspective: false, height: 30 });
+    expect([b!.transition, b!.delay, b!.includeInAnimation]).toEqual([3, 0, false]);
+    expect(b!.hiddenIds.sort()).toEqual([m.root.instances[1]!.pid!, faceAt(m.definitions.get(0)!.entities.faces, 0).pid!].sort());
+    expect(m.activePage).toBe(1);
+    // 글꼴 0: 세계 크기가 없다. 문자 기본값: 지시선 글 색·글꼴이 없다
+    expect([...m.fonts!.values()]).toEqual([
+      { face: 'Arial', bold: false, italic: false, pointSize: 12 },
+      { face: 'Tahoma', bold: false, italic: false, pointSize: 10 },
+    ]);
+    const d = m.annotationDefaults!;
+    expect(d).toMatchObject({ textColor: [1, 2, 3], leaderType: 'pushpin', dimColor: [7, 8, 9], dimArrow: 'open', dimAlignedText: true });
+    expect([d.leaderColor, d.leaderFont]).toEqual([undefined, undefined]);
+    // 덩어리 값(앞뒷면·하늘·지면, 하늘만 켬)이 이기고, 네 바이트 0인 배경·모서리 색과 덩어리에 없는 값은 SketchUp 기본 스타일
+    const st = styleFor(m.rendering, r.styles)!;
+    const rgb = (c: number[] | null | undefined): number[] | null | undefined => c && c.map((x) => Math.round(x * 255));
+    expect([rgb(st.front), rgb(st.back), rgb(st.sky), st.ground]).toEqual([[10, 20, 30], [40, 50, 60], [1, 2, 3], null]);
+    expect([rgb(st.background), rgb(st.edgeColor)]).toEqual([
+      [255, 255, 255],
+      [0, 0, 0],
+    ]);
+    expect(st).toMatchObject({ name: 'Style', faceStyle: 'textured', edges: true, profiles: true, profileWidth: 3, axes: true, sectionPlanes: true, sectionCuts: true });
+    // 장면 덩어리(4바이트 짧다)도 같은 기본 스타일로 푼다
+    const ps = styleFor(b!.rendering, r.styles)!;
+    expect([ps.name, ps.faceStyle, rgb(ps.background)]).toEqual(['Style', 'wireframe', [255, 255, 255]]);
+  });
+
+  it('SketchUp 5: 덩어리에 색이 있으면(네 바이트 0이 아니면) 배경·모서리 색은 덩어리 값', () => {
+    const r = read({ ...pageSpec('v5'), rendering: { background: [200, 210, 220], foreground: [9, 8, 7] } });
+    const st = styleFor(r.model.rendering, r.styles)!;
+    expect([st.background, st.edgeColor].map((c) => c!.map((x) => Math.round(x * 255)))).toEqual([
+      [200, 210, 220],
+      [9, 8, 7],
+    ]);
+  });
+
+  it('SketchUp 4: 그리기 요소 깃발에 잠김이 없고(5바이트) 인스턴스 이름이 없으며, 렌더링 덩어리가 135바이트(장면 안 131)다', () => {
+    const r = read({
+      ...pageSpec('v4'),
+      rendering: { front: [10, 20, 30], back: [40, 50, 60], sky: [1, 2, 3], ground: [4, 5, 6], drawGround: true },
+      root: squareEntities({
+        edges: [{ a: 0, b: 1, soft: true, smooth: true }, { a: 1, b: 2, hidden: true }, { a: 2, b: 3 }, { a: 3, b: 0 }],
+        instances: [
+          { def: 0, xform: ID13, name: '이름', hidden: true, locked: true },
+          { def: 0, xform: move13(20, 0, 0) },
+        ],
+      }),
+      axes: [1, 2, 3, 1, 0, 0, 0, 1, 0, 0, 0, 1],
+    });
+    const m = r.model;
+    expect(m.warnings).toEqual([]);
+    expect(edgeList(m.root.edges).map((e) => e.flags)).toEqual([24, 1, 0, 0]);
+    const [a, b] = m.root.instances;
+    expect([a!.name, a!.flags, b!.name, b!.flags]).toEqual([undefined, 1, undefined, 0]);
+    // 그리기 축(그리기 요소 깃발 5바이트)·장면·설정 묶음이 제자리
+    expect(m.axes?.origin).toEqual([1, 2, 3]);
+    expect(m.lengthUnit).toBe(2);
+    expect(m.pages!.map((p) => p.name)).toEqual(['원근', '평행']);
+    expect([m.pages![1]!.transition, m.pages![1]!.includeInAnimation]).toEqual([3, false]);
+    const st = styleFor(m.rendering, r.styles)!;
+    const rgb = (c: number[] | null | undefined): number[] | null | undefined => c && c.map((x) => Math.round(x * 255));
+    expect([rgb(st.front), rgb(st.back), st.sky, rgb(st.ground), rgb(st.background)]).toEqual([[10, 20, 30], [40, 50, 60], null, [4, 5, 6], [255, 255, 255]]);
+    // 숨긴 형상 칸은 덩어리 자리를 몰라 기본 스타일 값(끔)
+    expect([st.name, st.faceStyle, st.hiddenGeometry, st.edges]).toEqual(['Style', 'textured', false, true]);
+    expect(styleFor(m.pages![1]!.rendering, r.styles)!.faceStyle).toBe('wireframe');
   });
 
   it('영구 번호가 없는 파일(2016 이하)은 숨긴 대상에 음수 임시 번호를 붙여 잇는다', () => {
@@ -777,6 +889,45 @@ describe('깨진 파일·모르는 기록', () => {
     expect(m.warnings.some((w) => w.includes('형상을 읽다 멈췄습니다'))).toBe(false);
   });
 
+  it.each(['v4', 'v5'] as const)('SketchUp %s: 어디서 잘라도, 바이트를 망가뜨려도 던지지 않고 끝난다', (v) => {
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46, 0, 1, 0xff, 0xd9]);
+    const bytes = mfcFile({
+      schemas: v,
+      materials: [
+        { name: '나무', color: [0, 0, 0, 0], texture: { image: tiny, path: 'wood.png' } },
+        { name: '사진', color: [0, 0, 0, 0], texture: { image: jpeg, kind: 1, path: 'p.jpg' } },
+      ],
+      definitions: [{ name: '판', entities: squareEntities() }],
+      root: squareEntities({
+        faces: [{ ...squareEntities().faces![0]!, front: 0, back: 1, textureCoords: true }],
+        instances: [{ def: 0, xform: move13(20, 0, 0) }],
+        texts: [{ text: '글', leader: 0, screen: [0.5, 0.5], font: 0 }],
+        linearDims: [{ start: { edge: 0, t: 0 }, end: { edge: 0, t: 1 }, normal: [0, 0, 1], xaxis: [1, 0, 0], alignment: 0, distance: -4 }],
+      }),
+      pages: [{ name: '장면', flags: 0x63, camera: { eye: [1, 1, 1], target: [0, 0, 0], up: [0, 0, 1] }, rendering: { mode: 1 } }],
+      fonts: [{ face: 'Arial' }],
+      defaults: { dimFont: 0, textFont: 0 },
+    });
+    const whole = readMfcModel(bytes, readSkpHeader(bytes)!).model;
+    expect(whole.warnings).toEqual([]);
+    expect([whole.root.faces.length, whole.root.instances.length, whole.root.dimensions!.length, whole.pages!.length]).toEqual([1, 1, 1, 1]);
+    for (let n = 0; n < bytes.length; n++) {
+      expect(() => skpToScene(bytes.subarray(0, n))).not.toThrow();
+      expect(() => readSkpImages(bytes.subarray(0, n))).not.toThrow();
+    }
+    let seed = 11;
+    const rnd = (k: number): number => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed % k;
+    };
+    for (let i = 0; i < 300; i++) {
+      const bad = bytes.slice();
+      for (let j = 0; j < 3; j++) bad[80 + rnd(bad.length - 80)] = rnd(256);
+      expect(() => skpToScene(bad)).not.toThrow();
+      expect(() => readSkpImages(bad)).not.toThrow();
+    }
+  });
+
   it('바이트를 무작위로 망가뜨려도 던지지 않는다', () => {
     const bytes = full();
     let seed = 7;
@@ -904,6 +1055,30 @@ describe('무늬(2020 이하: CTexture·CFaceTextureCoords)', () => {
     expect(r.materials.get('색 바꾼 돌')!.texture).toMatchObject({ width: 1, height: 1 });
     expect(r.materials.get('색 바꾼 돌')!.colorize).toBe('shift');
     expect(r.materials.get('벽돌')!.texture).toBeUndefined();
+  });
+
+  it('SketchUp 5(CTexture 4·CDib 2): 무늬 그림은 앞머리 없이 u8 + 줄 안 그림이고 JPEG 뒤 품질이 없다', () => {
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46, 0, 1, 0xff, 0xd9]);
+    const base = spec({ front: 1, back: 3, textureCoords: { front: moved, back: moved, frontFlags: 1, backFlags: 1 } });
+    const bytes = mfcFile({
+      ...base,
+      schemas: 'v5',
+      materials: [...base.materials!, { name: '줄무늬', color: [0, 0, 0, 0], texture: { image: jpeg, kind: 1, path: 'D:\\maps\\stripes.jpg', width: 12, height: 6, avg: [10, 20, 30, 255] } }],
+    });
+    const r = readMfcModel(bytes, readSkpHeader(bytes)!);
+    expect(r.model.warnings).toEqual([]);
+    expect(r.materials.get('나무')!.texture).toEqual({ width: 20, height: 10, average: [140, 100, 60], file: 'wood.png' });
+    expect(r.materials.get('줄무늬')!.texture).toEqual({ width: 12, height: 6, average: [10, 20, 30], file: 'stripes.jpg' });
+    expect(r.materials.get('색 바꾼 돌')!.colorize).toBe('shift');
+    const f = faceAt(r.model.root.faces, 0);
+    expect([f.frontMap?.matrix[6], f.backMap?.matrix[6]]).toEqual([5, 5]);
+    const img = readSkpImages(bytes);
+    expect(img.materials.map((m) => [m.folder, m.mime])).toEqual([
+      ['나무', 'image/png'],
+      ['색 바꾼 돌', 'image/png'],
+      ['줄무늬', 'image/jpeg'],
+    ]);
+    expect([...img.materials[2]!.bytes]).toEqual([...jpeg]);
   });
 
   it('면 무늬 위치: 그쪽 재질이 무늬 재질이고 깃발 비트 0이 있을 때만 앞 9개를 열 우선 행렬로', () => {
