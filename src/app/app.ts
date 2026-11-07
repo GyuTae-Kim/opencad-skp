@@ -137,6 +137,9 @@ const TOOLS_URL = 'https://gyutae-kim.github.io/opencad';
 const REPO_URL = 'https://github.com/GyuTae-Kim/opencad-skp';
 /** 이보다 좁으면 패널이 아래 시트가 된다(styles.css와 같은 값) */
 export const NARROW_WIDTH = 760;
+const NARROW_MQ = `(max-width: ${NARROW_WIDTH - 0.02}px)`;
+/** 미디어 질의(matchMedia가 없는 환경이면 null) */
+const media = (q: string): MediaQueryList | null => (typeof matchMedia === 'function' ? matchMedia(q) : null);
 /** 뷰 큐브 한 변(CSS 화소): 넓은 화면 · 좁은 화면 */
 export const VIEW_CUBE_WIDE = 112;
 export const VIEW_CUBE_NARROW = 76;
@@ -351,19 +354,18 @@ export class SkpViewerApp implements PanelHost {
   private readonly texLimits: TextureLimits = textureLimitsFor(deviceHints());
   private readonly panel: Panel;
   private panelOpen: boolean;
-  private readonly narrowQuery: MediaQueryList | null =
-    typeof window.matchMedia === 'function' ? window.matchMedia(`(max-width: ${NARROW_WIDTH - 0.02}px)`) : null;
+  private readonly narrowQuery = media(NARROW_MQ);
   /**
    * 휴대폰: 좁은 화면이거나 손가락 기기의 낮은 가로 화면(폭은 760px을 넘을 수 있다).
    * 한 줄 도구 막대(styles.css)·작은 뷰 큐브·처음엔 닫힌 패널로 3D 보기 자리를 지킨다
    */
-  private readonly phoneQuery: MediaQueryList | null =
-    typeof window.matchMedia === 'function' ? window.matchMedia(`(max-width: ${NARROW_WIDTH - 0.02}px), (pointer: coarse) and (max-height: 499.98px)`) : null;
+  private readonly phoneQuery = media(`${NARROW_MQ}, (pointer: coarse) and (max-height: 499.98px)`);
   /** 손가락이 주인 기기(휴대폰·태블릿): 측정 안내·파일 고르기를 맞춘다 */
-  private readonly coarseQuery: MediaQueryList | null = typeof window.matchMedia === 'function' ? window.matchMedia('(pointer: coarse)') : null;
+  private readonly coarseQuery = media('(pointer: coarse)');
+  /** 움직임 줄이기(47차 — WCAG 2.3.3): 카메라를 옮기는 움직임 없이 바로 둔다(장면 전환·맞춰 보기·이전 보기·코어 표준 뷰·뷰 큐브) */
+  private readonly calmQuery = media('(prefers-reduced-motion: reduce)');
   /** 측정 띠를 쓰는 화면(styles.css .measure-bar와 같은 조건): 측정값 칸을 띠 안 둘째 줄로 옮긴다 */
-  private readonly bandQuery: MediaQueryList | null =
-    typeof window.matchMedia === 'function' ? window.matchMedia(`(max-width: ${NARROW_WIDTH - 0.02}px), (pointer: coarse)`) : null;
+  private readonly bandQuery = media(`${NARROW_MQ}, (pointer: coarse)`);
   /** 측정값 칸(VCB): 줄자 길이·각도기 각도를 보이고 쳐서 넣는다 */
   private vcb!: Vcb;
   private projection: Projection = 'perspective';
@@ -481,7 +483,7 @@ export class SkpViewerApp implements PanelHost {
     this.applyTheme();
 
     const tbtn = (label: string, ico: string, title: string, run: () => void, cls = ''): HTMLButtonElement => {
-      const b = h('button', { class: `tbtn ${cls}`.trim(), type: 'button', title, 'aria-label': title, html: `${icon(ico)}<span class="lbl">${label}</span>` });
+      const b = h('button', { class: `tbtn ${cls}`.trim(), title, 'aria-label': title, html: `${icon(ico)}<span class="lbl">${label}</span>` });
       b.addEventListener('click', run);
       return b;
     };
@@ -516,7 +518,6 @@ export class SkpViewerApp implements PanelHost {
     const fwdBtn = tbtn('다음 보기', 'forward', '다음 보기(카메라 기록)', () => this.viewForward(), 'icon-only wide-only');
     const viewBtn = h('button', {
       class: 'tbtn',
-      type: 'button',
       title: '표준 뷰 (1 앞 · 2 뒤 · 3 왼쪽 · 4 오른쪽 · 5 위 · 6 아래 · 7 등각)',
       'aria-label': '표준 뷰 메뉴',
       'aria-haspopup': 'menu',
@@ -539,7 +540,7 @@ export class SkpViewerApp implements PanelHost {
     const panelBtn = tbtn('패널', 'panel', '패널 열기·닫기', () => this.setPanelOpen(!this.panelOpen));
     // 단면 보기: 끔·X·Y·Z, 위치 슬라이더(장면 범위 안 0~1), 뒤집기, 잘린 면 채우기(해석기가 닫힌 입체로 가린 그물만 — capGroup)
     const axisBtn = (axis: SectionAxis): HTMLButtonElement => {
-      const b = h('button', { class: 'tbtn sec-axis', type: 'button', title: `${axis.toUpperCase()}축에 수직인 단면(+${axis.toUpperCase()} 쪽을 잘라 냄)`, 'aria-label': `${axis.toUpperCase()}축 단면` }, axis.toUpperCase());
+      const b = h('button', { class: 'tbtn sec-axis', title: `${axis.toUpperCase()}축에 수직인 단면(+${axis.toUpperCase()} 쪽을 잘라 냄)`, 'aria-label': `${axis.toUpperCase()}축 단면` }, axis.toUpperCase());
       b.addEventListener('click', () => this.setSectionAxis(axis));
       return b;
     };
@@ -555,7 +556,7 @@ export class SkpViewerApp implements PanelHost {
     const secFill = tbtn('채우기', 'fill', '잘린 면 채우기(닫힌 입체 — 파일 스타일의 단면 채우기를 따름)', () => this.setSectionFill(!this.sectionFill), 'icon-only sec-fill');
     // 좁은 화면(휴대폰): 보기·측정에 쓰는 단추만 한 줄에 두고, 단면 축과 나머지 보기 설정은 메뉴로 모은다
     const menuBtn = (label: string, ico: string, title: string): HTMLButtonElement =>
-      h('button', { class: 'tbtn narrow-only', type: 'button', title, 'aria-label': title, 'aria-haspopup': 'menu', 'aria-expanded': 'false', html: `${icon(ico)}<span class="lbl">${label}</span>` });
+      h('button', { class: 'tbtn narrow-only', title, 'aria-label': title, 'aria-haspopup': 'menu', 'aria-expanded': 'false', html: `${icon(ico)}<span class="lbl">${label}</span>` });
     const secMenuBtn = menuBtn('단면', 'section', '단면 보기');
     const secBadge = h('b', { class: 'sec-badge', hidden: true });
     secMenuBtn.append(secBadge);
@@ -589,7 +590,7 @@ export class SkpViewerApp implements PanelHost {
     const busyTitle = h('div', { class: 'busy-title' });
     const busyBar = h('i');
     const busyStage = h('div', { class: 'busy-stage' });
-    const cancelBtn = h('button', { class: 'mini-btn', type: 'button' }, '취소');
+    const cancelBtn = h('button', { class: 'mini-btn' }, '취소');
     cancelBtn.addEventListener('click', () => this.cancelOpen());
     const busy = h(
       'div',
@@ -609,9 +610,9 @@ export class SkpViewerApp implements PanelHost {
     // 측정 띠(휴대폰·터치): 안내·결과를 크게 보이고, Esc 대신 지우기·끝내기 단추를 둔다
     const measureText = h('div', { class: 'mb-text', 'aria-live': 'polite' });
     // 좁은 휴대폰(폭 430px 미만)에서는 글을 숨기고 아이콘만(안내 두기 단추 자리 — 이름은 aria-label)
-    const measureClear = h('button', { class: 'mb-btn mb-clear', type: 'button', title: '찍은 점과 결과 지우기', 'aria-label': '다시 재기', html: `${icon('back', 16)}<span class="mb-clear-text">다시 재기</span>` });
+    const measureClear = h('button', { class: 'mb-btn mb-clear', title: '찍은 점과 결과 지우기', 'aria-label': '다시 재기', html: `${icon('back', 16)}<span class="mb-clear-text">다시 재기</span>` });
     measureClear.addEventListener('click', () => this.measureTool?.clear());
-    const measureClose = h('button', { class: 'mb-btn icon', type: 'button', title: '측정 끝내기', 'aria-label': '측정 끝내기', html: icon('close', 16) });
+    const measureClose = h('button', { class: 'mb-btn icon', title: '측정 끝내기', 'aria-label': '측정 끝내기', html: icon('close', 16) });
     // 닫으면 숨는 띠 안 초점은 그 도구 단추로(44차 — body로 사라지지 않게)
     measureClose.addEventListener('click', () => {
       const b = this.measureModeNow === 'protractor' ? this.els.protractorBtn : this.els.measureBtn;
@@ -619,13 +620,13 @@ export class SkpViewerApp implements PanelHost {
       focusIfLost(b, measureBar);
     });
     // 지금 결과 복사·최근 측정 기록(새것부터 10개, 줄마다 복사)
-    const measureCopy = h('button', { class: 'mb-btn icon', type: 'button', title: '지금 결과 글 복사', 'aria-label': '지금 결과 글 복사', html: icon('copy', 16) });
+    const measureCopy = h('button', { class: 'mb-btn icon', title: '지금 결과 글 복사', 'aria-label': '지금 결과 글 복사', html: icon('copy', 16) });
     measureCopy.addEventListener('click', () => this.copyMeasure('current'));
-    const measureLogBtn = h('button', { class: 'mb-btn icon', type: 'button', title: '최근 측정 기록', 'aria-label': '최근 측정 기록', html: icon('list', 16) });
+    const measureLogBtn = h('button', { class: 'mb-btn icon', title: '최근 측정 기록', 'aria-label': '최근 측정 기록', html: icon('list', 16) });
     measureLogBtn.addEventListener('click', () => this.toggleMeasureLog());
     // 방향 잠금(Shift가 없는 손가락 기기 — SketchUp 추론 잠금): 방향을 잡는 동안만 보이고, 누르면 지금 방향을 잠그고 다시 누르면 푼다.
     // 정밀 조준 중 다른 손가락으로 누르면 둘째 손가락이라 click이 오지 않으므로 손가락·펜은 누르는 순간에 받는다
-    const measureLock = h('button', { class: 'mb-btn icon mb-lock', type: 'button', title: '지금 방향 잠그기(다시 누르면 풀기)', 'aria-label': '방향 잠금', 'aria-pressed': 'false', hidden: true, html: icon('lock', 16) });
+    const measureLock = h('button', { class: 'mb-btn icon mb-lock', title: '지금 방향 잠그기(다시 누르면 풀기)', 'aria-label': '방향 잠금', 'aria-pressed': 'false', hidden: true, html: icon('lock', 16) });
     let lockPressedAt = -Infinity;
     measureLock.addEventListener('pointerdown', (e) => {
       if (e.pointerType === 'mouse') return;
@@ -638,7 +639,7 @@ export class SkpViewerApp implements PanelHost {
       this.toggleMeasureLock();
     });
     // 안내 두기(SketchUp 줄자·각도기의 + — 키보드는 Ctrl·Option): 켜면 줄자 둘째·각도기 셋째 누르기가 안내점·안내선을 둔다
-    const measureGuide = h('button', { class: 'mb-btn icon mb-guide', type: 'button', title: '안내 두기: 누르기로 안내점·안내선 두기(다시 누르면 재기만)', 'aria-label': '안내 두기', 'aria-pressed': 'false', html: icon('guide', 16) });
+    const measureGuide = h('button', { class: 'mb-btn icon mb-guide', title: '안내 두기: 누르기로 안내점·안내선 두기(다시 누르면 재기만)', 'aria-label': '안내 두기', 'aria-pressed': 'false', html: icon('guide', 16) });
     measureGuide.addEventListener('click', () => {
       const t = this.measureTool;
       if (!t?.active) return;
@@ -661,11 +662,11 @@ export class SkpViewerApp implements PanelHost {
     // 카드도 측정 띠처럼 이름 붙은 묶음 + 알림 영역은 글 하나(45차 — 카드가 role=status(atomic)일 때는 글이 바뀔 때마다 단추 이름까지 읽혔다)
     const selText = h('div', { class: 'mb-text', 'aria-live': 'polite' });
     // 그룹을 고른 뒤 누른 면·모서리 하나만(면 넓이·모서리 길이) — 휴대폰에서 패널을 열지 않고
-    const selPart = h('button', { class: 'mb-btn', type: 'button', title: '누른 면 하나의 넓이(모서리면 길이)만 보기', hidden: true, html: `${icon('face', 16)}<span class="mb-part">면만</span>` });
+    const selPart = h('button', { class: 'mb-btn', title: '누른 면 하나의 넓이(모서리면 길이)만 보기', hidden: true, html: `${icon('face', 16)}<span class="mb-part">면만</span>` });
     selPart.addEventListener('click', () => this.selectPickedPart());
-    const selMore = h('button', { class: 'mb-btn sel-more', type: 'button', title: '패널의 선택 탭에서 전체 정보 보기', html: `${icon('panel', 16)}<span>자세히</span>` });
+    const selMore = h('button', { class: 'mb-btn sel-more', title: '패널의 선택 탭에서 전체 정보 보기', html: `${icon('panel', 16)}<span>자세히</span>` });
     selMore.addEventListener('click', () => this.showEntityTab());
-    const selClose = h('button', { class: 'mb-btn icon', type: 'button', title: '선택 해제', 'aria-label': '선택 해제', html: icon('close', 16) });
+    const selClose = h('button', { class: 'mb-btn icon', title: '선택 해제', 'aria-label': '선택 해제', html: icon('close', 16) });
     selClose.addEventListener('click', () => {
       this.measureTool?.deselectGuide();
       this.applySelection(null, false);
@@ -677,16 +678,16 @@ export class SkpViewerApp implements PanelHost {
     const fovRange = h('input', { class: 'fov-range', type: 'range', min: '10', max: '120', step: '1', value: '35', 'aria-label': '시야각(도)', title: '세로 시야각(도)' });
     fovRange.addEventListener('input', () => this.setFov(Number(fovRange.value)));
     const fovValue = h('span', { class: 'fov-value' });
-    const walkBtn = h('button', { class: 'mb-btn', type: 'button', title: '걷기(1인칭): 눈 자리에서 둘러보고 걷기', 'aria-pressed': 'false', html: `${icon('walk', 16)}<span>걷기</span>` });
+    const walkBtn = h('button', { class: 'mb-btn', title: '걷기(1인칭): 눈 자리에서 둘러보고 걷기', 'aria-pressed': 'false', html: `${icon('walk', 16)}<span>걷기</span>` });
     walkBtn.addEventListener('click', () => this.setWalk(!this.walking));
-    const twoPointBtn = h('button', { class: 'mb-btn', type: 'button', title: '2점 투시: 세로선을 곧게(수평으로 보고 렌즈를 위아래로 옮김)', 'aria-pressed': 'false' }, '2점 투시');
+    const twoPointBtn = h('button', { class: 'mb-btn', title: '2점 투시: 세로선을 곧게(수평으로 보고 렌즈를 위아래로 옮김)', 'aria-pressed': 'false' }, '2점 투시');
     twoPointBtn.addEventListener('click', () => this.setTwoPoint(!this.twoPointOn));
     // 걷는 동안만: 바닥 따라가기(중력)·벽 앞 멈춤(부딪힘) — SketchUp 걷기처럼 처음엔 둘 다 켬
-    const gravityBtn = h('button', { class: 'mb-btn', type: 'button', title: '중력: 바닥·계단을 따라 걷기(끄면 Q/E로 위아래)', 'aria-pressed': 'true', hidden: true }, '중력');
+    const gravityBtn = h('button', { class: 'mb-btn', title: '중력: 바닥·계단을 따라 걷기(끄면 Q/E로 위아래)', 'aria-pressed': 'true', hidden: true }, '중력');
     gravityBtn.addEventListener('click', () => this.setWalkGravity(!this.walkGravity));
-    const collideBtn = h('button', { class: 'mb-btn', type: 'button', title: '부딪힘: 벽·면을 지나가지 않기', 'aria-pressed': 'true', hidden: true }, '부딪힘');
+    const collideBtn = h('button', { class: 'mb-btn', title: '부딪힘: 벽·면을 지나가지 않기', 'aria-pressed': 'true', hidden: true }, '부딪힘');
     collideBtn.addEventListener('click', () => this.setWalkCollide(!this.walkCollide));
-    const camClose = h('button', { class: 'mb-btn icon', type: 'button', title: '카메라 띠 닫기(걷기 끝내기)', 'aria-label': '카메라 띠 닫기', html: icon('close', 16) });
+    const camClose = h('button', { class: 'mb-btn icon', title: '카메라 띠 닫기(걷기 끝내기)', 'aria-label': '카메라 띠 닫기', html: icon('close', 16) });
     camClose.addEventListener('click', () => {
       this.closeCamBar();
       focusIfLost(this.els.moreBtn, camBar);
@@ -700,12 +701,12 @@ export class SkpViewerApp implements PanelHost {
     );
     this.stick = new WalkStick((i) => this.viewer?.setWalkInput(i));
     // 새 판 알림(서비스 워커가 새 판을 받아 기다릴 때)
-    const updLater = h('button', { class: 'mini-btn', type: 'button' }, '나중에');
+    const updLater = h('button', { class: 'mini-btn' }, '나중에');
     const updateBar = h(
       'div',
       { class: 'update-bar', role: 'status', hidden: true },
       h('span', {}, '새 버전이 있습니다. 새로 고치면 열어 둔 파일은 최근 문서에서 다시 엽니다.'),
-      h('button', { class: 'mini-btn primary upd-apply', type: 'button' }, '새로 고침'),
+      h('button', { class: 'mini-btn primary upd-apply' }, '새로 고침'),
       updLater,
     );
     updLater.addEventListener('click', () => {
@@ -747,7 +748,7 @@ export class SkpViewerApp implements PanelHost {
 
     // 상태 막대
     const stMain = h('span', { class: 'st-main' });
-    const stWarn = h('button', { class: 'st-warn', type: 'button', hidden: true, title: '해석기 경고 보기(정보 탭)' });
+    const stWarn = h('button', { class: 'st-warn', hidden: true, title: '해석기 경고 보기(정보 탭)' });
     stWarn.addEventListener('click', () => this.showInfoTab());
     const stSel = h('span', { class: 'st-sel' });
     const status = h('footer', { class: 'statusbar' }, stMain, stWarn, stSel);
@@ -832,12 +833,12 @@ export class SkpViewerApp implements PanelHost {
   }
 
   private buildStart(): HTMLElement {
-    const openBtn = h('button', { class: 'btn primary', type: 'button', html: `${icon('open')}<span>파일 열기</span>` });
+    const openBtn = h('button', { class: 'btn primary', html: `${icon('open')}<span>파일 열기</span>` });
     openBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       this.chooseFile();
     });
-    const sampleBtn = h('button', { class: 'btn', type: 'button', html: `${icon('sample')}<span>예제 열기</span>` });
+    const sampleBtn = h('button', { class: 'btn', html: `${icon('sample')}<span>예제 열기</span>` });
     sampleBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       void this.openSample();
@@ -889,7 +890,7 @@ export class SkpViewerApp implements PanelHost {
 
   /** 시작 화면의 최근 문서 카드(비었으면 숨김) */
   private buildRecent(): HTMLElement {
-    const clear = h('button', { class: 'recent-clear', type: 'button', title: '최근 문서 목록을 모두 지웁니다(원래 파일은 그대로)' }, '모두 지우기');
+    const clear = h('button', { class: 'recent-clear', title: '최근 문서 목록을 모두 지웁니다(원래 파일은 그대로)' }, '모두 지우기');
     clear.addEventListener('click', () => void this.recent.clear().then(() => this.refreshRecent()));
     this.recentCard.append(
       h('div', { class: 'recent-head' }, h('h2', { id: 'recent-title' }, '최근 문서'), clear),
@@ -911,14 +912,14 @@ export class SkpViewerApp implements PanelHost {
   private recentRow(e: RecentEntry, now: number): HTMLElement {
     const open = h(
       'button',
-      { class: 'recent-open', type: 'button' },
+      { class: 'recent-open' },
       h('span', { class: 'recent-icon', html: icon('open', 18) }),
       h('span', { class: 'recent-name', translate: 'no' }, e.name),
       // 크기와 시각은 따로 번역되게 나눈다(독일어 "vor 3 Min."이 크기 앞으로 가지 않게)
       h('span', { class: 'recent-meta' }, formatBytes(e.size), ' · ', h('span', {}, recentTimeText(e.time, now))),
     );
     open.addEventListener('click', () => void this.openRecent(e));
-    const del = h('button', { class: 'recent-del', type: 'button', title: '목록에서 지우기', 'aria-label': `최근 문서에서 지우기: ${e.name}`, html: icon('close', 16) });
+    const del = h('button', { class: 'recent-del', title: '목록에서 지우기', 'aria-label': `최근 문서에서 지우기: ${e.name}`, html: icon('close', 16) });
     del.addEventListener('click', () => void this.recent.remove(e.id).then(() => this.refreshRecent()));
     return h('li', { class: 'recent-row' }, open, del);
   }
@@ -992,7 +993,7 @@ export class SkpViewerApp implements PanelHost {
     });
     // 시스템 테마(직접 고르지 않았을 때만 따른다)
     try {
-      matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+      media('(prefers-color-scheme: dark)')?.addEventListener('change', (e) => {
         if (this.themeStored) return;
         this.theme = e.matches ? 'dark' : 'light';
         this.applyTheme();
@@ -1306,6 +1307,7 @@ export class SkpViewerApp implements PanelHost {
         viewCubeSize: this.viewCubeSize(),
         textureLimit: this.texLimits.limit,
         textureBudget: this.texLimits.budget,
+        animate: !this.calmQuery?.matches,
       });
       v.onPick((p, e) => this.onPick(p, e));
       // 단면 상태(앱 단추·슬라이더·새 장면으로 꺼짐 등)는 코어 알림으로 도구 막대에 맞춘다
@@ -1622,13 +1624,13 @@ export class SkpViewerApp implements PanelHost {
     const mm = mmPerSceneUnit(d.scene.units);
     const rows = this.measureLog.map((m, i) => {
       // 기록 줄의 "거리·각도"도 번역층이 옮긴다(30차까지는 번역에서 빼 다른 언어에서도 한국어로 남았다 — 값과 축 이름은 사전 틀이 그대로 끼운다)
-      const b = h('button', { class: 'ml-row', type: 'button', title: '눌러서 이 결과 복사' }, h('span', {}, measureLine(m, d.units, mm)), h('span', { class: 'ml-copy', html: icon('copy', 14) }));
+      const b = h('button', { class: 'ml-row', title: '눌러서 이 결과 복사' }, h('span', {}, measureLine(m, d.units, mm)), h('span', { class: 'ml-copy', html: icon('copy', 14) }));
       b.addEventListener('click', () => this.copyMeasure(i));
       return b;
     });
-    const all = h('button', { class: 'mini-btn', type: 'button' }, '모두 복사');
+    const all = h('button', { class: 'mini-btn' }, '모두 복사');
     all.addEventListener('click', () => this.copyMeasure('all'));
-    const clear = h('button', { class: 'mini-btn', type: 'button' }, '기록 지우기');
+    const clear = h('button', { class: 'mini-btn' }, '기록 지우기');
     clear.addEventListener('click', () => this.clearMeasureLog());
     el.replaceChildren(h('div', { class: 'ml-head' }, h('b', {}, `최근 측정 ${fmtCount(this.measureLog.length)}개`)), ...rows, h('div', { class: 'pbar ml-acts' }, all, clear));
   }
@@ -1797,7 +1799,7 @@ export class SkpViewerApp implements PanelHost {
     if (!v) return;
     this.stopCameraAnim();
     const from = v.getCamera();
-    if (!(ms > 0)) {
+    if (!(ms > 0) || this.calmQuery?.matches) {
       v.setCamera(to);
       done?.();
       return;
@@ -2075,7 +2077,6 @@ export class SkpViewerApp implements PanelHost {
     // 장면 재생(▶/■)
     const play = h('button', {
       class: `scene-play${this.sliding ? ' on' : ''}`,
-      type: 'button',
       title: this.sliding ? '장면 재생 멈추기' : '장면 재생: 장면을 전환 시간과 지연 시간마다 차례로 넘깁니다(3D를 누르거나 장면을 고르면 멈춤)',
       'aria-label': this.sliding ? '장면 재생 멈추기' : '장면 재생',
       'aria-pressed': this.sliding ? 'true' : 'false',
@@ -2091,7 +2092,6 @@ export class SkpViewerApp implements PanelHost {
         'button',
         {
           class: `scene-tab${on ? ' on' : ''}${pg.includeInAnimation === false ? ' no-play' : ''}`,
-          type: 'button',
           role: 'tab',
           'data-page': String(i),
           tabindex: i === cur ? '0' : '-1',
@@ -3141,7 +3141,7 @@ export class SkpViewerApp implements PanelHost {
       // 항목은 Tab 차례에서 빼고 화살표로 오간다(APG Menu Button)
       const item = h(
         'button',
-        { class: `menu-item${it.checked ? ' checked' : ''}`, type: 'button', role, tabindex: '-1', disabled: !!it.disabled, 'aria-checked': it.checked === undefined ? null : it.checked ? 'true' : 'false' },
+        { class: `menu-item${it.checked ? ' checked' : ''}`, role, tabindex: '-1', disabled: !!it.disabled, 'aria-checked': it.checked === undefined ? null : it.checked ? 'true' : 'false' },
         it.checked !== undefined ? h('span', { class: 'menu-check', html: it.checked ? icon('check', 15) : '' }) : null,
         it.icon ? h('span', { class: 'menu-ico', html: icon(it.icon, 16) }) : null,
         h('span', { class: 'menu-label' }, uiText(it.label)),
@@ -3418,7 +3418,7 @@ export class SkpViewerApp implements PanelHost {
     const n = this.els.notice;
     n.className = `notice ${kind}`;
     n.innerHTML = '';
-    const close = h('button', { class: 'icon-btn', type: 'button', title: '알림 닫기', 'aria-label': '알림 닫기', html: icon('close') });
+    const close = h('button', { class: 'icon-btn', title: '알림 닫기', 'aria-label': '알림 닫기', html: icon('close') });
     close.addEventListener('click', () => {
       this.closeNotice();
       // 숨는 알림 안 초점은 3D 보기로(문서가 없으면 처음 화면의 첫 단추로 — 44차)

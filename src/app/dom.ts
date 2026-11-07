@@ -5,9 +5,13 @@
 type Attrs = Record<string, string | number | boolean | undefined | null>;
 type Child = Node | string | number | null | undefined | false;
 
-/** 요소 만들기. 속성 html은 innerHTML(아이콘 SVG 등 우리가 만든 글만), hidden·disabled 등 참거짓 속성은 true/false */
+/**
+ * 요소 만들기. 속성 html은 innerHTML(아이콘 SVG 등 우리가 만든 글만), hidden·disabled 등 참거짓 속성은 true/false.
+ * 단추는 type을 주지 않으면 type="button"(폼 안에서도 보내지 않게 — 보내는 단추는 type: 'submit'을 준다)
+ */
 export function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Attrs = {}, ...children: Child[]): HTMLElementTagNameMap[K] {
   const el = document.createElement(tag);
+  if (tag === 'button') el.setAttribute('type', 'button');
   for (const [k, v] of Object.entries(attrs)) {
     if (v === undefined || v === null || v === false) continue;
     if (k === 'html') el.innerHTML = String(v);

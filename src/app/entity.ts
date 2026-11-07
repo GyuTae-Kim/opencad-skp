@@ -95,6 +95,8 @@ export interface AttrDictView {
   entries: [string, string][];
   /** ATTR_KEY_LIMIT를 넘어 뺀 열쇠 수 */
   more: number;
+  /** 원래 사전 객체(앞부분만 받은 긴 값의 자리를 찾는 열쇠 — attrview.ts) */
+  src?: object;
 }
 
 export interface EntityInfo {
@@ -141,6 +143,7 @@ export function attributeDicts(dicts: SkpAttrDictsMeta | null | undefined, sourc
       source,
       entries: shown.map((k) => [k, attributeText((d as Record<string, SkpAttrValueMeta>)[k])]),
       more: keys.length - shown.length,
+      src: d,
     });
   }
   return out;

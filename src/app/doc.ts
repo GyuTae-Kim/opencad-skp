@@ -29,7 +29,7 @@ import type { MeasureToolResult } from './measure';
 import { readActivePage, readPages, readSectionPlane, readShadow } from './pages';
 import { formatAngle, formatArea, formatLength, mmPerSceneUnit, readUnits, type UnitsDisplay } from './units';
 import { fmtCount } from './format';
-import type { ParseResult } from './protocol';
+import type { AttrLong, ParseResult } from './protocol';
 import {
   deepestNodeAt,
   hiddenByNodes,
@@ -201,6 +201,8 @@ export interface SkpDoc {
   extras: DocExtras | null;
   /** 꾸러미 안 그림(없으면 null) */
   images: DocImages | null;
+  /** 앞부분만 받은 아주 긴 속성 글 값의 원래 글(47차 — 펼칠 때 attrview.ts가 읽는다) */
+  attrLong?: AttrLong;
   /** 파일이 잘렸거나 깨져 일부만 읽었는지(meta.damaged) · 출력 한도에 걸렸는지(meta.limited) */
   damaged: boolean;
   limited: boolean;
@@ -619,6 +621,7 @@ export function createDoc(name: string, size: number, res: ParseResult, opts: { 
     nodeOutline,
     extras: readExtras(scene),
     images: opts.makeUrl ? docImages(res.images, opts.makeUrl) : null,
+    attrLong: res.attrLong,
     damaged: meta(scene).damaged === true,
     limited: meta(scene).limited === true,
     hiddenTags: new Set(),
