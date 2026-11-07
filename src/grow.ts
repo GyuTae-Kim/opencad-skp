@@ -51,60 +51,63 @@ export function freeTyped(a: Typed | null | undefined): boolean {
   return true;
 }
 
-/** 두 배씩 키우는 쌓기. a[0, n)이 쌓은 값이다(쓰는 쪽이 reserve 뒤 a에 바로 쓰고 n을 옮긴다) */
-class Grow<T extends Typed> {
+/**
+ * 두 배씩 키우는 쌓기. a[0, n)이 쌓은 값이다(쓰는 쪽이 reserve 뒤 a에 바로 쓰고 n을 옮긴다).
+ * 51차: 쌓을 자리(cap = a.length)를 따로 들고, 꼴별 쌓기(F64·F32·U32·I32·U8)를 하위 클래스가 아니라 이 클래스 하나로 만든다.
+ * 하위 클래스 다섯이면 V8이 reserve·push 안의 this.n·this.a.length 읽기를 여러 숨은 꼴(map)과 여러 배열 꼴로 보고 느린 길로 돌았다
+ * (165 MB 표본 장면 만들기에서 정의 준비가 면마다 부르는 reserve만 50 ms 남짓). 쌓는 값·키우는 크기·낸 배열은 같다
+ */
+export class Grow<T extends Typed> {
   a: T;
   n = 0;
+  /** a의 길이(쌓을 자리) — a를 바꾸는 곳(만들 때·키울 때·끝낼 때)에서만 함께 바꾼다 */
+  cap: number;
   constructor(
     private readonly C: TypedCtor<T>,
     size: number,
   ) {
     this.a = new C(size);
+    this.cap = size;
   }
   /** k개를 더 쓸 자리 */
   reserve(k: number): void {
-    if (this.n + k <= this.a.length) return;
+    if (this.n + k <= this.cap) return;
+    this.grow(k);
+  }
+  private grow(k: number): void {
     let size = Math.max(1, this.a.length * 2);
     while (size < this.n + k) size *= 2;
     this.a = resizeTyped(this.a, this.n, size, this.C);
+    this.cap = size;
   }
   push(v: number): void {
-    this.reserve(1);
+    if (this.n >= this.cap) this.grow(1);
     this.a[this.n++] = v;
   }
   /** 쌓은 값만큼의 배열(쌓던 큰 버퍼는 놓는다). 끝낸 뒤 다시 부르면 같은 배열 — 끝낸 뒤에는 더 쌓지 않는다 */
   done(): T {
-    if (this.a.length !== this.n) this.a = resizeTyped(this.a, this.n, this.n, this.C);
+    if (this.cap !== this.n) {
+      this.a = resizeTyped(this.a, this.n, this.n, this.C);
+      this.cap = this.n;
+    }
     return this.a;
   }
 }
 
-export class F64 extends Grow<Float64Array> {
-  constructor(size = 1024) {
-    super(Float64Array, size);
-  }
-}
+/** 꼴별 쌓기를 만드는 함수에 new를 붙여 부르는 꼴(new F64(n) — 돌려준 Grow가 그대로 결과다) */
+type GrowCtor<T extends Typed> = new (size?: number) => Grow<T>;
+const growOf = <T extends Typed>(C: TypedCtor<T>): GrowCtor<T> =>
+  function (size = 1024): Grow<T> {
+    return new Grow(C, size);
+  } as unknown as GrowCtor<T>;
 
-export class F32 extends Grow<Float32Array> {
-  constructor(size = 1024) {
-    super(Float32Array, size);
-  }
-}
-
-export class U32 extends Grow<Uint32Array> {
-  constructor(size = 1024) {
-    super(Uint32Array, size);
-  }
-}
-
-export class I32 extends Grow<Int32Array> {
-  constructor(size = 1024) {
-    super(Int32Array, size);
-  }
-}
-
-export class U8 extends Grow<Uint8Array> {
-  constructor(size = 1024) {
-    super(Uint8Array, size);
-  }
-}
+export type F64 = Grow<Float64Array>;
+export const F64 = growOf(Float64Array);
+export type F32 = Grow<Float32Array>;
+export const F32 = growOf(Float32Array);
+export type U32 = Grow<Uint32Array>;
+export const U32 = growOf(Uint32Array);
+export type I32 = Grow<Int32Array>;
+export const I32 = growOf(Int32Array);
+export type U8 = Grow<Uint8Array>;
+export const U8 = growOf(Uint8Array);

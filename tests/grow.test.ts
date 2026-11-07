@@ -3,9 +3,40 @@
  * 끝낸 배열은 꼭 맞는 길이이며 쌓던 큰 버퍼를 붙들지 않는다.
  */
 import { describe, expect, it } from 'vitest';
-import { CAN_TRANSFER, F32, I32, U32, freeTyped, resizeTyped } from '../src/grow';
+import { CAN_TRANSFER, F32, F64, Grow, I32, U32, U8, freeTyped, resizeTyped } from '../src/grow';
 
 describe('장면 배열 쌓기', () => {
+  it('51차: 꼴별 쌓기는 모두 같은 클래스(Grow)이고, 쌓을 자리(cap)는 늘 배열 길이와 같다 — 키우는 크기는 예전처럼 두 배씩', () => {
+    const all = [new F64(), new F32(3), new U32(1), new I32(0), new U8(5)];
+    for (const g of all) {
+      expect(g).toBeInstanceOf(Grow);
+      expect(Object.getPrototypeOf(g)).toBe(Grow.prototype);
+      expect(g.cap).toBe(g.a.length);
+    }
+    expect(all.map((g) => g.a.constructor)).toEqual([Float64Array, Float32Array, Uint32Array, Int32Array, Uint8Array]);
+    expect(new F64().a.length).toBe(1024);
+    // 0칸에서 시작해도 push가 1 → 2 → 4 …로 키운다
+    const z = new I32(0);
+    const caps: number[] = [];
+    for (let i = 0; i < 9; i++) {
+      z.push(-i);
+      caps.push(z.cap);
+      expect(z.cap).toBe(z.a.length);
+    }
+    expect(caps).toEqual([1, 2, 4, 4, 8, 8, 8, 8, 16]);
+    expect(Array.from(z.done())).toEqual([0, -1, -2, -3, -4, -5, -6, -7, -8]);
+    expect(z.cap).toBe(9);
+    // reserve는 모자랄 때만 키우고(한 번에 여러 배), 넉넉하면 그대로
+    const f = new F32(3);
+    f.reserve(3);
+    expect(f.cap).toBe(3);
+    f.n = 3;
+    f.reserve(10);
+    expect([f.cap, f.a.length]).toEqual([24, 24]);
+    expect(f.done().length).toBe(3);
+    expect([f.cap, f.a.length]).toEqual([3, 3]);
+  });
+
   it('resizeTyped: 옮기든 복사하든 앞 keep개와 0으로 채운 뒤가 같다', () => {
     for (const useTransfer of [true, false]) {
       const a = new Float32Array(8);

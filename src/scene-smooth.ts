@@ -8,6 +8,7 @@
  * 큰 모형을 생각해 이어 칠하는 면만 꼭짓점 배열을 잡는다.
  */
 import { loopEdgesKnown } from './entities';
+import { hypot3 } from './hypot';
 import { FLAG_SMOOTH, type SkpEntities } from './model';
 
 export const SMOOTH_MIN_DOT = 0.02;
@@ -21,12 +22,12 @@ export interface CornerNormals {
   normals: Float32Array;
 }
 
-/** 면 평면 법선(단위, 0이면 0) */
+/** 면 평면 법선(단위, 0이면 0). 길이는 Math.hypot과 같은 값(hypot3 — 51차, 면마다 부른다) */
 export function faceUnitNormal(n: ArrayLike<number>, out: Float64Array, o: number): void {
   const x = n[0] ?? 0;
   const y = n[1] ?? 0;
   const z = n[2] ?? 0;
-  const l = Math.hypot(x, y, z);
+  const l = hypot3(x, y, z);
   out[o] = l > 0 ? x / l : 0;
   out[o + 1] = l > 0 ? y / l : 0;
   out[o + 2] = l > 0 ? z / l : 0;
@@ -179,7 +180,7 @@ export function cornerNormals(ents: SkpEntities): CornerNormals | null {
     const x = sum[3 * c]!;
     const y = sum[3 * c + 1]!;
     const z = sum[3 * c + 2]!;
-    const l = Math.hypot(x, y, z) || 1;
+    const l = hypot3(x, y, z) || 1;
     normals[3 * c] = x / l;
     normals[3 * c + 1] = y / l;
     normals[3 * c + 2] = z / l;

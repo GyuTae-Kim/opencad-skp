@@ -8,6 +8,7 @@
  *   종류 2·3은 면 법선 대신 저장된 방향으로 평면 틀을 잡는다. M을 뒤집을 수 없으면 기본 투영.
  *   M의 마지막 줄이 (0, 0, 1)이 아니면(사진 맞춤처럼 일그러뜨린 무늬) Q가 면 위에서 바뀌어 원근 무늬가 된다.
  */
+import { hypot3 } from './hypot';
 
 type V3 = [number, number, number];
 
@@ -16,11 +17,12 @@ export const NEAR_Z = 1e-3;
 
 /**
  * 면 평면 틀(planeAxes와 같은 값)을 out[0, 6)에 적는다: x 축 3값, y 축 3값. 법선은 n[k, k + 3).
- * 큰 모형의 장면 만들기가 면마다 부르므로 배열을 새로 잡지 않는다(33차 — 165 MB 표본에서 무늬 투영 계산이 장면 만들기의 4분의 1이었다)
+ * 큰 모형의 장면 만들기가 면마다 부르므로 배열을 새로 잡지 않는다(33차 — 165 MB 표본에서 무늬 투영 계산이 장면 만들기의 4분의 1이었다).
+ * 길이는 Math.hypot과 같은 값의 hypot3(51차 — V8 Math.hypot은 부를 때마다 인자 배열을 잡는다)
  */
 export function planeAxesInto(n: ArrayLike<number>, k: number, out: number[]): void {
   let nx = n[k]!, ny = n[k + 1]!, nz = n[k + 2]!;
-  const l = Math.hypot(nx, ny, nz);
+  const l = hypot3(nx, ny, nz);
   if (l > 0) {
     nx /= l;
     ny /= l;
@@ -30,7 +32,7 @@ export function planeAxesInto(n: ArrayLike<number>, k: number, out: number[]): v
   let x0: number, x1: number, x2: number;
   if (Math.abs(nx) < NEAR_Z && Math.abs(ny) < NEAR_Z) (x0 = nz), (x1 = 0), (x2 = -nx);
   else (x0 = -ny), (x1 = nx), (x2 = 0);
-  const xl = Math.hypot(x0, x1, x2);
+  const xl = hypot3(x0, x1, x2);
   if (xl > 0) (x0 = x0 / xl), (x1 = x1 / xl), (x2 = x2 / xl);
   const y0 = ny * x2 - nz * x1, y1 = nz * x0 - nx * x2, y2 = nx * x1 - ny * x0;
   // −0을 0으로(값은 같다 — 비교·출력을 깔끔하게)
@@ -89,7 +91,7 @@ export function faceUvqInto(normal: ArrayLike<number>, t: ArrayLike<number> | un
   const stored = !!t && o >= 0;
   let dirAt = -1;
   if (stored && (t[o] === 2 || t[o] === 3) && t[o + 1]) {
-    const l = Math.hypot(t[o + 11]!, t[o + 12]!, t[o + 13]!);
+    const l = hypot3(t[o + 11]!, t[o + 12]!, t[o + 13]!);
     if (l > 1e-12 && Number.isFinite(l)) dirAt = o + 11;
   }
   if (dirAt >= 0) planeAxesInto(t!, dirAt, axesAt);
@@ -107,13 +109,20 @@ export function faceUvqInto(normal: ArrayLike<number>, t: ArrayLike<number> | un
     const s = o + 2;
     inv = inv3Into(t[s]!, t[s + 3]!, t[s + 6]!, t[s + 1]!, t[s + 4]!, t[s + 7]!, t[s + 2]!, t[s + 5]!, t[s + 8]!, invAt);
   }
-  const I = invAt;
-  for (let r = 0; r < 3; r++)
+  // 51차: 3×4 고리를 풀어 썼다(칸마다 같은 식·같은 차례 — 줄 0은 ÷w, 줄 1은 ÷h, 줄 2는 그대로)
+  if (inv) {
+    const I = invAt;
     for (let c = 0; c < 4; c++) {
-      let v: number;
-      if (inv) v = I[r * 3]! * P[c]! + I[r * 3 + 1]! * P[4 + c]! + I[r * 3 + 2]! * P[8 + c]!;
-      else v = P[r * 4 + c]!;
-      out[r * 4 + c] = r === 0 ? v / w : r === 1 ? v / h : v;
+      const p0 = P[c]!, p1 = P[4 + c]!, p2 = P[8 + c]!;
+      out[c] = (I[0]! * p0 + I[1]! * p1 + I[2]! * p2) / w;
+      out[4 + c] = (I[3]! * p0 + I[4]! * p1 + I[5]! * p2) / h;
+      out[8 + c] = I[6]! * p0 + I[7]! * p1 + I[8]! * p2;
+    }
+  } else
+    for (let c = 0; c < 4; c++) {
+      out[c] = P[c]! / w;
+      out[4 + c] = P[4 + c]! / h;
+      out[8 + c] = P[8 + c]!;
     }
   return stored && !inv;
 }
@@ -143,16 +152,30 @@ const Q_FLOOR = 1e-3;
  * 원근 없이 칠하고 flat을 돌려준다.
  */
 export function applyFaceUvq(m: ArrayLike<number>, points: ArrayLike<number>, start: number, count: number, out: number[]): { flat: boolean } {
-  const base = out.length;
+  const tmp = new Float64Array(3 * count);
+  const flat = applyFaceUvqAt(m, points, start, count, tmp, 0);
+  for (let i = 0; i < tmp.length; i++) out.push(tmp[i]!);
+  return { flat };
+}
+
+/**
+ * applyFaceUvq와 같은 값을 형식 배열 out[at, at + 3·count)에 바로 적는다(51차 — 장면 만들기가 면마다 부른다: 면마다 작은 배열을 비우고
+ * 다시 채운 뒤 옮겨 적던 것을 줄인다). 원근 없이 칠했으면 true
+ */
+export function applyFaceUvqAt(m: ArrayLike<number>, points: ArrayLike<number>, start: number, count: number, out: Float64Array, at: number): boolean {
+  const base = at;
+  const end = at + 3 * count;
   let qlo = Infinity, qhi = -Infinity;
   const linearQ = m[8] !== 0 || m[9] !== 0 || m[10] !== 0;
-  for (let i = 0; i < count; i++) {
+  for (let i = 0, w = base; i < count; i++, w += 3) {
     const o = (start + i) * 3;
     const px = points[o]!, py = points[o + 1]!, pz = points[o + 2]!;
     const U = m[0]! * px + m[1]! * py + m[2]! * pz + m[3]!;
     const V = m[4]! * px + m[5]! * py + m[6]! * pz + m[7]!;
     const Q = m[8]! * px + m[9]! * py + m[10]! * pz + m[11]!;
-    out.push(U, V, Q);
+    out[w] = U;
+    out[w + 1] = V;
+    out[w + 2] = Q;
     if (Q < qlo) qlo = Q;
     if (Q > qhi) qhi = Q;
   }
@@ -162,7 +185,7 @@ export function applyFaceUvq(m: ArrayLike<number>, points: ArrayLike<number>, st
   const usable = varying && (qlo > 0 || qhi < 0) && Math.min(Math.abs(qlo), Math.abs(qhi)) >= Q_FLOOR * mag;
   // 면마다 정수 부분 빼기(같은 면 안에서는 같은 정수라 무늬가 이어진다)
   let umin = Infinity, vmin = Infinity;
-  for (let i = base; i < out.length; i += 3) {
+  for (let i = base; i < end; i += 3) {
     const q = Math.abs(out[i + 2]!) < 1e-12 ? 1 : out[i + 2]!;
     if (usable) {
       out[i] = out[i]! / scale;
@@ -180,9 +203,9 @@ export function applyFaceUvq(m: ArrayLike<number>, points: ArrayLike<number>, st
   const ku = Number.isFinite(umin) ? Math.floor(umin) : 0;
   const kv = Number.isFinite(vmin) ? Math.floor(vmin) : 0;
   if (ku || kv)
-    for (let i = base; i < out.length; i += 3) {
+    for (let i = base; i < end; i += 3) {
       out[i] = out[i]! - ku * out[i + 2]!;
       out[i + 1] = out[i + 1]! - kv * out[i + 2]!;
     }
-  return { flat: varying && !usable };
+  return varying && !usable;
 }

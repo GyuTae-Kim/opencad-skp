@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { MAP_STRIDE } from '../src/entities';
-import { faceUvq, faceUvqInto, NEAR_Z, planeAxes, planeAxesInto } from '../src/projection';
+import { applyFaceUvq, applyFaceUvqAt, faceUvq, faceUvqInto, NEAR_Z, planeAxes, planeAxesInto } from '../src/projection';
 
 type V3 = [number, number, number];
 
@@ -162,5 +162,87 @@ describe('면 무늬 투영 자리 쓰기(33차)', () => {
       }
     // 뒤집을 수 없는 행렬도 섞였다
     expect(singular).toBeGreaterThan(0);
+  });
+});
+
+// ── 50차까지의 applyFaceUvq(JS 배열에 push로 쌓던 판 — 그대로 옮겨 둔 것) ──
+function oldApplyFaceUvq(m: ArrayLike<number>, points: ArrayLike<number>, start: number, count: number, out: number[]): { flat: boolean } {
+  const base = out.length;
+  let qlo = Infinity, qhi = -Infinity;
+  const linearQ = m[8] !== 0 || m[9] !== 0 || m[10] !== 0;
+  for (let i = 0; i < count; i++) {
+    const o = (start + i) * 3;
+    const px = points[o]!, py = points[o + 1]!, pz = points[o + 2]!;
+    const U = m[0]! * px + m[1]! * py + m[2]! * pz + m[3]!;
+    const V = m[4]! * px + m[5]! * py + m[6]! * pz + m[7]!;
+    const Q = m[8]! * px + m[9]! * py + m[10]! * pz + m[11]!;
+    out.push(U, V, Q);
+    if (Q < qlo) qlo = Q;
+    if (Q > qhi) qhi = Q;
+  }
+  const scale = Math.abs(qhi) >= Math.abs(qlo) ? qhi : qlo;
+  const mag = Math.abs(scale);
+  const varying = linearQ && qhi - qlo > 1e-6 * mag;
+  const usable = varying && (qlo > 0 || qhi < 0) && Math.min(Math.abs(qlo), Math.abs(qhi)) >= 1e-3 * mag;
+  let umin = Infinity, vmin = Infinity;
+  for (let i = base; i < out.length; i += 3) {
+    const q = Math.abs(out[i + 2]!) < 1e-12 ? 1 : out[i + 2]!;
+    if (usable) {
+      out[i] = out[i]! / scale;
+      out[i + 1] = out[i + 1]! / scale;
+      out[i + 2] = out[i + 2]! / scale;
+    } else {
+      out[i] = out[i]! / q;
+      out[i + 1] = out[i + 1]! / q;
+      out[i + 2] = 1;
+    }
+    const k = out[i + 2]!;
+    umin = Math.min(umin, out[i]! / k);
+    vmin = Math.min(vmin, out[i + 1]! / k);
+  }
+  const ku = Number.isFinite(umin) ? Math.floor(umin) : 0;
+  const kv = Number.isFinite(vmin) ? Math.floor(vmin) : 0;
+  if (ku || kv)
+    for (let i = base; i < out.length; i += 3) {
+      out[i] = out[i]! - ku * out[i + 2]!;
+      out[i + 1] = out[i + 1]! - kv * out[i + 2]!;
+    }
+  return { flat: varying && !usable };
+}
+
+describe('면 무늬 좌표를 형식 배열에 바로 쓰기(51차 — applyFaceUvqAt)', () => {
+  it('옛 push 판과 모든 칸(−0·NaN까지)·원근 없이 칠함 표시가 같고, 적는 자리 밖은 그대로 둔다', () => {
+    const r = rng(51);
+    const ns = normals(r, 20);
+    const ms = maps(r, 40);
+    let flats = 0;
+    let persp = 0;
+    for (const n of ns)
+      for (const [k, mp] of ms.entries()) {
+        const m = oldFaceUvq(n, mp, 1 + (k % 5), 0.5 + (k % 3)).m;
+        const count = 1 + (k % 9);
+        const start = k % 4;
+        // 큰 좌표·작은 좌표·수가 아닌 점을 섞는다
+        const points = Float64Array.from({ length: (start + count) * 3 }, (_, i) =>
+          k % 13 === 0 && i === 4 ? NaN : k % 11 === 0 ? 1e6 + (i % 3) : (r() * 2 - 1) * (k % 2 ? 1000 : 1),
+        );
+        const want: number[] = [1, 2];
+        const wf = oldApplyFaceUvq(m, points, start, count, want).flat;
+        const out = new Float64Array(2 + 3 * count + 1).fill(7);
+        out[0] = 1;
+        out[1] = 2;
+        expect(applyFaceUvqAt(m, points, start, count, out, 2)).toBe(wf);
+        if (!same(out.subarray(0, 2 + 3 * count), want)) throw new Error(`다르다: ${JSON.stringify({ n, k })}`);
+        expect(out[2 + 3 * count]).toBe(7);
+        // 배열 판(시험·다른 쓰임)도 같은 값
+        const viaArr: number[] = [1, 2];
+        expect(applyFaceUvq(m, points, start, count, viaArr).flat).toBe(wf);
+        expect(same(viaArr, want)).toBe(true);
+        if (wf) flats++;
+        for (let i = 4; i < want.length; i += 3) if (want[i] !== 1) persp++;
+      }
+    // 원근 무늬·원근 없이 칠한 면도 섞였다
+    expect(flats).toBeGreaterThan(0);
+    expect(persp).toBeGreaterThan(0);
   });
 });

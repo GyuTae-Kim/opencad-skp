@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import earcutRef from 'earcut';
 import { faceAt, facesFrom } from '../src/entities';
 import { F64, U32 } from '../src/grow';
 import { skpToScene } from '../src/index';
@@ -226,6 +227,85 @@ describe('면 삼각화', () => {
     const idx = new U32();
     expect(triangulateFace(new Float64Array([0, 0, 0, 1, 0, 0, 2, 0, 0]), oneFace([[0, 1, 2]], [0, 0, 1]), 0, pos, idx)).toBe(false);
     expect([pos.n, idx.n]).toEqual([0, 0]);
+  });
+
+  it('51차: 면마다 꼭 맞게 잡은 earcut 입력이 50차의 다시 쓰는 배열과 같은 위치·삼각형·실패를 낸다(구멍·여러 구멍·겹친 점·한 줄 점·세로 면)', () => {
+    // 50차 triangulateFace(다시 쓰는 배열을 length = 0으로 비우고 push) — 그대로 옮겨 둔 것
+    const flat0: number[] = [];
+    const holes0: number[] = [];
+    const before = (points: Float64Array, faces: ReturnType<typeof facesFrom>, k: number, pos: F64, idx: U32): boolean => {
+      const N = faces.normal;
+      const ax = Math.abs(N[3 * k]!), ay = Math.abs(N[3 * k + 1]!), az = Math.abs(N[3 * k + 2]!);
+      const drop = az >= ax && az >= ay ? 2 : ax >= ay ? 0 : 1;
+      const u = drop === 0 ? 1 : 0;
+      const v = drop === 2 ? 1 : 2;
+      flat0.length = 0;
+      holes0.length = 0;
+      const base = pos.n / 3;
+      const C = faces.cornerStart;
+      for (let li = faces.loopStart[k]!; li < faces.loopStart[k + 1]!; li++) {
+        if (li > faces.loopStart[k]!) holes0.push(flat0.length / 2);
+        pos.reserve(3 * (C[li + 1]! - C[li]!));
+        for (let c = C[li]!; c < C[li + 1]!; c++) {
+          const o = 3 * faces.vertex[c]!;
+          flat0.push(points[o + u]!, points[o + v]!);
+          pos.a[pos.n++] = points[o]!;
+          pos.a[pos.n++] = points[o + 1]!;
+          pos.a[pos.n++] = points[o + 2]!;
+        }
+      }
+      const tri = earcutRef(flat0, holes0.length ? holes0 : undefined, 2);
+      if (tri.length === 0) {
+        pos.n = base * 3;
+        return false;
+      }
+      for (const t of tri) idx.push(base + t);
+      return true;
+    };
+    let s = 51;
+    const r = (): number => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 2 ** 32);
+    const pts: number[] = [];
+    const ring = (cx: number, cy: number, rad: number, n: number, rev: boolean, plane: 0 | 1 | 2): number[] => {
+      const ids: number[] = [];
+      for (let i = 0; i < n; i++) {
+        const a = ((rev ? -i : i) * 2 * Math.PI) / n;
+        const p = [cx + rad * Math.cos(a), cy + rad * Math.sin(a)];
+        const xyz = plane === 2 ? [p[0]!, p[1]!, 5] : plane === 0 ? [5, p[0]!, p[1]!] : [p[0]!, 5, p[1]!];
+        ids.push(pts.length / 3);
+        pts.push(...xyz);
+      }
+      return ids;
+    };
+    const list: Parameters<typeof facesFrom>[0][number][] = [];
+    for (let f = 0; f < 400; f++) {
+      const plane = (f % 3) as 0 | 1 | 2;
+      const normal: [number, number, number] = plane === 2 ? [0, 0, 1] : plane === 0 ? [1, 0, 0] : [0, -1, 0];
+      const n = 3 + Math.floor(r() * 10);
+      const cx = r() * 100, cy = r() * 100, rad = 2 + r() * 5;
+      const loops = [ring(cx, cy, rad, n, false, plane)];
+      const holes = f % 5 === 0 ? 1 : f % 17 === 0 ? 3 : 0;
+      for (let h = 0; h < holes; h++) loops.push(ring(cx + (h - 1) * 1.2, cy, 0.4, 3 + h, true, plane));
+      // 겹친 점·한 줄 점(삼각화 실패)도 섞는다
+      if (f % 23 === 0) loops[0] = [loops[0]![0]!, loops[0]![0]!, loops[0]![1]!];
+      if (f % 29 === 0) {
+        const a = pts.length / 3;
+        pts.push(0, 0, 0, 1, 0, 0, 2, 0, 0);
+        loops.splice(0, loops.length, [a, a + 1, a + 2]);
+      }
+      list.push({ loops, normal, flags: 0 });
+    }
+    const faces = facesFrom(list);
+    const points = Float64Array.from(pts);
+    const p0 = new F64(), i0 = new U32(), p1 = new F64(), i1 = new U32();
+    let fails = 0;
+    for (let k = 0; k < faces.length; k++) {
+      const a = before(points, faces, k, p0, i0);
+      expect(triangulateFace(points, faces, k, p1, i1)).toBe(a);
+      if (!a) fails++;
+    }
+    expect(fails).toBeGreaterThan(0);
+    expect(Array.from(p1.done())).toEqual(Array.from(p0.done()));
+    expect(Array.from(i1.done())).toEqual(Array.from(i0.done()));
   });
 });
 
