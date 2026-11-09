@@ -8,24 +8,25 @@ import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Viewer3d, type Pick3d, type PickEvent } from 'opencad-viewer3d';
 import { KEY_SNAP_KEYS, KEY_SNAP_MESSAGES, keySnapAction, keySnapHint, keySnapMessages, type KeySnapMessageKey } from 'opencad-viewer3d/keysnap';
-import type { Scene3d } from 'opencad-viewer3d/types';
 import { catalogs, languages, registerCatalog, sourceMessage, translate } from '../../site/i18n.mjs';
-import { createDoc, selectionForPick } from '../../src/app/doc';
+import { type createDoc, selectionForPick } from '../../src/app/doc';
 import { KEY_PICK_TEXT, KeyPick, PICK_CYCLE, keyPickMessages, keyPickName, keyPickText } from '../../src/app/keypick';
 import { keyAction } from '../../src/app/keys';
+import { PICK_LIST_MAX, pickListItems } from '../../src/app/picklist';
 import { SHORTCUTS } from '../../src/app/shortcuts';
 import { childrenOf, nodeName } from '../../src/app/tree';
-import { edgesFrom, facesFrom } from '../../src/entities';
-import type { SkpDefinition, SkpEdge, SkpEntities, SkpFace, SkpInstance, SkpModel } from '../../src/model';
-import { buildSceneParts } from '../../src/scene';
 import { type FakeElement, installDom } from '../fakegl/fakedom';
+import { rowDoc } from './rowdoc';
 
 const CODES = languages.filter((l) => l.code !== 'ko').map((l) => l.code);
 const HANGUL = /[가-힣]/;
 /** 이번에 사전에 더한 열쇠: 알림 틀(이미 있던 면·모서리·보조점은 빼고)과 바로 가기 안내의 새 묶음 */
 const SHORTCUT_GROUP = SHORTCUTS.find((g) => g.title === '3D 보기 키보드 고르기')!;
 const BEFORE = new Set(['면', '모서리', '보조점']);
-const ADDED = [...new Set([...Object.values(KEY_PICK_TEXT).filter((t) => !BEFORE.has(t)), SHORTCUT_GROUP.title, ...SHORTCUT_GROUP.items.map((i) => i.label)])];
+// 57차 겹친 것 목록 줄(Shift+F10)은 tests/app/picklist.test.ts가 본다
+const ADDED = [
+  ...new Set([...Object.values(KEY_PICK_TEXT).filter((t) => !BEFORE.has(t)), SHORTCUT_GROUP.title, ...SHORTCUT_GROUP.items.filter((i) => !i.keys.includes('Shift+F10')).map((i) => i.label)]),
+];
 
 describe('알림 틀(네 언어 사전 열쇠)', () => {
   it('앱이 주는 틀은 모두 코어 열쇠이고 네 언어 사전에 있으며, 옮긴 틀에 한글이 남지 않는다', () => {
@@ -154,67 +155,7 @@ describe('키 겹침', () => {
   });
 });
 
-// ── 가짜 WebGL2 위 코어 뷰어 ──
-
-const at = (x: number, y = 0, z = 0): Float64Array => Float64Array.from([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1]);
-function shell(points: number[], loops: number[][]): SkpEntities {
-  const edges: SkpEdge[] = [];
-  const index = new Map<string, number>();
-  const edgeOf = (a: number, b: number): number => {
-    const key = a < b ? `${a},${b}` : `${b},${a}`;
-    let i = index.get(key);
-    if (i === undefined) {
-      index.set(key, (i = edges.length));
-      edges.push({ a, b, flags: 0 });
-    }
-    return i;
-  };
-  const faces: SkpFace[] = loops.map((loop) => {
-    const via = loop.map((v, k) => edgeOf(v, loop[(k + 1) % loop.length]!));
-    const n = [0, 0, 0];
-    loop.forEach((v, k) => {
-      const w = loop[(k + 1) % loop.length]!;
-      const [ax, ay, az] = [points[3 * v]!, points[3 * v + 1]!, points[3 * v + 2]!];
-      const [bx, by, bz] = [points[3 * w]!, points[3 * w + 1]!, points[3 * w + 2]!];
-      n[0]! += (ay - by) * (az + bz);
-      n[1]! += (az - bz) * (ax + bx);
-      n[2]! += (ax - bx) * (ay + by);
-    });
-    return { loops: [loop], normal: [n[0]!, n[1]!, n[2]!], flags: 0, loopEdges: [via] };
-  });
-  return { points: Float64Array.from(points), faces: facesFrom(faces), edges: edgesFrom(edges), instances: [] };
-}
-const CUBE = [
-  [0, 3, 2, 1],
-  [4, 5, 6, 7],
-  [0, 1, 5, 4],
-  [3, 7, 6, 2],
-  [0, 4, 7, 3],
-  [1, 2, 6, 5],
-];
-const cube = (): SkpEntities => shell([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1], CUBE);
-const inst = (definition: number, matrix: Float64Array): SkpInstance => ({ definition, matrix, flags: 0, kind: 'group' });
-const group = (list: SkpInstance[]): SkpEntities => ({ ...shell([], []), instances: list });
-/** 모형: 감싼 그룹 Row 안에 x 방향으로 늘어선 상자 둘(Near x 3~4, Far x 0~1) — 오른쪽(+x)에서 보면 가운데 시선이 두 상자를 꿰뚫는다 */
-function rowDoc(): ReturnType<typeof createDoc> {
-  const defs = new Map<number, SkpDefinition>([
-    [1, { id: 1, name: 'Far', entities: cube() }],
-    [2, { id: 2, name: 'Near', entities: cube() }],
-    [3, { id: 3, name: 'Row', entities: group([inst(1, at(0)), inst(2, at(3))]) }],
-  ]);
-  const model: SkpModel = {
-    materials: new Map(),
-    layers: new Map([[1, 'Layer0']]),
-    defaultLayer: 1,
-    definitions: defs,
-    root: group([inst(3, at(0))]),
-    counts: { vertices: 0, edges: 0, faces: 0, instances: 3 },
-    warnings: [],
-  };
-  const p = buildSceneParts(model, new Map(), 1, { outline: true });
-  const scene: Scene3d = { name: 't', units: 'inch', meshes: p.meshes, lines: p.lines, meta: { tree: p.tree, outline: p.outline, faceRuns: p.faceRuns } };
-  return createDoc('row.skp', 1, { scene, ms: 1 });
-}
+// ── 가짜 WebGL2 위 코어 뷰어(모형: 감싼 그룹 Row 안 상자 Near·Far — rowdoc.ts) ──
 
 let dom: ReturnType<typeof installDom>;
 const views: Viewer3d[] = [];
@@ -304,6 +245,50 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
     expect(kp.text).toBe('가상 커서를 껐습니다');
     key(cv, 'Tab');
     expect(v.keyboardCursor).toBeNull();
+  });
+
+  it('57차 겹친 것 목록 항목: 같은 자리 코어 pickCandidates를 앱 고르기로 묶는다(첫째 펼친 단계, 둘째부터 가장 안쪽·면 방식은 면마다)', () => {
+    const { v, d } = setup();
+    const t = d.tree!;
+    const row = childrenOf(t, -1)[0]!;
+    const [far, near] = childrenOf(t, row);
+    const cx = v.canvas.clientWidth / 2 || 400;
+    const cy = v.canvas.clientHeight / 2 || 300;
+    const picks = v.pickCandidates(cx, cy, { ...PICK_CYCLE, pointerType: 'mouse', max: PICK_LIST_MAX });
+    // 가운데 시선: Near 앞·뒤 면, Far 앞·뒤 면(가상 커서 Tab 차례와 같다)
+    expect(picks.length).toBe(4);
+    const items = pickListItems(d, picks);
+    expect(items.map((i) => [i.name, i.kind])).toEqual([
+      ['그룹 Row', '면'],
+      ['그룹 Near', '면'],
+      ['그룹 Far', '면'],
+    ]);
+    expect(items.map((i) => i.sel)).toEqual([
+      { kind: 'outline', index: d.outline.findIndex((r) => r.node === row) },
+      { kind: 'node', index: near },
+      { kind: 'node', index: far },
+    ]);
+    // 고를 것은 그 후보로 앱 onPick이 고르는 것과 같다(첫째는 보통, 둘째부터 e.cycle)
+    expect(items[0]!.sel).toEqual(selectionForPick(d, items[0]!.pick));
+    expect(items[2]!.sel).toEqual(selectionForPick(d, items[2]!.pick, false, true));
+    expect(items[2]!.pick).toEqual(picks[2]);
+    // 면·모서리 방식: 면마다 하나(넷), 이름은 그 면을 품은 가장 안쪽 그룹
+    d.pickMode = 'face';
+    const faces = pickListItems(d, picks);
+    expect(faces.map((i) => [i.name, i.sel?.kind])).toEqual([
+      ['그룹 Near', 'face'],
+      ['그룹 Near', 'face'],
+      ['그룹 Far', 'face'],
+      ['그룹 Far', 'face'],
+    ]);
+    d.pickMode = 'open';
+    // 잘린 면 후보는 뺀다(앱이 고르지 않는다), 종류는 지금 언어
+    const en = pickListItems(d, [{ ...picks[0]!, section: true }, ...picks.slice(1)], (x) => translate(x, 'en'));
+    expect(en.map((i) => [i.name, i.kind])).toEqual([
+      ['그룹 Near', 'Face'],
+      ['그룹 Far', 'Face'],
+    ]);
+    expect(pickListItems(d, [{ ...picks[0]!, kind: 'line' }], (x) => x)[0]!.kind).toBe('모서리');
   });
 
   it('줄자·각도기를 켜면(set(false)) 켜진 커서도 끄고 화살표를 받지 않는다(측정 도구의 방향 잠금 몫), 다시 켜면 받는다', () => {

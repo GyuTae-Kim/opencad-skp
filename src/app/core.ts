@@ -17,7 +17,9 @@ type Measure = typeof import('./measure');
 type Release = typeof import('./release');
 type Sections = typeof import('./sections');
 type KeyPicking = typeof import('./keypick');
+type PickListing = typeof import('./picklist');
 type SunLight = typeof import('./sun');
+type Annotating = typeof import('./annotations');
 
 /**
  * 파일 단면 → 코어 평면 계산(sections.ts — 55차: 구간 단면을 더하며 첫 화면 조각에서 뺐다). 코어 입구와 함께 받아 두므로
@@ -26,6 +28,13 @@ type SunLight = typeof import('./sun');
 export let fileSections: Sections | null = null;
 /** 3D 보기 키보드 고르기(keypick.ts — 56차, 가상 커서·겹친 것 고르기 돌리기). fileSections처럼 코어 입구와 함께 받는다(받기 전에는 null) */
 export let keyPicking: KeyPicking | null = null;
+/** 3D 보기 겹친 것 고르기 목록(picklist.ts — 57차, 오른쪽 단추·길게 누르기·Shift+F10). keyPicking처럼 코어 입구와 함께 받는다(받기 전에는 null) */
+export let pickListing: PickListing | null = null;
+/**
+ * 글·치수 라벨(annotations.ts — 57차: 겹친 것 목록을 더하며 첫 화면 조각에서 뺐다). 라벨은 뷰어 덧그림 위에 그리므로 코어 입구와 함께 받는다
+ * (뷰어를 만들 때 라벨 그리기를 만든다 — 받기 전에는 null)
+ */
+export let annotating: Annotating | null = null;
 /**
  * 해 조명·안개 계산(sun.ts — 56차: 키보드 고르기를 더하며 첫 화면 조각에서 뺐다). 조명은 뷰어가 있어야 걸므로 코어 입구와 함께 받는다(받기 전에는 null —
  * 상태 보내기의 해 자리도 null)
@@ -52,11 +61,21 @@ export function onceImport<T>(load: () => Promise<T>): () => Promise<T> {
  * (54차: 첫 화면이 바로 가져오던 것을 뺐다 — 코어 0.44.0 손가락 큐브로 커진 모듈이 첫 화면 조각에 실렸다. 뷰어를 만들기 전에 옮기므로 큐브는 처음부터 그 언어로 그린다)
  */
 export const loadViewerCore: () => Promise<Core> = onceImport(() =>
-  Promise.all([import('opencad-viewer3d'), import('opencad-viewer3d/viewcube'), import('./sections'), import('./keypick'), import('./sun')]).then(([core, cube, sections, keys, sun]) => {
+  Promise.all([
+    import('opencad-viewer3d'),
+    import('opencad-viewer3d/viewcube'),
+    import('./sections'),
+    import('./keypick'),
+    import('./sun'),
+    import('./picklist'),
+    import('./annotations'),
+  ]).then(([core, cube, sections, keys, sun, list, notes]) => {
     localizeCubeFaces(cube.CUBE_FACES);
     fileSections = sections;
     keyPicking = keys;
     sunLight = sun;
+    pickListing = list;
+    annotating = notes;
     return core;
   }),
 );
