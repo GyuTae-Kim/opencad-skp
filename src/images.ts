@@ -15,7 +15,7 @@
  */
 
 import { readSkpHeader } from './header';
-import { parseMaterialXml, pbrFiles, type SkpMaterialInfo, type SkpPbrRole } from './materials';
+import { parseMaterialPbr, parseMaterialXml, pbrFiles, type SkpMaterialInfo, type SkpPbrRole } from './materials';
 import type { MfcImageRef } from './mfcstate';
 import { mfcImageRefs } from './mfcmodel';
 import { findSkpZipItems, runZipReads, type ZipItem, type ZipReads } from './zip';
@@ -33,7 +33,10 @@ export interface SkpImage {
 export interface SkpImages {
   /** 모형 미리보기(meta/model_thumbnail.png, 없으면 meta/preview_thumbnail.png) */
   model?: SkpImage;
-  /** 재질 무늬 그림(폴더 = model.dat의 재질 이름 = meta.materialStats[].folder) — 폴더마다 하나(material.xml이 가리키는 것, 없으면 첫 그림) */
+  /**
+   * 재질 무늬 그림(폴더 = model.dat의 재질 이름 = meta.materialStats[].folder) — 폴더마다 하나(material.xml이 가리키는 것, 없으면 첫 그림).
+   * 색 무늬 없는 PBR 재질은 PBR 그림이 아닌 그림(재질 미리보기)이고, 폴더 그림이 모두 PBR 그림이면 그 폴더는 없다(57차)
+   */
   materials: (SkpImage & { folder: string })[];
   /** 컴포넌트 미리보기(name = 파일 이름 = 컴포넌트 정의 이름으로 보임) */
   components: SkpImage[];
@@ -43,7 +46,7 @@ export interface SkpImages {
   skipped: number;
   warnings: string[];
   /**
-   * 무늬 재질의 PBR 그림(material.xml <mat:pbrMR>에서 켠 법선·거칠기·금속 그림 — 55차). 2021+ 꾸러미에서 무늬(색 그림)가 있는 재질(56차부터 색 무늬 없이 그림 한 장 크기가 있는 재질도)만, 다른 그림을 다 넣은 뒤
+   * 무늬 재질의 PBR 그림(material.xml <mat:pbrMR>에서 켠 법선·거칠기·금속 그림 — 55차). 2021+ 꾸러미에서 무늬(색 그림)가 있는 재질(56차부터 색 무늬 없이 그림 한 장 크기가 있는 재질도, 57차부터 그림이 하나뿐인 재질 폴더도)만, 다른 그림을 다 넣은 뒤
    * 남은 한도 안에서. 그림 하나가 여러 쓰임이면 roles가 여럿. 없으면 칸이 없다(앱 워커는 화면에 넘기기 전에 이 칸을 뗀다 — 바이트는 장면 무늬가 든다)
    */
   pbr?: (SkpImage & { folder: string; roles: SkpPbrRole[] })[];
@@ -214,31 +217,35 @@ export function* zipImageReads(
       if (m && IMAGE_EXT.test(m[1]!)) want.push({ item, kind: 'scene', name: stem(m[1]!) });
     }
   }
-  // 재질 폴더마다 그림 하나: 여럿이면 material.xml의 무늬 그림 이름과 같은 것
+  // 재질 폴더마다 그림 하나: 여럿이면 material.xml의 무늬 그림 이름과 같은 것.
+  // 57차: 그림이 하나뿐인 폴더도 material.xml을 읽는다 — 그 그림이 PBR 그림(색 무늬 없는 재질의 법선 그림, 색 무늬와 같은 파일을 쓰는 거칠기 그림 등)일 수 있다
   const text = new TextDecoder('utf-8');
-  const pickXml = (f: { images: ZipItem[]; xml?: ZipItem }): ZipItem | undefined => (f.images.length > 1 && f.xml && f.xml.size < 1 << 20 ? f.xml : undefined);
+  const pickXml = (f: { images: ZipItem[]; xml?: ZipItem }): ZipItem | undefined => (f.images.length && f.xml && f.xml.size < 1 << 20 ? f.xml : undefined);
   plan?.([...folders.values()].map(pickXml).filter((x): x is ZipItem => !!x));
   const fileOf = (it: ZipItem): string => it.name.slice(it.name.lastIndexOf('/') + 1);
   for (const [folder, f] of folders) {
     if (!f.images.length) continue;
-    let pick = f.images[0]!;
+    let pick: ZipItem | undefined = f.images[0]!;
     const xml = pickXml(f);
     let info: SkpMaterialInfo | null = null;
     if (xml)
       try {
-        info = parseMaterialXml(text.decode(yield xml));
+        const s = text.decode(yield xml);
+        // 그림이 하나뿐이면 PBR 그림 파일이 있을 때만 재질 정보를 다 푼다(고를 그림이 하나라 무늬 그림 이름이 필요 없다 — 2025+ 재질은 거의 모두 꺼진 PBR 꼬리표를 둔다)
+        if (f.images.length > 1 || pbrFiles(parseMaterialPbr(s)).length) info = parseMaterialXml(s);
         const file = info?.texture?.file;
         const hit = file ? f.images.find((it) => fileOf(it) === file) : undefined;
         if (hit) pick = hit;
         else if (!file && info?.pbr) {
-          // 56차: 색 무늬 없는 PBR 재질의 견본은 PBR 그림(법선 그림 등)이 아닌 그림(재질 미리보기)으로
+          // 56차: 색 무늬 없는 PBR 재질의 견본은 PBR 그림(법선 그림 등)이 아닌 그림(재질 미리보기)으로.
+          // 57차: 그런 그림이 없으면(폴더 그림이 모두 PBR 그림) 견본 그림을 두지 않는다 — 재질 목록은 재질 색을 보인다
           const maps = new Set(pbrFiles(info.pbr).map((x) => x[1]));
-          pick = f.images.find((it) => !maps.has(fileOf(it))) ?? pick;
+          pick = maps.size ? f.images.find((it) => !maps.has(fileOf(it))) : pick;
         }
       } catch {
         /* 첫 그림 */
       }
-    want.push({ item: pick, kind: 'material', name: fileOf(pick), folder });
+    if (pick) want.push({ item: pick, kind: 'material', name: fileOf(pick), folder });
     // 55차: 무늬(색 그림)가 있는 재질의 PBR 그림(법선·거칠기·금속) — 무늬 좌표는 색 무늬와 같다. 56차: 색 무늬 없이 PBR 그림만 있는 재질도
     // 그림 한 장 크기(<mat:pbrMR xScale yScale> — pbr.tile)가 있으면 넣는다(장면이 그 크기로 무늬 좌표만 만든다). 그림 하나가 여러 쓰임이면 한 번만 읽는다
     if (info?.texture || info?.pbr?.tile) {
