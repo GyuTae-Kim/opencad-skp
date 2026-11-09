@@ -4,8 +4,10 @@
  * 워커의 PBR 그림 떼기(휴대 기기·무늬 좌표를 잃은 그물), 놓기의 raw 쥐기(견본 주소는 그대로).
  * 꼬리표 이름·값은 이 컴퓨터의 2025+ 표본 material.xml 꼴을 따른다(실제 파일은 저장소에 넣지 않는다).
  */
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { Viewer3d } from 'opencad-viewer3d';
 import type { Mesh3d, Scene3d } from 'opencad-viewer3d/types';
+import { installDom } from './fakegl/fakedom';
 import { readSkpImages, skpToScene, type SkpTextureInfo } from '../src/index';
 import { parseMaterialPbr, parseMaterialXml } from '../src/materials';
 import { dropPbrMaps, dropTexture, needsDecode, PBR_MIN_TEXTURE_LIMIT } from '../src/worker/textures';
@@ -47,13 +49,17 @@ const texturedPbr = (name: string, file: string, block: string): string =>
 const plainPbr = (name: string, block: string): string =>
   `<?xml version="1.0" encoding="UTF-8" standalone="no" ?>\n<materialDocument>\n  <mat:material name="${name}" type="0" colorRed="90" colorGreen="90" colorBlue="95" colorizeType="0" trans="1" useTrans="0" hasTexture="0">\n${block}  </mat:material>\n</materialDocument>\n`;
 
-/** 재질: 1 금속판(무늬 + 법선·거칠기·금속 그림), 2 금속(무늬 없음 — 값만), 3 보통(무늬, PBR 모두 끔), 4 같은그림(거칠기·금속 한 그림), 5 빠짐(그림 없는 칸 + 값) */
+/**
+ * 재질: 1 금속판(무늬 + 법선·거칠기·금속 그림), 2 금속(무늬 없음 — 값만), 3 보통(무늬, PBR 모두 끔), 4 같은그림(거칠기·금속 한 그림), 5 빠짐(그림 없는 칸 + 값),
+ * 6 법선만(56차 — 색 무늬 없이 법선·거칠기 그림, 그림 한 장 20 × 5 인치, 폴더에 재질 미리보기 그림도 — 표본 꼴)
+ */
 const MATS: [number, string][] = [
   [1, '금속판'],
   [2, '금속'],
   [3, '보통'],
   [4, '같은그림'],
   [5, '빠짐'],
+  [6, '법선만'],
 ];
 const XMLS: [string, string][] = [
   [
@@ -68,6 +74,13 @@ const XMLS: [string, string][] = [
   ['보통', texturedPbr('보통', 'b.png', pbrBlock({ rough: { on: false, file: 'off.png' } }))],
   ['같은그림', texturedPbr('같은그림', 'c.png', pbrBlock({ metal: { on: true, file: 'rm.png' }, rough: { on: true, file: 'rm.png' }, normal: { on: true, file: 'cn.png', style: 0 } }))],
   ['빠짐', texturedPbr('빠짐', 'd.png', pbrBlock({ metal: { on: true, factor: 0.5 }, rough: { on: true, file: 'gone.png' }, normal: { on: true, file: 'gone-n.png' } }))],
+  [
+    '법선만',
+    plainPbr('법선만', pbrBlock({ rough: { on: true, factor: 0.7, file: 'pr.png' }, normal: { on: true, file: 'pn.png', style: 0 } })).replace(
+      'xScale="10" yScale="10"',
+      'xScale="20" yScale="5"',
+    ),
+  ],
 ];
 const png = (seed: number): Uint8Array => pngRgb(2, 2, (x, y) => [x * 100 + seed, y * 100, seed * 3]);
 const IMGS = [
@@ -81,6 +94,9 @@ const IMGS = [
   ['같은그림/rm.png', 8],
   ['같은그림/cn.png', 9],
   ['빠짐/d.png', 10],
+  ['법선만/pn.png', 11],
+  ['법선만/pr.png', 12],
+  ['법선만/thumbnail.png', 13],
 ].map(([n, s]) => ({ name: `materials/${n}`, data: png(s as number) }));
 
 /** 10 × 10 인치 정사각형 면 하나(재질 mat, 기본 무늬 투영)인 정의 */
@@ -128,9 +144,13 @@ describe('material.xml <mat:pbrMR>', () => {
       metallic: { factor: 1, file: 'm.png' },
       roughness: { factor: 0.6, file: 'r.png', invert: true },
       normal: { file: 'n.png', scale: 0.5, directX: true },
+      tile: { width: 10, height: 10 },
     });
-    // 값만(법선은 켰어도 그림이 없으면 없음)
+    // 값만(법선은 켰어도 그림이 없으면 없음) — 그림이 없으면 그림 한 장 크기도 두지 않는다
     expect(parseMaterialPbr(XMLS[1]![1])).toEqual({ metallic: { factor: 0.3 }, roughness: { factor: 0.25, invert: false } });
+    // 56차: 색 무늬 없는 재질도 그림이 있으면 <mat:pbrMR xScale yScale>을 그림 한 장 크기로
+    expect(parseMaterialPbr(XMLS[5]![1])).toEqual({ roughness: { factor: 0.7, file: 'pr.png', invert: false }, normal: { file: 'pn.png', scale: 1, directX: false }, tile: { width: 20, height: 5 } });
+    expect(parseMaterialXml(XMLS[5]![1])!.texture).toBeUndefined();
     // 모두 끔(SketchUp이 거의 모든 재질에 적는 기본 꼴) → 없음, 재질 정보에도 칸이 없다
     expect(parseMaterialPbr(XMLS[2]![1])).toBeUndefined();
     expect(parseMaterialXml(XMLS[2]![1])!.pbr).toBeUndefined();
@@ -145,19 +165,28 @@ describe('material.xml <mat:pbrMR>', () => {
       '<mat:enable_roughness>1</mat:enable_roughness><mat:roughnessFactor>abc</mat:roughnessFactor>' +
       '<mat:enable_normal>1</mat:enable_normal><mat:normal_texture><mat:image path="./n2.png"/></mat:normal_texture><mat:normalScale>-2</mat:normalScale></mat:pbrMR>';
     expect(parseMaterialPbr(odd)).toEqual({ metallic: { factor: 1 }, roughness: { factor: 1, invert: false }, normal: { file: 'n2.png', scale: 0, directX: true } });
+    // 그림 한 장 크기가 0·음수·글이면 두지 않는다
+    for (const bad of ['xScale="0" yScale="5"', 'xScale="-1" yScale="5"', 'xScale="a" yScale="5"', 'yScale="5"'])
+      expect(parseMaterialPbr(odd.replace('<mat:pbrMR>', `<mat:pbrMR ${bad}>`))!.tile, bad).toBeUndefined();
+    expect(parseMaterialPbr(odd.replace('<mat:pbrMR>', '<mat:pbrMR xScale="3.5" yScale="7">'))!.tile).toEqual({ width: 3.5, height: 7 });
   });
 });
 
 describe('꾸러미의 PBR 그림', () => {
-  it('무늬 재질의 켠 그림만, 같은 그림은 쓰임을 합쳐 한 번 — 다른 그림·경고는 예전과 같다', () => {
+  it('무늬 재질(56차부터 그림 한 장 크기가 있는 색 무늬 없는 재질도)의 켠 그림만, 같은 그림은 쓰임을 합쳐 한 번 — 다른 그림·경고는 예전과 같다', () => {
     const img = readSkpImages(file());
+    // 색 무늬 없는 PBR 재질의 견본은 PBR 그림이 아닌 그림(재질 미리보기 — 꾸러미 차례로는 법선 그림이 먼저)
     expect(img.materials.map((m) => [m.folder, m.name])).toEqual([
       ['금속판', 'a.png'],
       ['보통', 'b.png'],
       ['같은그림', 'c.png'],
       ['빠짐', 'd.png'],
+      ['법선만', 'thumbnail.png'],
     ]);
+    // 색 무늬 없는 재질의 PBR 그림이 먼저(그 재질에는 유일한 결), 그다음 무늬 재질의 PBR 그림(꾸러미 차례)
     expect(img.pbr!.map((p) => [p.folder, p.name, p.roles])).toEqual([
+      ['법선만', 'pn.png', ['normal']],
+      ['법선만', 'pr.png', ['roughness']],
       ['금속판', 'n.png', ['normal']],
       ['금속판', 'r.png', ['roughness']],
       ['금속판', 'm.png', ['metallic']],
@@ -173,8 +202,8 @@ describe('꾸러미의 PBR 그림', () => {
     const all = readSkpImages(file());
     const some = readSkpImages(file(), { maxCount: all.materials.length + 2 });
     expect(some.materials.length).toBe(all.materials.length);
-    expect(some.pbr!.length).toBe(2);
-    expect(some.pbrSkipped).toBe(3);
+    expect(some.pbr!.map((p) => p.name)).toEqual(['pn.png', 'pr.png']);
+    expect(some.pbrSkipped).toBe(5);
     expect(some.skipped).toBe(0);
     expect(some.warnings).toEqual([]);
   });
@@ -220,6 +249,8 @@ describe('장면의 PBR 무늬·그물 필드', () => {
       'skp-pbr-1-metallic',
       'skp-pbr-4-normal',
       'skp-pbr-4-roughness-metallic',
+      'skp-pbr-6-normal',
+      'skp-pbr-6-roughness',
     ]);
     const nrm = s.textures!.find((t) => t.id === 'skp-pbr-1-normal')!;
     expect(nrm.data).toBe(img.pbr!.find((p) => p.name === 'n.png')!.bytes);
@@ -242,13 +273,46 @@ describe('장면의 PBR 무늬·그물 필드', () => {
     expect(s.meta!.materialStats).toEqual(base.meta!.materialStats);
   });
 
-  it('PBR 그림을 주지 않으면 그림 칸은 없고 값만 — 색 무늬·그물 배열은 같다', () => {
+  it('56차 색 무늬 없는 PBR 재질: 그 그림이 쓸 무늬 좌표만(무늬 id 없음 — 한 장 크기는 <mat:pbrMR xScale yScale>), 그림 칸·정보의 한 장 크기도 그 값', () => {
+    const { s } = open();
+    const m = meshOf(s, '법선만');
+    expect(m.texture).toBeUndefined();
+    expect(m.backTexture).toBeUndefined();
+    expect(m.backUvs).toBeUndefined();
+    expect(pbrOf(m)).toEqual({ normalTexture: 'skp-pbr-6-normal', roughnessTexture: 'skp-pbr-6-roughness', roughness: 0.7 });
+    // 10 × 10 인치 정사각형(z = 0, 기본 투영) ÷ 한 장 20 × 5 인치 → u 0~0.5, v 0~2
+    const uv = Array.from(m.uvs!);
+    expect(uv.length).toBe((m.positions.length / 3) * 2);
+    const us = uv.filter((_, i) => i % 2 === 0);
+    const vs = uv.filter((_, i) => i % 2 === 1);
+    expect(Math.max(...us) - Math.min(...us)).toBeCloseTo(0.5, 6);
+    expect(Math.max(...vs) - Math.min(...vs)).toBeCloseTo(2, 6);
+    const infos = s.meta!.textures as SkpTextureInfo[];
+    expect(infos.find((t) => t.id === 'skp-pbr-6-normal')).toEqual({
+      id: 'skp-pbr-6-normal',
+      material: '법선만',
+      folder: '법선만',
+      path: 'materials/법선만/pn.png',
+      tile: [20, 5],
+      alphaPossible: false,
+      pbr: ['normal'],
+    });
+    // 색 무늬 목록·재질 통계에는 무늬가 없다(무늬 좌표만 만드는 재질은 장면 무늬가 아니다)
+    expect(infos.some((t) => t.id.startsWith('skp-uv-'))).toBe(false);
+    expect((s.meta!.materialStats as { name: string; texture?: string }[]).find((x) => x.name === '법선만')!.texture).toBeUndefined();
+  });
+
+  it('PBR 그림을 주지 않으면 그림 칸은 없고 값만 — 색 무늬·그물 배열은 같다(색 무늬 없는 PBR 재질은 무늬 좌표도 없다)', () => {
     const { s } = open({ pbr: false });
     expect(s.textures!.map((t) => t.id)).toEqual(['skp-tex-1', 'skp-tex-3', 'skp-tex-4', 'skp-tex-5']);
     expect(pbrOf(meshOf(s, '금속판'))).toEqual({});
     expect(pbrOf(meshOf(s, '금속'))).toEqual({ roughness: 0.25, metallic: 0.3 });
+    expect(pbrOf(meshOf(s, '법선만'))).toEqual({});
+    expect(meshOf(s, '법선만').uvs).toBeUndefined();
     const full = open().s;
-    expect(s.meshes.map((m) => [m.id, m.positions, m.uvs, m.texture])).toEqual(full.meshes.map((m) => [m.id, m.positions, m.uvs, m.texture]));
+    const arrays = (x: Scene3d): unknown[] => x.meshes.filter((m) => !m.name?.startsWith('법선만')).map((m) => [m.id, m.positions, m.uvs, m.texture]);
+    expect(arrays(s)).toEqual(arrays(full));
+    expect(s.meshes.map((m) => [m.id, m.positions])).toEqual(full.meshes.map((m) => [m.id, m.positions]));
   });
 
   it('2025 이전 꼴(PBR 꼬리표 없음)·그림을 넘기지 않은 장면은 예전과 같다', () => {
@@ -274,7 +338,11 @@ describe('워커·놓기의 PBR 그림', () => {
     expect(textureLimitsFor({ coarse: true, narrow: true }).limit).toBeLessThan(PBR_MIN_TEXTURE_LIMIT);
     expect(textureLimitsFor({ deviceMemory: 2 }).limit).toBeLessThan(PBR_MIN_TEXTURE_LIMIT);
     const s = scene();
-    expect(dropPbrMaps(s)).toBe(5);
+    expect(meshOf(s, '법선만').uvs).toBeDefined();
+    expect(dropPbrMaps(s)).toBe(7);
+    // 56차: 색 무늬 없이 PBR 그림만 쓰던 그물은 무늬 좌표도 지운다(무늬 좌표는 그 그림만 썼다), 색 무늬 그물은 그대로
+    expect(meshOf(s, '법선만').uvs).toBeUndefined();
+    expect(meshOf(s, '금속판').uvs).toBeDefined();
     expect(s.meshes.every((m) => !m.normalTexture && !m.roughnessTexture && !m.metallicTexture && m.normalScale === undefined && m.roughnessInvert === undefined)).toBe(true);
     expect(pbrOf(meshOf(s, '금속판'))).toEqual({});
     expect(pbrOf(meshOf(s, '금속'))).toEqual({ roughness: 0.25, metallic: 0.3 });
@@ -290,8 +358,16 @@ describe('워커·놓기의 PBR 그림', () => {
     const m = meshOf(s, '금속판');
     expect(m.uvs).toBeUndefined();
     expect(pbrOf(m)).toEqual({});
-    expect(s.textures!.map((t) => t.id)).toEqual(['skp-tex-3', 'skp-tex-4', 'skp-tex-5', 'skp-pbr-4-normal', 'skp-pbr-4-roughness-metallic']);
+    expect(s.textures!.map((t) => t.id)).toEqual(['skp-tex-3', 'skp-tex-4', 'skp-tex-5', 'skp-pbr-4-normal', 'skp-pbr-4-roughness-metallic', 'skp-pbr-6-normal', 'skp-pbr-6-roughness']);
     expect(pbrOf(meshOf(s, '같은그림')).roughnessTexture).toBe('skp-pbr-4-roughness-metallic');
+    // 색 무늬 없는 PBR 재질: 그림 하나를 빼면(풀지 못함) 남은 그림이 좌표를 쓴다, 둘 다 빼면 좌표도 지운다
+    dropTexture(s, 'skp-pbr-6-normal');
+    expect(pbrOf(meshOf(s, '법선만'))).toEqual({ roughnessTexture: 'skp-pbr-6-roughness', roughness: 0.7 });
+    expect(meshOf(s, '법선만').uvs).toBeDefined();
+    dropTexture(s, 'skp-pbr-6-roughness');
+    expect(pbrOf(meshOf(s, '법선만'))).toEqual({});
+    expect(meshOf(s, '법선만').uvs).toBeUndefined();
+    expect(meshOf(s, '같은그림').uvs).toBeDefined();
   });
 
   it('놓기: PBR 그림도 raw로 쥐되 재질 목록 견본 주소는 바꾸지 않는다(같은 폴더의 색 그림이 견본)', () => {
@@ -315,6 +391,8 @@ describe('워커·놓기의 PBR 그림', () => {
       ['skp-pbr-1-metallic', true, 'image/png'],
       ['skp-pbr-4-normal', true, 'image/png'],
       ['skp-pbr-4-roughness-metallic', true, 'image/png'],
+      ['skp-pbr-6-normal', true, 'image/png'],
+      ['skp-pbr-6-roughness', true, 'image/png'],
     ]);
     // 견본은 색 그림의 Blob 주소로만 바뀐다(PBR 그림이 뒤에 와도 덮지 않는다)
     const a = images.materials.get('금속판')!.url;
@@ -325,5 +403,34 @@ describe('워커·놓기의 PBR 그림', () => {
     expect(held.find((h) => h.id === 'skp-tex-1')!.raw).toBe(true);
     expect(colorBlob.size).toBe(s.textures!.find((t) => t.id === 'skp-tex-1')!.data!.length);
     for (const u of images.urls) URL.revokeObjectURL(u);
+  });
+});
+
+describe('코어에 올리기(가짜 WebGL2 — 56차 색 무늬 없는 PBR 재질)', () => {
+  let dom: ReturnType<typeof installDom>;
+  beforeAll(() => {
+    dom = installDom();
+  });
+  afterAll(() => dom.restore());
+
+  it('무늬 그림 없이 PBR 그림만 단 그물도 코어가 무늬 좌표를 GPU에 올리고, PBR 그림을 떼면(휴대 기기) 무늬 좌표도 없다', () => {
+    const bytes = file();
+    const img = readSkpImages(bytes);
+    const s = skpToScene(bytes, { textures: img.materials, pbrTextures: img.pbr });
+    const m = meshOf(s, '법선만');
+    const only = (x: Scene3d): Scene3d => ({ ...x, meshes: x.meshes.filter((y) => y.name?.startsWith('법선만')), lines: [], textures: (x.textures ?? []).filter((t) => t.id.startsWith('skp-pbr-6-')) });
+    const v = new Viewer3d(dom.host() as unknown as HTMLElement, { animate: false, keyboard: false, viewCube: false, grid: false });
+    try {
+      v.setScene(only(s));
+      v.renderNow();
+      expect(v.stats.buffers.uvs).toBe(m.uvs!.byteLength);
+      expect(v.stats.buffers.uvs).toBeGreaterThan(0);
+      dropPbrMaps(s);
+      v.setScene(only(s));
+      v.renderNow();
+      expect(v.stats.buffers.uvs).toBe(0);
+    } finally {
+      v.dispose();
+    }
   });
 });

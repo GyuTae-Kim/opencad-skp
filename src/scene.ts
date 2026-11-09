@@ -292,6 +292,11 @@ export interface SceneTexture {
   id: string;
   w: number;
   h: number;
+  /**
+   * 56차: 색 무늬 없이 PBR 그림만 있는 재질 — 앞면 무늬 좌표만 만들고 그물에 무늬 id(texture)는 달지 않는다(PBR 그림이 그 좌표를 쓴다).
+   * 뒷면에는 무늬 좌표를 만들지 않는다(코어 PBR은 앞면 재질만)
+   */
+  uvOnly?: boolean;
 }
 
 /**
@@ -633,6 +638,8 @@ export function prepare(
     const { mat, back, corners: c, faces: f } = s;
     const own = tex && mat >= 0 ? tex.tile(mat) : undefined;
     const ownBack = tex && back >= 0 ? tex.tile(back) : undefined;
+    // 무늬 좌표만 만드는 재질(uvOnly — 56차)은 뒷면 좌표가 없다
+    const buv = !!ownBack && !ownBack.uvOnly;
     const g: FaceGroup = {
       mat,
       back,
@@ -646,7 +653,7 @@ export function prepare(
       nrm: smooth ? new F32(3 * c) : null,
       smoothed: false,
       uv: own ? new F64(3 * c) : null,
-      buv: ownBack ? new F64(3 * c) : null,
+      buv: buv ? new F64(3 * c) : null,
       plane: tex?.plane && (mat < 0 || back < 0) ? new F32(2 * c) : null,
       ft: new U32(f),
     };
@@ -1906,7 +1913,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   };
   /** back: 앞과 다른 뒷면 재질(undefined = 스타일 뒷면 색), null = 뒷면도 앞면 재질 */
   const newBack = (back: number | undefined | null): BackSide | null =>
-    back === null ? null : { mat: back, uv: back !== undefined && texMap?.has(back) ? new F32() : null, uvStride: 2 };
+    back === null ? null : { mat: back, uv: back !== undefined && texMap?.has(back) && !texMap.get(back)!.uvOnly ? new F32() : null, uvStride: 2 };
   const faceBucket = (
     slot: number,
     cls: number,
@@ -2927,12 +2934,13 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     const t = bk.uv && bk.mat !== undefined ? texMap?.get(bk.mat) : undefined;
     if (t && bk.uv!.n === nv * bk.uvStride) {
       mesh.uvs = bk.uv!.done();
-      mesh.texture = t.id;
+      // 56차: 무늬 좌표만 만드는 재질(PBR 그림만)은 무늬 id 없이
+      if (!t.uvOnly) mesh.texture = t.id;
     }
     // PBR(55차): 값은 그 재질 그물 모두, 그림은 앞면 무늬 좌표를 단 그물만
     const pb = bk.mat !== undefined ? pbrMap?.get(bk.mat) : undefined;
     if (pb?.values) Object.assign(mesh, pb.values);
-    if (pb?.maps && mesh.texture) Object.assign(mesh, pb.maps);
+    if (pb?.maps && mesh.uvs) Object.assign(mesh, pb.maps);
     const back = bk.back;
     if (!back) return;
     mesh.backColor = back.mat !== undefined ? colorOf(back.mat) : defaultBack!;

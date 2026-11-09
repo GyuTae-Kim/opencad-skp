@@ -375,6 +375,14 @@ function sceneFrom(read: Package | Scene3d, st: Start, opts: SkpOptions): Scene3
     sceneTex.set(id, { id: `skp-tex-${id}`, w: info.texture.width, h: info.texture.height });
     texByMat.set(id, { folder, info, img });
   }
+  // 56차: 색 무늬 없이 PBR 그림만 있는 재질은 그 그림을 받았으면 무늬 좌표만 만든다(그물에 무늬 id는 달지 않는다 — 코어 0.43.0은 무늬 그림이 없어도
+  // PBR 그림이 있으면 무늬 좌표를 올린다). 한 장 크기는 <mat:pbrMR xScale yScale>
+  const pbrFolders = new Set((opts.pbrTextures ?? []).map((p) => p.folder));
+  for (const [id, folder] of model.materials) {
+    const info = materials.get(folder);
+    const tile = info?.pbr?.tile;
+    if (tile && !info.texture && pbrFolders.has(folder)) sceneTex.set(id, { id: `skp-uv-${id}`, w: tile.width, h: tile.height, uvOnly: true });
+  }
   const { pbr: scenePbr, sources: pbrSources } = pbrFor(model.materials, materials, sceneTex, opts.pbrTextures);
   // 모형 스타일(렌더링 설정 + 그 스타일의 style.xml): 재질 없는 면은 스타일 앞면 색으로 칠한다(SketchUp 기본 화면처럼)
   let style: ReturnType<typeof styleFor>;
@@ -458,7 +466,7 @@ function sceneFrom(read: Package | Scene3d, st: Start, opts: SkpOptions): Scene3
     const textures: Texture3d[] = [];
     const infos: SkpTextureInfo[] = [];
     for (const [id, t] of sceneTex) {
-      if (!used.has(t.id)) continue;
+      if (t.uvOnly || !used.has(t.id)) continue;
       const { folder, info, img } = texByMat.get(id)!;
       const head = imageInfo(img.bytes);
       const tex: Texture3d = { id: t.id, data: img.bytes, mime: img.mime };
@@ -756,7 +764,8 @@ type PbrImage = NonNullable<SkpImages['pbr']>[number];
 
 /**
  * PBR 재질(SkpMaterialInfo.pbr — <mat:pbrMR>에서 켠 칸) → 재질 번호마다 그물 PBR 필드와 쓸 그림(55차, 코어 0.43.0).
- * - 법선·거칠기·금속 그림은 무늬를 입힌 재질(sceneTex — 색 무늬와 같은 무늬 좌표)이고 그 그림을 받았을 때만: 그림 id와 배율(배율 1·OpenGL 꼴·뒤집지 않음은 코어 기본이라 뺀다).
+ * - 법선·거칠기·금속 그림은 무늬를 입힌 재질(sceneTex — 색 무늬와 같은 무늬 좌표, 56차부터 색 무늬 없이 무늬 좌표만 만드는 uvOnly 재질도)이고
+ *   그 그림을 받았을 때만: 그림 id와 배율(배율 1·OpenGL 꼴·뒤집지 않음은 코어 기본이라 뺀다).
  *   SketchUp 그림은 거칠기·금속이 따로라 metallicRoughnessTexture가 아니라 roughnessTexture·metallicTexture(코어는 초록·파랑 채널 — 회색조 그림이면 그대로).
  * - 그림이 없는 거칠기·금속 칸은 값(roughness·metallic — 그 재질 그물 모두). 그림이 있어야 할 칸인데 그림을 받지 못했으면(한도·무늬 없는 재질) 그 칸은 뺀다.
  * 그림 id는 재질 번호와 쓰임(skp-pbr-<번호>-<쓰임들>) — 같은 그림을 여러 쓰임에 쓰면 하나

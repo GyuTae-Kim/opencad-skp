@@ -70,12 +70,21 @@ function unsetPbrMap(m: Mesh3d, field: 'normalTexture' | 'roughnessTexture' | 'm
 
 const PBR_FIELDS = ['normalTexture', 'roughnessTexture', 'metallicTexture'] as const;
 
+/** 56차: 색 무늬 없이 PBR 그림만 쓰던 그물이 그림을 모두 잃으면 무늬 좌표도 지운다(그 좌표는 PBR 그림만 썼다) */
+function dropBareUvs(m: Mesh3d): void {
+  if (m.uvs && !m.texture && !PBR_FIELDS.some((f) => m[f] !== undefined)) delete m.uvs;
+}
+
 /**
  * 55차: 그물의 PBR 그림을 뗀다 — which가 참인 그물(기본 모두)의 그림과 그 배율·꼴 칸(값만 준 거칠기·금속은 둔다).
  * 그 뒤 어느 그물도 쓰지 않는 PBR 그림은 장면·meta.textures에서 뺀다. 뺀 그림 수를 돌려준다
  */
 export function dropPbrMaps(scene: Scene3d, which: (m: Mesh3d) => boolean = () => true): number {
-  for (const m of scene.meshes) if (which(m)) for (const f of PBR_FIELDS) if (m[f] !== undefined) unsetPbrMap(m, f);
+  for (const m of scene.meshes)
+    if (which(m)) {
+      for (const f of PBR_FIELDS) if (m[f] !== undefined) unsetPbrMap(m, f);
+      dropBareUvs(m);
+    }
   const infos = (scene.meta?.textures ?? []) as SkpTextureInfo[];
   const pbrIds = new Set(infos.filter((t) => t.pbr).map((t) => t.id));
   if (!pbrIds.size || !scene.textures) return 0;
@@ -108,6 +117,7 @@ export function dropTexture(scene: Scene3d, id: string): void {
       delete m.backUvs;
     }
     for (const f of PBR_FIELDS) if (m[f] === id) unsetPbrMap(m, f);
+    dropBareUvs(m);
   }
   const infos = (scene.meta?.textures ?? []) as SkpTextureInfo[];
   if (scene.meta) scene.meta.textures = infos.filter((t) => t.id !== id);
