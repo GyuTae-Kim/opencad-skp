@@ -964,9 +964,10 @@ export function partOfPick(d: SkpDoc): 'face' | 'edge' | null {
 
 /**
  * 고르기 결과 → 고른 것. 면·모서리 방식이면 누른 면·모서리 하나를, 나무가 있으면 펼친 단계(또는 deepest면 가장 안쪽)의 노드를,
- * 없으면 예전처럼 윗단계 항목 전체를 고른다.
+ * 없으면 예전처럼 윗단계 항목 전체를 고른다. cycle(56차 — 가상 커서로 돌린 둘째 이후 후보, onPick e.cycle)은 펼친 단계를 건너뛰고 그 후보 그대로
+ * (면·모서리 방식이면 그 면·모서리, 아니면 그것을 낸 가장 안쪽 노드 — 펼친 단계로 올리면 뒤의 후보가 앞 후보와 같은 그룹이 되기 쉽다)
  */
-export function selectionForPick(d: SkpDoc, p: Pick3d | null, deepest = false): Selection | null {
+export function selectionForPick(d: SkpDoc, p: Pick3d | null, deepest = false, cycle = false): Selection | null {
   if (!p) return null;
   if (d.pickMode === 'face' && !deepest) {
     const fe = faceOrEdgeSelection(d, p);
@@ -977,7 +978,7 @@ export function selectionForPick(d: SkpDoc, p: Pick3d | null, deepest = false): 
     if (n < 0) {
       const loose = d.outline.findIndex((r) => r.kind === 'loose');
       if (loose >= 0) return { kind: 'outline', index: loose };
-    } else return nodeSelection(d, levelNode(d.tree, n, d.expanded, deepest ? 'deepest' : d.pickMode));
+    } else return nodeSelection(d, levelNode(d.tree, n, d.expanded, deepest || cycle ? 'deepest' : d.pickMode));
   }
   const i = d.itemOutline.get(p.id);
   if (i !== undefined) return { kind: 'outline', index: i };

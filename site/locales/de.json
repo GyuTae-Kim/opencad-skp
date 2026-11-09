@@ -1098,5 +1098,21 @@
   "3D 보기: 고르기 번호가 {0}개 모자란 묶음은 뒤쪽을 배열 차례로 고릅니다": "3D-Ansicht: Einer Gruppe fehlen {0} Auswahlnummern; der Rest wird nach Array-Reihenfolge ausgewählt",
   "3D 보기: 같은 이름의 형상 묶음이 또 있어 이름으로 찾는 기능은 하나만 봅니다": "3D-Ansicht: Eine weitere Geometriegruppe hat denselben Namen, daher findet die Suche nach Namen nur eine davon",
   "주변 가림(구석·틈 어둡게)": "Umgebungsverdeckung (Winkel und Fugen abdunkeln)",
-  "움직이는 동안 주변 가림 끄기": "Umgebungsverdeckung während der Bewegung ausschalten"
+  "움직이는 동안 주변 가림 끄기": "Umgebungsverdeckung während der Bewegung ausschalten",
+  "가상 커서를 켰습니다. {0}. {1}": "Virtueller Cursor an. {0}. {1}",
+  "가상 커서를 껐습니다": "Virtueller Cursor aus",
+  "{0} (후보 하나)": "{0} (einziger Kandidat)",
+  "고를 것이 없습니다": "Nichts zum Auswählen",
+  "골랐습니다: {0}": "{0} ausgewählt",
+  "빈 곳을 골랐습니다": "Leere Stelle ausgewählt",
+  "옮기기 ←→↑↓": "Bewegen ←→↑↓",
+  "후보 Tab": "Nächster Kandidat Tab",
+  "고르기 Enter": "Auswählen Enter",
+  "끄기 Esc": "Beenden Esc",
+  "잘린 면": "Schnittfläche",
+  "3D 보기 키보드 고르기": "Tastaturauswahl in der 3D-Ansicht",
+  "3D 보기에 초점이 있을 때(줄자·각도기를 끈 동안): 가상 커서 켜기·옮기기(Shift와 함께면 크게)": "Mit Fokus auf der 3D-Ansicht (Maßband und Winkelmesser aus): virtuellen Cursor einschalten und bewegen (mit Shift in größeren Schritten)",
+  "가상 커서를 켠 동안: 커서 자리에 겹친 면·모서리를 앞에서부터 차례로(앞 면 뒤의 것까지)": "Bei eingeschaltetem virtuellem Cursor: die unter dem Cursor übereinanderliegenden Flächen und Kanten von vorn nach hinten durchgehen (auch die hinter der vorderen Fläche)",
+  "가상 커서를 켠 동안: 지금 차례의 것 고르기(둘째부터는 펼친 단계와 상관없이 그것을 낸 가장 안쪽 그룹·컴포넌트)": "Bei eingeschaltetem virtuellem Cursor: das aktuelle Element auswählen (ab dem zweiten die innerste Gruppe oder Komponente, zu der es gehört, unabhängig von der aufgeklappten Ebene)",
+  "가상 커서 끄기(그 뒤 Tab은 초점 이동, 한 번 더 누르면 고른 것 지우기)": "Virtuellen Cursor ausschalten (danach verschiebt Tab den Fokus; erneut drücken hebt die Auswahl auf)"
 }

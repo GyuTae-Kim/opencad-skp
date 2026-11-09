@@ -16,12 +16,21 @@ type Core = typeof import('opencad-viewer3d');
 type Measure = typeof import('./measure');
 type Release = typeof import('./release');
 type Sections = typeof import('./sections');
+type KeyPicking = typeof import('./keypick');
+type SunLight = typeof import('./sun');
 
 /**
  * 파일 단면 → 코어 평면 계산(sections.ts — 55차: 구간 단면을 더하며 첫 화면 조각에서 뺐다). 코어 입구와 함께 받아 두므로
  * 뷰어가 있으면 늘 있다(단면은 뷰어가 있어야 쓴다). 받기 전에는 null
  */
 export let fileSections: Sections | null = null;
+/** 3D 보기 키보드 고르기(keypick.ts — 56차, 가상 커서·겹친 것 고르기 돌리기). fileSections처럼 코어 입구와 함께 받는다(받기 전에는 null) */
+export let keyPicking: KeyPicking | null = null;
+/**
+ * 해 조명·안개 계산(sun.ts — 56차: 키보드 고르기를 더하며 첫 화면 조각에서 뺐다). 조명은 뷰어가 있어야 걸므로 코어 입구와 함께 받는다(받기 전에는 null —
+ * 상태 보내기의 해 자리도 null)
+ */
+export let sunLight: SunLight | null = null;
 
 /** import()를 한 번만 부르는 받기: 받는 동안·받은 뒤에는 같은 약속을 주고, 받지 못하면 비워 다음 부름에서 다시 받는다 */
 export function onceImport<T>(load: () => Promise<T>): () => Promise<T> {
@@ -43,9 +52,11 @@ export function onceImport<T>(load: () => Promise<T>): () => Promise<T> {
  * (54차: 첫 화면이 바로 가져오던 것을 뺐다 — 코어 0.44.0 손가락 큐브로 커진 모듈이 첫 화면 조각에 실렸다. 뷰어를 만들기 전에 옮기므로 큐브는 처음부터 그 언어로 그린다)
  */
 export const loadViewerCore: () => Promise<Core> = onceImport(() =>
-  Promise.all([import('opencad-viewer3d'), import('opencad-viewer3d/viewcube'), import('./sections')]).then(([core, cube, sections]) => {
+  Promise.all([import('opencad-viewer3d'), import('opencad-viewer3d/viewcube'), import('./sections'), import('./keypick'), import('./sun')]).then(([core, cube, sections, keys, sun]) => {
     localizeCubeFaces(cube.CUBE_FACES);
     fileSections = sections;
+    keyPicking = keys;
+    sunLight = sun;
     return core;
   }),
 );

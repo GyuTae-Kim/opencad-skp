@@ -43,7 +43,7 @@ export interface SkpImages {
   skipped: number;
   warnings: string[];
   /**
-   * 무늬 재질의 PBR 그림(material.xml <mat:pbrMR>에서 켠 법선·거칠기·금속 그림 — 55차). 2021+ 꾸러미에서 무늬(색 그림)가 있는 재질만, 다른 그림을 다 넣은 뒤
+   * 무늬 재질의 PBR 그림(material.xml <mat:pbrMR>에서 켠 법선·거칠기·금속 그림 — 55차). 2021+ 꾸러미에서 무늬(색 그림)가 있는 재질(56차부터 색 무늬 없이 그림 한 장 크기가 있는 재질도)만, 다른 그림을 다 넣은 뒤
    * 남은 한도 안에서. 그림 하나가 여러 쓰임이면 roles가 여럿. 없으면 칸이 없다(앱 워커는 화면에 넘기기 전에 이 칸을 뗀다 — 바이트는 장면 무늬가 든다)
    */
   pbr?: (SkpImage & { folder: string; roles: SkpPbrRole[] })[];
@@ -186,7 +186,8 @@ export function* zipImageReads(
   const maxTotal = opts.maxTotalBytes ?? MAX_IMAGE_TOTAL;
 
   type Kind = 'model' | 'preview' | 'material' | 'component' | 'scene' | 'pbr';
-  const want: { item: ZipItem; kind: Kind; name: string; folder?: string; roles?: SkpPbrRole[] }[] = [];
+  /** rank: 같은 종류 안의 차례(작은 것이 먼저 — PBR 그림만 쓴다) */
+  const want: { item: ZipItem; kind: Kind; name: string; folder?: string; roles?: SkpPbrRole[]; rank?: number }[] = [];
   /** 재질 폴더 → 그림 후보(꾸러미 차례)·material.xml */
   const folders = new Map<string, { images: ZipItem[]; xml?: ZipItem }>();
   for (const item of dir) {
@@ -229,13 +230,18 @@ export function* zipImageReads(
         const file = info?.texture?.file;
         const hit = file ? f.images.find((it) => fileOf(it) === file) : undefined;
         if (hit) pick = hit;
+        else if (!file && info?.pbr) {
+          // 56차: 색 무늬 없는 PBR 재질의 견본은 PBR 그림(법선 그림 등)이 아닌 그림(재질 미리보기)으로
+          const maps = new Set(pbrFiles(info.pbr).map((x) => x[1]));
+          pick = f.images.find((it) => !maps.has(fileOf(it))) ?? pick;
+        }
       } catch {
         /* 첫 그림 */
       }
     want.push({ item: pick, kind: 'material', name: fileOf(pick), folder });
-    // 55차: 무늬(색 그림)가 있는 재질의 PBR 그림(법선·거칠기·금속) — 무늬 좌표가 색 무늬와 같아 색 무늬 없는 재질은 넣지 않는다.
-    // 그림 하나가 여러 쓰임이면 한 번만 읽는다
-    if (info?.texture) {
+    // 55차: 무늬(색 그림)가 있는 재질의 PBR 그림(법선·거칠기·금속) — 무늬 좌표는 색 무늬와 같다. 56차: 색 무늬 없이 PBR 그림만 있는 재질도
+    // 그림 한 장 크기(<mat:pbrMR xScale yScale> — pbr.tile)가 있으면 넣는다(장면이 그 크기로 무늬 좌표만 만든다). 그림 하나가 여러 쓰임이면 한 번만 읽는다
+    if (info?.texture || info?.pbr?.tile) {
       const roles = new Map<ZipItem, SkpPbrRole[]>();
       for (const [role, file] of pbrFiles(info.pbr)) {
         const hit = f.images.find((it) => fileOf(it) === file);
@@ -244,12 +250,13 @@ export function* zipImageReads(
         if (list) list.push(role);
         else roles.set(hit, [role]);
       }
-      for (const [item, r] of roles) want.push({ item, kind: 'pbr', name: fileOf(item), folder, roles: r });
+      // 색 무늬 없는 재질의 PBR 그림이 먼저(rank 0 — 그 재질에는 이 그림이 유일한 결이다), 무늬 재질의 PBR 그림은 그다음
+      for (const [item, r] of roles) want.push({ item, kind: 'pbr', name: fileOf(item), folder, roles: r, rank: info.texture ? 1 : 0 });
     }
   }
   // 한도 안에서 먼저 넣을 차례: 모형 → 장면 → 재질 → 컴포넌트 → PBR 그림(55차 — 예전 그림을 그대로 넣고 남은 한도만 쓴다)
   const order: Record<Kind, number> = { model: 0, preview: 1, scene: 2, material: 3, component: 4, pbr: 5 };
-  want.sort((a, b) => order[a.kind] - order[b.kind]);
+  want.sort((a, b) => order[a.kind] - order[b.kind] || (a.rank ?? 0) - (b.rank ?? 0));
   const over = (w: (typeof want)[number], count: number, total: number): boolean =>
     count >= maxCount || w.item.size > maxEach || w.item.compressedSize > maxEach || total + w.item.size > maxTotal || !!w.item.truncated;
   if (plan) {

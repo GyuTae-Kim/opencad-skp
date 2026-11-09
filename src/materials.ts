@@ -52,6 +52,11 @@ export interface SkpMaterialPbr {
   roughness?: { factor: number; file?: string; invert: boolean };
   /** 법선 그림(켰고 그림이 있을 때만): 배율, 초록이 아래인 DirectX 꼴인지(normalMapStyle 1 — C API SUMaterialNormalMapStyle 차례 OpenGL·DirectX) */
   normal?: { file: string; scale: number; directX: boolean };
+  /**
+   * 그림 한 장 크기(인치 — <mat:pbrMR xScale yScale>, 그림 칸이 하나라도 있고 두 값이 양수일 때만). 색 무늬가 없는 재질(56차)의 PBR 그림 무늬 좌표가 쓴다.
+   * 이 컴퓨터 표본에서 색 무늬와 PBR 그림이 함께 있는 재질 53개는 모두 색 무늬 크기(texture xScale·yScale)와 같았다
+   */
+  tile?: { width: number; height: number };
 }
 
 /** PBR 그림 쓰임(재질 폴더의 그림 하나가 맡는 것) */
@@ -254,6 +259,9 @@ export function parseMaterialPbr(xml: string): SkpMaterialPbr | undefined {
   const nf = on('enable_normal') ? file('normal_texture') : undefined;
   // normalMapStyle이 없으면 SketchUp이 거의 모든 재질에 적는 기본값(1)으로 본다
   if (nf) out.normal = { file: nf, scale: num('normalScale', 1, 16), directX: text('normalMapStyle') !== '0' };
+  const w = Number(el.attrs.get('xScale'));
+  const h = Number(el.attrs.get('yScale'));
+  if ((out.normal || out.roughness?.file || out.metallic?.file) && w > 0 && h > 0 && Number.isFinite(w) && Number.isFinite(h)) out.tile = { width: w, height: h };
   return out.metallic || out.roughness || out.normal ? out : undefined;
 }
 

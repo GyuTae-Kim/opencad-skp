@@ -14,6 +14,8 @@ import { chunkFailText } from '../src/app/core';
 import { CONTEXT_LOST_TEXT, CONTEXT_LOST_TITLE, RESTORE_FAIL_TEXT, RESTORE_FAIL_TITLE, RESTORE_TEXT, RESTORE_TITLE } from '../src/app/release';
 import { catalogs, currentLanguage, languageUrl, languages, translate } from '../site/i18n.mjs';
 import { DEFAULT_UNITS, unitsLabel } from '../src/app/units';
+import { KeyPick } from '../src/app/keypick';
+import type { KeyboardSnapOptions, Viewer3d } from 'opencad-viewer3d';
 
 let dispose: (() => void) | undefined;
 afterEach(() => { dispose?.(); vi.unstubAllGlobals(); });
@@ -351,6 +353,34 @@ describe('language URLs and UI presentation', () => {
     dispose(); dispose=undefined;
     expect(uiText('끝점')).toBe('끝점');
     dom.window.close();
+  });
+  it('gives the core the keyboard-pick message templates of the UI language and keeps the announcement region out of the localization layer (56th round)', async () => {
+    const dom = new JSDOM('<!doctype html><html><head><title>OpenCAD</title></head><body><div id="app"><header class="titlebar"></header><div id="view"><canvas></canvas></div></div></body></html>', {url:languageUrl(metadataForLanguage('ko').url,'en')});
+    for (const name of ['window','document','Node','Element','HTMLAnchorElement','MutationObserver','location','history','localStorage','CustomEvent']) vi.stubGlobal(name,(dom.window as unknown as Record<string,unknown>)[name]);
+    const root = document.getElementById('app')!;
+    dispose = await installLocalization(root);
+    const given: (KeyboardSnapOptions | boolean | null)[] = [];
+    const viewer = { canvas: document.querySelector('canvas')!, keyboardCursor: null, setKeyboardSnap: (o: KeyboardSnapOptions | boolean | null) => given.push(o) };
+    const kp = new KeyPick(viewer as unknown as Viewer3d, document.getElementById('view')!, () => null);
+    root.addEventListener('languagechange', () => kp.relocalize());
+    kp.set(true);
+    const first = given.at(-1) as KeyboardSnapOptions;
+    expect(first.messages?.start).toBe('Virtual cursor on. {0}. {1}');
+    expect(first.messages?.['pick.line']).toBe('Edge');
+    // 알림 칸 글은 앱이 이미 옮긴 글 — 번역층이 파일 글("모서리 · Layer0"처럼 사전 낱말과 같은 이름)을 바꾸지 않는다
+    first.announce!({ reason: 'move', mode: 'pick', x: 0, y: 0, snap: null, index: 0, count: 0, pick: null, text: '모서리 · Layer0' });
+    await new Promise(resolve=>setTimeout(resolve,0));
+    expect(kp.text).toBe('모서리 · Layer0');
+    const plain = document.createElement('div'); plain.textContent = '모서리 · Layer0'; root.append(plain);
+    await new Promise(resolve=>setTimeout(resolve,0));
+    expect(plain.textContent).toBe('Edge · Layer0');
+    (document.querySelector('.language-list [data-language="ja"]') as HTMLButtonElement).click();
+    for (let i=0;i<4;i++) await new Promise(resolve=>setTimeout(resolve,0));
+    expect((given.at(-1) as KeyboardSnapOptions).messages?.start).toBe(translate('가상 커서를 켰습니다. {0}. {1}','ja'));
+    expect(kp.text).toBe('모서리 · Layer0');
+    kp.set(false);
+    expect(given.at(-1)).toBe(false);
+    dispose(); dispose=undefined; dom.window.close();
   });
   it('reopens an open toolbar menu in the new language on languagechange, keeping the focused item or the outside focus and the scroll (32nd round)', async () => {
     const dom = new JSDOM('<!doctype html><html><head><title>OpenCAD</title></head><body><div id="app"><header class="titlebar"></header><button id="more">보기 설정</button></div></body></html>', {url:languageUrl(metadataForLanguage('ko').url,'de')});
