@@ -35,7 +35,27 @@ export interface SkpMaterialInfo {
   colorize?: 'shift' | 'tint';
   /** 재질 속성 사전(2021+ material.xml의 n0:AttributeDictionaries, 2020 이하 CMaterial 앞머리) — 있을 때만 */
   attrs?: SkpAttrDicts;
+  /** PBR 금속·거칠기(SketchUp 2025+ material.xml의 <mat:pbrMR>) — 켠 것(enable_*)이 하나라도 있을 때만 */
+  pbr?: SkpMaterialPbr;
 }
+
+/**
+ * PBR 금속·거칠기 재질(<mat:pbrMR> — 표본으로 본 꼬리표: enable_metalness·enable_roughness·enable_normal·enable_occlusion(0·1),
+ * metallic_texture·roughness_texture·normal_texture·occlusion_texture(path="./그림"), metallicFactor·roughnessFactor·normalScale(실수),
+ * normalMapStyle(0·1), roughness_texture_invert(0·1), occlusionStrength, baseColorFactor). 켬 깃발이 0인 칸은 SketchUp도 쓰지 않는 기본값이라 뺀다.
+ * 가림(occlusion) 그림은 코어가 받지 않아 읽지 않는다
+ */
+export interface SkpMaterialPbr {
+  /** 금속성: 그림이 있으면 그 배율, 없으면 값(0~1)과 재질 폴더 안 그림 파일 이름 */
+  metallic?: { factor: number; file?: string };
+  /** 거칠기: 그림이 있으면 그 배율, 없으면 값(0~1), 매끈함 그림(roughness_texture_invert)인지 */
+  roughness?: { factor: number; file?: string; invert: boolean };
+  /** 법선 그림(켰고 그림이 있을 때만): 배율, 초록이 아래인 DirectX 꼴인지(normalMapStyle 1 — C API SUMaterialNormalMapStyle 차례 OpenGL·DirectX) */
+  normal?: { file: string; scale: number; directX: boolean };
+}
+
+/** PBR 그림 쓰임(재질 폴더의 그림 하나가 맡는 것) */
+export type SkpPbrRole = 'normal' | 'roughness' | 'metallic';
 
 const XML_ENT: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
 
@@ -194,5 +214,54 @@ export function parseMaterialXml(xml: string): SkpMaterialInfo | null {
   }
   const dicts = parseMaterialAttrs(xml);
   if (dicts) info.attrs = dicts;
+  const pbr = parseMaterialPbr(xml);
+  if (pbr) info.pbr = pbr;
   return info;
+}
+
+/** material.xml 글 → PBR 금속·거칠기(SkpMaterialPbr — 켠 칸만). <mat:pbrMR>가 없거나 모두 꺼졌으면 undefined */
+export function parseMaterialPbr(xml: string): SkpMaterialPbr | undefined {
+  const at = xml.search(/<(?:[\w.-]+:)?pbrMR\b/);
+  const el = at >= 0 ? xmlElement(xml, at) : undefined;
+  if (!el) return undefined;
+  const kid = (name: string): XmlEl | undefined => el.kids.find((k) => k.name === name);
+  const text = (name: string): string | undefined => kid(name)?.text.trim();
+  const on = (name: string): boolean => text(name) === '1';
+  const num = (name: string, fallback: number, max: number): number => {
+    const s = text(name);
+    const v = s ? Number(s) : NaN;
+    return Number.isFinite(v) ? Math.min(max, Math.max(0, v)) : fallback;
+  };
+  // 표본의 꼴은 <mat:normal_texture id path file_name/>, 안에 <mat:image path/>를 둔 꼴도 읽는다
+  const file = (name: string): string | undefined => {
+    const k = kid(name);
+    const img = k?.kids.find((x) => x.name === 'image');
+    return imageFile(k?.attrs.get('path')) ?? imageFile(k?.attrs.get('file_name')) ?? imageFile(img?.attrs.get('path')) ?? imageFile(img?.attrs.get('file_name'));
+  };
+  const out: SkpMaterialPbr = {};
+  if (on('enable_metalness')) {
+    const m: NonNullable<SkpMaterialPbr['metallic']> = { factor: num('metallicFactor', 1, 1) };
+    const f = file('metallic_texture');
+    if (f) m.file = f;
+    out.metallic = m;
+  }
+  if (on('enable_roughness')) {
+    const r: NonNullable<SkpMaterialPbr['roughness']> = { factor: num('roughnessFactor', 1, 1), invert: on('roughness_texture_invert') };
+    const f = file('roughness_texture');
+    if (f) r.file = f;
+    out.roughness = r;
+  }
+  const nf = on('enable_normal') ? file('normal_texture') : undefined;
+  // normalMapStyle이 없으면 SketchUp이 거의 모든 재질에 적는 기본값(1)으로 본다
+  if (nf) out.normal = { file: nf, scale: num('normalScale', 1, 16), directX: text('normalMapStyle') !== '0' };
+  return out.metallic || out.roughness || out.normal ? out : undefined;
+}
+
+/** PBR 재질의 그림 파일(쓰임 → 재질 폴더 안 파일 이름) */
+export function pbrFiles(pbr: SkpMaterialPbr | undefined): [SkpPbrRole, string][] {
+  const out: [SkpPbrRole, string][] = [];
+  if (pbr?.normal) out.push(['normal', pbr.normal.file]);
+  if (pbr?.roughness?.file) out.push(['roughness', pbr.roughness.file]);
+  if (pbr?.metallic?.file) out.push(['metallic', pbr.metallic.file]);
+  return out;
 }

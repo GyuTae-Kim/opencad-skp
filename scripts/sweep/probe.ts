@@ -108,7 +108,8 @@ export interface ProbeResult {
   /** 파일을 어떻게 읽었는지(skpFileToScene onFileRead — parts 필요한 자리만, whole 파일 전체) */
   fileRead?: SkpFileRead;
   ms: Partial<Record<ProbeStage, number>> & { total: number };
-  images?: { model: boolean; materials: number; components: number; scenes: number; skipped: number };
+  /** pbr·pbrSkipped: PBR 그림 수와 한도로 넣지 못한 수(55차 — 있을 때만) */
+  images?: { model: boolean; materials: number; components: number; scenes: number; skipped: number; pbr?: number; pbrSkipped?: number };
   imageError?: string;
   metrics: ProbeMetrics;
   warnings: string[];
@@ -397,7 +398,7 @@ export async function probeSkp(input: SkpSource | Uint8Array, opts: ProbeOptions
   };
   if (modelRead) result.modelRead = modelRead;
   if (fileRead) result.fileRead = fileRead;
-  if (images)
+  if (images) {
     result.images = {
       model: !!images.model,
       materials: images.materials.length,
@@ -405,6 +406,9 @@ export async function probeSkp(input: SkpSource | Uint8Array, opts: ProbeOptions
       scenes: images.scenes.length,
       skipped: images.skipped,
     };
+    if (images.pbr?.length) result.images.pbr = images.pbr.length;
+    if (images.pbrSkipped) result.images.pbrSkipped = images.pbrSkipped;
+  }
   if (imageError) result.imageError = imageError;
 
   if (mem && base && retained) {

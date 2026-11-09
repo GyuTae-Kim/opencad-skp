@@ -294,6 +294,15 @@ export interface SceneTexture {
   h: number;
 }
 
+/**
+ * 재질 하나의 그물 PBR 필드(코어 0.43.0): maps는 그림 id와 그 배율(앞면 무늬 좌표를 단 그물에만 — 그림은 색 무늬와 같은 무늬 좌표를 쓴다),
+ * values는 그림 없이 값만 준 칸(그 재질 그물 모두). 그림이 있어야 할 칸에 그림을 받지 못했으면 둘 다에서 뺀다(배율을 값으로 쓰면 다른 재질이 된다)
+ */
+export interface ScenePbr {
+  maps?: Pick<Mesh3d, 'normalTexture' | 'normalScale' | 'normalFlipY' | 'roughnessTexture' | 'roughness' | 'roughnessInvert' | 'metallicTexture' | 'metallic'>;
+  values?: Pick<Mesh3d, 'roughness' | 'metallic'>;
+}
+
 /** 정의 준비 때 무늬 맥락 */
 interface PrepTex {
   tile: (mat: number) => SceneTexture | undefined;
@@ -1260,6 +1269,8 @@ export interface BuildOptions {
   originThreshold?: number;
   /** 무늬를 입힐 재질(model.dat 재질 번호 → 무늬 id·한 장 크기). 없으면 무늬 좌표를 만들지 않는다 */
   textures?: ReadonlyMap<number, SceneTexture>;
+  /** PBR 재질(model.dat 재질 번호 → 그물 PBR 필드 — 55차). 앞면 재질에만(코어 PBR은 앞면 재질만 쓴다) */
+  pbr?: ReadonlyMap<number, ScenePbr>;
   /** 무늬 좌표를 다는 정점 수 한도 */
   maxUvVertices?: number;
   /** 진행 알림(0~1) */
@@ -1389,6 +1400,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
 
   // 무늬: 물려받을 무늬 재질(인스턴스 재질)이 하나라도 있을 때만 정의마다 평면 좌표를 구해 둔다
   const texMap = opts.textures && opts.textures.size ? opts.textures : null;
+  const pbrMap = opts.pbr && opts.pbr.size ? opts.pbr : null;
   let prepTex: PrepTex | null = null;
   if (texMap) {
     let inherits = false;
@@ -2917,6 +2929,10 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       mesh.uvs = bk.uv!.done();
       mesh.texture = t.id;
     }
+    // PBR(55차): 값은 그 재질 그물 모두, 그림은 앞면 무늬 좌표를 단 그물만
+    const pb = bk.mat !== undefined ? pbrMap?.get(bk.mat) : undefined;
+    if (pb?.values) Object.assign(mesh, pb.values);
+    if (pb?.maps && mesh.texture) Object.assign(mesh, pb.maps);
     const back = bk.back;
     if (!back) return;
     mesh.backColor = back.mat !== undefined ? colorOf(back.mat) : defaultBack!;

@@ -54,6 +54,7 @@ export const RESTORE_FAIL_TEXT = '그 무늬 면은 평균색으로 그립니다
  * - 워커가 색을 바꾼 무늬(푼 그림이 바이트와 다른 그림): 바이트를 장면에서 뺀다(되찾을 때 다시 손질 — 재질 목록 견본은 워커가 따로 만든 바꾼 색 PNG).
  * - 나머지(raw): 바이트는 코어가 처음 올릴 때 풀어야 하므로 장면에 둔다(코어가 올린 뒤 지운다). 재질 목록 견본 주소가 같은 폴더의 그림
  *   (해석기는 그 그림 바이트 배열을 그대로 무늬에 쓴다 — 폴더마다 그림 하나)이면 아직 그리기 전이므로 그 주소를 이 Blob의 주소로 바꾼다(브라우저가 한 벌만 든다).
+ *   PBR 그림(55차 — meta.textures의 pbr)도 raw로 쥐지만 견본 주소는 바꾸지 않는다(같은 폴더의 색 그림이 견본이다).
  * Blob은 화면의 형식 배열이 아니라 브라우저가 따로 들고(큰 것은 디스크로 내보낼 수 있다), 손질 워커에 복사 없이 넘어간다
  */
 export function prepareRelease(d: { scene: Pick<Scene3d, 'textures' | 'meta'>; images?: DocImages | null }): HeldTexture[] {
@@ -69,7 +70,8 @@ export function prepareRelease(d: { scene: Pick<Scene3d, 'textures' | 'meta'>; i
       delete t.data;
     } else {
       held.push({ id: t.id, blob, info, raw: true });
-      swapSwatch(d.images, info.folder, blob);
+      // PBR 그림(55차 — 법선·거칠기·금속)은 같은 재질 폴더라도 견본 그림이 아니다
+      if (!info.pbr) swapSwatch(d.images, info.folder, blob);
     }
   }
   return held;

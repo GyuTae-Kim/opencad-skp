@@ -15,7 +15,7 @@
  */
 
 import { readSkpHeader } from './header';
-import { parseMaterialXml } from './materials';
+import { parseMaterialXml, pbrFiles, type SkpMaterialInfo, type SkpPbrRole } from './materials';
 import type { MfcImageRef } from './mfcstate';
 import { mfcImageRefs } from './mfcmodel';
 import { findSkpZipItems, runZipReads, type ZipItem, type ZipReads } from './zip';
@@ -42,6 +42,13 @@ export interface SkpImages {
   /** 한도·모르는 꼴로 건너뛴 그림 수 */
   skipped: number;
   warnings: string[];
+  /**
+   * 무늬 재질의 PBR 그림(material.xml <mat:pbrMR>에서 켠 법선·거칠기·금속 그림 — 55차). 2021+ 꾸러미에서 무늬(색 그림)가 있는 재질만, 다른 그림을 다 넣은 뒤
+   * 남은 한도 안에서. 그림 하나가 여러 쓰임이면 roles가 여럿. 없으면 칸이 없다(앱 워커는 화면에 넘기기 전에 이 칸을 뗀다 — 바이트는 장면 무늬가 든다)
+   */
+  pbr?: (SkpImage & { folder: string; roles: SkpPbrRole[] })[];
+  /** 한도로 넣지 못한 PBR 그림 수(경고 없이 — PBR 그림이 없으면 그 재질은 색 무늬만 그린다) */
+  pbrSkipped?: number;
 }
 
 export interface SkpImageOptions {
@@ -178,8 +185,8 @@ export function* zipImageReads(
   const maxEach = opts.maxBytesEach ?? MAX_IMAGE_BYTES;
   const maxTotal = opts.maxTotalBytes ?? MAX_IMAGE_TOTAL;
 
-  type Kind = 'model' | 'preview' | 'material' | 'component' | 'scene';
-  const want: { item: ZipItem; kind: Kind; name: string; folder?: string }[] = [];
+  type Kind = 'model' | 'preview' | 'material' | 'component' | 'scene' | 'pbr';
+  const want: { item: ZipItem; kind: Kind; name: string; folder?: string; roles?: SkpPbrRole[] }[] = [];
   /** 재질 폴더 → 그림 후보(꾸러미 차례)·material.xml */
   const folders = new Map<string, { images: ZipItem[]; xml?: ZipItem }>();
   for (const item of dir) {
@@ -210,22 +217,38 @@ export function* zipImageReads(
   const text = new TextDecoder('utf-8');
   const pickXml = (f: { images: ZipItem[]; xml?: ZipItem }): ZipItem | undefined => (f.images.length > 1 && f.xml && f.xml.size < 1 << 20 ? f.xml : undefined);
   plan?.([...folders.values()].map(pickXml).filter((x): x is ZipItem => !!x));
+  const fileOf = (it: ZipItem): string => it.name.slice(it.name.lastIndexOf('/') + 1);
   for (const [folder, f] of folders) {
     if (!f.images.length) continue;
     let pick = f.images[0]!;
     const xml = pickXml(f);
+    let info: SkpMaterialInfo | null = null;
     if (xml)
       try {
-        const file = parseMaterialXml(text.decode(yield xml))?.texture?.file;
-        const hit = file ? f.images.find((it) => it.name.slice(it.name.lastIndexOf('/') + 1) === file) : undefined;
+        info = parseMaterialXml(text.decode(yield xml));
+        const file = info?.texture?.file;
+        const hit = file ? f.images.find((it) => fileOf(it) === file) : undefined;
         if (hit) pick = hit;
       } catch {
         /* 첫 그림 */
       }
-    want.push({ item: pick, kind: 'material', name: pick.name.slice(pick.name.lastIndexOf('/') + 1), folder });
+    want.push({ item: pick, kind: 'material', name: fileOf(pick), folder });
+    // 55차: 무늬(색 그림)가 있는 재질의 PBR 그림(법선·거칠기·금속) — 무늬 좌표가 색 무늬와 같아 색 무늬 없는 재질은 넣지 않는다.
+    // 그림 하나가 여러 쓰임이면 한 번만 읽는다
+    if (info?.texture) {
+      const roles = new Map<ZipItem, SkpPbrRole[]>();
+      for (const [role, file] of pbrFiles(info.pbr)) {
+        const hit = f.images.find((it) => fileOf(it) === file);
+        if (!hit) continue;
+        const list = roles.get(hit);
+        if (list) list.push(role);
+        else roles.set(hit, [role]);
+      }
+      for (const [item, r] of roles) want.push({ item, kind: 'pbr', name: fileOf(item), folder, roles: r });
+    }
   }
-  // 한도 안에서 먼저 넣을 차례: 모형 → 장면 → 재질 → 컴포넌트
-  const order: Record<Kind, number> = { model: 0, preview: 1, scene: 2, material: 3, component: 4 };
+  // 한도 안에서 먼저 넣을 차례: 모형 → 장면 → 재질 → 컴포넌트 → PBR 그림(55차 — 예전 그림을 그대로 넣고 남은 한도만 쓴다)
+  const order: Record<Kind, number> = { model: 0, preview: 1, scene: 2, material: 3, component: 4, pbr: 5 };
   want.sort((a, b) => order[a.kind] - order[b.kind]);
   const over = (w: (typeof want)[number], count: number, total: number): boolean =>
     count >= maxCount || w.item.size > maxEach || w.item.compressedSize > maxEach || total + w.item.size > maxTotal || !!w.item.truncated;
@@ -246,26 +269,32 @@ export function* zipImageReads(
   let total = 0;
   for (const w of want) {
     if (w.kind === 'preview' && out.model) continue;
+    // PBR 그림은 건너뛰어도 경고·건너뜀 수에 넣지 않는다(예전 그림·경고가 그대로 — 따로 센다)
+    const miss = (): void => {
+      if (w.kind === 'pbr') out.pbrSkipped = (out.pbrSkipped ?? 0) + 1;
+      else out.skipped++;
+    };
     if (over(w, count, total)) {
-      out.skipped++;
+      miss();
       continue;
     }
     let data: Uint8Array;
     try {
       data = yield w.item;
     } catch {
-      out.skipped++;
+      miss();
       continue;
     }
     const mime = imageMime(data);
     if (!mime || data.length > maxEach) {
-      out.skipped++;
+      miss();
       continue;
     }
     count++;
     total += data.length;
     const img: SkpImage = { path: w.item.name, name: w.name, mime, bytes: data };
     if (w.kind === 'model' || w.kind === 'preview') out.model = img;
+    else if (w.kind === 'pbr') (out.pbr ??= []).push({ ...img, folder: w.folder!, roles: w.roles! });
     else if (w.kind === 'material') out.materials.push({ ...img, folder: w.folder! });
     else if (w.kind === 'component') out.components.push(img);
     else out.scenes.push(img);
