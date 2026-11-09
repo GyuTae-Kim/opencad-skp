@@ -2,14 +2,16 @@
  * 문서를 열 때 나눠 받는 조각(dynamic import — 첫 화면 JS에서 문서가 없을 때 쓰지 않는 코드를 뺀다).
  *
  * - 3D 뷰어 코어(opencad-viewer3d 입구 → viewer·renderer·셰이더·고르기): 시작 화면(파일 열기·최근 문서·예제·언어 메뉴)은 코어 없이 그린다.
- *   앱은 코어의 작은 모듈(camera 뷰 이름·표준 뷰 키 표·카메라 계산, pointer 터치 거리, viewcube 뷰 큐브 글, theme 테마 색,
- *   section 단면 수 한도)만 바로 가져오고, 코어 입구는 여기서만 가져온다.
+ *   앱은 코어의 작은 모듈(camera 뷰 이름·표준 뷰 키 표·카메라 계산, pointer 터치 거리, theme 테마 색,
+ *   section 단면 수 한도)만 바로 가져오고, 코어 입구와 뷰 큐브 모듈(viewcube — 54차)은 여기서만 가져온다.
  * - 측정 도구(measure.ts 줄자·각도기·안내 두기·고르기, snap.ts 추정, 코어 inference 교차점·추론 잠금): 키·안내 글은 measurehints.ts에 남긴다.
  * - 파일을 열기 시작하면 워커 해석과 함께 둘 다 받기 시작한다(app.ts openBuffer). 측정 도구는 받는 대로 만들고, 그 전에 켜면 받은 뒤에 켠다.
  *   오프라인 앱은 서비스 워커가 이 조각들도 미리 담아 둔다.
  * - 받지 못하면(오프라인에서 새 판 등) 약속을 비워 다음 부름에서 다시 받는다.
  * - 큰 모형 놓기·그래픽 문맥 잃음과 되찾음(release.ts — 27차, 29차에 되찾기를 바꿈): 파일을 열기 시작할 때 함께 받는다. 받지 못하면 놓지 않고 안내만 없다.
  */
+import { localizeCubeFaces } from './i18n';
+
 type Core = typeof import('opencad-viewer3d');
 type Measure = typeof import('./measure');
 type Release = typeof import('./release');
@@ -29,8 +31,16 @@ export function onceImport<T>(load: () => Promise<T>): () => Promise<T> {
   };
 }
 
-/** 코어 입구 모듈(한 번만 받는다) */
-export const loadViewerCore: () => Promise<Core> = onceImport(() => import('opencad-viewer3d'));
+/**
+ * 코어 입구 모듈(한 번만 받는다). 뷰 큐브 모듈(viewcube — 면 글 CUBE_FACES)도 함께 받아 지금 언어로 옮긴 뒤 준다
+ * (54차: 첫 화면이 바로 가져오던 것을 뺐다 — 코어 0.44.0 손가락 큐브로 커진 모듈이 첫 화면 조각에 실렸다. 뷰어를 만들기 전에 옮기므로 큐브는 처음부터 그 언어로 그린다)
+ */
+export const loadViewerCore: () => Promise<Core> = onceImport(() =>
+  Promise.all([import('opencad-viewer3d'), import('opencad-viewer3d/viewcube')]).then(([core, cube]) => {
+    localizeCubeFaces(cube.CUBE_FACES);
+    return core;
+  }),
+);
 
 /** 측정 도구 조각(한 번만 받는다) */
 export const loadMeasure: () => Promise<Measure> = onceImport(() => import('./measure'));

@@ -101,7 +101,10 @@ describe('코어 나눠 받기', () => {
       else bad.push(relative(ROOT, f));
     }
     expect(bad).toEqual([]);
-    expect(dynamic).toBe(1);
+    // 코어 입구와 뷰 큐브 모듈(54차 — 면 글 번역을 코어와 함께 받는다) 둘
+    expect(dynamic).toBe(2);
+    // 뷰 큐브 모듈은 첫 화면 그래프에 없다(코어 0.44.0부터 손가락 큐브로 커졌다 — 코어 조각과 함께 받는다)
+    expect(core.has('viewcube')).toBe(false);
     // 측정 도구 조각도 core.ts의 import() 하나로만 받는다
     const measureDyn: string[] = [];
     for (const f of files) if (!f.startsWith(CORE) && dynamicSpecs(readFileSync(f, 'utf8')).includes('./measure')) measureDyn.push(relative(ROOT, f));
@@ -136,6 +139,12 @@ describe('코어 나눠 받기', () => {
     expect(m.VIEW_LABELS).toBe(VIEW_LABELS);
     const { DARK_THEME } = await import('opencad-viewer3d/theme');
     expect(m.DARK_THEME).toBe(DARK_THEME);
+    // 뷰 큐브 면 글은 코어와 함께 받은 객체를 번역층에 맡긴다(한국어면 그대로, 다시 맡겨도 원래 글을 지킨다)
+    const { CUBE_FACES } = await import('opencad-viewer3d/viewcube');
+    const { localizeCubeFaces } = await import('../../src/app/i18n');
+    expect(CUBE_FACES.map((f) => f.label)).toEqual(['앞', '뒤', '오른쪽', '왼쪽', '위', '아래']);
+    localizeCubeFaces(CUBE_FACES);
+    expect(CUBE_FACES.map((f) => f.label)).toEqual(['앞', '뒤', '오른쪽', '왼쪽', '위', '아래']);
     // 첫 화면용으로 앱이 둔 단면 수 한도가 코어와 같다
     const { MAX_SECTION_PLANES } = await import('../../src/app/doc');
     expect(MAX_SECTION_PLANES).toBe(m.MAX_SECTION_PLANES);
