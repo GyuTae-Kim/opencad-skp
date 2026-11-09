@@ -7,7 +7,6 @@ import {
   hiddenSelection,
   prepareEdgeDisplay,
   sectionIndexOfId,
-  sectionPlanesFor,
   tagColors,
   definitionCounts,
   docLabel,
@@ -28,6 +27,7 @@ import {
   unsupportedVersion,
 } from '../../src/app/doc';
 import { readSkpImages, skpToScene } from '../../src/index';
+import { sectionPlanesFor } from '../../src/app/sections';
 import { oldSkpHeader } from '../build';
 import { PRE3_SCHEMAS, mfcFile, squareEntities } from '../mfcwrite';
 import { sampleSkpBytes } from '../../src/app/sample';

@@ -10,7 +10,7 @@ import type { Scene3d } from 'opencad-viewer3d/types';
 import { edgesFrom, facesFrom } from '../../src/entities';
 import type { SkpDefinition, SkpEdge, SkpEntities, SkpFace, SkpInstance, SkpModel } from '../../src/model';
 import { buildSceneParts } from '../../src/scene';
-import { sectionItems, sectionPlanesFor } from '../../src/app/doc';
+import { sectionItems, sectionPlanesFor } from '../../src/app/sections';
 import { readTree, type TreeView } from '../../src/app/tree';
 import { type FakeElement, installDom } from '../fakegl/fakedom';
 import type { DrawEntry, FakeGL } from '../fakegl/fakegl';
