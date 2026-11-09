@@ -3,7 +3,7 @@
  * 해석기가 scene.meta에 적은 것(판·단위·통계·tagStats·materialStats·outline·tree·extraItems)을 안전하게 읽어 화면용 꼴로 바꾼다.
  * meta가 비었거나 옛 꼴이어도 장면(그물 이름·묶음)에서 최소한의 목록을 만든다.
  */
-import type { IndexRange, Pick3d, RangeSelection, Scene3d, SectionPlane } from 'opencad-viewer3d';
+import type { IndexRange, Pick3d, RangeSelection, Scene3d, SceneIssue, SectionPlane } from 'opencad-viewer3d';
 import type { SkpImages } from '../images';
 import type {
   SkpAnnotationItems,
@@ -231,6 +231,11 @@ export interface SkpDoc {
   /** 줄자·각도기 결과 */
   measure: MeasureToolResult | null;
   panelTab: PanelTab;
+  /**
+   * 3D 뷰어 코어가 장면을 받으며 빼거나 고쳐 그린 깨진 입력(코어 0.50.0 sceneIssues — NaN·무한대·한도 밖 좌표, 정점 수 밖 색인 등, 54차).
+   * 장면을 올린 뒤 채운다(멀쩡하면 빈 배열). 정보 탭 경고 칸에 해석기 경고 뒤로 잇고 상태 줄 경고 수에 더한다
+   */
+  coreIssues: readonly SceneIssue[];
   // ── 형식이 더 알려 준 것(meta, 없으면 빈 값) ──
   /** 모형 표시 단위 */
   units: UnitsDisplay;
@@ -639,6 +644,7 @@ export function createDoc(name: string, size: number, res: ParseResult, opts: { 
     pick: null,
     measure: null,
     panelTab: 'tags',
+    coreIssues: [],
     ...readMetaExtras(scene),
   };
   // 파일에서 숨긴 태그·폴더는 처음부터 숨긴다(SketchUp에서 연 것과 같게)

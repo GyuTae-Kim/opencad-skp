@@ -8,7 +8,7 @@
  * 큰 모형을 생각해 이어 칠하는 면만 꼭짓점 배열을 잡는다.
  */
 import { loopEdgesKnown } from './entities';
-import { hypot3 } from './hypot';
+import { hypot3 } from 'opencad-viewer3d/math';
 import { FLAG_SMOOTH, type SkpEntities } from './model';
 
 export const SMOOTH_MIN_DOT = 0.02;

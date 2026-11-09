@@ -11,7 +11,7 @@ import { mixNodes, mixText, uiText } from './i18n';
 import { chip, hint, keep, row, section } from './panel';
 import { sunForShadow } from './sun';
 import { unitsLabel } from './units';
-import { warningParts } from './warntext';
+import { coreIssueText, warningParts } from './warntext';
 
 /** 정보 탭의 칸들. applyPage: 장면 카드를 누르면 그 장면으로 */
 export function infoSections(d: SkpDoc, applyPage: (index: number) => void): HTMLElement[] {
@@ -111,12 +111,20 @@ export function infoSections(d: SkpDoc, applyPage: (index: number) => void): HTM
     out.push(section(`장면 그림 ${scenes.length}개`, hint('파일 안의 장면 미리보기 그림입니다(장면 목록을 읽지 못한 파일).'), grid));
   }
   const warns = s.warnings ?? [];
+  // 54차: 3D 뷰어 코어가 장면을 받으며 빼거나 고쳐 그린 깨진 입력(코어 0.50.0 sceneIssues)을 해석기 경고 뒤로 잇는다
+  const issues = d.coreIssues;
+  const count = warns.length + issues.length;
   out.push(
     section(
-      warns.length ? `경고 ${warns.length}개` : '경고',
+      count ? `경고 ${count}개` : '경고',
       // 53차: 경고 끝의 꾸러미 항목 이름(재질·스타일 폴더)은 파일 글로 — 앱 글만 옮겨 넣고 번역층은 건너뛴다(언어를 바꾸면 패널이 다시 그린다)
-      warns.length
-        ? h('ul', { class: 'warns' }, ...warns.slice(0, 300).map((w) => h('li', { 'data-i18n-skip': '' }, ...mixNodes(warningParts(w)))))
+      count
+        ? h(
+            'ul',
+            { class: 'warns' },
+            ...warns.slice(0, 300).map((w) => h('li', { 'data-i18n-skip': '' }, ...mixNodes(warningParts(w)))),
+            ...issues.slice(0, 100).map((i) => h('li', { 'data-i18n-skip': '' }, ...mixNodes([coreIssueText(i)]))),
+          )
         : hint('해석기가 남긴 경고가 없습니다.'),
     ),
     section(

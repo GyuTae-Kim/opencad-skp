@@ -8,7 +8,7 @@ import { TEXTURE_LIMIT } from 'opencad-viewer3d/texture';
 import type { Mesh3d, Scene3d } from 'opencad-viewer3d/types';
 import { skpFileToScene } from '../src/index';
 import { INCREMENTAL_ITEMS } from '../src/app/protocol';
-import { UV_PACK_MAX_TEXEL, packBigScene, packMeshNormals, packMeshUvs, packSceneAttribs, packUvsChecked, textureTexels } from '../src/worker/pack';
+import { UV_PACK_MAX_TEXEL, packBigScene, packMeshUvs, packSceneAttribs, packUvsChecked, textureTexels } from '../src/worker/pack';
 
 /** 정점 n개 격자(u·v 범위 0~span) — 위치·법선·무늬 좌표 */
 function grid(id: string, n: number, span: number, extra: Partial<Mesh3d> = {}): Mesh3d {
@@ -45,10 +45,11 @@ describe('법선·무늬 좌표 줄이기(pack.ts)', () => {
 
   it('법선은 Int8 정점 4값(단위 길이로 맞춰 반올림 — 방향 오차 0.4° 안)', () => {
     const m = grid('a', 50, 1);
-    const p = packMeshNormals(m.normals as Float32Array);
+    const n = m.normals as Float32Array;
+    packSceneAttribs({ meshes: [m] });
+    const p = m.normals as Int8Array;
     expect(p).toBeInstanceOf(Int8Array);
     expect(p.length).toBe(50 * 4);
-    const n = m.normals as Float32Array;
     for (let i = 0; i < 50; i++) {
       const a = [n[i * 3]!, n[i * 3 + 1]!, n[i * 3 + 2]!];
       const b = [p[i * 4]! / 127, p[i * 4 + 1]! / 127, p[i * 4 + 2]! / 127];
@@ -168,8 +169,23 @@ function packUvsCheckedBefore(uvs: ArrayLike<number>, nv: number, size: readonly
   return { uvs: out, transform: [...p.transform], errTexel: err };
 }
 
+/** 53차까지 앱이 돌던 법선 줄이기(코어 0.50.0 packNormals(int8, 정점 4값) 식 — 길이는 Math.hypot) — 54차에 코어 packNormals로 바꿔도 같은 바이트인지 견준다 */
+function packNormalsBefore(n: ArrayLike<number>): Int8Array {
+  const nv = Math.floor(n.length / 3);
+  const out = new Int8Array(nv * 4);
+  for (let i = 0; i < nv; i++) {
+    const x = n[i * 3]!, y = n[i * 3 + 1]!, z = n[i * 3 + 2]!;
+    const l = Math.hypot(x, y, z);
+    if (!(l > 0) || !Number.isFinite(l)) continue;
+    out[i * 4] = Math.round((x / l) * 127);
+    out[i * 4 + 1] = Math.round((y / l) * 127);
+    out[i * 4 + 2] = Math.round((z / l) * 127);
+  }
+  return out;
+}
+
 describe('줄이기를 앱에서 돌아도 코어 도우미와 같은 값(51차)', () => {
-  it('법선: 코어 packNormals(int8, 정점 4값)와 같은 배열 — 단위·단위 아님·0·NaN·무한·거울상 법선', () => {
+  it('법선: 장면 줄이기(코어 packNormals — 54차)가 53차 앱 셈과 같은 배열 — 단위·단위 아님·0·NaN·무한·거울상 법선', () => {
     const r = rng(11);
     const n = new Float32Array(30_000 * 3);
     for (let i = 0; i < n.length; i++) {
@@ -181,10 +197,14 @@ describe('줄이기를 앱에서 돌아도 코어 도우미와 같은 값(51차)
       const l = Math.hypot(n[i]!, n[i + 1]!, n[i + 2]!);
       if (l > 0 && Number.isFinite(l)) for (let c = 0; c < 3; c++) n[i + c] = n[i + c]! / l;
     }
-    expect(Array.from(packMeshNormals(n))).toEqual(Array.from(packNormals(n, 'int8', 4)));
-    expect(Array.from(packMeshNormals(new Float32Array(0)))).toEqual([]);
-    // 정점 3값으로 나누어떨어지지 않는 길이는 남는 값을 버린다(코어와 같게)
-    expect(Array.from(packMeshNormals(n.subarray(0, 7)))).toEqual(Array.from(packNormals(n.subarray(0, 7), 'int8', 4)));
+    const want = packNormalsBefore(n);
+    const mesh: Mesh3d = { id: 'n', positions: new Float32Array(n.length), normals: n.slice(), color: [1, 1, 1, 1] };
+    packSceneAttribs({ meshes: [mesh] });
+    expect(mesh.normals).toBeInstanceOf(Int8Array);
+    expect(Array.from(mesh.normals!)).toEqual(Array.from(want));
+    expect(Array.from(packNormals(new Float32Array(0), 'int8', 4))).toEqual([]);
+    // 정점 3값으로 나누어떨어지지 않는 길이는 남는 값을 버린다(53차와 같게)
+    expect(Array.from(packNormals(n.subarray(0, 7), 'int8', 4))).toEqual(Array.from(packNormalsBefore(n.subarray(0, 7))));
   });
 
   it('무늬 좌표: 코어 packUvs(int16)와 같은 배열·변환, 예전 견주기와 같은 오차 — 2값·원근 3값, 수 아닌 값·같은 값·좁고 넓은 범위', () => {

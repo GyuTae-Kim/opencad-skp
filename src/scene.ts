@@ -63,7 +63,8 @@ import { AttrPool, PAGE_USE_HIDDEN_OBJECTS } from './scene-meta';
 import { cornerNormals, faceUnitNormal } from './scene-smooth';
 import { emptyEdges, emptyFaces, MAP_STRIDE, opt, type SkpFaces } from './entities';
 import { F32, F64, I32, U32, freeTyped } from './grow';
-import { hypot3 } from './hypot';
+// 세 값의 길이 — Math.hypot과 비트까지 같은 셈을 인자 배열 없이(51차 앱 사본 → 54차 코어 0.51.0 hypot3)
+import { hypot3 } from 'opencad-viewer3d/math';
 import { applyFaceUvqAt, faceUvqInto, planeAxesInto } from './projection';
 import { solidInfo, type SolidInfo } from './solid';
 

@@ -1,7 +1,6 @@
 import { createLanguageMenu } from 'opencad-site-kit/i18n/language-menu';
 // 코어 입구가 다시 내보내는 것과 같은 객체(작은 모듈 — 첫 화면에 코어 전체를 넣지 않는다, core.ts)
 import { VIEW_LABELS } from 'opencad-viewer3d/camera';
-import { CUBE_FACES } from 'opencad-viewer3d/viewcube';
 /** Localize only presentation DOM. CAD data, input values and command keys stay intact. */
 import { currentLanguage, languages, languageUrl, metadataForLanguage, registerCatalog, sourceMessage, translate } from '../../site/i18n-core.mjs';
 import { isAppName, slotText, type Mixed } from './filetext';
@@ -49,6 +48,19 @@ export function mixNodes(parts: Mixed): (string | Node)[] {
 /** 이름 칸 글: 앱 자리 글("(이름 없음)" 등)만 지금 언어로, 파일 글은 그대로(번역층이 건너뛰는 칸에 넣을 때) */
 export const uiName = (name: string): string => isAppName(name) ? uiText(name) : name;
 
+/**
+ * 뷰 큐브 면 글(코어 viewcube의 CUBE_FACES — 코어가 그 객체의 label로 그린다). 54차: 코어 0.44.0부터 viewcube 모듈이 커져(손가락 큐브)
+ * 첫 화면에서 바로 가져오지 않고 코어 조각과 함께 받는다(core.ts loadViewerCore). 받으면 지금 언어로 옮기고, 언어를 바꾸거나 번역층을 닫으면 따라간다
+ */
+let cubeFaces: readonly { label: string }[] = [];
+let cubeOriginal: string[] = [];
+export function localizeCubeFaces(faces: readonly { label: string }[]): void {
+  if (faces === cubeFaces) return;
+  cubeFaces = faces;
+  cubeOriginal = faces.map(face => face.label);
+  faces.forEach((face,index) => { face.label=translate(cubeOriginal[index]!,active); });
+}
+
 type RecordValue = { source: string; rendered: string };
 // Scene names come from the model; playback controls beside them are authored UI.
 const SKIP = '[data-static-languages], [translate="no"], [data-i18n-skip], script, style, [contenteditable]:not([contenteditable="false"]), textarea, input, code, pre, canvas, svg, .anno-layer, .pmi-layer, .docname, .doc-name, .code-list, .cmd-input, .file-name, .tree .name, .tree-name, .boot-recent-list button, .plist .name, .def-cell, .scene-tabs .scene-tab, .scene-cap, .group-item:not(.opt) .name';
@@ -56,10 +68,9 @@ export async function installLocalization(root: HTMLElement): Promise<() => void
   let language = currentLanguage(location.href);
   await (installed = loadLanguage(language).then(() => { active = language; }));
   const originalViews = Object.entries(VIEW_LABELS);
-  const originalFaces = CUBE_FACES.map(face => face.label);
   function canvasLabels(): void {
     for (const [view,label] of originalViews) VIEW_LABELS[view as keyof typeof VIEW_LABELS] = translate(label,language);
-    CUBE_FACES.forEach((face,index) => { face.label=translate(originalFaces[index]!,language); });
+    cubeFaces.forEach((face,index) => { face.label=translate(cubeOriginal[index]!,language); });
   }
   canvasLabels();
   const presentationRoot = document.body;
@@ -180,6 +191,6 @@ export async function installLocalization(root: HTMLElement): Promise<() => void
     active = 'ko';
     observer.disconnect(); titleObserver.disconnect(); control.dispose();
     for (const [view,label] of originalViews) VIEW_LABELS[view as keyof typeof VIEW_LABELS]=label;
-    CUBE_FACES.forEach((face,index) => { face.label=originalFaces[index]!; });
+    cubeFaces.forEach((face,index) => { face.label=cubeOriginal[index]!; });
   };
 }

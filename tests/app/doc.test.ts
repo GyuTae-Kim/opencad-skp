@@ -259,7 +259,8 @@ describe('파일 단면 → 코어 여러 단면', () => {
     expect(r.applied).toEqual([0, 1]);
     expect(r.planes[0]).toEqual({ normal: [0, 0, 1], offset: 0, caps: 'closed', id: 'skp-section-0' });
     expect(r.planes[1]!.items!.length).toBeGreaterThan(0);
-    expect(r.planes[1]!.items!.every((id) => d.meshIndex.has(id) || d.lineIndex.has(id))).toBe(true);
+    // 코어 0.44.0부터 items는 id 글이나 구간({ id, start, count })이다 — 따로 나눈 노드는 id 글만 준다
+    expect(r.planes[1]!.items!.every((id) => typeof id === 'string' && (d.meshIndex.has(id) || d.lineIndex.has(id)))).toBe(true);
     // 나누지 않은 노드(구간으로만 아는 노드)는 그 노드만 자를 수 없다
     const unsplit = { ...d, tree: { ...t, meshFirst: Int32Array.from(t.meshFirst).fill(-1) } };
     expect(sectionPlanesFor(unsplit, [item(1, split)], 'none').skipped).toEqual({ scope: 1, limit: 0 });

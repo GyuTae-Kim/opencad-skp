@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 const { JSDOM } = createRequire(import.meta.url)('jsdom');
-import { installLocalization, uiText } from '../src/app/i18n';
+import { installLocalization, localizeCubeFaces, uiText } from '../src/app/i18n';
 import { reopenMenu } from '../src/app/dom';
 import { GUIDE_CLEAR_FILE_LABEL, GUIDE_DELETE_KEY_HINT, GUIDE_DELETE_TEXT, GUIDE_KIND_NAMES, GUIDE_REDO_LABEL, GUIDE_UNDO_LABEL, GUIDES_SHOWN_LABEL, LOCK_HINTS, LOCK_MENU_LABEL, guideKeyHint, lockHint, measureHint, trackHint } from '../src/app/measure';
 import { GUIDE_HIDE_LABEL, GUIDE_HIDE_TEXT, GUIDE_SELECT_ALL_LABEL, GUIDE_SELECT_ALL_TEXT, GUIDE_UNHIDE_LABEL, guideCountText, guideDeleteLabel } from '../src/app/measure';
@@ -467,6 +467,23 @@ describe('language URLs and UI presentation', () => {
       if (code!=='ko') { expect(root.querySelector('#brand')!.getAttribute('title')).not.toMatch(/[가-힣]/); expect(root.querySelector('#theme')!.getAttribute('title')).not.toMatch(/[가-힣]/); expect(root.querySelector('.scene-tabs')!.getAttribute('aria-label')).not.toMatch(/[가-힣]/); } expect(root.querySelector('.scene-tabs button')!.textContent).toBe('열기');
     }
     dispose();dispose=undefined;dom.window.close();
+  });
+
+  it('뷰 큐브 면 글은 코어와 함께 받은 뒤에 맡겨도 지금 언어로 옮기고 언어를 바꾸면 따르며 닫으면 되돌린다(54차)', async () => {
+    const dom = new JSDOM('<!doctype html><html><head><title>OpenCAD</title></head><body><div id="app"><header class="titlebar"></header></div></body></html>', {url:languageUrl(metadataForLanguage('ko').url,'en')});
+    for (const name of ['window','document','Node','Element','HTMLAnchorElement','MutationObserver','location','history','localStorage','CustomEvent']) vi.stubGlobal(name,(dom.window as unknown as Record<string,unknown>)[name]);
+    const root = document.getElementById('app')!;
+    dispose=await installLocalization(root);
+    // 번역층을 켠 뒤에 받은 것(코어 조각을 문서를 열 때 받는다)
+    const faces = ['앞','뒤','오른쪽','왼쪽','위','아래'].map(label=>({label}));
+    localizeCubeFaces(faces);
+    expect(faces.map(f=>f.label)).toEqual(['Front','Back','Right','Left','Top','Bottom']);
+    (document.querySelector('.language-list [data-language="de"]') as HTMLButtonElement).click();
+    for (let i=0;i<4;i++) await new Promise(resolve=>setTimeout(resolve,0));
+    expect(faces.map(f=>f.label)).toEqual(['Vorne','Hinten','Rechts','Links','Oben','Unten']);
+    dispose();dispose=undefined;
+    expect(faces.map(f=>f.label)).toEqual(['앞','뒤','오른쪽','왼쪽','위','아래']);
+    dom.window.close();
   });
 
 });
