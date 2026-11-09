@@ -1116,5 +1116,9 @@
   "가상 커서를 켠 동안: 지금 차례의 것 고르기(둘째부터는 펼친 단계와 상관없이 그것을 낸 가장 안쪽 그룹·컴포넌트)": "While the virtual cursor is on: select the current one (from the second on, the innermost group or component it belongs to, whatever the expanded level)",
   "가상 커서 끄기(그 뒤 Tab은 초점 이동, 한 번 더 누르면 고른 것 지우기)": "Turn off the virtual cursor (Tab then moves focus; press again to clear the selection)",
   "겹친 것 고르기": "Select stacked items",
-  "3D 보기에 초점이 있을 때(줄자·각도기를 끈 동안): 겹친 면·모서리 목록 열기(가상 커서 자리, 커서가 꺼져 있으면 마우스 자리나 3D 보기 가운데 — 초점이 간 줄은 3D에 미리 강조). 마우스는 오른쪽 단추를 끌지 않고 떼기, 손가락·펜은 길게 누르기": "With focus on the 3D view (Tape Measure and Protractor off): open a list of the stacked faces and edges (at the virtual cursor; with the cursor off, at the mouse pointer or the center of the 3D view — the focused row is previewed with a highlight in 3D). With a mouse, release the right button without dragging; with a finger or pen, press and hold"
+  "3D 보기에 초점이 있을 때(줄자·각도기를 끈 동안): 겹친 면·모서리 목록 열기(가상 커서 자리, 커서가 꺼져 있으면 마우스 자리나 3D 보기 가운데 — 초점이 간 줄은 3D에 미리 강조). 마우스는 오른쪽 단추를 끌지 않고 떼기, 손가락·펜은 길게 누르기": "With focus on the 3D view (Tape Measure and Protractor off): open a list of the stacked faces and edges (at the virtual cursor; with the cursor off, at the mouse pointer or the center of the 3D view — the focused row is previewed with a highlight in 3D). With a mouse, release the right button without dragging; with a finger or pen, press and hold",
+  "{0}의 면": "Face of {0}",
+  "{0}의 모서리": "Edge of {0}",
+  "{0}의 보조점": "Auxiliary point of {0}",
+  "{0}의 잘린 면": "Section cut of {0}"
 }
