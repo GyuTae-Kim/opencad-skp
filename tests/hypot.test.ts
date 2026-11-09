@@ -1,9 +1,11 @@
 /**
- * 세 값의 길이 hypot3(src/hypot.ts — 51차): Math.hypot(x, y, z)와 같은 값(이 시험이 도는 V8에서는 비트까지)을 내는지 넓은 범위의 값으로 견준다.
+ * 세 값의 길이 hypot3: Math.hypot(x, y, z)와 같은 값(이 시험이 도는 V8에서는 비트까지)을 내는지 넓은 범위의 값으로 견준다.
  * 장면 만들기(법선 옮기기·면 법선·무늬 평면 틀)와 법선 줄이기가 Math.hypot 대신 쓴다 — 값이 하나라도 다르면 장면 바이트가 바뀐다.
+ * 51차에 앱이 V8 셈을 옮긴 사본(src/hypot.ts)을 두었고, 54차에 같은 셈을 코어 0.51.0이 내보내 그것을 쓴다(사본은 지웠다 —
+ * 51·53차 장면도 Math.hypot과 비트까지 같았으므로 이 시험이 지나면 장면 바이트가 같다).
  */
 import { describe, expect, it } from 'vitest';
-import { hypot3 } from '../src/hypot';
+import { hypot3 } from 'opencad-viewer3d/math';
 
 /** 시험마다 같은 값이 나오는 작은 난수 */
 function rng(seed: number): () => number {

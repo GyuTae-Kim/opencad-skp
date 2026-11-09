@@ -8,7 +8,7 @@
  *   종류 2·3은 면 법선 대신 저장된 방향으로 평면 틀을 잡는다. M을 뒤집을 수 없으면 기본 투영.
  *   M의 마지막 줄이 (0, 0, 1)이 아니면(사진 맞춤처럼 일그러뜨린 무늬) Q가 면 위에서 바뀌어 원근 무늬가 된다.
  */
-import { hypot3 } from './hypot';
+import { hypot3 } from 'opencad-viewer3d/math';
 
 type V3 = [number, number, number];
 

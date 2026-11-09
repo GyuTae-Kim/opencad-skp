@@ -12,11 +12,13 @@
  *
  * 29차: 화면은 줄인 배열을 놓지 않고 장면에 둔다(app/release.ts — 그래픽 문맥을 되찾으면 코어가 그대로 다시 올린다. 27·28차는 놓았다가 파일을 다시 풀어 같은 꼴로 줬다).
  * 51차: 코어 도우미(packNormals·packUvs)와 같은 식을 여기서 빠르게 돈다(같은 배열·변환 — tests/pack.test.ts가 코어와 견준다).
+ * 54차: 코어 0.51.0 packNormals가 같은 빠른 셈(hypot3)이 되어 법선은 코어 것을 쓴다(법선 600만 개 303 ms — 앱 사본 303 ms와 같다).
+ * 무늬 좌표는 줄이며 같은 고리에서 다시 편 오차를 재는 앱 셈을 둔다(코어 packUvs는 오차를 재지 않아 한 번 더 돌면 정점 200만 개 57 → 74 ms).
  */
+import { packNormals } from 'opencad-viewer3d/attribs';
 import { TEXTURE_LIMIT, fitSize } from 'opencad-viewer3d/texture';
 import type { Mesh3d, Scene3d, Texture3d, UvTransform } from 'opencad-viewer3d/types';
 import { isBigScene } from '../app/protocol';
-import { hypot3 } from '../hypot';
 
 /** 무늬 좌표를 Int16으로 줄였을 때 다시 편 값의 가장 큰 차(무늬 화소)가 이보다 크면 Float32로 둔다 */
 export const UV_PACK_MAX_TEXEL = 1 / 16;
@@ -123,25 +125,6 @@ export function packMeshUvs(uvs: ArrayLike<number>, nv: number, size: readonly [
   return p.errTexel <= maxTexel ? { uvs: p.uvs, transform: p.transform } : null;
 }
 
-/**
- * 법선을 Int8 정점 4값으로(코어 README가 권하는 꼴 — 한 정점 4바이트라 GPU 백엔드가 줄을 다시 맞추지 않는다).
- * 51차: 코어 packNormals(n, 'int8', 4)와 같은 식을 여기서 돈다 — 길이만 Math.hypot과 같은 값의 hypot3로 잰다(V8 Math.hypot은 정점마다 인자 배열을
- * 잡아 165 MB 표본에서 이 줄이기가 0.19초였다). 낸 배열은 코어와 같다(시험이 견준다)
- */
-export function packMeshNormals(n: ArrayLike<number>): Int8Array {
-  const nv = Math.floor(n.length / 3);
-  const out = new Int8Array(nv * 4);
-  for (let i = 0; i < nv; i++) {
-    const x = n[i * 3]!, y = n[i * 3 + 1]!, z = n[i * 3 + 2]!;
-    const l = hypot3(x, y, z);
-    if (!(l > 0) || !Number.isFinite(l)) continue;
-    out[i * 4] = Math.round((x / l) * 127);
-    out[i * 4 + 1] = Math.round((y / l) * 127);
-    out[i * 4 + 2] = Math.round((z / l) * 127);
-  }
-  return out;
-}
-
 const isFloat = (a: unknown): a is Float32Array => a instanceof Float32Array || Object.prototype.toString.call(a) === '[object Float32Array]';
 
 /**
@@ -175,7 +158,8 @@ export function packSceneAttribs(scene: Pick<Scene3d, 'meshes' | 'textures'>, ma
     if (isFloat(n) && n.length >= nv * 3) {
       let p = normalsDone.get(n);
       if (!p) {
-        p = packMeshNormals(n);
+        // Int8 정점 4값(코어 README가 권하는 꼴 — 한 정점 4바이트라 GPU 백엔드가 줄을 다시 맞추지 않는다)
+        p = packNormals(n, 'int8', 4) as Int8Array;
         normalsDone.set(n, p);
         st.normals++;
         st.before += n.byteLength;
