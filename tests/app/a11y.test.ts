@@ -163,6 +163,10 @@ describe('움직임 줄이기(47차 — 2.3.3)', () => {
     // 앱 카메라 옮기기는 코어 flyTo(움직이지 않는 설정이면 코어가 바로 옮긴다) — 앱의 requestAnimationFrame 고리·바로 두기 갈래는 없다
     expect(app).toMatch(/v\.flyTo\(to, undefined, \{ duration: ms \}\)/);
     expect(app).not.toMatch(/cancelAnimationFrame/);
+    // 새 문서를 올리면 앞 문서의 움직임을 먼저 끝낸다(그 끝 알림이 새 문서의 2점 투시를 켜지 않게) — 2점 투시를 끄기 전에
+    const setDoc = app.slice(app.indexOf('private setDoc('), app.indexOf('private setDoc(') + 3000);
+    expect(setDoc.indexOf('this.stopCameraAnim();')).toBeGreaterThan(0);
+    expect(setDoc.indexOf('this.stopCameraAnim();')).toBeLessThan(setDoc.indexOf('this.twoPointOn = false;'));
   });
 });
 

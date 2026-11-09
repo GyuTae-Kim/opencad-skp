@@ -1208,6 +1208,8 @@ export class SkpViewerApp implements PanelHost {
     this.closeNotice();
     this.stopSlideshow();
     this.exportDialog?.close();
+    // 앞 문서의 장면 전환·이전 보기 움직임은 여기서 끝낸다(그 끝 알림이 새 문서에 2점 투시·보기 기록을 남기지 않게 — 54차, 코어 flyTo는 새 장면이 가져가면 늦게 풀린다)
+    this.stopCameraAnim();
     // 걷기·2점 투시는 새 문서에서 끈다(카메라 띠는 열려 있으면 그대로)
     if (this.walking) {
       this.walking = false;
