@@ -303,7 +303,7 @@ export class Panel {
       });
       const sk = d.sectionSkipped;
       const notes: string[] = [];
-      if (sk.scope) notes.push(`그룹 안 단면 ${fmtCount(sk.scope)}개는 그 그룹만 자를 수 없어(그룹이 너무 많아 따로 나누지 않음) 적용하지 않았습니다.`);
+      if (sk.scope) notes.push(`그룹 안 단면 ${fmtCount(sk.scope)}개는 모형이 너무 커서 그 그룹만 자를 수 없어 적용하지 않았습니다.`);
       if (sk.limit) notes.push(`단면은 한 번에 ${MAX_FILE_SECTIONS}개까지라 ${fmtCount(sk.limit)}개는 적용하지 않았습니다.`);
       this.body.append(
         section(

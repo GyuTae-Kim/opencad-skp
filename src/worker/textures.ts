@@ -14,7 +14,7 @@
  * 48차: 165 MB 표본에서 손질 0.73초 가운데 0.29초가 다음 무늬 풀기를 기다리는 몫이었다 — 작은 무늬는 푼 화소 합 한도 안에서 여럿을 앞서 푼다
  * (DECODE_AHEAD·DECODE_PIXELS — 큰 무늬는 예전처럼 다음 하나만).
  */
-import type { Scene3d, Texture3d } from 'opencad-viewer3d/types';
+import type { Mesh3d, Scene3d, Texture3d } from 'opencad-viewer3d/types';
 import { fitSize, imageInfo } from 'opencad-viewer3d/texture';
 import { colorizeRgba } from '../colorize';
 import type { SkpTextureInfo } from '../index';
@@ -50,19 +50,64 @@ export interface TexturePrepResult {
   swatches: Map<string, Uint8Array>;
 }
 
-/** 무늬를 장면에서 뺀다: 그 무늬를 쓰던 그물은 무늬 좌표도 지워 평균색으로 칠한다 */
+/**
+ * PBR 그림을 넣는 가장 작은 무늬 한도(55차): 이보다 작은 한도(휴대 기기·메모리 4 GB 이하 — texlimits.ts)는 PBR 그림을 넣지 않는다
+ * (코어는 PBR 그림도 무늬와 한 예산으로 줄여 색 무늬가 흐려진다). 값만 준 거칠기·금속은 그대로 둔다
+ */
+export const PBR_MIN_TEXTURE_LIMIT = 2048;
+
+/** 그물에서 PBR 그림 하나(쓰임)를 떼고 그 그림의 배율·꼴 칸도 뗀다 */
+function unsetPbrMap(m: Mesh3d, field: 'normalTexture' | 'roughnessTexture' | 'metallicTexture'): void {
+  delete m[field];
+  if (field === 'normalTexture') {
+    delete m.normalScale;
+    delete m.normalFlipY;
+  } else if (field === 'roughnessTexture') {
+    delete m.roughness;
+    delete m.roughnessInvert;
+  } else delete m.metallic;
+}
+
+const PBR_FIELDS = ['normalTexture', 'roughnessTexture', 'metallicTexture'] as const;
+
+/**
+ * 55차: 그물의 PBR 그림을 뗀다 — which가 참인 그물(기본 모두)의 그림과 그 배율·꼴 칸(값만 준 거칠기·금속은 둔다).
+ * 그 뒤 어느 그물도 쓰지 않는 PBR 그림은 장면·meta.textures에서 뺀다. 뺀 그림 수를 돌려준다
+ */
+export function dropPbrMaps(scene: Scene3d, which: (m: Mesh3d) => boolean = () => true): number {
+  for (const m of scene.meshes) if (which(m)) for (const f of PBR_FIELDS) if (m[f] !== undefined) unsetPbrMap(m, f);
+  const infos = (scene.meta?.textures ?? []) as SkpTextureInfo[];
+  const pbrIds = new Set(infos.filter((t) => t.pbr).map((t) => t.id));
+  if (!pbrIds.size || !scene.textures) return 0;
+  const used = new Set<string>();
+  for (const m of scene.meshes) for (const f of PBR_FIELDS) if (m[f]) used.add(m[f]!);
+  const gone = new Set([...pbrIds].filter((id) => !used.has(id)));
+  if (!gone.size) return 0;
+  scene.textures = scene.textures.filter((t) => !gone.has(t.id));
+  if (scene.meta) scene.meta.textures = infos.filter((t) => !gone.has(t.id));
+  if (!scene.textures.length) {
+    delete scene.textures;
+    if (scene.meta) delete scene.meta.textures;
+  }
+  return gone.size;
+}
+
+/** 무늬를 장면에서 뺀다: 그 무늬를 쓰던 그물은 무늬 좌표도 지워 평균색으로 칠한다(그 그물의 PBR 그림도 — 무늬 좌표를 함께 쓴다) */
 export function dropTexture(scene: Scene3d, id: string): void {
   if (!scene.textures) return;
   scene.textures = scene.textures.filter((t) => t.id !== id);
+  let lostUvs = false;
   for (const m of scene.meshes) {
     if (m.texture === id) {
       delete m.texture;
       delete m.uvs;
+      lostUvs = true;
     }
     if (m.backTexture === id) {
       delete m.backTexture;
       delete m.backUvs;
     }
+    for (const f of PBR_FIELDS) if (m[f] === id) unsetPbrMap(m, f);
   }
   const infos = (scene.meta?.textures ?? []) as SkpTextureInfo[];
   if (scene.meta) scene.meta.textures = infos.filter((t) => t.id !== id);
@@ -72,6 +117,7 @@ export function dropTexture(scene: Scene3d, id: string): void {
     delete scene.textures;
     if (scene.meta) delete scene.meta.textures;
   }
+  if (lostUvs) dropPbrMaps(scene, (m) => !m.uvs);
 }
 
 /** 워커에서 풀어야 하는 무늬인지(색 바꾸기 또는 알파 재기) */

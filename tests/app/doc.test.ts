@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { SectionItemRange } from 'opencad-viewer3d';
 import type { Scene3d } from 'opencad-viewer3d/types';
 import { translate } from '../../site/i18n.mjs';
 import {
@@ -6,7 +7,6 @@ import {
   hiddenSelection,
   prepareEdgeDisplay,
   sectionIndexOfId,
-  sectionPlanesFor,
   tagColors,
   definitionCounts,
   docLabel,
@@ -27,6 +27,7 @@ import {
   unsupportedVersion,
 } from '../../src/app/doc';
 import { readSkpImages, skpToScene } from '../../src/index';
+import { sectionPlanesFor } from '../../src/app/sections';
 import { oldSkpHeader } from '../build';
 import { PRE3_SCHEMAS, mfcFile, squareEntities } from '../mfcwrite';
 import { sampleSkpBytes } from '../../src/app/sample';
@@ -250,7 +251,7 @@ describe('숨은 선 모드용 윤곽선·태그 색', () => {
 });
 
 describe('파일 단면 → 코어 여러 단면', () => {
-  it('모형 단면은 모두, 그룹 안 단면은 따로 나눈 노드의 항목만 자르고, 나누지 않은 노드·한도(6)를 넘는 것은 센다', () => {
+  it('모형 단면은 모두, 그룹 안 단면은 따로 나눈 노드의 항목·나누지 않은 노드의 구간만 자르고, 자를 것을 모르는 노드·한도(6)를 넘는 것은 센다', () => {
     const d = createDoc('예제.skp', 1, { scene: sampleScene(), ms: 1 });
     const t = d.tree!;
     const split = [...Array(t.count).keys()].find((i) => t.meshFirst[i]! >= 0)!;
@@ -261,9 +262,27 @@ describe('파일 단면 → 코어 여러 단면', () => {
     expect(r.planes[1]!.items!.length).toBeGreaterThan(0);
     // 코어 0.44.0부터 items는 id 글이나 구간({ id, start, count })이다 — 따로 나눈 노드는 id 글만 준다
     expect(r.planes[1]!.items!.every((id) => typeof id === 'string' && (d.meshIndex.has(id) || d.lineIndex.has(id)))).toBe(true);
-    // 나누지 않은 노드(구간으로만 아는 노드)는 그 노드만 자를 수 없다
-    const unsplit = { ...d, tree: { ...t, meshFirst: Int32Array.from(t.meshFirst).fill(-1) } };
-    expect(sectionPlanesFor(unsplit, [item(1, split)], 'none').skipped).toEqual({ scope: 1, limit: 0 });
+    // 나누지 않은 노드(구간으로만 아는 노드)는 그 노드 구간(코어 0.44.0 { id, start, count })만 — 나눈 노드 항목의 삼각형·선분과 같은 수
+    const unsplit = { ...d, tree: { ...t, meshFirst: Int32Array.from(t.meshFirst).fill(-1), lineFirst: Int32Array.from(t.lineFirst).fill(-1) } };
+    const ru = sectionPlanesFor(unsplit, [item(1, split)], 'none');
+    expect(ru.skipped).toEqual({ scope: 0, limit: 0 });
+    expect(ru.applied).toEqual([1]);
+    const ranges = ru.planes[0]!.items! as SectionItemRange[];
+    expect(ranges.length).toBeGreaterThan(0);
+    expect(ranges.every((x) => typeof x === 'object' && x.count > 0 && !x.edges)).toBe(true);
+    const total = (ids: readonly string[], kind: 'mesh' | 'line'): number =>
+      ids.reduce((a, id) => {
+        const m = d.scene.meshes.find((x) => x.id === id);
+        const l = d.scene.lines.find((x) => x.id === id);
+        return a + (kind === 'mesh' ? (m ? m.indices!.length / 3 : 0) : l ? l.positions.length / 6 : 0);
+      }, 0);
+    const own = r.planes[1]!.items! as string[];
+    const sum = (kind: 'mesh' | 'line'): number => ranges.filter((x) => (kind === 'mesh' ? d.meshIndex.has(x.id) : d.lineIndex.has(x.id))).reduce((a, x) => a + x.count, 0);
+    expect(sum('mesh')).toBe(total(own, 'mesh'));
+    expect(sum('line')).toBe(total(own, 'line'));
+    // 구간을 버린 큰 나무(runsDropped)·나무 밖 노드는 자를 것을 몰라 센다
+    expect(sectionPlanesFor({ ...d, tree: { ...unsplit.tree, runsDropped: true } }, [item(1, split)], 'none').skipped).toEqual({ scope: 1, limit: 0 });
+    expect(sectionPlanesFor(d, [item(1, t.count + 3)], 'none').skipped).toEqual({ scope: 1, limit: 0 });
     const many = sectionPlanesFor(d, [...Array(8).keys()].map((i) => item(i, -1)), 'none');
     expect(many.planes.length).toBe(6);
     expect(many.skipped).toEqual({ scope: 0, limit: 2 });

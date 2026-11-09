@@ -12,7 +12,7 @@
 // 코어 입구(Viewer3d — 그리기·고르기)는 문서를 열 때 나눠 받는다(core.ts). 여기서는 타입과 작은 모듈만 가져온다
 import type { Pick3d, IndexRange, PickEvent, Projection, RenderMode, SectionAxis, ViewName, Viewer3d } from 'opencad-viewer3d';
 import { VIEW_LABELS, type CameraState, type ViewFrame } from 'opencad-viewer3d/camera';
-import { FirstUse, chunkFailText, isChunkLoadError, loadMeasure, loadRelease, loadViewerCore } from './core';
+import { FirstUse, chunkFailText, fileSections, isChunkLoadError, loadMeasure, loadRelease, loadViewerCore } from './core';
 // 큰 모형 놓기·문맥 잃음과 되찾음(release.ts)도 문서를 열 때 나눠 받는다 — 여기서는 형만
 import type { ContextWatch, GraphicsState, RestoreRecord } from './release';
 import { dragStartPx } from 'opencad-viewer3d/pointer';
@@ -61,7 +61,6 @@ import {
   createDoc,
   faceOrEdgeSelection,
   sectionIndexOfId,
-  sectionPlanesFor,
   hiddenSelection,
   tagColors,
   partBox,
@@ -2165,12 +2164,12 @@ export class SkpViewerApp implements PanelHost {
     this.panel.rerender();
   }
 
-  /** 파일 단면을 코어 여러 단면으로(sectionPlanesFor). 없으면 끈다 */
+  /** 파일 단면을 코어 여러 단면으로(sections.ts sectionPlanesFor — 코어와 함께 받아 뷰어가 있으면 있다). 없으면 끈다 */
   private applyFileSections(list: readonly PageSection[]): void {
     const d = this.doc;
     const v = this.viewer;
-    if (!d || !v) return;
-    const r = sectionPlanesFor(d, list, this.caps);
+    if (!d || !v || !fileSections) return;
+    const r = fileSections.sectionPlanesFor(d, list, this.caps);
     v.setSections(r.planes.length ? r.planes : null);
     d.fileSections = r.applied;
     d.sectionSkipped = r.skipped;

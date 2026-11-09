@@ -3,7 +3,7 @@
  * 해석기가 scene.meta에 적은 것(판·단위·통계·tagStats·materialStats·outline·tree·extraItems)을 안전하게 읽어 화면용 꼴로 바꾼다.
  * meta가 비었거나 옛 꼴이어도 장면(그물 이름·묶음)에서 최소한의 목록을 만든다.
  */
-import type { IndexRange, Pick3d, RangeSelection, Scene3d, SceneIssue, SectionPlane } from 'opencad-viewer3d';
+import type { IndexRange, Pick3d, RangeSelection, Scene3d, SceneIssue } from 'opencad-viewer3d';
 import type { SkpImages } from '../images';
 import type {
   SkpAnnotationItems,
@@ -697,41 +697,7 @@ export function hiddenSelection(d: Pick<SkpDoc, 'scene'>, item: number, prims: r
   return prims;
 }
 
-/**
- * 파일 단면(activeSections) → 코어 setSections 평면: 모형 단면은 장면 전체, 그룹·컴포넌트 안 단면은 그 노드의 항목(따로 나눈 노드만 — 해석기가
- * 단면이 든 노드를 따로 나눈다)만 자른다. 나누지 않은 노드라 항목을 모르는 단면과 코어 한도(MAX_SECTION_PLANES)를 넘는 단면은 건너뛰고 수를 센다
- */
-export function sectionPlanesFor(
-  d: Pick<SkpDoc, 'tree' | 'scene'>,
-  list: readonly { index: number; plane: Pick<SkpSectionPlaneMeta, 'node'>; normal: readonly number[]; offset: number }[],
-  caps: 'closed' | 'none' | 'all',
-): { planes: SectionPlane[]; applied: number[]; skipped: { scope: number; limit: number } } {
-  const planes: SectionPlane[] = [];
-  const applied: number[] = [];
-  const skipped = { scope: 0, limit: 0 };
-  for (const s of list) {
-    const base: SectionPlane = { normal: [s.normal[0]!, s.normal[1]!, s.normal[2]!], offset: s.offset, caps, id: `skp-section-${s.index}` };
-    const node = s.plane.node;
-    if (node >= 0) {
-      const t = d.tree;
-      const ids = t && node < t.count && isSplit(t, node) ? nodeItemIds(t, d.scene, node) : [];
-      if (!ids.length) {
-        skipped.scope++;
-        continue;
-      }
-      base.items = ids;
-    }
-    if (planes.length >= MAX_SECTION_PLANES) {
-      skipped.limit++;
-      continue;
-    }
-    planes.push(base);
-    applied.push(s.index);
-  }
-  return { planes, applied, skipped };
-}
-
-/** 단면 상태 id(sectionPlanesFor의 id) → 파일 단면 차례(파일 단면이 아니면 null) */
+/** 단면 상태 id(sections.ts sectionPlanesFor의 id) → 파일 단면 차례(파일 단면이 아니면 null) */
 export function sectionIndexOfId(id: string | undefined): number | null {
   const m = id ? /^skp-section-(\d+)$/.exec(id) : null;
   return m ? Number(m[1]) : null;

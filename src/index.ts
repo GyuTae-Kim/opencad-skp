@@ -15,12 +15,12 @@ import type { Scene3d, Texture3d } from 'opencad-viewer3d/types';
 import { imageInfo } from 'opencad-viewer3d/texture';
 import { readSkpHeader } from './header';
 import { readSkpImages, zipImageReads, type SkpImageOptions, type SkpImages } from './images';
-import { parseMaterialXml, type SkpMaterialInfo } from './materials';
+import { parseMaterialXml, type SkpMaterialInfo, type SkpPbrRole } from './materials';
 import type { SkpMetaExtras } from './meta';
 import { MfcRefused, readMfcModel, rememberMfcImages, takeMfcResult } from './mfcmodel';
 import { readModelDat, type SkpModel } from './model';
 import { inflateNative, STREAM_MIN_BYTES, streamModelDat, type InflateInput, type InflatePump } from './modelstream';
-import { buildSceneParts, type SceneTexture } from './scene';
+import { buildSceneParts, type ScenePbr, type SceneTexture } from './scene';
 import { axesMeta, cameraMeta, edgeColoringFor, locationMeta, pagesMeta, shadowMeta, styleFor, unitsFor } from './scene-meta';
 import { parseStyleXml } from './styles';
 import { blobSource, HEAD_BYTES, readSourceDirectory, SourceItems, type SkpSource } from './range';
@@ -46,7 +46,7 @@ export {
   type SkpTextureMaps,
 } from './entities';
 export { readSkpImages, type SkpImage, type SkpImages, type SkpImageOptions } from './images';
-export { parseMaterialXml, type SkpMaterialInfo, type SkpMaterialTexture } from './materials';
+export { parseMaterialPbr, parseMaterialXml, type SkpMaterialInfo, type SkpMaterialPbr, type SkpMaterialTexture, type SkpPbrRole } from './materials';
 export { colorizeRgba, rgbToHls, hlsToRgb, type ColorizeSpec } from './colorize';
 export type { SkpExtraItems, SkpMaterialStat, SkpOutlineEntry, SkpTagStat, SkpTree } from './scene';
 export { TREE_HIDDEN, TREE_MORE } from './scene';
@@ -88,6 +88,11 @@ export interface SkpOptions {
    * 주지 않으면 예전처럼 무늬 평균색만 칠한다. 2020 이하는 재질 열쇠가 폴더다(readSkpImages가 같은 열쇠로 꺼낸다).
    */
   textures?: SkpImages['materials'];
+  /**
+   * PBR 그림(readSkpImages(bytes).pbr — 55차). 주면 무늬를 입힌 재질의 <mat:pbrMR> 법선·거칠기·금속 그림을 scene.textures에 넣고(바이트는 같은 배열)
+   * 그 재질 그물(앞면 무늬 좌표를 단 것)에 normalTexture·roughnessTexture·metallicTexture를 단다. 그림 없이 값만 켠 칸(roughness·metallic)은 주지 않아도 단다
+   */
+  pbrTextures?: SkpImages['pbr'];
   /** 무늬를 입힐 재질 수 한도(기본 MAX_SKP_TEXTURES — 넘는 재질은 평균색) */
   maxTextures?: number;
   /** 무늬 좌표를 다는 정점 수 한도(기본 scene.ts MAX_UV_VERTICES) */
@@ -141,6 +146,11 @@ export interface SkpTextureInfo {
   alphaPossible: boolean;
   /** 색을 바꾼 무늬(재질 type 2): 방식·재질 색(0~255)·원래 평균색 */
   colorize?: { type: 'shift' | 'tint'; color: [number, number, number]; average?: [number, number, number] };
+  /**
+   * PBR 그림(55차 — 법선·거칠기·금속, 그림 하나가 여러 쓰임이면 여럿). 있으면 색 무늬가 아니다: 워커가 풀거나 색을 바꾸지 않고(alphaPossible false),
+   * 재질 목록 견본도 아니다. 놓기·문맥 복구는 바이트 그대로(raw) 쥐었다 준다
+   */
+  pbr?: SkpPbrRole[];
 }
 
 type TexImage = SkpImages['materials'][number];
@@ -253,7 +263,7 @@ export async function skpToSceneAsync(bytes: Uint8Array, opts: SkpAsyncOptions =
 }
 
 /** skpFileToScene 선택(장면은 skpToSceneAsync와 같다 — 무늬 그림은 직접 꺼내 넘긴다) */
-export interface SkpFileOptions extends Omit<SkpAsyncOptions, 'textures' | 'inflated' | 'releaseBytes'> {
+export interface SkpFileOptions extends Omit<SkpAsyncOptions, 'textures' | 'pbrTextures' | 'inflated' | 'releaseBytes'> {
   /** 그림 꺼내기 선택(readSkpImages와 같다) */
   images?: SkpImageOptions;
   /**
@@ -318,7 +328,7 @@ export async function skpFileToScene(file: Blob | SkpSource, opts: SkpFileOption
     } catch (e) {
       imageError = errText(e);
     }
-    const scene = await skpToSceneAsync(bytes, { ...sceneOpts, textures: images?.materials, releaseBytes: true });
+    const scene = await skpToSceneAsync(bytes, { ...sceneOpts, textures: images?.materials, pbrTextures: images?.pbr, releaseBytes: true });
     return out(scene, images, imageError);
   }
   told('parts');
@@ -331,7 +341,7 @@ export async function skpFileToScene(file: Blob | SkpSource, opts: SkpFileOption
   } catch (e) {
     imageError = errText(e);
   }
-  const o: SkpAsyncOptions = { ...sceneOpts, textures: images?.materials };
+  const o: SkpAsyncOptions = { ...sceneOpts, textures: images?.materials, pbrTextures: images?.pbr };
   const st = startScene(head, o);
   if (!('header' in st)) return out(st, images, imageError);
   st.progress(0.05, '꾸러미(ZIP) 목록 읽는 중');
@@ -365,6 +375,7 @@ function sceneFrom(read: Package | Scene3d, st: Start, opts: SkpOptions): Scene3
     sceneTex.set(id, { id: `skp-tex-${id}`, w: info.texture.width, h: info.texture.height });
     texByMat.set(id, { folder, info, img });
   }
+  const { pbr: scenePbr, sources: pbrSources } = pbrFor(model.materials, materials, sceneTex, opts.pbrTextures);
   // 모형 스타일(렌더링 설정 + 그 스타일의 style.xml): 재질 없는 면은 스타일 앞면 색으로 칠한다(SketchUp 기본 화면처럼)
   let style: ReturnType<typeof styleFor>;
   try {
@@ -401,6 +412,7 @@ function sceneFrom(read: Package | Scene3d, st: Start, opts: SkpOptions): Scene3
       releaseModel: true,
     };
     if (sceneTex.size) build.textures = sceneTex;
+    if (scenePbr.size) build.pbr = scenePbr;
     if (opts.maxUvVertices !== undefined) build.maxUvVertices = opts.maxUvVertices;
     parts = buildSceneParts(model, materials, u.scale, build);
   } catch (e) {
@@ -435,12 +447,13 @@ function sceneFrom(read: Package | Scene3d, st: Start, opts: SkpOptions): Scene3
   const scene: Scene3d = { name, units: u.units, meshes: parts.meshes, lines: parts.lines, warnings, meta };
   if (parts.points.length) scene.points = parts.points;
   if (parts.bounds) scene.bounds = parts.bounds;
-  // 그물이 쓰는 무늬만 장면에 넣는다
+  // 그물이 쓰는 무늬만 장면에 넣는다(55차: 색 무늬 다음에 PBR 그림 — 색 무늬 차례는 예전과 같다)
   if (sceneTex.size) {
     const used = new Set<string>();
     for (const m of scene.meshes) {
       if (m.texture) used.add(m.texture);
       if (m.backTexture) used.add(m.backTexture);
+      for (const id of [m.normalTexture, m.roughnessTexture, m.metallicTexture]) if (id) used.add(id);
     }
     const textures: Texture3d[] = [];
     const infos: SkpTextureInfo[] = [];
@@ -461,6 +474,17 @@ function sceneFrom(read: Package | Scene3d, st: Start, opts: SkpOptions): Scene3
         if (info.texture?.average) ti.colorize.average = info.texture.average;
       }
       infos.push(ti);
+    }
+    for (const [id, s] of pbrSources) {
+      if (!used.has(id)) continue;
+      const head = imageInfo(s.img.bytes);
+      const tex: Texture3d = { id, data: s.img.bytes, mime: s.img.mime };
+      if (head?.width && head.height) {
+        tex.width = head.width;
+        tex.height = head.height;
+      }
+      textures.push(tex);
+      infos.push({ id, material: s.info.name, folder: s.img.folder, path: s.img.path, tile: [s.tile.w, s.tile.h], alphaPossible: false, pbr: [...s.img.roles] });
     }
     if (textures.length) {
       scene.textures = textures;
@@ -726,6 +750,82 @@ function textureImages(
   }
   if (skipped) warnings.push(`무늬 재질이 너무 많아(${max}개 한도) ${skipped}개는 평균색으로 그렸습니다`);
   return out;
+}
+
+type PbrImage = NonNullable<SkpImages['pbr']>[number];
+
+/**
+ * PBR 재질(SkpMaterialInfo.pbr — <mat:pbrMR>에서 켠 칸) → 재질 번호마다 그물 PBR 필드와 쓸 그림(55차, 코어 0.43.0).
+ * - 법선·거칠기·금속 그림은 무늬를 입힌 재질(sceneTex — 색 무늬와 같은 무늬 좌표)이고 그 그림을 받았을 때만: 그림 id와 배율(배율 1·OpenGL 꼴·뒤집지 않음은 코어 기본이라 뺀다).
+ *   SketchUp 그림은 거칠기·금속이 따로라 metallicRoughnessTexture가 아니라 roughnessTexture·metallicTexture(코어는 초록·파랑 채널 — 회색조 그림이면 그대로).
+ * - 그림이 없는 거칠기·금속 칸은 값(roughness·metallic — 그 재질 그물 모두). 그림이 있어야 할 칸인데 그림을 받지 못했으면(한도·무늬 없는 재질) 그 칸은 뺀다.
+ * 그림 id는 재질 번호와 쓰임(skp-pbr-<번호>-<쓰임들>) — 같은 그림을 여러 쓰임에 쓰면 하나
+ */
+function pbrFor(
+  modelMaterials: ReadonlyMap<number, string>,
+  materials: ReadonlyMap<string, SkpMaterialInfo>,
+  sceneTex: ReadonlyMap<number, SceneTexture>,
+  images: SkpImages['pbr'],
+): { pbr: Map<number, ScenePbr>; sources: Map<string, { img: PbrImage; info: SkpMaterialInfo; tile: SceneTexture }> } {
+  const pbr = new Map<number, ScenePbr>();
+  const sources = new Map<string, { img: PbrImage; info: SkpMaterialInfo; tile: SceneTexture }>();
+  const byFolder = new Map<string, Map<SkpPbrRole, PbrImage>>();
+  for (const img of images ?? [])
+    for (const role of img.roles) {
+      let m = byFolder.get(img.folder);
+      if (!m) byFolder.set(img.folder, (m = new Map()));
+      if (!m.has(role)) m.set(role, img);
+    }
+  for (const [id, folder] of modelMaterials) {
+    const info = materials.get(folder);
+    const p = info?.pbr;
+    if (!info || !p) continue;
+    const tile = sceneTex.get(id);
+    const imgs = tile ? byFolder.get(folder) : undefined;
+    const mapId = (role: SkpPbrRole): string | undefined => {
+      const img = imgs?.get(role);
+      if (!img || !tile) return undefined;
+      const tid = `skp-pbr-${id}-${img.roles.join('-')}`;
+      sources.set(tid, { img, info, tile });
+      return tid;
+    };
+    const maps: NonNullable<ScenePbr['maps']> = {};
+    const values: NonNullable<ScenePbr['values']> = {};
+    if (p.normal) {
+      const t = mapId('normal');
+      if (t) {
+        maps.normalTexture = t;
+        if (p.normal.scale !== 1) maps.normalScale = p.normal.scale;
+        if (p.normal.directX) maps.normalFlipY = true;
+      }
+    }
+    if (p.roughness) {
+      if (!p.roughness.file) values.roughness = p.roughness.factor;
+      else {
+        const t = mapId('roughness');
+        if (t) {
+          maps.roughnessTexture = t;
+          if (p.roughness.factor !== 1) maps.roughness = p.roughness.factor;
+          if (p.roughness.invert) maps.roughnessInvert = true;
+        }
+      }
+    }
+    if (p.metallic) {
+      if (!p.metallic.file) values.metallic = p.metallic.factor;
+      else {
+        const t = mapId('metallic');
+        if (t) {
+          maps.metallicTexture = t;
+          if (p.metallic.factor !== 1) maps.metallic = p.metallic.factor;
+        }
+      }
+    }
+    const sp: ScenePbr = {};
+    if (Object.keys(maps).length) sp.maps = maps;
+    if (Object.keys(values).length) sp.values = values;
+    if (sp.maps || sp.values) pbr.set(id, sp);
+  }
+  return { pbr, sources };
 }
 
 /** 뿌리 절·주석·나무 정보 → meta에 더할 칸(src/meta.ts SkpMetaExtras). 없거나 풀지 못한 칸은 빠진다 */

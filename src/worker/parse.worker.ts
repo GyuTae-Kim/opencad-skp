@@ -16,7 +16,7 @@
 import { TEXTURE_LIMIT } from 'opencad-viewer3d/texture';
 import { skpFileToScene, STREAM_MIN_BYTES, type SkpFileResult, type SkpImages } from '../index';
 import { collectTransfers, errorText, isBigScene, sceneHasGeometry, type ParseRequest, type ParseResponse, type ParseResult } from '../app/protocol';
-import { prepareSceneTextures } from './textures';
+import { dropPbrMaps, PBR_MIN_TEXTURE_LIMIT, prepareSceneTextures } from './textures';
 import { damageNotice, emptySceneNotice } from './notice';
 import { packBigScene } from './pack';
 import { filePrint } from './print';
@@ -66,9 +66,13 @@ async function open(req: ParseRequest): Promise<ParseResult> {
   const scene = read.scene;
   const images: SkpImages | undefined = read.images;
   const result: ParseResult = { scene, ms: 0 };
+  // 55차: PBR 그림 바이트는 장면 무늬가 든다(같은 배열) — 화면 쪽 그림 목록에는 넘기지 않는다(놓기 뒤에도 화면이 붙들지 않게)
+  if (images) delete images.pbr;
   if (images && (images.model || images.materials.length || images.components.length || images.scenes.length)) result.images = images;
   if (scene.textures?.length) {
     const limit = req.textureLimit && req.textureLimit > 0 ? req.textureLimit : TEXTURE_LIMIT;
+    // 휴대 기기·작은 메모리(무늬 한도가 작다)는 PBR 그림을 넣지 않는다(값만 준 거칠기·금속은 둔다)
+    if (limit < PBR_MIN_TEXTURE_LIMIT) dropPbrMaps(scene);
     const prep = await prepareSceneTextures(scene, limit, (d, n) => progress(0.96 + (0.02 * d) / Math.max(1, n), '무늬 그림 손질하는 중'));
     // 색을 바꾼 무늬는 재질 목록 견본도 바꾼 색으로
     if (images && prep.swatches.size)
