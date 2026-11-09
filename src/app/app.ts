@@ -11,7 +11,7 @@
  */
 // 코어 입구(Viewer3d — 그리기·고르기)는 문서를 열 때 나눠 받는다(core.ts). 여기서는 타입과 작은 모듈만 가져온다
 import type { Pick3d, IndexRange, PickEvent, Projection, RenderMode, SectionAxis, ViewName, Viewer3d } from 'opencad-viewer3d';
-import { VIEW_LABELS, lerpCamera, type CameraState, type ViewFrame } from 'opencad-viewer3d/camera';
+import { VIEW_LABELS, type CameraState, type ViewFrame } from 'opencad-viewer3d/camera';
 import { FirstUse, chunkFailText, isChunkLoadError, loadMeasure, loadRelease, loadViewerCore } from './core';
 // 큰 모형 놓기·문맥 잃음과 되찾음(release.ts)도 문서를 열 때 나눠 받는다 — 여기서는 형만
 import type { ContextWatch, GraphicsState, RestoreRecord } from './release';
@@ -370,8 +370,6 @@ export class SkpViewerApp implements PanelHost {
   private readonly phoneQuery = media(`${NARROW_MQ}, (pointer: coarse) and (max-height: 499.98px)`);
   /** 손가락이 주인 기기(휴대폰·태블릿): 측정 안내·파일 고르기를 맞춘다 */
   private readonly coarseQuery = media('(pointer: coarse)');
-  /** 움직임 줄이기(47차 — WCAG 2.3.3): 카메라를 옮기는 움직임 없이 바로 둔다(장면 전환·맞춰 보기·이전 보기·코어 표준 뷰·뷰 큐브) */
-  private readonly calmQuery = media('(prefers-reduced-motion: reduce)');
   /** 측정 띠를 쓰는 화면(styles.css .measure-bar와 같은 조건): 측정값 칸을 띠 안 둘째 줄로 옮긴다 */
   private readonly bandQuery = media(`${NARROW_MQ}, (pointer: coarse)`);
   /** 측정값 칸(VCB): 줄자 길이·각도기 각도를 보이고 쳐서 넣는다 */
@@ -409,7 +407,9 @@ export class SkpViewerApp implements PanelHost {
   private hiddenRanges = new Map<number, IndexRange[]>();
   /** 나눠 올리기가 끝나면 부를 것(새 문서로 바뀌면 바로 부른다) */
   private uploadDone: (() => void) | null = null;
-  private camAnim = 0;
+  /** 앱이 시작한 카메라 움직임(코어 flyTo — 54차)의 차례 번호(끊긴 앞 움직임의 끝 알림을 거른다)와 옮기는 중인지 */
+  private flight = 0;
+  private flying = false;
   /** 옮기는 중인 카메라 움직임이 끝나면 부를 것(그만둘 때도 부른다 — 보기 기록이 '옮기는 중'에 머물지 않게) */
   private camAnimDone: (() => void) | null = null;
   /** 장면 카메라를 지금 3D 보기 종횡비에 맞춘 상태(세로 화면이면 장면의 가로 범위를 지키게 넓힘 — 휴대폰을 돌리면 다시 맞춘다) */
@@ -1325,7 +1325,9 @@ export class SkpViewerApp implements PanelHost {
         viewCubeSize: this.viewCubeSize(),
         textureLimit: this.texLimits.limit,
         textureBudget: this.texLimits.budget,
-        animate: !this.calmQuery?.matches,
+        // 움직임 줄이기(47차 — WCAG 2.3.3): 코어 0.48.0 'auto'가 prefers-reduced-motion을 듣고 연 뒤 바꾼 설정도 따른다
+        // (뷰 큐브·키 F·1~7·맞춰 보기와 앱의 장면 전환·이전·다음 보기 — 앱은 flyTo로 옮긴다)
+        animate: 'auto',
       });
       v.onPick((p, e) => this.onPick(p, e));
       // 단면 상태(앱 단추·슬라이더·새 장면으로 꺼짐 등)는 코어 알림으로 도구 막대에 맞춘다
@@ -1786,7 +1788,7 @@ export class SkpViewerApp implements PanelHost {
     const v = this.viewer;
     const f = this.sceneFit;
     if (!v || !f || !this.doc) return;
-    if (this.camAnim) {
+    if (this.flying) {
       this.refitLater = true;
       return;
     }
@@ -1802,37 +1804,39 @@ export class SkpViewerApp implements PanelHost {
     }
   }
 
-  /** 옮기는 중인 카메라 움직임을 그만둔다(끝났을 때 부를 것도 부른다 — 이전·다음 보기면 보기 기록의 '옮기는 중'을 푼다) */
+  /**
+   * 옮기는 중인 카메라 움직임을 그 자리에서 그만둔다(끝났을 때 부를 것도 부른다 — 이전·다음 보기면 보기 기록의 '옮기는 중'을 푼다).
+   * 코어 움직임은 지금 카메라로 setCamera해 멈춘다(그 flyTo는 false로 풀리고 차례 번호로 거른다 — 같은 카메라라 카메라 알림은 없다)
+   */
   private stopCameraAnim(): void {
-    cancelAnimationFrame(this.camAnim);
-    this.camAnim = 0;
+    this.flight++;
+    if (this.flying) {
+      this.flying = false;
+      const v = this.viewer;
+      if (v) v.setCamera(v.getCamera());
+    }
     const done = this.camAnimDone;
     this.camAnimDone = null;
     done?.();
   }
 
-  /** 카메라를 부드럽게 옮긴다(뷰어의 맞춰 보기 움직임과 비슷한 시간). 앞의 움직임은 그만두고 그 done을 먼저 부른다 */
+  /**
+   * 카메라를 부드럽게 옮긴다(장면 전환·이전·다음 보기·고른 것 맞춰 보기). 54차: 앱의 requestAnimationFrame 고리 대신 코어 flyTo(0.49.0 길이·끝 알림)로 —
+   * 움직임 줄이기 선호(뷰어 animate 'auto' — 바로 옮기고 곧바로 끝), 숨은 탭·문맥 잃음(0.50.0 — 끝 자리로 마침), 옮기는 중 끌기·휠(끝 자리로 마친 뒤 그 조작)을
+   * 코어가 맡는다. 곡선은 코어 곡선(표준 뷰와 같은 가속·감속)이다. 앞의 움직임은 그만두고 그 done을 먼저 부른다.
+   * done은 끝 자리에 닿았을 때, 다른 카메라 길(setCamera·새 장면 맞춤 등)이 가져갔을 때 모두 부른다(지금처럼 — 보기 기록·2점 투시를 마무리)
+   */
   private animateCamera(to: CameraState, ms = 320, done?: () => void): void {
     const v = this.viewer;
     if (!v) return;
     this.stopCameraAnim();
-    const from = v.getCamera();
-    if (!(ms > 0) || this.calmQuery?.matches) {
-      v.setCamera(to);
-      done?.();
-      return;
-    }
+    const id = ++this.flight;
+    this.flying = true;
     this.camAnimDone = done ?? null;
-    const t0 = performance.now();
-    const step = (now: number): void => {
-      const k = Math.min(1, (now - t0) / ms);
-      const e = 1 - (1 - k) ** 3;
-      v.setCamera(lerpCamera(from, to, e));
-      if (k < 1) {
-        this.camAnim = requestAnimationFrame(step);
-        return;
-      }
-      this.camAnim = 0;
+    void v.flyTo(to, undefined, { duration: ms }).then(() => {
+      // 그 사이 새 움직임이 시작했거나 그만뒀다 — 앞의 done은 stopCameraAnim이 이미 불렀다
+      if (id !== this.flight) return;
+      this.flying = false;
       this.camAnimDone = null;
       done?.();
       // 옮기는 동안 휴대폰을 돌렸으면 다 옮긴 뒤 다시 맞춘다
@@ -1840,14 +1844,13 @@ export class SkpViewerApp implements PanelHost {
         this.refitLater = false;
         this.refitScene();
       }
-    };
-    this.camAnim = requestAnimationFrame(step);
+    });
   }
 
   /** 카메라가 바뀔 때: 보기 기록(멈추면 한 칸, 그때의 장면 맞춤과 함께) */
   private onCamera(c: CameraState): void {
     // 2점 투시에서 돌려 앙각이 생기면(옮기는 중이 아닐 때) 2점 투시를 끝내고 렌즈 이동을 없앤다
-    if (this.twoPointOn && !this.camAnim && !isTwoPoint(c)) {
+    if (this.twoPointOn && !this.flying && !isTwoPoint(c)) {
       this.twoPointOn = false;
       if (c.shiftX || c.shiftY) this.viewer?.setLensShift(0, 0);
       this.refreshCamBar();
