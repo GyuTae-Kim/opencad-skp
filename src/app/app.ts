@@ -257,6 +257,8 @@ export interface AppSnapshot {
   shadows: boolean;
   fog: boolean;
   lit: boolean;
+  /** 코어에 건 주변 가림(꺼져 있으면 null, 켰으면 움직이는 동안 'off'·'keep' — 54차) */
+  ambientOcclusion: 'off' | 'keep' | null;
   /** 걷는 중인지·코어 조작 방식·세로 시야각(도)·2점 투시·카메라 띠·조이스틱이 보이는지 */
   walking: boolean;
   navigation: 'orbit' | 'walk';
@@ -1285,6 +1287,8 @@ export class SkpViewerApp implements PanelHost {
     this.fogStyle = d.style;
     this.fogOn = d.style?.fog === true;
     this.applyLighting();
+    // 주변 가림은 고른 값을 이어 가고, 움직이는 동안 끄기 기본은 이 문서 크기를 따른다
+    this.applyAmbientOcclusion();
     // 잘린 면 채우기: 모형 스타일의 단면 채우기(장면 스타일이 바꿀 수 있다)
     this.sectionFill = sectionFillOf(d.style, d.info.major);
     // 활성 단면 모두(모형 단면은 모형 전체, 그룹 안 단면은 그 그룹만)
@@ -2602,6 +2606,36 @@ export class SkpViewerApp implements PanelHost {
   }
 
   /**
+   * 주변 가림(코어 0.49.0 화면 공간 SSAO — 45차 요청, 54차): 켜면 음영 계열 방식에서 면이 만나는 구석·틈·물체가 놓인 바닥을 어둡게 한다.
+   * 기본은 끔(SketchUp 기본 스타일처럼 — 켜면 불투명 깊이를 한 번 더 그린다). 새 문서에서도 고른 값을 이어 간다(이번 실행 동안).
+   * 움직이는 동안 끄기(0.50.0 moving 'off'): 끌기·휠·카메라 움직임 동안은 가림을 그리지 않고 멈춘 첫 그림부터 다시 그린다 —
+   * 기본은 휴대폰이거나 큰 모형(나눠 올리는 기준)일 때 켬, 사용자가 고르면 그 값. 근거(54차, 헤드리스 Chrome·M1 Pro GPU, 멈춘 화면 그리기 + 1화소 읽기):
+   * 넓은 화면(950 × 685)에서 큰 표본 셋(삼각형 34만~115만)은 가림을 켜면 한 그림이 가운데값으로 1.0~7.4 ms 늘고(165 MB 10.3~11.3 → 17.9~18.5 ms)
+   * 예제 집은 0.8 ms 늘었다(휴대폰 화면 재기는 끔·켬 모두 17 ms 안팎에 붙어 가르지 못했다). 휴대폰 GPU를 그 1/3~1/5로 보면(코어 README 0.49.0 어림)
+   * 큰 모형은 움직이는 그림마다 3~37 ms가 더해져 60 fps 몫(16.7 ms)을 넘기 쉽다
+   */
+  private aoOn = false;
+  private aoMovingChoice: boolean | null = null;
+
+  private get aoMovingOff(): boolean {
+    return this.aoMovingChoice ?? (!!this.phoneQuery?.matches || (!!this.doc && isBigScene(this.doc)));
+  }
+
+  setAmbientOcclusion(on: boolean): void {
+    this.aoOn = on;
+    this.applyAmbientOcclusion();
+  }
+
+  setAoMovingOff(on: boolean): void {
+    this.aoMovingChoice = on;
+    this.applyAmbientOcclusion();
+  }
+
+  private applyAmbientOcclusion(): void {
+    this.viewer?.setAmbientOcclusion(this.aoOn ? { moving: this.aoMovingOff ? 'off' : 'keep' } : null);
+  }
+
+  /**
    * 코어 조명·안개를 지금 상태로: 그림자를 켰거나 파일이 해로 음영을 칠하면 그 날짜·시각·위치의 해(설정이 없으면 SketchUp 기본 11월 8일 13:30 볼더),
    * 아니면 예전 고정 조명. 안개는 장면 범위로 정한 기본 거리(스타일 거리가 있으면 그것)
    */
@@ -3085,6 +3119,8 @@ export class SkpViewerApp implements PanelHost {
       ...(this.measureTool?.guideMenuItems(!!this.coarseQuery?.matches) ?? []),
       { label: '그림자(파일의 날짜·시각·위치)', checked: this.shadowsOn, toggle: true, sep: true, run: () => this.setShadows(!this.shadowsOn) },
       { label: '안개', checked: this.fogOn, toggle: true, run: () => this.setFogOn(!this.fogOn) },
+      { label: '주변 가림(구석·틈 어둡게)', checked: this.aoOn, toggle: true, run: () => this.setAmbientOcclusion(!this.aoOn) },
+      { label: '움직이는 동안 주변 가림 끄기', checked: this.aoMovingOff, toggle: true, disabled: !this.aoOn, run: () => this.setAoMovingOff(!this.aoMovingOff) },
       { label: '걷기(1인칭)', icon: 'walk', checked: this.walking, toggle: true, sep: true, run: () => this.setWalk(!this.walking) },
       { label: '2점 투시', checked: this.twoPointOn, toggle: true, run: () => this.setTwoPoint(!this.twoPointOn) },
       {
@@ -3748,6 +3784,7 @@ export class SkpViewerApp implements PanelHost {
       shadows: this.shadowsOn,
       fog: this.fogOn,
       lit: !!this.viewer?.lighting,
+      ambientOcclusion: (this.viewer?.ambientOcclusion?.moving as 'off' | 'keep' | undefined) ?? null,
       walking: this.walking,
       navigation: this.viewer?.navigation ?? 'orbit',
       fov: this.viewer ? Math.round(this.viewer.fov * 10) / 10 : null,

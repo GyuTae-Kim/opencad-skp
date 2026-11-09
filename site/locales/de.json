@@ -1096,5 +1096,7 @@
   "3D 보기: 굵기가 깨진 선 묶음을 1화소 굵기로 그렸습니다": "3D-Ansicht: Eine Liniengruppe mit beschädigter Breite wurde 1 Pixel breit gezeichnet",
   "3D 보기: 크기가 깨진 점 묶음을 4화소 크기로 그렸습니다": "3D-Ansicht: Eine Punktgruppe mit beschädigter Größe wurde 4 Pixel groß gezeichnet",
   "3D 보기: 고르기 번호가 {0}개 모자란 묶음은 뒤쪽을 배열 차례로 고릅니다": "3D-Ansicht: Einer Gruppe fehlen {0} Auswahlnummern; der Rest wird nach Array-Reihenfolge ausgewählt",
-  "3D 보기: 같은 이름의 형상 묶음이 또 있어 이름으로 찾는 기능은 하나만 봅니다": "3D-Ansicht: Eine weitere Geometriegruppe hat denselben Namen, daher findet die Suche nach Namen nur eine davon"
+  "3D 보기: 같은 이름의 형상 묶음이 또 있어 이름으로 찾는 기능은 하나만 봅니다": "3D-Ansicht: Eine weitere Geometriegruppe hat denselben Namen, daher findet die Suche nach Namen nur eine davon",
+  "주변 가림(구석·틈 어둡게)": "Umgebungsverdeckung (Winkel und Fugen abdunkeln)",
+  "움직이는 동안 주변 가림 끄기": "Umgebungsverdeckung während der Bewegung ausschalten"
 }
