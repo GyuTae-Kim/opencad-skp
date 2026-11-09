@@ -179,6 +179,8 @@ export interface AppSnapshot {
   edges: number | null;
   triangles: number | null;
   warnings: number;
+  /** 3D 뷰어 코어가 빼거나 고쳐 그린 깨진 입력 수(코어 0.50.0 sceneIssues — 54차) */
+  sceneIssues: number;
   tags: number;
   materials: number;
   outline: number;
@@ -1249,6 +1251,8 @@ export class SkpViewerApp implements PanelHost {
         ...(rel ? { release: rel.RELEASE_OPTIONS } : {}),
       });
     else v.setScene(d.scene);
+    // 코어가 빼거나 고쳐 그린 깨진 입력(0.50.0 — setScene 안에서 정한다, 멀쩡하면 빈 배열): 정보 탭 경고 칸·상태 줄 경고 수에 잇는다
+    d.coreIssues = v.sceneIssues;
     if (rel) this.watchContext(rel, v).setSource({ scene: d.scene, textures: held, textureLimit: this.texLimits.limit });
     // 장면을 올리면 코어가 겉모습(선 색)을 풀었다 — 끝의 applyTheme에서 다시 건다
     this.lineContrast.reset();
@@ -3548,7 +3552,7 @@ export class SkpViewerApp implements PanelHost {
     ];
     e.stMain.textContent = parts.join('  |  ');
     e.stMain.title = parts.join(' · ');
-    const w = d.scene.warnings?.length ?? 0;
+    const w = (d.scene.warnings?.length ?? 0) + d.coreIssues.length;
     e.stWarn.hidden = !w;
     e.stWarn.textContent = `경고 ${w}`;
     let sel = '';
@@ -3689,6 +3693,7 @@ export class SkpViewerApp implements PanelHost {
       edges: d?.info.edges ?? null,
       triangles: d?.info.triangles ?? null,
       warnings: d?.scene.warnings?.length ?? 0,
+      sceneIssues: d?.coreIssues.length ?? 0,
       tags: d?.tags.length ?? 0,
       materials: d?.materials.length ?? 0,
       outline: d?.outline.length ?? 0,
