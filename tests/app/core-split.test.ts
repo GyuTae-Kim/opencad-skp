@@ -20,7 +20,16 @@ const CORE = join(ROOT, 'node_modules/opencad-viewer3d/src');
  */
 const SMALL = new Set(['camera', 'pointer', 'viewcube', 'theme', 'section', 'types', 'math', 'bounds', 'extent']);
 /** 문서를 열 때 나눠 받는 앱 모듈(첫 화면 그래프에 없어야 한다 — release.ts는 큰 모형 놓기·문맥 잃음과 되찾음) */
-const SPLIT_APP = ['src/app/measure.ts', 'src/app/snap.ts', 'src/app/release.ts', 'src/app/sections.ts', 'src/app/keypick.ts', 'src/app/sun.ts'];
+const SPLIT_APP = [
+  'src/app/measure.ts',
+  'src/app/snap.ts',
+  'src/app/release.ts',
+  'src/app/sections.ts',
+  'src/app/keypick.ts',
+  'src/app/sun.ts',
+  'src/app/picklist.ts',
+  'src/app/annotations.ts',
+];
 
 /** 주석을 뺀 글(주석 속 예시를 가져오기로 세지 않게) */
 const stripComments = (t: string): string => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"\\])\/\/.*$/gm, '$1');
@@ -118,7 +127,8 @@ describe('코어 나눠 받기', () => {
     for (const f of files) if (!f.startsWith(CORE) && dynamicSpecs(readFileSync(f, 'utf8')).includes('./sections')) sectionsDyn.push(relative(ROOT, f));
     expect(sectionsDyn).toEqual(['src/app/core.ts']);
     // 키보드 고르기(56차 — 가상 커서·겹친 것 고르기 돌리기)와 해 조명·안개 계산(56차에 첫 화면에서 뺐다)도 코어와 함께 core.ts의 import() 하나로만
-    for (const spec of ['./keypick', './sun']) {
+    // 57차: 겹친 것 고르기 목록과 글·치수 라벨(첫 화면에서 뺐다)도
+    for (const spec of ['./keypick', './sun', './picklist', './annotations']) {
       const dyn: string[] = [];
       for (const f of files) if (!f.startsWith(CORE) && dynamicSpecs(readFileSync(f, 'utf8')).includes(spec)) dyn.push(relative(ROOT, f));
       expect(dyn, spec).toEqual(['src/app/core.ts']);
@@ -159,8 +169,11 @@ describe('코어 나눠 받기', () => {
     const { MAX_SECTION_PLANES } = await import('../../src/app/doc');
     expect(MAX_SECTION_PLANES).toBe(m.MAX_SECTION_PLANES);
     // 파일 단면 계산(sections.ts)은 코어를 받으면 함께 있다(55차)
-    const { fileSections } = await import('../../src/app/core');
+    const { fileSections, pickListing, annotating } = await import('../../src/app/core');
     expect(typeof fileSections?.sectionPlanesFor).toBe('function');
+    // 겹친 것 고르기 목록·글·치수 라벨도 함께 있다(57차)
+    expect(typeof pickListing?.PickList).toBe('function');
+    expect(typeof annotating?.AnnotationLabels).toBe('function');
   });
 });
 

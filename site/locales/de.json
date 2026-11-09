@@ -1114,5 +1114,7 @@
   "3D 보기에 초점이 있을 때(줄자·각도기를 끈 동안): 가상 커서 켜기·옮기기(Shift와 함께면 크게)": "Mit Fokus auf der 3D-Ansicht (Maßband und Winkelmesser aus): virtuellen Cursor einschalten und bewegen (mit Shift in größeren Schritten)",
   "가상 커서를 켠 동안: 커서 자리에 겹친 면·모서리를 앞에서부터 차례로(앞 면 뒤의 것까지)": "Bei eingeschaltetem virtuellem Cursor: die unter dem Cursor übereinanderliegenden Flächen und Kanten von vorn nach hinten durchgehen (auch die hinter der vorderen Fläche)",
   "가상 커서를 켠 동안: 지금 차례의 것 고르기(둘째부터는 펼친 단계와 상관없이 그것을 낸 가장 안쪽 그룹·컴포넌트)": "Bei eingeschaltetem virtuellem Cursor: das aktuelle Element auswählen (ab dem zweiten die innerste Gruppe oder Komponente, zu der es gehört, unabhängig von der aufgeklappten Ebene)",
-  "가상 커서 끄기(그 뒤 Tab은 초점 이동, 한 번 더 누르면 고른 것 지우기)": "Virtuellen Cursor ausschalten (danach verschiebt Tab den Fokus; erneut drücken hebt die Auswahl auf)"
+  "가상 커서 끄기(그 뒤 Tab은 초점 이동, 한 번 더 누르면 고른 것 지우기)": "Virtuellen Cursor ausschalten (danach verschiebt Tab den Fokus; erneut drücken hebt die Auswahl auf)",
+  "겹친 것 고르기": "Übereinanderliegende Elemente auswählen",
+  "가상 커서를 켠 동안: 커서 자리에 겹친 면·모서리 목록 열기(마우스는 오른쪽 단추를 끌지 않고 떼기, 손가락·펜은 길게 누르기 — 줄자·각도기를 끈 동안)": "Bei eingeschaltetem virtuellem Cursor: Liste der unter dem Cursor übereinanderliegenden Flächen und Kanten öffnen (mit der Maus die rechte Taste ohne Ziehen loslassen, mit Finger oder Stift lange drücken – solange Maßband und Winkelmesser aus sind)"
 }

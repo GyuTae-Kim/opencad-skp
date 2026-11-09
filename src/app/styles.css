@@ -849,6 +849,12 @@ input[type='checkbox'] {
   flex: 1 1 auto;
 }
 
+/* 겹친 것 고르기 목록(57차): 이름 뒤 맞은 것의 종류(면·모서리·보조점) — 키 글과 같은 옅은 색(초점·마우스 바탕 위에서도 4.5:1) */
+.menu-item .menu-kind {
+  flex: none;
+  color: var(--text-dim);
+}
+
 .menu-check,
 .menu-ico {
   display: flex;

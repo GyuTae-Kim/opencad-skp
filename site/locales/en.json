@@ -1114,5 +1114,7 @@
   "3D 보기에 초점이 있을 때(줄자·각도기를 끈 동안): 가상 커서 켜기·옮기기(Shift와 함께면 크게)": "With focus on the 3D view (Tape Measure and Protractor off): turn on and move the virtual cursor (with Shift, in larger steps)",
   "가상 커서를 켠 동안: 커서 자리에 겹친 면·모서리를 앞에서부터 차례로(앞 면 뒤의 것까지)": "While the virtual cursor is on: cycle through the faces and edges stacked under the cursor, front to back (including those behind the front face)",
   "가상 커서를 켠 동안: 지금 차례의 것 고르기(둘째부터는 펼친 단계와 상관없이 그것을 낸 가장 안쪽 그룹·컴포넌트)": "While the virtual cursor is on: select the current one (from the second on, the innermost group or component it belongs to, whatever the expanded level)",
-  "가상 커서 끄기(그 뒤 Tab은 초점 이동, 한 번 더 누르면 고른 것 지우기)": "Turn off the virtual cursor (Tab then moves focus; press again to clear the selection)"
+  "가상 커서 끄기(그 뒤 Tab은 초점 이동, 한 번 더 누르면 고른 것 지우기)": "Turn off the virtual cursor (Tab then moves focus; press again to clear the selection)",
+  "겹친 것 고르기": "Select stacked items",
+  "가상 커서를 켠 동안: 커서 자리에 겹친 면·모서리 목록 열기(마우스는 오른쪽 단추를 끌지 않고 떼기, 손가락·펜은 길게 누르기 — 줄자·각도기를 끈 동안)": "While the virtual cursor is on: open a list of the faces and edges stacked under the cursor (with a mouse, release the right button without dragging; with a finger or pen, press and hold — while Tape Measure and Protractor are off)"
 }

@@ -12,13 +12,15 @@
 // 코어 입구(Viewer3d — 그리기·고르기)는 문서를 열 때 나눠 받는다(core.ts). 여기서는 타입과 작은 모듈만 가져온다
 import type { Pick3d, IndexRange, PickEvent, Projection, RenderMode, SectionAxis, ViewName, Viewer3d } from 'opencad-viewer3d';
 import { VIEW_LABELS, type CameraState, type ViewFrame } from 'opencad-viewer3d/camera';
-import { FirstUse, chunkFailText, fileSections, isChunkLoadError, keyPicking, loadMeasure, loadRelease, loadViewerCore, sunLight } from './core';
+import { FirstUse, annotating, chunkFailText, fileSections, isChunkLoadError, keyPicking, loadMeasure, loadRelease, loadViewerCore, pickListing, sunLight } from './core';
 import type { KeyPick } from './keypick';
+import type { PickList } from './picklist';
 // 큰 모형 놓기·문맥 잃음과 되찾음(release.ts)도 문서를 열 때 나눠 받는다 — 여기서는 형만
 import type { ContextWatch, GraphicsState, RestoreRecord } from './release';
 import { dragStartPx } from 'opencad-viewer3d/pointer';
 import { ParseClient } from './client';
-import { AnnotationLabels, occludedBy } from './annotations';
+// 글·치수 라벨은 코어 입구와 함께 받는다(core.ts annotating — 57차) — 여기서는 형만
+import type { AnnotationLabels } from './annotations';
 import type { ExportDialog, ExportContext } from './exporter';
 import { edgeGeometry } from './faces';
 import { copyText } from './clipboard';
@@ -431,6 +433,8 @@ export class SkpViewerApp implements PanelHost {
   private measureTool: MeasureTool | null = null;
   /** 3D 보기 키보드 고르기(keypick.ts — 56차): 고르기 도구일 때만 켠다(refreshToolbar) */
   private keyPick: KeyPick | null = null;
+  /** 3D 보기 겹친 것 고르기 목록(picklist.ts — 57차, 오른쪽 단추·길게 누르기·Shift+F10): 키보드 고르기와 같이 고르기 도구일 때만 켠다 */
+  private pickList: PickList | null = null;
   /** 지금 문서의 파일 내용 지문(SHA-256 — 측정 도구가 그 파일의 안내를 기억·되살리는 열쇠, openBlob) */
   private docPrint: Promise<ArrayBuffer | null> | null = null;
   /** 그래픽 문맥 잃음·되찾음 안내와 놓은 것 다시 주기(release.ts — 조각을 받으면 뷰어마다 하나), 그 안내로 띄운 알림 */
@@ -482,6 +486,8 @@ export class SkpViewerApp implements PanelHost {
     this.root.addEventListener('languagechange', () => {
       if (this.viewer) this.viewer.setViewCubeSize(this.viewer.viewCubeSize);
       this.keyPick?.relocalize();
+      // 열린 겹친 것 목록은 앞 언어로 옮겨 넣은 글이라 닫는다(다시 열면 새 언어)
+      this.pickList?.close();
       this.overlay?.invalidate();
       // 파일 글을 끼워 앱이 옮겨 넣은 글(패널 줄의 도움말·상태 줄의 고른 것 — 번역층이 건너뜀, 52차)도 새 언어로
       this.panel.rerender();
@@ -1210,6 +1216,8 @@ export class SkpViewerApp implements PanelHost {
     this.closeNotice();
     this.stopSlideshow();
     this.exportDialog?.close();
+    // 앞 문서의 겹친 것 목록(그 문서의 고르기)
+    this.pickList?.close();
     // 앞 문서의 장면 전환·이전 보기 움직임은 여기서 끝낸다(그 끝 알림이 새 문서에 2점 투시·보기 기록을 남기지 않게 — 54차, 코어 flyTo는 새 장면이 가져가면 늦게 풀린다)
     this.stopCameraAnim();
     // 걷기·2점 투시는 새 문서에서 끈다(카메라 띠는 열려 있으면 그대로)
@@ -1344,6 +1352,12 @@ export class SkpViewerApp implements PanelHost {
       v.onPick((p, e) => this.onPick(p, e));
       // 키보드 고르기(가상 커서 — 고르기 선택은 위 onPick과 같다, keypick.ts PICK_CYCLE)
       if (keyPicking) this.keyPick = new keyPicking.KeyPick(v, this.els.viewHost, () => this.doc);
+      // 겹친 것 고르기 목록(고른 것은 목록이 보인 그대로 — onPick의 측정·걷기 조건과 같을 때만 연다)
+      if (pickListing)
+        this.pickList = new pickListing.PickList(v, () => this.doc, {
+          allowed: () => !!this.doc && !this.measureTool?.active && !this.walking,
+          choose: (p, sel) => this.choosePicked(p, sel),
+        });
       // 단면 상태(앱 단추·슬라이더·새 장면으로 꺼짐 등)는 코어 알림으로 도구 막대에 맞춘다
       v.onSectionChange(() => {
         this.refreshToolbar();
@@ -1354,9 +1368,11 @@ export class SkpViewerApp implements PanelHost {
       this.viewer = v;
       this.overlay = new Overlay(this.els.viewHost);
       this.overlay.attach(v);
-      this.labels = new AnnotationLabels(this.overlay);
-      // 형상 뒤의 글·치수는 숨긴다(카메라가 멈추면 라벨 기준점에서 코어 고르기로 판정)
-      this.labels.setOcclusion((p, x, y, f) => this.labelOccluded(p, x, y, f));
+      // 글·치수 라벨(코어 입구와 함께 받은 조각 — 코어를 받았으면 있다). 형상 뒤의 글·치수는 숨긴다(카메라가 멈추면 라벨 기준점에서 코어 고르기로 판정)
+      if (annotating) {
+        this.labels = new annotating.AnnotationLabels(this.overlay);
+        this.labels.setOcclusion((p, x, y, f) => this.labelOccluded(p, x, y, f));
+      }
       // 치수·지시선 끝 표시는 조각을 받는 대로(45차 — 첫 화면 조각에서 뺐다. 받은 뒤 지금 문서의 표시를 넣고 다시 그린다)
       const ov = this.overlay;
       void import('./dimmarks').then(
@@ -1550,9 +1566,22 @@ export class SkpViewerApp implements PanelHost {
     // 단면에서 잘린 면(채운 면)은 형상이 아니므로 고르기에서 무시한다
     if (p?.section) return;
     if (e?.clicks === 2 && this.enterLevel(p)) return;
-    d.pick = p;
     const sel = selectionForPick(d, p, !!e?.altKey, !!e?.cycle);
-    // 가장 안쪽을 골랐으면 목록에서 보이게 조상을 펼친다(펼친 단계 방식이면 이미 펼쳐져 있다)
+    this.selectPicked(d, p, sel);
+    // 면·모서리 방식에서 두 번 누르면 그 면·모서리에 맞춰 본다
+    if (e?.clicks === 2 && (sel?.kind === 'face' || sel?.kind === 'edge')) this.zoomToSelection();
+  }
+
+  /** 겹친 것 목록에서 고른 것(57차 — 목록이 보인 고른 것 그대로, 안내 고르기·두 번 누르기 판별 없이) */
+  private choosePicked(p: Pick3d, sel: Selection | null): void {
+    const d = this.doc;
+    if (!d || this.measureTool?.active || this.walking) return;
+    this.selectPicked(d, p, sel);
+  }
+
+  /** 3D 고르기의 고른 것을 쓴다: 가장 안쪽을 골랐으면 목록에서 보이게 조상을 펼친다(펼친 단계 방식이면 이미 펼쳐져 있다) */
+  private selectPicked(d: SkpDoc, p: Pick3d | null, sel: Selection | null): void {
+    d.pick = p;
     const n = selectedNode(d, sel);
     let opened = false;
     if (d.tree && n !== null && n >= 0)
@@ -1563,8 +1592,6 @@ export class SkpViewerApp implements PanelHost {
         }
     if (opened && d.panelTab === 'outline') this.panel.rerender();
     this.applySelection(sel, true);
-    // 면·모서리 방식에서 두 번 누르면 그 면·모서리에 맞춰 본다
-    if (e?.clicks === 2 && (sel?.kind === 'face' || sel?.kind === 'edge')) this.zoomToSelection();
   }
 
   /** 3D에서 두 번 누르기: 고른 그룹·컴포넌트를 펼치고, 누른 곳을 품은 바로 안쪽 항목을 고른다. 들어갔으면 true */
@@ -2737,7 +2764,7 @@ export class SkpViewerApp implements PanelHost {
     } else if (d.annotationKind.has(hit.id) || d.extras?.soft.has(hit.id)) return false;
     const b = d.scene.bounds;
     const diag = b ? Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) : 0;
-    return occludedBy(f, p, hit.point, diag * 0.002);
+    return !!annotating?.occludedBy(f, p, hit.point, diag * 0.002);
   }
 
   // 격자·뷰 큐브·좌표축 상태는 뷰어가 들고 있다(뷰어를 만들기 전에는 뷰어 기본값 켜짐)
@@ -3283,6 +3310,13 @@ export class SkpViewerApp implements PanelHost {
       btn?.focus();
       return;
     }
+    // 겹친 것 목록(57차)이 열려 있으면 Esc는 목록만 닫고 3D 보기로 돌아간다(고른 것을 지우지 않는다 — 목록에 초점이 가면 코어 가상 커서는 이미 꺼졌다)
+    if (this.pickList?.element && ev.key === 'Escape') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.pickList.dismiss();
+      return;
+    }
     const v = this.viewer;
     const tool = this.measureTool;
     // 안내 되돌리기·다시 하기(Ctrl·⌘+Z, Ctrl+Y·Ctrl·⌘+Shift+Z — 도구를 끈 동안에도, 입력 칸은 브라우저 몫)
@@ -3553,6 +3587,7 @@ export class SkpViewerApp implements PanelHost {
     const mode = this.measureModeNow;
     // 키보드 고르기는 고르기 도구에서만(줄자·각도기는 화살표를 방향 잠금에 쓴다 — 받는 중인 도구도)
     this.keyPick?.set(!mode);
+    this.pickList?.set(!mode);
     press(e.measureBtn, mode === 'tape');
     press(e.protractorBtn, mode === 'protractor');
     // 측정 도구 조각을 받는 동안 켤 단추(누르면 거둔다)
