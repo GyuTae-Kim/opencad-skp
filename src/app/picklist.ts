@@ -2,7 +2,9 @@
  * 3D 보기 겹친 것 고르기 목록(57차 — 코어 0.47.0 pickCandidates, 여러 CAD의 "다른 것 고르기" 목록). 고르기 도구일 때만 켠다(keypick.ts와 같은 조건 — app.ts).
  *
  * - 여는 법: 마우스 오른쪽 단추를 끌지 않고 뗄 때(오른쪽 끌기는 코어의 화면 옮기기), 손가락·펜을 끌기 시작 거리 안에서 LONG_PRESS_MS 동안 누르고 있을 때
- *   (코어에서 그 포인터를 맡는다 — 떼어도 고르거나 돌리지 않는다), 가상 커서를 켠 동안 3D 보기에서 Shift+F10·메뉴 키(커서 자리).
+ *   (코어에서 그 포인터를 맡는다 — 떼어도 고르거나 돌리지 않는다), 3D 보기에 초점이 있을 때 Shift+F10·메뉴 키
+ *   (가상 커서를 켰으면 커서 자리, 아니면 3D 보기 위 마우스 자리, 마우스가 밖이면 3D 보기 가운데 — 58차).
+ * - 미리 강조(58차): 줄에 초점이 가거나 마우스가 오르면 그 줄을 고를 때의 고른 것을 3D에 강조하고(앱 강조 길 — 고른 것·패널은 그대로), 목록을 닫으면 되돌린다.
  * - 후보: 그 자리의 pickCandidates(앱 onPick과 같은 선택 PICK_CYCLE, 최대 PICK_LIST_MAX). 잘린 면은 뺀다(앱이 고르지 않는다).
  *   앱 고르기로 묶는다(코어 후보는 기본 도형 단위 — 같은 그물의 앞·뒷면, 같은 그룹의 면·모서리): 첫째는 누르기와 같은 고르기(펼친 단계),
  *   둘째부터는 가상 커서로 돌려 고른 것과 같은 고르기(펼친 단계를 건너뛴 가장 안쪽 그룹·컴포넌트, 면·모서리 방식이면 그 면·모서리). 같은 고른 것은 처음 것 하나.
@@ -61,8 +63,13 @@ export type PickListViewer = Pick<Viewer3d, 'canvas' | 'pickCandidates' | 'claim
 export interface PickListHost {
   /** 지금 목록을 열 수 있는지(문서가 있고 걷기·측정 중이 아님) */
   allowed(): boolean;
-  /** 목록에서 고른 것 */
+  /** 목록에서 고른 것(고르기 직전에 allowed를 다시 본다 — 목록이 열린 사이 걷기를 켰을 때) */
   choose(p: Pick3d, sel: Selection | null): void;
+  /**
+   * 3D 강조(58차 미리 강조 — 고른 것·패널은 바꾸지 않는다): 줄에 초점·마우스가 가면 그 줄의 고른 것으로, 미리 강조한 목록을 닫으면 문서의 지금 고른 것으로 부른다.
+   * 없으면 미리 강조하지 않는다
+   */
+  preview?(sel: Selection | null): void;
 }
 
 interface Press {
@@ -81,6 +88,10 @@ export class PickList {
   private press: Press | null = null;
   /** 누른 마우스 오른쪽 단추(끌면 지운다 — 코어 화면 옮기기) */
   private right: { id: number; x: number; y: number } | null = null;
+  /** 3D 보기 위 마우스 자리(client 좌표 — 가상 커서 없이 메뉴 키로 열 때. 3D 보기를 떠나면 지운다) */
+  private hover: { x: number; y: number } | null = null;
+  /** 줄을 미리 강조했는지(닫을 때 되돌린다) */
+  private previewed = false;
 
   constructor(
     private readonly v: PickListViewer,
@@ -92,6 +103,9 @@ export class PickList {
     cv.addEventListener('pointermove', (e) => this.onMove(e));
     cv.addEventListener('pointerup', (e) => this.onUp(e));
     cv.addEventListener('pointercancel', (e) => this.drop(e.pointerId));
+    cv.addEventListener('pointerleave', (e) => {
+      if (e.pointerType === 'mouse') this.hover = null;
+    });
     cv.addEventListener('keydown', (e) => this.onKey(e));
     cv.addEventListener('contextmenu', (e) => this.onContext(e));
   }
@@ -134,6 +148,19 @@ export class PickList {
     this.menu = null;
     this.menuOff?.();
     this.menuOff = null;
+    if (this.previewed) {
+      this.previewed = false;
+      this.host.preview?.(this.doc()?.selection ?? null);
+    }
+  }
+
+  /** 앱 창 키 처리(캡처 단계)에서: 목록이 열려 있으면 Esc는 목록만 닫고 3D 보기로(고른 것을 지우지 않는다). 다뤘으면 true */
+  escape(e: KeyboardEvent): boolean {
+    if (!this.menu || e.key !== 'Escape') return false;
+    e.preventDefault();
+    e.stopPropagation();
+    this.dismiss();
+    return true;
   }
 
   /** 고르지 않고 닫아 3D 보기로 초점(Esc·Tab — 앱 창 키 처리도 Esc를 여기로 보낸다: 고른 것을 지우지 않는다) */
@@ -150,7 +177,7 @@ export class PickList {
     menu.setAttribute('aria-label', uiText(PICK_LIST_LABEL));
     menu.setAttribute('data-i18n-skip', '');
     const buttons: HTMLButtonElement[] = [];
-    const add = (label: string, kind: string | null, run: (() => void) | null): void => {
+    const add = (label: string, kind: string | null, run: (() => void) | null, sel?: Selection | null): void => {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'menu-item';
@@ -168,15 +195,27 @@ export class PickList {
       }
       if (run) b.addEventListener('click', run);
       else b.disabled = true;
+      if (sel !== undefined) {
+        // 미리 강조: 초점이 간 줄(↑↓·처음 연 때 첫 줄). 마우스·펜이 오른 줄은 초점을 옮긴다(표준 메뉴처럼 — 강조 줄과 초점 줄을 하나로)
+        b.addEventListener('focus', () => this.previewSel(sel));
+        b.addEventListener('pointermove', (e) => {
+          if (e.pointerType !== 'touch' && document.activeElement !== b) b.focus({ preventScroll: true });
+        });
+      }
       buttons.push(b);
       menu.append(b);
     };
     for (const it of items)
-      add(it.name, it.kind, () => {
-        this.close();
-        this.v.canvas.focus({ preventScroll: true });
-        this.host.choose(it.pick, it.sel);
-      });
+      add(
+        it.name,
+        it.kind,
+        () => {
+          this.close();
+          this.v.canvas.focus({ preventScroll: true });
+          if (this.doc() && this.host.allowed()) this.host.choose(it.pick, it.sel);
+        },
+        it.sel,
+      );
     if (!items.length) add(uiText(KEY_PICK_TEXT.noPick), null, null);
     menu.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' || e.key === 'Tab') {
@@ -186,6 +225,8 @@ export class PickList {
         this.dismiss();
       } else listKeys(e, buttons, 'ArrowUp', 'ArrowDown', true, 0);
     });
+    // 목록 위의 브라우저 메뉴(오른쪽 단추·메뉴 키가 초점 줄에 낸 사건)는 막는다 — 3D 보기는 코어가 막는다
+    menu.addEventListener('contextmenu', (e) => e.preventDefault());
     document.body.append(menu);
     // 자리: 누른 곳 오른쪽 아래, 화면 끝이면 안쪽·위로(낮은 화면은 목록 안에서 굴린다)
     const w = menu.offsetWidth;
@@ -211,6 +252,13 @@ export class PickList {
     };
   }
 
+  /** 줄 미리 강조(열린 목록의 줄에 초점이 갈 때) */
+  private previewSel(sel: Selection | null): void {
+    if (!this.menu || !this.host.preview) return;
+    this.previewed = true;
+    this.host.preview(sel);
+  }
+
   private onDown(e: PointerEvent): void {
     if (!this.on) return;
     if (e.pointerType === 'mouse') {
@@ -229,6 +277,7 @@ export class PickList {
   }
 
   private onMove(e: PointerEvent): void {
+    if (e.pointerType === 'mouse') this.hover = { x: e.clientX, y: e.clientY };
     const r = this.right;
     if (r && e.pointerId === r.id && Math.hypot(e.clientX - r.x, e.clientY - r.y) >= dragStartPx('mouse')) this.right = null;
     const p = this.press;
@@ -271,7 +320,7 @@ export class PickList {
     this.open(p.x, p.y, p.type);
   }
 
-  /** 가상 커서를 켠 동안 Shift+F10·메뉴 키: 커서 자리에 목록 */
+  /** 3D 보기에 초점이 있을 때 Shift+F10·메뉴 키: 가상 커서 자리(없으면 마우스 자리·가운데)에 목록 */
   private onKey(e: KeyboardEvent): void {
     if (!((e.key === 'F10' && e.shiftKey) || e.key === 'ContextMenu') || e.ctrlKey || e.metaKey || e.altKey) return;
     if (this.openAtCursor()) {
@@ -280,18 +329,25 @@ export class PickList {
     }
   }
 
-  /** 키로 낸 contextmenu 사건(포인터 종류가 없다 — 키를 받지 못한 브라우저): 가상 커서 자리 */
+  /**
+   * 키로 낸 contextmenu 사건(포인터 종류가 없다 — 키를 받지 못한 브라우저): 키와 같은 자리.
+   * Ctrl을 누른 사건은 Mac의 Ctrl+누르기(포인터 종류를 싣지 않는 브라우저)라 열지 않는다(그 누르기는 고르기다)
+   */
   private onContext(e: MouseEvent): void {
     const type = (e as PointerEvent).pointerType;
-    if (type || this.right || this.press || this.menu) return;
+    if (type || e.ctrlKey || this.right || this.press || this.menu) return;
     if (this.openAtCursor()) e.preventDefault();
   }
 
+  /** 키로 여는 자리: 가상 커서, 없으면 3D 보기 위 마우스 자리, 마우스가 밖이면 3D 보기 가운데 */
   private openAtCursor(): boolean {
-    const c = this.v.keyboardCursor;
-    if (!this.on || !c) return false;
+    if (!this.on) return false;
     const r = this.v.canvas.getBoundingClientRect();
-    return this.open(r.left + c.x, r.top + c.y, 'keyboard');
+    const c = this.v.keyboardCursor;
+    if (c) return this.open(r.left + c.x, r.top + c.y, 'keyboard');
+    const h = this.hover;
+    if (h && h.x >= r.left && h.x < r.right && h.y >= r.top && h.y < r.bottom) return this.open(h.x, h.y, 'mouse');
+    return this.open(r.left + r.width / 2, r.top + r.height / 2, 'keyboard');
   }
 }
 

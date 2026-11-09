@@ -9,7 +9,7 @@ import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Pick3d } from 'opencad-viewer3d';
 import { catalogs, languages, registerCatalog, sourceMessage, translate } from '../../site/i18n.mjs';
-import { pickDeepest, type Selection } from '../../src/app/doc';
+import { pickDeepest, selectionForPick, type Selection } from '../../src/app/doc';
 import { PICK_CYCLE } from '../../src/app/keypick';
 import { LONG_PRESS_MS, PICK_LIST_LABEL, PICK_LIST_MAX, PickList, pickListTexts, type PickListViewer } from '../../src/app/picklist';
 import { SHORTCUTS } from '../../src/app/shortcuts';
@@ -49,9 +49,11 @@ interface Setup {
   chosen: [Pick3d, Selection | null][];
   allowed: { on: boolean };
   d: ReturnType<typeof rowDoc>;
+  /** 앱에 간 차례(3D 강조 'preview'·고르기 'choose') */
+  calls: [string, Selection | null][];
 }
 
-function setup(picks?: Pick3d[]): Setup {
+function setup(picks?: Pick3d[], withPreview = true): Setup {
   const d = rowDoc();
   const cv = document.createElement('canvas');
   cv.tabIndex = 0;
@@ -63,10 +65,18 @@ function setup(picks?: Pick3d[]): Setup {
   const view = { canvas: cv, pickCandidates, claimPointer, cursor: null } as unknown as Setup['view'];
   Object.defineProperty(view, 'keyboardCursor', { get: () => (view.cursor ? ({ x: view.cursor.x, y: view.cursor.y } as PickListViewer['keyboardCursor']) : null) });
   const chosen: [Pick3d, Selection | null][] = [];
+  const calls: [string, Selection | null][] = [];
   const allowed = { on: true };
-  const pl = new PickList(view, () => d, { allowed: () => allowed.on, choose: (p, sel) => chosen.push([p, sel]) });
+  const pl = new PickList(view, () => d, {
+    allowed: () => allowed.on,
+    choose: (p, sel) => {
+      chosen.push([p, sel]);
+      calls.push(['choose', sel]);
+    },
+    ...(withPreview ? { preview: (sel: Selection | null) => void calls.push(['preview', sel]) } : {}),
+  });
   pl.set(true);
-  return { list: pl, cv, view, pickCandidates, claimPointer, chosen, allowed, d };
+  return { list: pl, cv, view, pickCandidates, claimPointer, chosen, allowed, d, calls };
 }
 
 /** 포인터 사건(jsdom에 PointerEvent가 없어 MouseEvent에 칸을 단다) */
@@ -183,12 +193,12 @@ describe('여는 법', () => {
     expect(menu()).toBeNull();
   });
 
-  it('가상 커서를 켠 동안 Shift+F10·메뉴 키는 커서 자리 목록, 커서가 없으면 그대로(브라우저 몫)', () => {
+  it('가상 커서를 켠 동안 Shift+F10·메뉴 키는 커서 자리 목록(F10만·Ctrl과 함께는 브라우저 몫)', () => {
     const s = setup();
-    key(s.cv, 'F10', true);
-    expect(menu()).toBeNull();
     s.view.cursor = { x: 400, y: 300 };
     key(s.cv, 'F10');
+    expect(menu()).toBeNull();
+    s.cv.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, ctrlKey: true, bubbles: true, cancelable: true }));
     expect(menu()).toBeNull();
     key(s.cv, 'F10', true);
     expect(s.pickCandidates).toHaveBeenCalledWith(400, 300, { ...PICK_CYCLE, pointerType: 'keyboard', max: PICK_LIST_MAX });
@@ -197,6 +207,150 @@ describe('여는 법', () => {
     expect(menu()).toBeNull();
     key(s.cv, 'ContextMenu');
     expect(menu()).not.toBeNull();
+  });
+
+  it('가상 커서가 없으면 Shift+F10·메뉴 키는 3D 보기 위 마우스 자리, 마우스가 밖이면 3D 보기 가운데(58차)', () => {
+    const s = setup();
+    // 마우스가 3D 보기에 오른 적이 없다: 가운데(캔버스 800 × 600의 400, 300 — client 410, 320)
+    const ev = new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true, cancelable: true });
+    s.cv.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+    expect(s.pickCandidates).toHaveBeenLastCalledWith(400, 300, { ...PICK_CYCLE, pointerType: 'keyboard', max: PICK_LIST_MAX });
+    expect(menu()!.style.left).toBe('410px');
+    expect(menu()!.style.top).toBe('324px');
+    key(items()[0]!, 'Escape');
+    // 마우스가 3D 보기 위에 있으면 그 자리(마우스 허용 거리)
+    ptr(s.cv, 'pointermove', { x: 210, y: 120 });
+    key(s.cv, 'ContextMenu');
+    expect(s.pickCandidates).toHaveBeenLastCalledWith(200, 100, { ...PICK_CYCLE, pointerType: 'mouse', max: PICK_LIST_MAX });
+    expect(menu()!.style.left).toBe('210px');
+    key(items()[0]!, 'Escape');
+    // 손가락 자리는 마우스 자리가 아니다, 마우스가 3D 보기를 떠나면 가운데
+    ptr(s.cv, 'pointermove', { x: 600, y: 500, pointerType: 'touch' });
+    key(s.cv, 'F10', true);
+    expect(s.pickCandidates).toHaveBeenLastCalledWith(200, 100, { ...PICK_CYCLE, pointerType: 'mouse', max: PICK_LIST_MAX });
+    key(items()[0]!, 'Escape');
+    ptr(s.cv, 'pointerleave', { x: 0, y: 120 });
+    key(s.cv, 'F10', true);
+    expect(s.pickCandidates).toHaveBeenLastCalledWith(400, 300, { ...PICK_CYCLE, pointerType: 'keyboard', max: PICK_LIST_MAX });
+    key(items()[0]!, 'Escape');
+    // 키로 낸 contextmenu 사건(포인터 종류 없음)도 같은 자리, 막힌 때(걷기)·꺼진 목록은 브라우저 몫
+    const cm = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    s.cv.dispatchEvent(cm);
+    expect(cm.defaultPrevented).toBe(true);
+    expect(menu()).not.toBeNull();
+    key(items()[0]!, 'Escape');
+    // Mac Ctrl+누르기가 낸 contextmenu(포인터 종류를 싣지 않는 브라우저)는 열지 않는다
+    s.cv.dispatchEvent(new MouseEvent('contextmenu', { ctrlKey: true, bubbles: true, cancelable: true }));
+    expect(menu()).toBeNull();
+    s.allowed.on = false;
+    const blocked = new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true, cancelable: true });
+    s.cv.dispatchEvent(blocked);
+    expect(blocked.defaultPrevented).toBe(false);
+    expect(menu()).toBeNull();
+  });
+});
+
+describe('줄 미리 강조(58차)', () => {
+  it('처음 연 첫 줄·↑↓로 옮긴 줄·마우스가 오른 줄을 미리 강조하고, Esc로 닫으면 지금 고른 것으로 한 번 되돌린다(고르지 않는다)', () => {
+    const s = setup();
+    const t = s.d.tree!;
+    const [far, near] = childrenOf(t, childrenOf(t, -1)[0]!);
+    // 목록을 열기 전에 고른 것(닫으면 이것으로 되돌린다)
+    const before: Selection = { kind: 'node', index: near! };
+    s.d.selection = before;
+    ptr(s.cv, 'pointerdown', { x: 100, y: 100, button: 2 });
+    ptr(s.cv, 'pointerup', { x: 100, y: 100, button: 2 });
+    // 첫 줄 = 누르기와 같은 고르기(펼친 단계 — 맨 위 그룹 Row)
+    expect(s.calls).toEqual([['preview', selectionForPick(s.d, candidates(s.d)[0]!, false, false)]]);
+    expect(s.calls[0]![1]).toMatchObject({ kind: 'outline' });
+    key(items()[0]!, 'ArrowDown');
+    expect(s.calls.at(-1)).toEqual(['preview', { kind: 'node', index: near }]);
+    // 마우스가 셋째 줄에 오르면 초점도 옮긴다(강조 줄과 초점 줄이 하나), 같은 줄에서 움직여도 다시 그리지 않는다
+    ptr(items()[2]!, 'pointermove', { x: 120, y: 190 });
+    ptr(items()[2]!, 'pointermove', { x: 125, y: 191 });
+    expect(document.activeElement).toBe(items()[2]);
+    expect(s.calls.at(-1)).toEqual(['preview', { kind: 'node', index: far }]);
+    expect(s.calls.length).toBe(3);
+    // 손가락이 오른 줄은 초점을 옮기지 않는다(누르면 고른다)
+    ptr(items()[0]!, 'pointermove', { x: 120, y: 120, pointerType: 'touch' });
+    expect(document.activeElement).toBe(items()[2]);
+    key(items()[2]!, 'Escape');
+    expect(s.calls.slice(3)).toEqual([['preview', before]]);
+    expect(s.chosen).toEqual([]);
+    expect(s.d.selection).toBe(before);
+    // 이미 닫힌 목록을 다시 닫아도 되돌리지 않는다
+    s.list.close();
+    s.list.dismiss();
+    expect(s.calls.length).toBe(4);
+  });
+
+  it('고르면 미리 강조를 되돌린 뒤 고르고, 창 크기·도구 바꾸기로 닫혀도 되돌린다. 그사이 막혔으면(걷기) 고르지 않는다. 후보가 없거나 앱이 미리 강조를 받지 않으면 부르지 않는다', () => {
+    const s = setup();
+    const t = s.d.tree!;
+    const near = childrenOf(t, childrenOf(t, -1)[0]!)[1]!;
+    ptr(s.cv, 'pointerdown', { x: 100, y: 100, button: 2 });
+    ptr(s.cv, 'pointerup', { x: 100, y: 100, button: 2 });
+    key(items()[0]!, 'ArrowDown');
+    items()[1]!.click();
+    // 되돌리기(닫기 — 문서의 고른 것 null) 뒤 고르기
+    expect(s.calls.slice(1)).toEqual([
+      ['preview', { kind: 'node', index: near }],
+      ['preview', null],
+      ['choose', { kind: 'node', index: near }],
+    ]);
+    s.calls.length = 0;
+    ptr(s.cv, 'pointerdown', { x: 100, y: 100, button: 2 });
+    ptr(s.cv, 'pointerup', { x: 100, y: 100, button: 2 });
+    window.dispatchEvent(new Event('resize'));
+    ptr(s.cv, 'pointerdown', { x: 100, y: 100, button: 2 });
+    ptr(s.cv, 'pointerup', { x: 100, y: 100, button: 2 });
+    s.list.set(false);
+    expect(s.calls.map((c) => c[1] === null)).toEqual([false, true, false, true]);
+    expect(s.calls.every((c) => c[0] === 'preview')).toBe(true);
+    // 목록이 열린 사이 막히면(걷기 — 키로 켤 수 있다) 닫기만 한다
+    s.list.set(true);
+    ptr(s.cv, 'pointerdown', { x: 100, y: 100, button: 2 });
+    ptr(s.cv, 'pointerup', { x: 100, y: 100, button: 2 });
+    s.allowed.on = false;
+    items()[0]!.click();
+    expect(menu()).toBeNull();
+    expect(s.chosen.length).toBe(1);
+    s.allowed.on = true;
+    document.body.innerHTML = '';
+    const e = setup([]);
+    ptr(e.cv, 'pointerdown', { x: 100, y: 100, button: 2 });
+    ptr(e.cv, 'pointerup', { x: 100, y: 100, button: 2 });
+    key(items()[0]!, 'Escape');
+    expect(e.calls).toEqual([]);
+    document.body.innerHTML = '';
+    const n = setup(undefined, false);
+    ptr(n.cv, 'pointerdown', { x: 100, y: 100, button: 2 });
+    ptr(n.cv, 'pointerup', { x: 100, y: 100, button: 2 });
+    key(items()[0]!, 'ArrowDown');
+    items()[1]!.click();
+    expect(n.chosen.length).toBe(1);
+  });
+
+  it('목록 위 브라우저 메뉴(오른쪽 단추·메뉴 키)는 막는다', () => {
+    const s = setup();
+    ptr(s.cv, 'pointerdown', { x: 100, y: 100, button: 2 });
+    ptr(s.cv, 'pointerup', { x: 100, y: 100, button: 2 });
+    const cm = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    items()[1]!.dispatchEvent(cm);
+    expect(cm.defaultPrevented).toBe(true);
+    expect(menu()).not.toBeNull();
+  });
+
+  it('앱: 미리 강조·되돌리기는 고를 때와 같은 강조 길(paintSelection)로 그린다(고른 것·패널·상태 줄은 그대로)', () => {
+    const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
+    expect(app).toMatch(/preview: \(sel\) => this\.paintSelection\(sel\),/);
+    expect(app).toMatch(/d\.selection = sel;\n\s*if \(!sel\) d\.pick = null;\n\s*this\.paintSelection\(sel\);/);
+    const paint = app.slice(app.indexOf('private paintSelection('), app.indexOf('private itemId('));
+    expect(paint).toMatch(/v\.highlight\(/);
+    expect(paint).toMatch(/v\.highlightRanges\(/);
+    expect(paint).toMatch(/v\.setHighlightSegments\(/);
+    expect(paint).not.toMatch(/d\.selection =|refreshSelection|refreshStatus/);
   });
 });
 
@@ -262,11 +416,30 @@ describe('목록 키와 고르기', () => {
     const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
     expect(app).toMatch(/this\.keyPick\?\.set\(!mode\);\n\s*this\.pickList\?\.set\(!mode\);/);
     expect(app).toMatch(/allowed: \(\) => !!this\.doc && !this\.measureTool\?\.active && !this\.walking/);
-    expect(app).toMatch(/private choosePicked\(p: Pick3d, sel: Selection \| null\): void \{[^}]*this\.selectPicked\(d, p, sel\);/);
+    // 58차: 고르기 직전 막힘(측정·걷기)은 목록이 allowed로 다시 본다(앱 choosePicked를 줄였다 — 첫 화면 조각)
+    expect(app).toMatch(/choose: \(p, sel\) => this\.selectPicked\(this\.doc!, p, sel\),/);
     expect(app).toMatch(/const sel = selectionForPick\(d, p, !!e\?\.altKey, !!e\?\.cycle\);\n\s*this\.selectPicked\(d, p, sel\);/);
     expect(app.match(/this\.pickList\?\.close\(\);/g)?.length).toBe(2);
-    // 창 키 처리(캡처 단계)는 목록이 열려 있으면 Esc를 목록에 보낸다(고른 것 지우기로 가지 않는다)
-    expect(app).toMatch(/if \(this\.pickList\?\.element && ev\.key === 'Escape'\) \{[^}]*this\.pickList\.dismiss\(\);/);
+    // 창 키 처리(캡처 단계)는 목록이 열려 있으면 Esc를 목록에 보낸다(고른 것 지우기로 가지 않는다 — 58차: 판정은 목록 조각의 escape)
+    expect(app).toMatch(/if \(this\.pickList\?\.escape\(ev\)\) return;/);
+  });
+
+  it('창 키 처리용 escape: 목록이 열려 있을 때 Esc만 다루고(막고 닫아 3D 보기로) 그 밖은 그대로 둔다', () => {
+    const s = setup();
+    const esc = (): KeyboardEvent => new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    const e0 = esc();
+    expect(s.list.escape(e0)).toBe(false);
+    expect(e0.defaultPrevented).toBe(false);
+    ptr(s.cv, 'pointerdown', { x: 100, y: 100, button: 2 });
+    ptr(s.cv, 'pointerup', { x: 100, y: 100, button: 2 });
+    expect(s.list.escape(new KeyboardEvent('keydown', { key: 'Enter' }))).toBe(false);
+    expect(menu()).not.toBeNull();
+    const e1 = esc();
+    expect(s.list.escape(e1)).toBe(true);
+    expect(e1.defaultPrevented).toBe(true);
+    expect(menu()).toBeNull();
+    expect(document.activeElement).toBe(s.cv);
+    expect(s.chosen).toEqual([]);
   });
 });
 
