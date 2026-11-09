@@ -1098,5 +1098,21 @@
   "3D 보기: 고르기 번호가 {0}개 모자란 묶음은 뒤쪽을 배열 차례로 고릅니다": "3D view: a group missing {0} selection numbers selects the rest by array order",
   "3D 보기: 같은 이름의 형상 묶음이 또 있어 이름으로 찾는 기능은 하나만 봅니다": "3D view: another geometry group has the same name, so finding by name sees only one of them",
   "주변 가림(구석·틈 어둡게)": "Ambient occlusion (darken corners and gaps)",
-  "움직이는 동안 주변 가림 끄기": "Turn off ambient occlusion while moving"
+  "움직이는 동안 주변 가림 끄기": "Turn off ambient occlusion while moving",
+  "가상 커서를 켰습니다. {0}. {1}": "Virtual cursor on. {0}. {1}",
+  "가상 커서를 껐습니다": "Virtual cursor off",
+  "{0} (후보 하나)": "{0} (only candidate)",
+  "고를 것이 없습니다": "Nothing to select",
+  "골랐습니다: {0}": "Selected {0}",
+  "빈 곳을 골랐습니다": "Selected empty space",
+  "옮기기 ←→↑↓": "Move ←→↑↓",
+  "후보 Tab": "Next candidate Tab",
+  "고르기 Enter": "Select Enter",
+  "끄기 Esc": "Exit Esc",
+  "잘린 면": "Section cut",
+  "3D 보기 키보드 고르기": "Keyboard selection in the 3D view",
+  "3D 보기에 초점이 있을 때(줄자·각도기를 끈 동안): 가상 커서 켜기·옮기기(Shift와 함께면 크게)": "With focus on the 3D view (Tape Measure and Protractor off): turn on and move the virtual cursor (with Shift, in larger steps)",
+  "가상 커서를 켠 동안: 커서 자리에 겹친 면·모서리를 앞에서부터 차례로(앞 면 뒤의 것까지)": "While the virtual cursor is on: cycle through the faces and edges stacked under the cursor, front to back (including those behind the front face)",
+  "가상 커서를 켠 동안: 지금 차례의 것 고르기(둘째부터는 펼친 단계와 상관없이 그것을 낸 가장 안쪽 그룹·컴포넌트)": "While the virtual cursor is on: select the current one (from the second on, the innermost group or component it belongs to, whatever the expanded level)",
+  "가상 커서 끄기(그 뒤 Tab은 초점 이동, 한 번 더 누르면 고른 것 지우기)": "Turn off the virtual cursor (Tab then moves focus; press again to clear the selection)"
 }

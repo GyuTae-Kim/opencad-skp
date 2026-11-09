@@ -51,6 +51,8 @@ export interface KeyInput {
   walking?: boolean;
   /** 초점이 화살표·PageUp·PageDown을 스스로 쓰는 곳(패널 목록·메뉴·장면 탭·슬라이더)에 있는지 */
   inList?: boolean;
+  /** 3D 보기 가상 커서(키보드 고르기 — 56차)가 켜져 있는지: Esc는 고른 것을 지우기 전에 커서를 끈다 */
+  keyCursor?: boolean;
 }
 
 /** 목록·슬라이더가 스스로 쓰는 이동 키 */
@@ -59,6 +61,7 @@ const LIST_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'P
 /**
  * 키 하나 → 할 일(없으면 null).
  * Esc 차례(다른 두 OpenCAD 앱과 같게): 여는 중이면 취소 → 측정 점이 있으면 뷰어가 지움 → 측정 중이면 측정 끄기 → 고른 것 지우기.
+ * 걷는 중이면 고른 것 대신 걷기 끝, 가상 커서(56차)가 켜져 있으면 고른 것 대신 뷰어가 커서를 끈다(키보드로 고른 것을 남긴 채 나간다).
  * 그래서 측정 중에는 Esc 두 번이면 측정이 꺼진다.
  */
 export function keyAction(k: KeyInput): KeyAction | null {
@@ -82,6 +85,7 @@ export function keyAction(k: KeyInput): KeyAction | null {
     if ((k.measurePoints ?? 0) > 0) return { kind: 'viewer' };
     if (k.measureMode) return { kind: 'measureOff' };
     if (k.walking) return { kind: 'walkOff' };
+    if (k.keyCursor) return { kind: 'viewer' };
     return { kind: 'clearSelection' };
   }
   return { kind: 'viewer' };

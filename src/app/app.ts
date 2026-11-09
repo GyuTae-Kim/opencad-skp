@@ -12,7 +12,8 @@
 // 코어 입구(Viewer3d — 그리기·고르기)는 문서를 열 때 나눠 받는다(core.ts). 여기서는 타입과 작은 모듈만 가져온다
 import type { Pick3d, IndexRange, PickEvent, Projection, RenderMode, SectionAxis, ViewName, Viewer3d } from 'opencad-viewer3d';
 import { VIEW_LABELS, type CameraState, type ViewFrame } from 'opencad-viewer3d/camera';
-import { FirstUse, chunkFailText, fileSections, isChunkLoadError, loadMeasure, loadRelease, loadViewerCore } from './core';
+import { FirstUse, chunkFailText, fileSections, isChunkLoadError, keyPicking, loadMeasure, loadRelease, loadViewerCore, sunLight } from './core';
+import type { KeyPick } from './keypick';
 // 큰 모형 놓기·문맥 잃음과 되찾음(release.ts)도 문서를 열 때 나눠 받는다 — 여기서는 형만
 import type { ContextWatch, GraphicsState, RestoreRecord } from './release';
 import { dragStartPx } from 'opencad-viewer3d/pointer';
@@ -126,7 +127,6 @@ import type { BackgroundOptions, Rgba } from 'opencad-viewer3d';
 import { DEFAULT_EDGE_COLOR, LineContrast, edgeLooks, lineColorOverrides } from './linecontrast';
 import { focusIfLost, focusSpot, listKeys, refocus } from './kbd';
 import type { Rgb, SkpEdgeColorMode, SkpShadowMeta, SkpStyleMeta } from '../meta';
-import { fogFor, lightingForShadow, shadowOrDefault, sunForShadow, usesSun } from './sun';
 import { WalkStick } from './joystick';
 import { Vcb, vcbStartKey, type VcbKind } from './vcb';
 import { FlashNote } from './flash';
@@ -429,6 +429,8 @@ export class SkpViewerApp implements PanelHost {
   private lineColorWant: ReadonlyMap<string, Rgba> = new Map();
   /** 줄자·각도기(코어 두 점 측정 대신). 조각을 받으면 만든다(ensureMeasureTool) */
   private measureTool: MeasureTool | null = null;
+  /** 3D 보기 키보드 고르기(keypick.ts — 56차): 고르기 도구일 때만 켠다(refreshToolbar) */
+  private keyPick: KeyPick | null = null;
   /** 지금 문서의 파일 내용 지문(SHA-256 — 측정 도구가 그 파일의 안내를 기억·되살리는 열쇠, openBlob) */
   private docPrint: Promise<ArrayBuffer | null> | null = null;
   /** 그래픽 문맥 잃음·되찾음 안내와 놓은 것 다시 주기(release.ts — 조각을 받으면 뷰어마다 하나), 그 안내로 띄운 알림 */
@@ -479,6 +481,7 @@ export class SkpViewerApp implements PanelHost {
     // 열린 도구 막대 메뉴(같은 까닭으로 번역층이 건너뜀)는 그 단추로 다시 열어 새 언어로(32차 — 닫을 때까지 앞 언어였다)
     this.root.addEventListener('languagechange', () => {
       if (this.viewer) this.viewer.setViewCubeSize(this.viewer.viewCubeSize);
+      this.keyPick?.relocalize();
       this.overlay?.invalidate();
       // 파일 글을 끼워 앱이 옮겨 넣은 글(패널 줄의 도움말·상태 줄의 고른 것 — 번역층이 건너뜀, 52차)도 새 언어로
       this.panel.rerender();
@@ -1339,6 +1342,8 @@ export class SkpViewerApp implements PanelHost {
         animate: 'auto',
       });
       v.onPick((p, e) => this.onPick(p, e));
+      // 키보드 고르기(가상 커서 — 고르기 선택은 위 onPick과 같다, keypick.ts PICK_CYCLE)
+      if (keyPicking) this.keyPick = new keyPicking.KeyPick(v, this.els.viewHost, () => this.doc);
       // 단면 상태(앱 단추·슬라이더·새 장면으로 꺼짐 등)는 코어 알림으로 도구 막대에 맞춘다
       v.onSectionChange(() => {
         this.refreshToolbar();
@@ -1536,9 +1541,9 @@ export class SkpViewerApp implements PanelHost {
     // 걷는 중 누르기는 고르지 않는다(두 번 누르기는 코어가 그 자리에 서는 데 쓰고 두 번째는 알리지 않는다 — 그룹에 들어가지 않게)
     if (this.walking) return;
     // 안내점·안내선 둘레를 누르면 형상 대신 그 안내를 고른다(SketchUp 고르기 도구 — 측정 도구 조각의 pickGuide, 없으면 고른 안내를 푼다.
-    // Ctrl·Shift(Mac은 Option·Shift)를 누른 채면 고른 안내에 넣고 뺀다)
-    const up = this.lastUp;
-    if (up && performance.now() - up.t < 1000 && this.measureTool?.pickGuide(up.x, up.y, e?.pointerType ?? 'mouse', e)) {
+    // Ctrl·Shift(Mac은 Option·Shift)를 누른 채면 고른 안내에 넣고 뺀다). 키보드 Enter는 가상 커서 자리, 돌려 고른 후보(e.cycle)는 그 후보 그대로
+    const up = e?.pointerType === 'keyboard' ? this.keyPick?.clientPoint() : this.lastUp && performance.now() - this.lastUp.t < 1000 ? this.lastUp : null;
+    if (up && !e?.cycle && this.measureTool?.pickGuide(up.x, up.y, e?.pointerType ?? 'mouse', e)) {
       this.applySelection(null, false);
       return;
     }
@@ -1546,7 +1551,7 @@ export class SkpViewerApp implements PanelHost {
     if (p?.section) return;
     if (e?.clicks === 2 && this.enterLevel(p)) return;
     d.pick = p;
-    const sel = selectionForPick(d, p, !!e?.altKey);
+    const sel = selectionForPick(d, p, !!e?.altKey, !!e?.cycle);
     // 가장 안쪽을 골랐으면 목록에서 보이게 조상을 펼친다(펼친 단계 방식이면 이미 펼쳐져 있다)
     const n = selectedNode(d, sel);
     let opened = false;
@@ -2638,15 +2643,16 @@ export class SkpViewerApp implements PanelHost {
 
   /**
    * 코어 조명·안개를 지금 상태로: 그림자를 켰거나 파일이 해로 음영을 칠하면 그 날짜·시각·위치의 해(설정이 없으면 SketchUp 기본 11월 8일 13:30 볼더),
-   * 아니면 예전 고정 조명. 안개는 장면 범위로 정한 기본 거리(스타일 거리가 있으면 그것)
+   * 아니면 예전 고정 조명. 안개는 장면 범위로 정한 기본 거리(스타일 거리가 있으면 그것). 계산(sun.ts)은 코어와 함께 받아 뷰어가 있으면 늘 있다
    */
   private applyLighting(): void {
     const v = this.viewer;
     const d = this.doc;
-    if (!v) return;
+    const L = sunLight;
+    if (!v || !L) return;
     const s = this.activeShadow;
-    v.setLighting(d && (this.shadowsOn || usesSun(s)) ? lightingForShadow(shadowOrDefault(s), this.shadowsOn) : null);
-    v.setFog(d && this.fogOn ? fogFor(this.fogStyle, d.scene.bounds) : null);
+    v.setLighting(d && (this.shadowsOn || L.usesSun(s)) ? L.lightingForShadow(L.shadowOrDefault(s), this.shadowsOn) : null);
+    v.setFog(d && this.fogOn ? L.fogFor(this.fogStyle, d.scene.bounds) : null);
   }
 
   /** 외곽선(스타일 "윤곽선" — 코어 화면 공간 외곽선) */
@@ -3324,6 +3330,7 @@ export class SkpViewerApp implements PanelHost {
       hasPages: !!this.doc?.pages.length,
       walking: this.walking,
       inList: inList(ev.target),
+      keyCursor: !!v?.keyboardCursor,
     });
     if (!act) return;
     if (act.kind === 'help') {
@@ -3382,11 +3389,12 @@ export class SkpViewerApp implements PanelHost {
       return;
     }
     // F·1~7·Esc(측정 지우기)는 뷰어 규칙대로. 캡처 단계에서 처리했으면 캔버스의 같은 키 처리까지 가지 않게 막는다.
-    // 전체 보기·표준 뷰 키는 그 전에 넓힌 시야각을 되돌린다
-    if (isViewKey({ key: ev.key, ctrl: ev.ctrlKey, meta: ev.metaKey, alt: ev.altKey })) this.unwidenScene();
+    // 전체 보기·표준 뷰 키는 그 전에 넓힌 시야각을 되돌린다. 가상 커서 키(화살표·Tab·Enter — 56차)는 카메라를 옮기지 않아 보기를 움직인 것으로 둔다
+    const viewKey = isViewKey({ key: ev.key, ctrl: ev.ctrlKey, meta: ev.metaKey, alt: ev.altKey });
+    if (viewKey) this.unwidenScene();
     if (v.handleKey(ev)) {
       ev.stopPropagation();
-      if (ev.key !== 'Escape') this.userMoved = false;
+      if (viewKey || this.walking) this.userMoved = false;
     }
   }
 
@@ -3543,6 +3551,8 @@ export class SkpViewerApp implements PanelHost {
     press(e.cubeBtn, this.cubeOn);
     press(e.axesBtn, this.axesOn);
     const mode = this.measureModeNow;
+    // 키보드 고르기는 고르기 도구에서만(줄자·각도기는 화살표를 방향 잠금에 쓴다 — 받는 중인 도구도)
+    this.keyPick?.set(!mode);
     press(e.measureBtn, mode === 'tape');
     press(e.protractorBtn, mode === 'protractor');
     // 측정 도구 조각을 받는 동안 켤 단추(누르면 거둔다)
@@ -3793,7 +3803,7 @@ export class SkpViewerApp implements PanelHost {
       camBar: !this.els.camBar.hidden,
       joystick: !this.stick.el.hidden,
       sun: (() => {
-        const sun = sunForShadow(shadowOrDefault(this.activeShadow));
+        const sun = sunLight?.sunForShadow(sunLight.shadowOrDefault(this.activeShadow));
         return sun ? { elevation: sun.elevation, azimuth: sun.azimuth } : null;
       })(),
       profiles: this.profilesOn,
