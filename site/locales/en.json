@@ -247,7 +247,7 @@
   "그룹 {0} · 컴포넌트 {1}. 누르면 강조하고, 두 번 누르면 그쪽으로 확대합니다.": "Group {0} · Component {1}. Tap to highlight it, double tap to zoom in on it.",
   "그룹 {0} · 컴포넌트 {1}{2}(모든 단계, {3}단계까지).": "Group {0} · Component {1}{2} (all levels, up to level {3}).",
   "그룹 안": "In group",
-  "그룹 안 단면 {0}개는 그 그룹만 자를 수 없어(그룹이 너무 많아 따로 나누지 않음) 적용하지 않았습니다.": "{0} sections inside groups were not applied because only that group could not be cut (too many groups to split them apart).",
+  "그룹 안 단면 {0}개는 모형이 너무 커서 그 그룹만 자를 수 없어 적용하지 않았습니다.": "{0} sections inside groups were not applied because the model is too large to cut only that group.",
   "그룹#1": "Group #1",
   "그룹#2": "Group #2",
   "그룹·컴포넌트": "Group·Component",
