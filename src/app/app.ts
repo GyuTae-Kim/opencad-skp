@@ -11,7 +11,7 @@
  */
 // 코어 입구(Viewer3d — 그리기·고르기)는 문서를 열 때 나눠 받는다(core.ts). 여기서는 타입과 작은 모듈만 가져온다
 import type { Pick3d, IndexRange, PickEvent, Projection, RenderMode, SectionAxis, ViewName, Viewer3d } from 'opencad-viewer3d';
-import { VIEW_LABELS, type CameraState, type ViewFrame } from 'opencad-viewer3d/camera';
+import { VIEW_LABELS, viewKeyOf, type CameraState, type ViewFrame } from 'opencad-viewer3d/camera';
 import { FirstUse, annotating, chunkFailText, fileSections, isChunkLoadError, keyPicking, loadMeasure, loadRelease, loadViewerCore, pickListing, sunLight } from './core';
 import type { KeyPick } from './keypick';
 import type { PickList } from './picklist';
@@ -102,7 +102,7 @@ import {
 } from './doc';
 import { MAX_FILE_BYTES, SKP_ACCEPT, baseName, fmtCount, formatBytes, formatMs, rgbCss } from './format';
 import type { AnnotationMarks } from './dimmarks';
-import { VIEW_KEY_OF, VIEW_MENU, inList, isEditableTarget, isViewKey, keyAction } from './keys';
+import { VIEW_MENU, inList, isEditableTarget, isViewKey, keyAction } from './keys';
 import type { LaunchRequest } from './launch';
 import {
   PANEL_WIDTH_DEFAULT,
@@ -3092,7 +3092,7 @@ export class SkpViewerApp implements PanelHost {
       '표준 뷰',
       VIEW_MENU.map((v) => {
         const item: MenuItem = { label: VIEW_LABELS[v], run: () => this.setView(v) };
-        const key = VIEW_KEY_OF[v];
+        const key = viewKeyOf(v);
         if (key) item.kbd = key;
         return item;
       }),

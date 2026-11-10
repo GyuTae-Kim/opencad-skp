@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { VIEW_KEYS } from 'opencad-viewer3d';
-import { VIEW_KEYS as CAMERA_VIEW_KEYS } from 'opencad-viewer3d/camera';
-import { VIEW_KEY_OF, VIEW_MENU, isEditableTarget, isViewKey, keyAction } from '../../src/app/keys';
+import { VIEW_KEYS as CAMERA_VIEW_KEYS, viewKeyOf } from 'opencad-viewer3d/camera';
+import { VIEW_KEYS as SMALL_VIEW_KEYS } from 'opencad-viewer3d/viewkeys';
+import { VIEW_MENU, isEditableTarget, isViewKey, keyAction } from '../../src/app/keys';
 import { parseLaunch } from '../../src/app/launch';
 import { THEME_KEY, readStoredTheme, resolveTheme, storeTheme } from '../../src/app/theme';
 
@@ -64,13 +65,14 @@ describe('키 → 할 일', () => {
     expect(isEditableTarget(null)).toBe(false);
   });
 
-  it('표준 뷰 메뉴의 키 안내는 뷰어의 VIEW_KEYS에서(코어 작은 camera 모듈의 표 — 입구와 같은 객체)', () => {
+  it('표준 뷰 메뉴의 키 안내는 뷰어의 VIEW_KEYS에서(코어 작은 viewkeys 모듈의 표 — camera·입구와 같은 객체, 60차 코어 viewKeyOf)', () => {
     expect(CAMERA_VIEW_KEYS).toBe(VIEW_KEYS);
+    expect(SMALL_VIEW_KEYS).toBe(VIEW_KEYS);
     expect(VIEW_MENU.length).toBe(10);
-    for (const [k, v] of Object.entries(VIEW_KEYS)) expect(VIEW_KEY_OF[v]).toBe(k);
-    expect(VIEW_KEY_OF.top).toBe('5');
-    expect(VIEW_KEY_OF.seIso).toBe('7');
-    expect(VIEW_KEY_OF.nwIso).toBeUndefined();
+    for (const [k, v] of Object.entries(VIEW_KEYS)) expect(viewKeyOf(v)).toBe(k);
+    expect(viewKeyOf('top')).toBe('5');
+    expect(viewKeyOf('seIso')).toBe('7');
+    expect(VIEW_MENU.filter((v) => viewKeyOf(v) === undefined)).toEqual(['swIso', 'neIso', 'nwIso']);
   });
 });
 

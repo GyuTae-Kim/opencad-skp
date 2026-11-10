@@ -16,9 +16,10 @@ const CORE = join(ROOT, 'node_modules/opencad-viewer3d/src');
 /**
  * 첫 화면에서 바로 가져와도 되는 코어 모듈(작고 다른 코어 모듈을 거의 끌어오지 않는다 — inference는 측정 도구 조각과 함께 받는다).
  * extent는 코어 0.31.0에서 bounds의 itemExtent·itemsExtent를 옮긴 작은 모듈이다(bounds가 같은 이름으로 다시 내보내 그래프에 닿는다 — bounds·math만 가져오고,
- * 앱은 그 함수를 쓰지 않아 첫 화면 JS는 같다)
+ * 앱은 그 함수를 쓰지 않아 첫 화면 JS는 같다). viewkeys는 코어 0.54.0에서 camera의 표준 뷰 이름·키 표를 옮긴 아무것도 가져오지 않는 모듈이다
+ * (camera가 같은 객체를 다시 내보낸다 — 60차)
  */
-const SMALL = new Set(['camera', 'pointer', 'viewcube', 'theme', 'section', 'types', 'math', 'bounds', 'extent']);
+const SMALL = new Set(['camera', 'pointer', 'viewcube', 'theme', 'section', 'types', 'math', 'bounds', 'extent', 'viewkeys']);
 /** 문서를 열 때 나눠 받는 앱 모듈(첫 화면 그래프에 없어야 한다 — release.ts는 큰 모형 놓기·문맥 잃음과 되찾음) */
 const SPLIT_APP = [
   'src/app/measure.ts',
