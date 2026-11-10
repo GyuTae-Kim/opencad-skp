@@ -8,7 +8,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Viewer3d } from 'opencad-viewer3d';
 import type { Mesh3d, Scene3d } from 'opencad-viewer3d/types';
 import { installDom } from './fakegl/fakedom';
-import { readSkpImages, skpFileToScene, skpToScene, type SkpTextureInfo } from '../src/index';
+import { readSkpImages, skpFileToScene, skpToScene, skpToSceneAsync, type SkpImages, type SkpTextureInfo } from '../src/index';
+import { sceneDigest } from '../scripts/sweep/probe';
 import { bytesSource, SourceItems } from '../src/range';
 import type { ZipItem } from '../src/zip';
 import { parseMaterialPbr, parseMaterialXml } from '../src/materials';
@@ -101,8 +102,8 @@ const IMGS = [
   ['법선만/thumbnail.png', 13],
 ].map(([n, s]) => ({ name: `materials/${n}`, data: png(s as number) }));
 
-/** 10 × 10 인치 정사각형 면 하나(재질 mat, 기본 무늬 투영)인 정의 */
-function squareDef(defId: number, mat: number): Uint8Array {
+/** 10 × 10 인치 정사각형 면 하나(재질 mat — 없으면 재질 없는 면, 기본 무늬 투영)인 정의 */
+function squareDef(defId: number, mat: number | undefined): Uint8Array {
   const b = defId * 100;
   const P: [number, number, number][] = [
     [0, 0, 0],
@@ -125,7 +126,7 @@ function squareDef(defId: number, mat: number): Uint8Array {
             [b + 13, false],
           ],
         ],
-        { material: mat },
+        mat === undefined ? {} : { material: mat },
       ),
     ],
   });
@@ -305,6 +306,110 @@ describe('57차 그림이 하나뿐인 재질 폴더의 PBR 그림', () => {
     expect(r.images!.pbr!.map((p) => [p.folder, p.name, p.roles])).toEqual(img.pbr!.map((p) => [p.folder, p.name, p.roles]));
     expect(r.images!.materials.map((m) => m.folder)).toEqual(img.materials.map((m) => m.folder));
     expect(pbrOf(meshOf(r.scene, '법선한장'))).toEqual({ normalTexture: 'skp-pbr-1-normal', normalFlipY: true });
+  });
+});
+
+/**
+ * 61차: 재질 쓰임을 고른 꾸러미(재질·그림은 file()과 같다) — placed는 배치하는 정의마다 [면 재질, 인스턴스 재질](없으면 재질 없음),
+ * unplaced는 배치하지 않는 정의(모형 안 컴포넌트 목록에만 있는 것)의 면 재질
+ */
+function usePack(placed: [number | undefined, number | undefined][], unplaced: number[] = []): Uint8Array {
+  const defs = [...placed.map(([m]) => m), ...unplaced].map((mat, i) => ({ name: `판${i}`, entities: squareDef(50 + i, mat) }));
+  const comps = placed.map(([, im], i) => instance(900 + i, 50 + i, [1, 0, 0, 0, 1, 0, 0, 0, 1, i * 20, 0, 0, 1], im === undefined ? {} : { material: im }));
+  const model = modelDat({ materials: MATS, layers: [[1, 'Layer0']], definitions: defs, root: entities(undefined, { components: comps }) });
+  return skpFile(model, { materials: XMLS, extra: IMGS });
+}
+
+/** PBR 그림 칸을 뺀 그림 결과(꾸러미 경로·폴더·건너뜀·경고) */
+const imagesOf = (i: SkpImages): unknown => ({
+  model: i.model?.path,
+  materials: i.materials.map((m) => [m.folder, m.path]),
+  components: i.components.map((m) => m.path),
+  scenes: i.scenes.map((m) => m.path),
+  skipped: i.skipped,
+  warnings: i.warnings,
+});
+
+/** skpFileToScene과 그동안 내용을 읽은 꾸러미 항목 이름 */
+async function fileWithReads(bytes: Uint8Array, opts: Parameters<typeof skpFileToScene>[1] = {}): Promise<{ r: Awaited<ReturnType<typeof skpFileToScene>>; reads: string[] }> {
+  const reads: string[] = [];
+  const orig = SourceItems.prototype.content;
+  SourceItems.prototype.content = function (this: SourceItems, item: ZipItem) {
+    reads.push(item.name);
+    return orig.call(this, item);
+  };
+  try {
+    return { r: await skpFileToScene(bytesSource(bytes), opts), reads };
+  } finally {
+    SourceItems.prototype.content = orig;
+  }
+}
+
+describe('61차 쓰지 않는 재질의 PBR 그림은 꺼내지 않는다(skpFileToScene)', () => {
+  it('면·인스턴스(물려받기)가 쓰는 재질의 그림만 꺼내고 읽는다 — 배치하지 않은 정의·아무도 쓰지 않는 재질은 빠지고 장면은 모두 꺼낸 것과 같다', async () => {
+    // 금속판(면), 법선만(인스턴스 재질을 재질 없는 면이 물려받음), 보통(면, PBR 끔) — 같은그림은 배치하지 않은 정의에만, 금속·빠짐은 아무도 쓰지 않는다
+    const bytes = usePack(
+      [
+        [1, undefined],
+        [undefined, 6],
+        [3, undefined],
+      ],
+      [4],
+    );
+    const { r, reads } = await fileWithReads(bytes);
+    const img = readSkpImages(bytes);
+    expect(img.pbr!.map((p) => p.name)).toEqual(['pn.png', 'pr.png', 'n.png', 'r.png', 'm.png', 'cn.png', 'rm.png']);
+    expect(r.images!.pbr!.map((p) => [p.folder, p.name, p.roles])).toEqual([
+      ['법선만', 'pn.png', ['normal']],
+      ['법선만', 'pr.png', ['roughness']],
+      ['금속판', 'n.png', ['normal']],
+      ['금속판', 'r.png', ['roughness']],
+      ['금속판', 'm.png', ['metallic']],
+    ]);
+    expect(r.images!.pbrSkipped).toBeUndefined();
+    // 쓰지 않는 재질의 PBR 그림은 꾸러미에서 읽지도 않는다(견본 그림은 예전처럼 읽는다)
+    expect(reads.filter((n) => n.startsWith('materials/같은그림/') && n.endsWith('.png'))).toEqual(['materials/같은그림/c.png']);
+    for (const n of ['materials/금속판/n.png', 'materials/금속판/m.png', 'materials/법선만/pn.png']) expect(reads).toContain(n);
+    // 다른 그림·경고는 그대로
+    expect(imagesOf(r.images!)).toEqual(imagesOf(img));
+    // 장면: 모든 PBR 그림을 준 장면과 같다(물려받은 색 무늬 없는 PBR 재질도 그 그림을 쓴다)
+    const all = await skpToSceneAsync(bytes.slice(), { textures: img.materials, pbrTextures: img.pbr, releaseBytes: true });
+    expect(sceneDigest(r.scene)).toBe(sceneDigest(all));
+    expect(pbrOf(meshOf(r.scene, '법선만'))).toEqual({ normalTexture: 'skp-pbr-6-normal', roughnessTexture: 'skp-pbr-6-roughness', roughness: 0.7 });
+    expect(r.scene.textures!.filter((t) => t.id.startsWith('skp-pbr-')).map((t) => t.id)).toEqual([
+      'skp-pbr-1-normal',
+      'skp-pbr-1-roughness',
+      'skp-pbr-1-metallic',
+      'skp-pbr-6-normal',
+      'skp-pbr-6-roughness',
+    ]);
+  });
+
+  it('PBR 재질을 아무도 쓰지 않으면 PBR 그림 칸이 없다', async () => {
+    const { r, reads } = await fileWithReads(usePack([[3, undefined]], [1, 6]));
+    expect(r.images!.pbr).toBeUndefined();
+    expect(reads.some((n) => /\/(pn|pr|n|r|m|cn|rm)\.png$/.test(n))).toBe(false);
+  });
+
+  it('한도는 꺼낸 그림만 쓴다: 쓰지 않는 재질의 그림이 앞 차례여도 쓰는 재질의 그림이 그 자리에 든다(예전에는 앞 차례가 한도를 먹었다)', async () => {
+    // 법선만(색 무늬 없는 재질 — PBR 그림 차례가 먼저)은 배치하지 않은 정의에만, 금속판만 쓴다. 한도 = 견본 그림 5장 + 2장
+    const bytes = usePack([[1, undefined]], [6]);
+    const opts = { maxCount: 5 + 2 };
+    const old = readSkpImages(bytes, opts);
+    expect(old.pbr!.map((p) => p.name)).toEqual(['pn.png', 'pr.png']);
+    expect(old.pbrSkipped).toBe(5);
+    const { r } = await fileWithReads(bytes, { images: opts });
+    expect(r.images!.pbr!.map((p) => p.name)).toEqual(['n.png', 'r.png']);
+    expect(r.images!.pbrSkipped).toBe(1);
+    expect(r.images!.materials.length).toBe(old.materials.length);
+    expect(pbrOf(meshOf(r.scene, '금속판'))).toEqual({
+      normalTexture: 'skp-pbr-1-normal',
+      normalScale: 0.5,
+      normalFlipY: true,
+      roughnessTexture: 'skp-pbr-1-roughness',
+      roughness: 0.6,
+      roughnessInvert: true,
+    });
   });
 });
 

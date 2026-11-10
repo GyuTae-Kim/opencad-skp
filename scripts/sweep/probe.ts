@@ -108,7 +108,7 @@ export interface ProbeResult {
   /** 파일을 어떻게 읽었는지(skpFileToScene onFileRead — parts 필요한 자리만, whole 파일 전체) */
   fileRead?: SkpFileRead;
   ms: Partial<Record<ProbeStage, number>> & { total: number };
-  /** pbr·pbrSkipped: PBR 그림 수와 한도로 넣지 못한 수(55차 — 있을 때만) */
+  /** pbr·pbrSkipped: PBR 그림 수와 한도로 넣지 못한 수(55차 — 있을 때만. 61차부터 모형이 쓰는 재질의 그림만 꺼내고 센다) */
   images?: { model: boolean; materials: number; components: number; scenes: number; skipped: number; pbr?: number; pbrSkipped?: number };
   imageError?: string;
   metrics: ProbeMetrics;
