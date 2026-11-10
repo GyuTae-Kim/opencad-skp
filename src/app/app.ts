@@ -1267,6 +1267,7 @@ export class SkpViewerApp implements PanelHost {
     else v.setScene(d.scene);
     // 코어가 빼거나 고쳐 그린 깨진 입력(0.50.0 — setScene 안에서 정한다, 멀쩡하면 빈 배열): 정보 탭 경고 칸·상태 줄 경고 수에 잇는다
     d.coreIssues = v.sceneIssues;
+    // 61차: setSource는 해석 워커가 첫 그림 뒤로 미룬 색 바꾸기도 손질해 준다(ContextWatch.fill — 놓기 조각을 받지 못하면 그 무늬는 평균색)
     if (rel) this.watchContext(rel, v).setSource({ scene: d.scene, textures: held, textureLimit: this.texLimits.limit });
     // 장면을 올리면 코어가 겉모습(선 색)을 풀었다 — 끝의 applyTheme에서 다시 건다
     this.lineContrast.reset();

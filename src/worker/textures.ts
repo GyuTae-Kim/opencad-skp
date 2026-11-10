@@ -18,7 +18,7 @@ import type { Mesh3d, Scene3d, Texture3d } from 'opencad-viewer3d/types';
 import { fitSize, imageInfo } from 'opencad-viewer3d/texture';
 import { colorizeRgba } from '../colorize';
 import type { SkpTextureInfo } from '../index';
-import type { HeldTexture, RecolorResult } from '../app/protocol';
+import type { DeferredTexture, HeldTexture, RecolorResult } from '../app/protocol';
 
 /** 이 알파 아래 화소가 있으면 투명 화소를 쓰는 그림으로 본다 */
 const ALPHA_CUT = 250;
@@ -135,6 +135,32 @@ export function needsDecode(info: SkpTextureInfo | undefined): boolean {
   return !!info && (!!info.colorize || info.alphaPossible);
 }
 
+/**
+ * 61차: 첫 그림 뒤로 미룰 수 있는 손질 — 색을 바꾸는 무늬 가운데 그림 머리에 알파 칸이 없는 것(alphaPossible 거짓 — JPEG·알파 없는 PNG).
+ * 알파를 재야 하는 무늬는 코어가 반투명 차례를 setScene 때 정하므로(Texture3d.alpha) 알파를 모른 채 기다리게 두지 않는다
+ */
+export function deferrableRecolor(info: SkpTextureInfo | undefined): boolean {
+  return !!info?.colorize && !info.alphaPossible;
+}
+
+/**
+ * 61차: 큰 모형(화면이 놓아 올리는 장면)에서 첫 그림 뒤로 미룰 손질 무늬를 고르고 Texture3d.pending을 단다. 그림 바이트는 data에서
+ * deferredData로 옮긴다(app/protocol.ts DeferredTexture — 화면이 release.ts prepareRelease에서 쥐고 손질 워커로 손질해 코어 restoreTexture로 준다.
+ * data가 없어야 코어가 그 무늬를 기다린다). 고른 무늬 id를 돌려준다
+ */
+export function markDeferredRecolor(scene: Scene3d): Set<string> {
+  const infos = new Map(((scene.meta?.textures ?? []) as SkpTextureInfo[]).map((t) => [t.id, t] as const));
+  const out = new Set<string>();
+  for (const t of (scene.textures ?? []) as DeferredTexture[])
+    if (t.data?.length && !t.bitmap && deferrableRecolor(infos.get(t.id))) {
+      t.pending = true;
+      t.deferredData = t.data;
+      delete t.data;
+      out.add(t.id);
+    }
+  return out;
+}
+
 /** RGBA 화소에 투명 화소(알파 < ALPHA_CUT)가 있는지 */
 export function usesAlpha(data: ArrayLike<number>): boolean {
   for (let i = 3; i < data.length; i += 4) if (data[i]! < ALPHA_CUT) return true;
@@ -204,16 +230,18 @@ function prepDecoded(
 /**
  * 장면의 무늬 손질(위 설명). 손질한 무늬는 bitmap·크기·alpha를 채운다(바이트 data는 견본용 그림과 같은 배열이라 그대로 둔다).
  * onEach는 무늬 하나를 마칠 때마다(진행 표시용). swatches: false면 색 바꾼 무늬의 견본 그림을 만들지 않는다(문맥 복구 — 29차).
+ * skip에 든 무늬는 손질하지 않는다(61차 — 첫 그림 뒤로 미룬 무늬, markDeferredRecolor).
  */
 export async function prepareSceneTextures(
   scene: Scene3d,
   limit: number,
   onEach?: (done: number, total: number) => void,
-  opts: { swatches?: boolean } = {},
+  opts: { swatches?: boolean; skip?: ReadonlySet<string> } = {},
 ): Promise<TexturePrepResult> {
   const res: TexturePrepResult = { decoded: 0, colorized: 0, alpha: 0, dropped: 0, swatches: new Map() };
   const infos = new Map(((scene.meta?.textures ?? []) as SkpTextureInfo[]).map((t) => [t.id, t] as const));
-  const list = [...(scene.textures ?? [])].filter((t) => needsDecode(infos.get(t.id)));
+  const skip = opts.skip;
+  const list = [...(scene.textures ?? [])].filter((t) => needsDecode(infos.get(t.id)) && !skip?.has(t.id));
   const swatches = opts.swatches !== false;
   const ok = canDecode();
   // 33차: 무늬를 손질하는 동안 다음 무늬를 미리 풀어 두고(그림 풀기는 다른 스레드), 견본 PNG는 끝에 모아 기다린다 — 무늬마다 하는 일·결과는 같다
@@ -299,16 +327,27 @@ export async function heldAsTexture(h: Pick<HeldTexture, 'id' | 'blob'>): Promis
 
 /**
  * 문맥 복구(29차): 쥐어 둔 색 바꾼 무늬를 처음 열 때와 같은 손질(prepareSceneTextures — 견본은 빼고)로 다시 그림을 만든다.
- * 하나씩 풀어 워커가 그림 바이트를 한 장씩만 든다. 풀지 못한 무늬는 빠진다(화면은 그 무늬를 평균색으로 둔다)
+ * 하나씩 풀어 워커가 그림 바이트를 한 장씩만 든다. 풀지 못한 무늬는 빠진다(화면은 그 무늬를 평균색으로 둔다).
+ * swatches(61차 — 처음 열 때 첫 그림 뒤로 미룬 손질): 해석 워커가 하던 것과 같이 모두를 한 장면으로 손질해(다음 무늬를 앞서 풀기 — 33·48차)
+ * 재질 목록 견본 PNG도 만든다(결과 그림·견본이 해석 워커가 만들던 것과 같다)
  */
-export async function recolorTextures(list: readonly HeldTexture[], limit: number): Promise<RecolorResult> {
+export async function recolorTextures(list: readonly HeldTexture[], limit: number, opts: { swatches?: boolean } = {}): Promise<RecolorResult> {
   const t0 = performance.now();
   const out: RecolorResult['textures'] = [];
+  const take = (t: Texture3d | undefined): void => {
+    if (t?.bitmap) out.push({ id: t.id, bitmap: t.bitmap, width: t.bitmap.width, height: t.bitmap.height });
+  };
+  if (opts.swatches) {
+    const textures = await Promise.all(list.map((h) => heldAsTexture(h)));
+    const scene: Scene3d = { name: '', units: 'unknown', meshes: [], lines: [], textures, meta: { textures: list.map((h) => h.info) } };
+    const prep = await prepareSceneTextures(scene, limit);
+    for (const t of scene.textures ?? []) take(t);
+    return { textures: out, ms: performance.now() - t0, swatches: [...prep.swatches].map(([folder, png]) => ({ folder, png })) };
+  }
   for (const h of list) {
     const scene: Scene3d = { name: '', units: 'unknown', meshes: [], lines: [], textures: [await heldAsTexture(h)], meta: { textures: [h.info] } };
     await prepareSceneTextures(scene, limit, undefined, { swatches: false });
-    const t = scene.textures?.[0];
-    if (t?.bitmap) out.push({ id: h.id, bitmap: t.bitmap, width: t.bitmap.width, height: t.bitmap.height });
+    take(scene.textures?.[0]);
   }
   return { textures: out, ms: performance.now() - t0 };
 }

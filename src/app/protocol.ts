@@ -9,7 +9,7 @@
  * 큰 모형을 올린 뒤 그래픽 문맥을 되찾으면 화면이 쥐고 있던 색을 바꾼 무늬의 원래 그림 바이트만 작은 손질 워커(worker/recolor.worker.ts)에 넘겨
  * 다시 손질한 그림을 받는다(recolor — 29차, release.ts. 27·28차는 같은 파일을 해석 워커로 다시 풀었다).
  */
-import type { Scene3d } from 'opencad-viewer3d/types';
+import type { Scene3d, Texture3d } from 'opencad-viewer3d/types';
 import type { SkpImages } from '../images';
 import type { SkpTextureInfo } from '../index';
 import type { PackStats } from '../worker/pack';
@@ -38,6 +38,15 @@ export interface HeldTexture {
   raw?: boolean;
 }
 
+/**
+ * 61차: 해석 워커가 첫 그림 뒤로 미룬 색 바꾸기 무늬(큰 모형 — worker/textures.ts markDeferredRecolor). pending을 달고 그림 바이트는 data 대신
+ * deferredData에 둔다 — 화면이 놓기 조각(release.ts prepareRelease)에서 쥐고 손질 워커로 손질해 준다. 그 조각을 받지 못하면 코어는 그 무늬를
+ * 기다린 채 그물 색(평균색)으로 그린다(원래 색 그림을 그리지 않는다)
+ */
+export interface DeferredTexture extends Texture3d {
+  deferredData?: Uint8Array;
+}
+
 /** 쥐어 둔 무늬를 다시 손질해 받기(문맥 복구 — 처음 열 때와 같은 한도로 푼다). Blob은 복사 없이 넘어간다 */
 export interface RecolorRequest {
   id: number;
@@ -45,6 +54,8 @@ export interface RecolorRequest {
   textures: HeldTexture[];
   /** 처음 열 때 해석 워커에 준 무늬 한도(ParseRequest.textureLimit) */
   textureLimit?: number;
+  /** 61차: 처음 열 때 첫 그림 뒤로 미룬 손질 — 해석 워커처럼 모두를 함께 손질하고 재질 목록 견본 PNG도 만든다 */
+  swatches?: boolean;
 }
 
 /** 다시 손질한 무늬(손질한 그림과 크기 — 풀지 못한 무늬는 빠진다) */
@@ -52,6 +63,8 @@ export interface RecolorResult {
   textures: { id: string; bitmap: ImageBitmap; width: number; height: number }[];
   /** 다시 손질한 시간(ms) */
   ms: number;
+  /** 61차: 색 바꾼 무늬의 재질 목록 견본 PNG(재질 폴더 — swatches를 물었을 때만) */
+  swatches?: { folder: string; png: Uint8Array }[];
 }
 
 export type RecolorResponse = { id: number; type: 'recolored'; result: RecolorResult } | { id: number; type: 'error'; message: string };

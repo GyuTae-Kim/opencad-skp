@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ContextRestoreNeed, TextureSource } from 'opencad-viewer3d';
 import type { Scene3d } from 'opencad-viewer3d/types';
 import type { SkpTextureInfo } from '../../src/index';
-import type { HeldTexture, RecolorRequest, RecolorResult } from '../../src/app/protocol';
+import type { DeferredTexture, HeldTexture, RecolorRequest, RecolorResult } from '../../src/app/protocol';
 import type { DocImages } from '../../src/app/doc';
 import {
   CONTEXT_LOST_TITLE,
@@ -22,6 +22,7 @@ import {
   RESTORE_TITLE,
   prepareRelease,
   recolorJob,
+  swapSwatches,
   type ContextUi,
   type WatchViewer,
 } from '../../src/app/release';
@@ -708,5 +709,153 @@ describe('되찾을 때 바이트 그대로 다시 주기(41차 — raw)', () =>
     expect(w.state).toBe('ok');
     expect(w.last).toBeNull();
     expect(ui.shown.filter((s) => s.startsWith('warn'))).toEqual([]);
+  });
+});
+
+describe('61차 처음 열 때 첫 그림 뒤로 미룬 색 바꾸기(pending — ContextWatch.fill)', () => {
+  /** 재질 목록 견본(폴더 t1·t2의 원래 색 그림 주소) */
+  const swatchImages = (): DocImages => ({
+    model: null,
+    materials: new Map([
+      ['t1', { name: 't1.jpg', url: 'blob:old-t1' }],
+      ['t2', { name: 't2.jpg', url: 'blob:old-t2' }],
+    ]),
+    components: new Map(),
+    scenes: [],
+    skipped: 0,
+    urls: ['blob:old-t1', 'blob:old-t2'],
+  });
+  /** 놓아 올린 문서를 연다: 코어는 wait 무늬(장면에 바이트가 없는 pending)를 기다린다. t1·t2는 쥔 색 바꾼 무늬, t3은 raw */
+  function opened(wait: string[] = ['t1', 't2']): { v: FakeViewer; ui: FakeUi; w: ContextWatch; s: Scene3d; images: DocImages } {
+    const v = new FakeViewer();
+    const ui = new FakeUi();
+    const w = new ContextWatch(v, ui, make);
+    const s = sceneOf();
+    const images = swatchImages();
+    // 화면 차례: 놓기 준비(문서 그림을 적는다) → setScene → setSource
+    prepareRelease({ scene: s, images });
+    v.scene = s;
+    for (const id of wait) v.missTex.add(id);
+    w.setSource({ scene: s, textures: [held('t1'), held('t2'), { ...held('t3'), raw: true }], textureLimit: 1024 });
+    return { v, ui, w, s, images };
+  }
+
+  it('놓기 준비: 워커가 미룬 색 바꾸기(pending — 바이트는 deferredData)도 색 바꾼 무늬로 쥐고 장면에서 뺀다(코어가 그 무늬를 기다린다)', () => {
+    const scene: Pick<Scene3d, 'textures' | 'meta'> = {
+      textures: [
+        { id: 'd', pending: true, deferredData: new Uint8Array([1, 2, 3]), mime: 'image/jpeg', width: 4, height: 2 } as DeferredTexture,
+        { id: 'n', data: new Uint8Array([4]) },
+        { id: 'z', pending: true, deferredData: new Uint8Array([5]) } as DeferredTexture,
+      ],
+      meta: { textures: [info('d', true), info('n', true)] },
+    };
+    const got = prepareRelease({ scene });
+    // 정보가 없는 미룬 무늬(z)는 쥐지 않는다(그 무늬는 평균색 그대로)
+    expect(got.map((h) => [h.id, h.blob.type, h.blob.size, !!h.raw])).toEqual([
+      ['d', 'image/jpeg', 3, false],
+      ['n', '', 1, true],
+    ]);
+    expect(scene.textures!.map((t) => [t.id, !!t.data, !!(t as DeferredTexture).deferredData, !!t.pending])).toEqual([
+      ['d', false, false, true],
+      ['n', true, false, false],
+      ['z', false, true, true],
+    ]);
+  });
+
+  it('setSource가 코어가 기다리는 쥔 색 바꾼 무늬를 알림 없이 손질 워커(견본 포함)로 손질해 주고 재질 목록 견본을 바꾼다', async () => {
+    const { v, ui, w, images } = opened();
+    expect(FakeWorker.all).toHaveLength(1);
+    const wk = FakeWorker.all[0]!;
+    const msg = wk.posted[0]!.msg;
+    expect(msg.swatches).toBe(true);
+    expect(msg.textureLimit).toBe(1024);
+    expect(msg.textures.map((t) => t.id)).toEqual(['t1', 't2']);
+    const res: RecolorResult = { ...result('t1', 't2'), swatches: [{ folder: 't1', png: new Uint8Array([9, 8]) }] };
+    wk.emit({ id: 1, type: 'recolored', result: res });
+    await flush();
+    expect(v.gotTex.map(([id]) => id)).toEqual(['t1', 't2']);
+    // 견본이 온 폴더(t1)만 새 주소(받은 PNG), t2는 그대로
+    const t1 = images.materials.get('t1')!.url;
+    expect(t1).not.toBe('blob:old-t1');
+    expect(images.materials.get('t2')!.url).toBe('blob:old-t2');
+    expect(images.urls).toEqual([t1, 'blob:old-t2']);
+    const { resolveObjectURL } = await import('node:buffer');
+    expect([...new Uint8Array(await resolveObjectURL(t1)!.arrayBuffer())]).toEqual([9, 8]);
+    URL.revokeObjectURL(t1);
+    expect(ui.shown).toEqual([]);
+    expect(ui.refreshed).toBe(0);
+    expect(w.state).toBe('ok');
+    expect(w.last).toMatchObject({ textures: 2, left: 0 });
+    expect(wk.terminated).toBe(true);
+  });
+
+  it('코어가 기다리는 쥔 색 바꾼 무늬가 없으면(작게 연 장면·raw만) 워커를 띄우지 않는다', () => {
+    opened([]);
+    opened(['t3']);
+    expect(FakeWorker.all).toHaveLength(0);
+  });
+
+  it('손질하지 못해도 알림 없이 평균색으로 둔다(해석 워커가 손질하지 못한 무늬를 빼던 것과 같은 모습)', async () => {
+    const { ui, w } = opened();
+    FakeWorker.all[0]!.emit({ id: 1, type: 'error', message: 'x' });
+    await flush();
+    expect(ui.shown).toEqual([]);
+    expect(w.state).toBe('ok');
+    expect(w.last).toMatchObject({ textures: 0, left: 2 });
+  });
+
+  it('손질하는 동안 문맥을 잃으면 받은 것을 쥐었다가 되찾을 때 문맥 복구 길로 준다(워커는 한 번만)', async () => {
+    const { v, ui, w } = opened();
+    v.lose();
+    FakeWorker.all[0]!.emit({ id: 1, type: 'recolored', result: result('t1', 't2') });
+    await flush();
+    expect(v.gotTex).toEqual([]);
+    v.restore();
+    await flush();
+    expect(FakeWorker.all).toHaveLength(1);
+    expect(v.gotTex.map(([id]) => id)).toEqual(['t1', 't2']);
+    expect(w.state).toBe('ok');
+    expect(ui.open).toBeNull();
+    expect(ui.shown).toEqual([`info:${CONTEXT_LOST_TITLE}`, `info:${RESTORE_TITLE}`]);
+  });
+
+  it('새 파일을 여는 동안 멈추고, 열지 못해 그 문서가 그대로면 알림 없이 다시 손질한다', async () => {
+    const { v, ui, w } = opened();
+    w.pause();
+    expect(FakeWorker.all[0]!.terminated).toBe(true);
+    w.resume();
+    expect(FakeWorker.all).toHaveLength(2);
+    expect(FakeWorker.all[1]!.posted[0]!.msg.swatches).toBe(true);
+    FakeWorker.all[1]!.emit({ id: 1, type: 'recolored', result: result('t1', 't2') });
+    await flush();
+    expect(v.gotTex).toHaveLength(2);
+    expect(ui.shown).toEqual([]);
+    expect(w.state).toBe('ok');
+  });
+
+  it('견본 바꾸기: 재질 목록 견본 주소와 이미 그린 견본 그림을 받은 PNG의 주소로 바꾸고 앞 주소는 푼다 — 견본이 없는 폴더는 그대로', async () => {
+    const images: DocImages = {
+      model: null,
+      materials: new Map([['a', { name: 'a.jpg', url: 'blob:old-a' }]]),
+      components: new Map(),
+      scenes: [],
+      skipped: 0,
+      urls: ['blob:old-a'],
+    };
+    // 이미 그린 재질 목록(견본 그림 둘 — 하나가 a의 앞 주소)
+    const imgs = ['blob:old-a', 'blob:other'].map((src) => ({ src, getAttribute: function (this: { src: string }) { return this.src; } }));
+    vi.stubGlobal('document', { querySelectorAll: () => imgs });
+    expect(swapSwatches(images, [{ folder: 'zz', png: new Uint8Array([1]) }])).toBe(0);
+    expect(swapSwatches(null, [{ folder: 'a', png: new Uint8Array([1]) }])).toBe(0);
+    expect(swapSwatches(images, [{ folder: 'a', png: new Uint8Array([5, 6]) }])).toBe(1);
+    const a = images.materials.get('a')!;
+    expect(a.url).not.toBe('blob:old-a');
+    expect(images.urls).toEqual([a.url]);
+    expect(imgs.map((i) => i.src)).toEqual([a.url, 'blob:other']);
+    const { resolveObjectURL } = await import('node:buffer');
+    const b = resolveObjectURL(a.url)!;
+    expect(b.type).toBe('image/png');
+    expect([...new Uint8Array(await b.arrayBuffer())]).toEqual([5, 6]);
+    URL.revokeObjectURL(a.url);
   });
 });
