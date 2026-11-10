@@ -24,7 +24,7 @@
  */
 import type { IndexRange, KeyboardSnapAnnouncement, KeyPickCycleOptions, Pick3d, PickGroupKey, Viewer3d } from 'opencad-viewer3d';
 import { KEY_SNAP_KEYS, formatKeySnapMessage, keySnapHint, keySnapMessages, orderedText, pointText, type KeySnapMessageKey, type KeySnapMessages } from 'opencad-viewer3d/keysnap';
-import { faceOrEdgeSelection, selectionForPick, selectionParts, type SkpDoc } from './doc';
+import { selectionForPick, selectionParts, type SkpDoc } from './doc';
 import { mixText, uiText } from './i18n';
 import { isEditableTarget } from './keys';
 import { selKey } from './panel';
@@ -57,11 +57,12 @@ export function pickGroupKey(doc: () => SkpDoc | null): PickGroupKey {
 }
 
 /**
- * 60차 코어 0.54.0 그물 면 후보 표식의 면: 그물 면 후보가 든 SketchUp 면 하나의 삼각형 구간(해석기 meta.faceRuns — 면·모서리 방식으로 고를 때의 면, doc.ts faceOrEdgeSelection).
+ * 60차 코어 0.54.0 그물 면 후보 표식의 면: 그물 면 후보가 든 SketchUp 면 하나의 삼각형 구간(해석기 meta.faceRuns — 면·모서리 방식으로 고를 때의 면:
+ * 그 방식의 selectionForPick이 doc.ts faceOrEdgeSelection을 먼저 본다. 첫 화면 조각에서 이 조각으로 내보내는 이름을 늘리지 않게 이미 쓰는 함수로 묻는다).
  * 면 경계가 없는 그물(옛 장면)·잘린 면·선분·점은 null — 코어가 맞은 삼각형과 같은 평면으로 이어진 삼각형으로 어림한다(가상 커서는 그물 면만 묻는다)
  */
 export function pickFaceRanges(d: SkpDoc | null, p: Pick3d): IndexRange[] | null {
-  const s = d && faceOrEdgeSelection(d, p);
+  const s = d && selectionForPick({ ...d, pickMode: 'face' }, p);
   return s?.kind === 'face' ? [{ start: s.start, count: s.count }] : null;
 }
 
