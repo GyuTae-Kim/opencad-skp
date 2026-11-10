@@ -1352,11 +1352,13 @@ export class SkpViewerApp implements PanelHost {
       v.onPick((p, e) => this.onPick(p, e));
       // 키보드 고르기(가상 커서 — 고르기 선택은 위 onPick과 같다, keypick.ts PICK_CYCLE)
       if (keyPicking) this.keyPick = new keyPicking.KeyPick(v, this.els.viewHost, () => this.doc);
-      // 겹친 것 고르기 목록(고른 것은 목록이 보인 그대로 — onPick의 측정·걷기 조건과 같을 때만 연다)
+      // 겹친 것 고르기 목록(onPick의 측정·걷기 조건과 같을 때만 열고 고른다). 고른 것은 목록이 보인 그대로 onPick과 같은 길로
+      // (안내 고르기·두 번 누르기 판별 없이 — 57차). 줄 미리 강조와 닫을 때 되돌리기는 고를 때와 같은 강조 길(58차)
       if (pickListing)
         this.pickList = new pickListing.PickList(v, () => this.doc, {
           allowed: () => !!this.doc && !this.measureTool?.active && !this.walking,
-          choose: (p, sel) => this.choosePicked(p, sel),
+          choose: (p, sel) => this.selectPicked(this.doc!, p, sel),
+          preview: (sel) => this.paintSelection(sel),
         });
       // 단면 상태(앱 단추·슬라이더·새 장면으로 꺼짐 등)는 코어 알림으로 도구 막대에 맞춘다
       v.onSectionChange(() => {
@@ -1572,13 +1574,6 @@ export class SkpViewerApp implements PanelHost {
     if (e?.clicks === 2 && (sel?.kind === 'face' || sel?.kind === 'edge')) this.zoomToSelection();
   }
 
-  /** 겹친 것 목록에서 고른 것(57차 — 목록이 보인 고른 것 그대로, 안내 고르기·두 번 누르기 판별 없이) */
-  private choosePicked(p: Pick3d, sel: Selection | null): void {
-    const d = this.doc;
-    if (!d || this.measureTool?.active || this.walking) return;
-    this.selectPicked(d, p, sel);
-  }
-
   /** 3D 고르기의 고른 것을 쓴다: 가장 안쪽을 골랐으면 목록에서 보이게 조상을 펼친다(펼친 단계 방식이면 이미 펼쳐져 있다) */
   private selectPicked(d: SkpDoc, p: Pick3d | null, sel: Selection | null): void {
     d.pick = p;
@@ -1711,16 +1706,23 @@ export class SkpViewerApp implements PanelHost {
     if (sel) this.measureTool?.deselectGuide();
     d.selection = sel;
     if (!sel) d.pick = null;
-    const ids = selectionIds(d, sel);
-    const v = this.viewer;
-    v?.highlight(ids.length ? ids : null);
-    // 나누지 않은 깊은 노드: 면은 구간 강조(코어 highlightRanges), 안쪽 모서리는 굵은 강조 선(가려진 부분은 흐리게).
-    // 숨긴 구간과 겹치면 코어가 숨김을 앞세우고, 강조 선분도 숨긴 구간을 빼고 모은다
-    v?.highlightRanges(selectionRanges(d, sel));
-    const seg = v ? selectionSegments(d, sel, (item) => v.isVisible(this.itemId(item)), this.hiddenRanges) : null;
-    v?.setHighlightSegments(seg?.positions ?? null, seg?.origin ? { width: 3, hidden: 0.25, origin: seg.origin } : { width: 3, hidden: 0.25 });
+    this.paintSelection(sel);
     this.panel.refreshSelection(reveal);
     this.refreshStatus();
+  }
+
+  /** 고른 것(또는 겹친 것 목록 줄의 미리 강조 — 58차)을 3D에 강조한다. 문서의 고른 것·패널·상태 줄은 그대로 */
+  private paintSelection(sel: Selection | null): void {
+    const d = this.doc;
+    const v = this.viewer;
+    if (!d || !v) return;
+    const ids = selectionIds(d, sel);
+    v.highlight(ids.length ? ids : null);
+    // 나누지 않은 깊은 노드: 면은 구간 강조(코어 highlightRanges), 안쪽 모서리는 굵은 강조 선(가려진 부분은 흐리게).
+    // 숨긴 구간과 겹치면 코어가 숨김을 앞세우고, 강조 선분도 숨긴 구간을 빼고 모은다
+    v.highlightRanges(selectionRanges(d, sel));
+    const seg = selectionSegments(d, sel, (item) => v.isVisible(this.itemId(item)), this.hiddenRanges);
+    v.setHighlightSegments(seg?.positions ?? null, seg?.origin ? { width: 3, hidden: 0.25, origin: seg.origin } : { width: 3, hidden: 0.25 });
   }
 
   private itemId(item: number): string {
@@ -3311,12 +3313,7 @@ export class SkpViewerApp implements PanelHost {
       return;
     }
     // 겹친 것 목록(57차)이 열려 있으면 Esc는 목록만 닫고 3D 보기로 돌아간다(고른 것을 지우지 않는다 — 목록에 초점이 가면 코어 가상 커서는 이미 꺼졌다)
-    if (this.pickList?.element && ev.key === 'Escape') {
-      ev.preventDefault();
-      ev.stopPropagation();
-      this.pickList.dismiss();
-      return;
-    }
+    if (this.pickList?.escape(ev)) return;
     const v = this.viewer;
     const tool = this.measureTool;
     // 안내 되돌리기·다시 하기(Ctrl·⌘+Z, Ctrl+Y·Ctrl·⌘+Shift+Z — 도구를 끈 동안에도, 입력 칸은 브라우저 몫)

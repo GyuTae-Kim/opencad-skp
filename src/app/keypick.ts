@@ -9,7 +9,8 @@
  *   사전의 {0} 틀은 화면 번역층이 모든 글에 맞춰 보므로 그런 틀은 아무 글이나 잡는다. 키 안내 틀은 이 앱 키(코어 기본 키)를 끼운 글로 둔다('옮기기 ←→↑↓' — 자리 없는 열쇠).
  *   측정 모드 틀(첫 점·둘째 점·붙잡은 종류 등)은 이 앱이 코어 측정을 쓰지 않아 넣지 않는다(measure.ts).
  * - 고른 것 이름: 코어는 그물 이름(재질 · 태그 묶음)을 끼우므로, 앱이 그 후보를 Enter로 고를 때의 그룹·컴포넌트 이름(고른 것 설명의 첫 조각 — 파일 글은 그대로)과
- *   모형 단위 좌표로 같은 틀에 다시 만든다. 글은 보이지 않는 알림 칸(role=status, 번역층 밖 — 이미 옮긴 글)에 넣는다.
+ *   모형 단위 좌표로 같은 틀에 다시 만든다. 이름과 맞은 것 종류는 코어 pickItem 대신 종류마다 한글이 든 사전 틀(KEY_PICK_ITEM — 58차, 언어마다 말 차례)로 잇는다.
+ *   글은 보이지 않는 알림 칸(role=status, 번역층 밖 — 이미 옮긴 글)에 넣는다.
  * 코어 입구와 함께 받는다(core.ts loadViewerCore — 첫 화면 조각 밖).
  */
 import type { KeyboardSnapAnnouncement, KeyPickCycleOptions, Pick3d, Viewer3d } from 'opencad-viewer3d';
@@ -50,23 +51,45 @@ export function keyPickMessages(tr: (text: string) => string = uiText): Partial<
   return out;
 }
 
+/**
+ * 알림의 "고른 것 이름 + 맞은 것 종류"(58차 — 말 차례를 언어마다 사전이 정한다: 'Face of {0}'·'{0}の面'·'{0}的面').
+ * 코어 pickItem('{0} {1}' — "Group Wall Face"처럼 이름 뒤에 종류)은 한글이 없어 사전에 넣지 못하므로, 종류마다 자리 밖에 한글이 든 틀을 사전 열쇠로 둔다.
+ * 겹친 것 목록 줄(picklist.ts)은 이름 · 종류 두 칸이라 이 틀을 쓰지 않는다
+ */
+export const KEY_PICK_ITEM = {
+  mesh: '{0}의 면',
+  line: '{0}의 모서리',
+  edge: '{0}의 모서리',
+  point: '{0}의 보조점',
+  section: '{0}의 잘린 면',
+} as const;
+export type KeyPickItems = Record<keyof typeof KEY_PICK_ITEM, string>;
+
+/** 지금 언어의 "이름 + 종류" 틀(tr = 사전 번역 — 한국어면 원문) */
+export function keyPickItems(tr: (text: string) => string = uiText): KeyPickItems {
+  const out = {} as KeyPickItems;
+  for (const [k, v] of Object.entries(KEY_PICK_ITEM)) out[k as keyof KeyPickItems] = tr(v);
+  return out;
+}
+
 /** 캔버스가 받는 키(aria-keyshortcuts — Tab은 커서가 켜진 동안만이라 적지 않는다) */
 const KEY_SHORTCUTS = 'ArrowLeft ArrowRight ArrowUp ArrowDown Enter';
 
 /**
  * 고르기 모드 알림 글: 코어 글(a.text)과 같은 틀·차례로, 고른 것 이름(name)과 좌표 글(num)만 앱 것으로(고른 것이 없으면 코어 글 그대로).
+ * 이름과 종류는 items(keyPickItems — 58차, 언어마다 말 차례)로 잇는다.
  * 'start' 커서 켬(키 안내를 붙인다), 'commit' Enter로 고름, 후보가 하나인 자리에서 돌리면 only, 그 밖은 후보 글
  */
 export function keyPickText(
   a: Pick<KeyboardSnapAnnouncement, 'reason' | 'index' | 'count' | 'pick' | 'text'>,
   M: KeySnapMessages,
+  items: KeyPickItems,
   name: string,
   num: (v: number) => string,
 ): string {
   const p = a.pick;
   if (!p) return a.text;
-  const kind = (p.section ? 'pick.section' : `pick.${p.kind}`) as KeySnapMessageKey;
-  const label = formatKeySnapMessage(M.pickItem, [name, M[kind]]);
+  const label = formatKeySnapMessage(items[p.section ? 'section' : p.kind], [name]);
   if (a.reason === 'commit') return formatKeySnapMessage(M.picked, [label]);
   const body = orderedText(label, a.index, a.count, pointText(p.point, num, M), null, M);
   if (a.reason === 'start') return formatKeySnapMessage(M.start, [body, keySnapHint(KEY_SNAP_KEYS, 'pick', true, M)]);
@@ -144,11 +167,12 @@ export class KeyPick {
     }
     const messages = keyPickMessages();
     const M = keySnapMessages(messages);
-    this.v.setKeyboardSnap({ pickCycle: PICK_CYCLE, messages, announce: (a) => this.say(a, M) });
+    const items = keyPickItems();
+    this.v.setKeyboardSnap({ pickCycle: PICK_CYCLE, messages, announce: (a) => this.say(a, M, items) });
     cv.setAttribute('aria-keyshortcuts', KEY_SHORTCUTS);
   }
 
-  private say(a: KeyboardSnapAnnouncement, M: KeySnapMessages): void {
+  private say(a: KeyboardSnapAnnouncement, M: KeySnapMessages, items: KeyPickItems): void {
     const d = this.doc();
     const p = a.mode === 'pick' && d ? a.pick : null;
     if (!d || !p) {
@@ -156,6 +180,6 @@ export class KeyPick {
       return;
     }
     const mm = mmPerSceneUnit(d.scene.units);
-    this.live.textContent = keyPickText(a, M, keyPickName(d, p, a.index > 0), (x) => formatLength(x * mm, d.units));
+    this.live.textContent = keyPickText(a, M, items, keyPickName(d, p, a.index > 0), (x) => formatLength(x * mm, d.units));
   }
 }
