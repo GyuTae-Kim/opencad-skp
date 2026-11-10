@@ -8,6 +8,8 @@
  * - 후보: 그 자리의 pickCandidates(앱 onPick과 같은 선택 PICK_CYCLE, 최대 PICK_LIST_MAX). 잘린 면은 뺀다(앱이 고르지 않는다).
  *   앱 고르기로 묶는다(코어 후보는 기본 도형 단위 — 같은 그물의 앞·뒷면, 같은 그룹의 면·모서리): 첫째는 누르기와 같은 고르기(펼친 단계),
  *   둘째부터는 가상 커서로 돌려 고른 것과 같은 고르기(펼친 단계를 건너뛴 가장 안쪽 그룹·컴포넌트, 면·모서리 방식이면 그 면·모서리). 같은 고른 것은 처음 것 하나.
+ *   59차: 코어 0.53.0 묶음 열쇠(keypick.ts pickGroupKey — 차례와 상관없이 고를 것이 같은 후보만)를 주어 그런 후보는 코어가 하나로 센다(한도가 묶음 수 —
+ *   촘촘한 자리에서 뒤의 것이 목록에 든다). 접힌 그룹 안 후보는 열쇠가 없어 위 같은 고른 것 빼기가 맡는다.
  * - 항목: 그 고르기의 그룹·컴포넌트 이름(keyPickName — 파일 글은 그대로)과 맞은 것의 종류(면·모서리·보조점 — 가상 커서 알림과 같은 사전 열쇠).
  *   고르면 앱 처리기에 그 후보와 고른 것을 넘긴다(목록이 보인 그대로 고른다).
  * - 목록은 메뉴(role=menu — 표준 뷰 메뉴와 같은 꼴, 손가락 기기는 항목 높이 44px): ↑↓·Home·End로 오가고 Enter·Space로 고르며,
@@ -19,12 +21,12 @@ import { dragStartPx } from 'opencad-viewer3d/pointer';
 import { selectionForPick, type Selection, type SkpDoc } from './doc';
 import { uiText } from './i18n';
 import { listKeys } from './kbd';
-import { KEY_PICK_TEXT, PICK_CYCLE, keyPickName } from './keypick';
+import { KEY_PICK_TEXT, PICK_CYCLE, keyPickName, pickGroupKey } from './keypick';
 import { selKey } from './panel';
 
 /** 손가락·펜 길게 누르기(ms) — 줄자·각도기 정밀 조준(350 ms)보다 길게, 브라우저·OS 길게 누르기 메뉴와 비슷하게 */
 export const LONG_PRESS_MS = 500;
-/** 목록 후보 수 한도(코어 PICK_CANDIDATES_MAX와 같다) */
+/** 목록 후보 수 한도(코어 PICK_CANDIDATES_MAX와 같다 — 59차부터 코어 묶음 수) */
 export const PICK_LIST_MAX = 16;
 /** 목록 이름(메뉴 aria-label) */
 export const PICK_LIST_LABEL = '겹친 것 고르기';
@@ -92,12 +94,15 @@ export class PickList {
   private hover: { x: number; y: number } | null = null;
   /** 줄을 미리 강조했는지(닫을 때 되돌린다) */
   private previewed = false;
+  /** 코어 후보 묶음 열쇠(59차 — 가상 커서 Tab 차례와 같은 열쇠) */
+  private readonly group: ReturnType<typeof pickGroupKey>;
 
   constructor(
     private readonly v: PickListViewer,
     private readonly doc: () => SkpDoc | null,
     private readonly host: PickListHost,
   ) {
+    this.group = pickGroupKey(doc);
     const cv = v.canvas;
     cv.addEventListener('pointerdown', (e) => this.onDown(e));
     cv.addEventListener('pointermove', (e) => this.onMove(e));
@@ -137,7 +142,7 @@ export class PickList {
     const d = this.doc();
     if (!this.on || !d || !this.host.allowed()) return false;
     const r = this.v.canvas.getBoundingClientRect();
-    const picks = this.v.pickCandidates(clientX - r.left, clientY - r.top, { ...PICK_CYCLE, pointerType, max: PICK_LIST_MAX });
+    const picks = this.v.pickCandidates(clientX - r.left, clientY - r.top, { ...PICK_CYCLE, pointerType, max: PICK_LIST_MAX, group: this.group });
     this.show(pickListItems(d, picks), clientX, clientY);
     return true;
   }

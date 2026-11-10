@@ -48,22 +48,50 @@ const cube = (): SkpEntities => shell([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0,
 const inst = (definition: number, matrix: Float64Array): SkpInstance => ({ definition, matrix, flags: 0, kind: 'group' });
 const group = (list: SkpInstance[]): SkpEntities => ({ ...shell([], []), instances: list });
 
+function docOf(name: string, defs: Map<number, SkpDefinition>, root: SkpInstance[]): ReturnType<typeof createDoc> {
+  const model: SkpModel = {
+    materials: new Map(),
+    layers: new Map([[1, 'Layer0']]),
+    defaultLayer: 1,
+    definitions: defs,
+    root: group(root),
+    counts: { vertices: 0, edges: 0, faces: 0, instances: defs.size },
+    warnings: [],
+  };
+  const p = buildSceneParts(model, new Map(), 1, { outline: true });
+  const scene: Scene3d = { name: 't', units: 'inch', meshes: p.meshes, lines: p.lines, meta: { tree: p.tree, outline: p.outline, faceRuns: p.faceRuns } };
+  return createDoc(name, 1, { scene, ms: 1 });
+}
+
 export function rowDoc(): ReturnType<typeof createDoc> {
   const defs = new Map<number, SkpDefinition>([
     [1, { id: 1, name: 'Far', entities: cube() }],
     [2, { id: 2, name: 'Near', entities: cube() }],
     [3, { id: 3, name: 'Row', entities: group([inst(1, at(0)), inst(2, at(3))]) }],
   ]);
-  const model: SkpModel = {
-    materials: new Map(),
-    layers: new Map([[1, 'Layer0']]),
-    defaultLayer: 1,
-    definitions: defs,
-    root: group([inst(3, at(0))]),
-    counts: { vertices: 0, edges: 0, faces: 0, instances: 3 },
-    warnings: [],
-  };
-  const p = buildSceneParts(model, new Map(), 1, { outline: true });
-  const scene: Scene3d = { name: 't', units: 'inch', meshes: p.meshes, lines: p.lines, meta: { tree: p.tree, outline: p.outline, faceRuns: p.faceRuns } };
-  return createDoc('row.skp', 1, { scene, ms: 1 });
+  return docOf('row.skp', defs, [inst(3, at(0))]);
+}
+
+/**
+ * 촘촘한 자리 시험 모형(59차 — 코어 0.53.0 후보 묶음 열쇠): 정사각형 판 n장(x 3부터 0.05 간격, y·z 0~1)을 낱 면으로 담은 그룹 Slats와
+ * 그 뒤 상자 그룹 Wall(x 0~1). 오른쪽(+x)에서 보면 가운데 시선이 판 n장을 지나 Wall의 앞·뒤 면에 닿는다.
+ * nested면 두 그룹을 그룹 Site 안에 둔다(펼친 단계 방식에서 접힌 그룹 안 — 차례마다 고를 것이 달라 묶음 열쇠가 없다)
+ */
+export function stackDoc(n: number, nested = false): ReturnType<typeof createDoc> {
+  const points: number[] = [];
+  const loops: number[][] = [];
+  for (let k = 0; k < n; k++) {
+    const x = 3 + k * 0.05;
+    const b = points.length / 3;
+    points.push(x, 0, 0, x, 1, 0, x, 1, 1, x, 0, 1);
+    loops.push([b, b + 1, b + 2, b + 3]);
+  }
+  const defs = new Map<number, SkpDefinition>([
+    [1, { id: 1, name: 'Slats', entities: shell(points, loops) }],
+    [2, { id: 2, name: 'Wall', entities: cube() }],
+  ]);
+  const top = [inst(1, at(0)), inst(2, at(0))];
+  if (!nested) return docOf('stack.skp', defs, top);
+  defs.set(3, { id: 3, name: 'Site', entities: group(top) });
+  return docOf('stack.skp', defs, [inst(3, at(0))]);
 }

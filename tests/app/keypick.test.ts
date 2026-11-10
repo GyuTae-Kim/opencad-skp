@@ -238,7 +238,8 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
     expect(v.keyboardSnap).toBeNull();
     kp.set(true);
     const ks = v.keyboardSnap!;
-    expect(ks.pickCycle).toEqual(PICK_CYCLE);
+    // 59차: 앱 묶음 열쇠(pickGroupKey — tests/app/pickgroup.test.ts)
+    expect(ks.pickCycle).toEqual({ ...PICK_CYCLE, group: expect.any(Function) });
     expect(ks.messages).toEqual(keyPickMessages());
     expect(cv.getAttribute('aria-keyshortcuts')).toBe('ArrowLeft ArrowRight ArrowUp ArrowDown Enter');
     kp.set(false);

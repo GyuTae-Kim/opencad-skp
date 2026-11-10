@@ -4,6 +4,7 @@
  * - 3D 보기에 초점이 있을 때 화살표로 가상 커서를 켜고 옮기며, Tab·Shift+Tab으로 커서 자리에 겹친 면·모서리(앞 면 뒤의 것까지 — 코어 pickCandidates 차례)를 돌리고
  *   Enter로 고른다. 둘째 이후 후보는 onPick의 e.cycle로 오고 앱은 펼친 단계 규칙을 건너뛰어 그것을 그대로 고른다(doc.ts selectionForPick).
  * - 후보 고르기 선택(PICK_CYCLE)은 앱 onPick 선택과 같다(앱은 반투명 너머·면만 고르기를 쓰지 않는다).
+ *   59차: 코어 0.53.0 후보 묶음 열쇠(group — pickGroupKey)로 같은 고른 것이 될 후보를 하나로 센다(후보 한도·Tab 수·알림 수가 묶음 수 — 겹친 것 목록과 같다).
  * - 알림 글: 코어 알림 틀 가운데 이 앱이 보일 수 있는 것(고르기 모드)만 네 언어 사전 열쇠(KEY_PICK_TEXT)로 옮겨 setKeyboardSnap({ messages })로 준다.
  *   한글이 없는 틀(pickItem '{0} {1}'·candidate '{0}: {1}'·order '{0} {1}/{2}'·point 'X {0}, Y {1}, Z {2}'·hintJoin)은 사전에 넣지 않는다 —
  *   사전의 {0} 틀은 화면 번역층이 모든 글에 맞춰 보므로 그런 틀은 아무 글이나 잡는다. 키 안내 틀은 이 앱 키(코어 기본 키)를 끼운 글로 둔다('옮기기 ←→↑↓' — 자리 없는 열쇠).
@@ -13,14 +14,38 @@
  *   글은 보이지 않는 알림 칸(role=status, 번역층 밖 — 이미 옮긴 글)에 넣는다.
  * 코어 입구와 함께 받는다(core.ts loadViewerCore — 첫 화면 조각 밖).
  */
-import type { KeyboardSnapAnnouncement, KeyPickCycleOptions, Pick3d, Viewer3d } from 'opencad-viewer3d';
+import type { KeyboardSnapAnnouncement, KeyPickCycleOptions, Pick3d, PickGroupKey, Viewer3d } from 'opencad-viewer3d';
 import { KEY_SNAP_KEYS, formatKeySnapMessage, keySnapHint, keySnapMessages, orderedText, pointText, type KeySnapMessageKey, type KeySnapMessages } from 'opencad-viewer3d/keysnap';
 import { selectionForPick, selectionParts, type SkpDoc } from './doc';
 import { mixText, uiText } from './i18n';
+import { selKey } from './panel';
 import { formatLength, mmPerSceneUnit } from './units';
 
 /** 가상 커서 고르기 후보 선택: 앱 onPick 선택과 같다(반투명 너머·면만 고르기 없음, 윤곽선은 코어 기본) */
 export const PICK_CYCLE: KeyPickCycleOptions = { throughTranslucent: false, meshesOnly: false };
+
+/** 잘린 면 후보의 묶음 열쇠(앱은 잘린 면을 고르지 않는다 — 고른 것 열쇠 selKey와 겹치지 않는 글) */
+export const SECTION_GROUP = '§';
+
+/**
+ * 59차 코어 0.53.0 후보 묶음 열쇠(pickCandidates·pickCycle의 group): 후보를 그 후보로 앱이 고를 것의 열쇠(panel.ts selKey)로 묶는다.
+ * 앱은 첫째 후보를 누르기와 같은 고르기(펼친 단계), 둘째부터 펼친 단계를 건너뛴 가장 안쪽 그룹·컴포넌트로 고르는데(doc.ts selectionForPick의 cycle),
+ * 열쇠 함수는 후보 하나만 받아 그 차례를 모른다. 그래서 두 고르기가 같은 후보만 그 열쇠로 묶고 다른 후보는 묶지 않는다(null — 코어는 0.47.0처럼 기본 도형마다,
+ * 겹친 것 목록이 같은 고른 것을 뺀다): 가장 안쪽 방식·면 방식은 모든 후보가, 펼친 단계 방식은 접힌 그룹·컴포넌트 안에 들지 않은 후보(맨 위 단계 그룹의 면,
+ * 펼친 단계의 면·모서리, 맨 위 낱 형상)가 묶인다. 접힌 그룹 안 후보까지 가장 안쪽 열쇠로 묶으면 첫 후보와 같은 안쪽 그룹의 뒤 후보(닫힌 몸의 뒷면)가 빠져,
+ * 그 안쪽 그룹을 고르는 줄·Tab 차례가 없어진다(첫 후보 줄은 펼친 단계를 고른다).
+ * 이렇게 묶어 빠지는 후보는 늘 앞 후보와 고를 것이 같아 목록이 빼던 것뿐이라 목록 줄·Enter로 고르는 것은 그대로이고, 한도(16)는 묶음 수라
+ * 촘촘한 자리에서 뒤 후보가 목록·Tab 차례에 든다. 잘린 면은 앱이 고르지 않으므로 하나로 묶는다(SECTION_GROUP)
+ */
+export function pickGroupKey(doc: () => SkpDoc | null): PickGroupKey {
+  return (p) => {
+    const d = doc();
+    if (!d) return null;
+    if (p.section) return SECTION_GROUP;
+    const key = selKey(selectionForPick(d, p, false, true));
+    return key && key === selKey(selectionForPick(d, p, false, false)) ? key : null;
+  };
+}
 
 /**
  * 코어 알림 틀 → 이 앱의 한국어 원문(네 언어 사전 열쇠). 선분 묶음은 SketchUp 모서리라 '모서리', 점 묶음은 보조점이다.
@@ -168,7 +193,7 @@ export class KeyPick {
     const messages = keyPickMessages();
     const M = keySnapMessages(messages);
     const items = keyPickItems();
-    this.v.setKeyboardSnap({ pickCycle: PICK_CYCLE, messages, announce: (a) => this.say(a, M, items) });
+    this.v.setKeyboardSnap({ pickCycle: { ...PICK_CYCLE, group: pickGroupKey(this.doc) }, messages, announce: (a) => this.say(a, M, items) });
     cv.setAttribute('aria-keyshortcuts', KEY_SHORTCUTS);
   }
 
