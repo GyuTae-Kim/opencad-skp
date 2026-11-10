@@ -109,3 +109,12 @@ export function isEditableTarget(t: EventTarget | null): boolean {
   }
   return !!el.isContentEditable;
 }
+
+/**
+ * 키 대상이 화살표·PageUp·PageDown을 스스로 쓰는 곳(패널 목록·메뉴·장면 탭·패널 크기 손잡이·슬라이더 등 입력)인지
+ * (app.ts 창 키와 59차 keypick.ts 측정 도구 키가 함께 쓴다)
+ */
+export function inList(t: EventTarget | null): boolean {
+  const el = t as Element | null;
+  return !!el && typeof el.closest === 'function' && !!el.closest('.panel, .menu, .scene-tabs, .resizer, .measure-log, input, select, [role="tree"], [role="listbox"]');
+}

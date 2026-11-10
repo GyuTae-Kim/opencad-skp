@@ -1120,5 +1120,15 @@
   "{0}의 면": "Face of {0}",
   "{0}의 모서리": "Edge of {0}",
   "{0}의 보조점": "Auxiliary point of {0}",
-  "{0}의 잘린 면": "Section cut of {0}"
+  "{0}의 잘린 면": "Section cut of {0}",
+  "찍기 Enter": "Place point Enter",
+  "방향 잠금 Shift": "Lock direction Shift",
+  "붙잡을 점이 없습니다": "No point to snap to",
+  "찍을 점이 없습니다": "No point to place",
+  "시작점을 찍었습니다. {0}": "Start point placed. {0}",
+  "중심을 찍었습니다. {0}": "Center placed. {0}",
+  "기준 방향을 찍었습니다. {0}": "Reference direction placed. {0}",
+  "줄자·각도기를 켠 동안 3D 보기에 초점이 있을 때: 가상 커서 켜기, 켠 동안은 커서 자리에 점 찍기": "With Tape Measure or Protractor on and focus on the 3D view: turn on the virtual cursor; while it is on, place a point at the cursor",
+  "줄자·각도기의 가상 커서를 켠 동안: 커서 옮기기(Shift와 함께면 크게 — 그동안 방향 잠금은 Shift)": "While the Tape Measure or Protractor virtual cursor is on: move the cursor (with Shift, in larger steps — meanwhile Shift locks the direction)",
+  "줄자·각도기의 가상 커서를 켠 동안: 찍은 점·결과를 먼저 지우고, 없으면 커서 끄기": "While the Tape Measure or Protractor virtual cursor is on: clear the placed points and the result first, then turn off the cursor"
 }

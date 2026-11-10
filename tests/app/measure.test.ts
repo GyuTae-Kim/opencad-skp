@@ -4143,3 +4143,79 @@ describe('측정 도구: 툴팁을 지금 화면 언어의 글로 재어 놓기(
     expect(parseFloat(tip.style.left)).toBe(165);
   });
 });
+
+describe('측정 도구: 키보드 점 찍기(59차 — 가상 커서 자리, keypick.ts KeyMeasureHost)', () => {
+  it('줄자: keyHover는 마우스처럼 추정·툴팁을 보이고 "툴팁 글: 좌표" 알림 글, keyPlace는 그 자리에 찍고 시작점·결과 알림 글', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    expect(r.tool.keyHover(102, 103)).toBe('끝점: X 0 mm, Y 0 mm, Z 0 mm');
+    r.overlay.paintNow();
+    expect(r.q('.measure-snap-endpoint')).not.toBeNull();
+    expect(r.tip()).toBe('끝점');
+    // 툴팁 알림(role=status)은 감춘다 — 알림 칸이 같은 글과 좌표를 읽는다
+    expect(r.q('.measure-tip')!.getAttribute('aria-hidden')).toBe('true');
+    expect(r.tool.keyPlace(false)).toBe('시작점을 찍었습니다. 끝점: X 0 mm, Y 0 mm, Z 0 mm');
+    expect(r.tool.pointCount).toBe(1);
+    expect(r.tool.keyHover(153, 101)).toBe('중간점 · 50 mm: X 50 mm, Y 0 mm, Z 0 mm');
+    r.overlay.paintNow();
+    expect(r.q('line.measure-rubber')).not.toBeNull();
+    // 측정값 칸 값도 마우스처럼(시작점 → 커서 길이)
+    expect(r.lives.at(-1)).toBe(50);
+    expect(r.tool.keyHover(198, 101)).toBe('끝점 · 100 mm: X 100 mm, Y 0 mm, Z 0 mm');
+    expect(r.tool.keyPlace(false)).toBe('거리 100 mm (dx 100 mm · dy 0 mm · dz 0 mm)');
+    expect(r.results.at(-1)).toMatchObject({ kind: 'tape', a: [0, 0, 0], b: [100, 0, 0], distance: 100 });
+    expect(r.tool.pointCount).toBe(0);
+    // 빈 곳: 붙잡을 점이 없고 찍지 않는다
+    expect(r.tool.keyHover(30, 170)).toBe('붙잡을 점이 없습니다');
+    expect(r.tool.keyPlace(false)).toBe('찍을 점이 없습니다');
+    expect(r.tool.pointCount).toBe(0);
+  });
+
+  it('각도기: 중심 → 기준 방향 → 잰 결과(각도), 중심은 빈 곳에 찍지 않는다', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('protractor');
+    expect(r.tool.keyHover(30, 170)).toBe('붙잡을 점이 없습니다');
+    r.tool.keyHover(101, 101);
+    expect(r.tool.keyPlace(false)).toBe('중심을 찍었습니다. 끝점: X 0 mm, Y 0 mm, Z 0 mm');
+    r.tool.keyHover(197, 102);
+    expect(r.tool.keyPlace(false)).toBe('기준 방향을 찍었습니다. 끝점: X 100 mm, Y 0 mm, Z 0 mm');
+    expect(r.tool.pointCount).toBe(2);
+    expect(r.tool.keyHover(101, 52)).toBe('끝점 · 90.0°: X 0 mm, Y 50 mm, Z 0 mm');
+    expect(r.tool.keyPlace(false)).toBe('각도 90.0°');
+    expect(r.results.at(-1)?.kind).toBe('protractor');
+  });
+
+  it('keyEnd: 거두거나(Esc·포인터) 그 자리에 둔다(초점이 측정값 칸으로 — 친 길이의 방향), 커서가 켜진 동안의 작은 마우스 움직임은 커서 자리 그대로', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    r.tool.keyHover(102, 103);
+    r.tool.keyPlace(false);
+    r.tool.keyHover(198, 101);
+    // 초점이 측정값 칸으로 갔다: 표식을 두어 친 길이가 그 방향으로 간다
+    r.tool.keyEnd(true);
+    r.overlay.paintNow();
+    expect(r.tip()).toBe('끝점 · 100 mm');
+    expect(r.tool.applyLength(30)).toBe('ok');
+    expect(r.results.at(-1)).toMatchObject({ kind: 'tape', b: [30, 0, 0] });
+    r.tool.keyHover(102, 103);
+    r.tool.keyEnd(false);
+    r.overlay.paintNow();
+    expect(r.tip()).toBeNull();
+    expect(r.q('.measure-snap-endpoint')).toBeNull();
+    // 코어 가상 커서가 켜진 동안(4화소 안의 마우스 움직임 — 코어가 커서를 끄지 않는다)은 커서 자리 그대로, 꺼지면 마우스를 따른다
+    const v = r.viewer as { keyboardCursor?: unknown };
+    v.keyboardCursor = { x: 102, y: 103 };
+    r.tool.keyHover(102, 103);
+    r.move(153, 101);
+    expect(r.tip()).toBe('끝점');
+    v.keyboardCursor = null;
+    r.move(153, 101);
+    expect(r.tip()).toBe('중간점');
+    // 마우스 툴팁은 알림(role=status)을 그대로 둔다
+    expect(r.q('.measure-tip')!.hasAttribute('aria-hidden')).toBe(false);
+    // 마우스 커서·도구를 끈 동안에는 찍지 않는다
+    expect(r.tool.keyPlace(false)).toBe('찍을 점이 없습니다');
+    r.tool.setMode(null);
+    expect(r.tool.keyHover(102, 103)).toBe('');
+  });
+});

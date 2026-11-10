@@ -1120,5 +1120,15 @@
   "{0}의 면": "Fläche von {0}",
   "{0}의 모서리": "Kante von {0}",
   "{0}의 보조점": "Hilfspunkt von {0}",
-  "{0}의 잘린 면": "Schnittfläche von {0}"
+  "{0}의 잘린 면": "Schnittfläche von {0}",
+  "찍기 Enter": "Punkt setzen Enter",
+  "방향 잠금 Shift": "Richtung sperren Shift",
+  "붙잡을 점이 없습니다": "Kein Fangpunkt",
+  "찍을 점이 없습니다": "Kein Punkt zum Setzen",
+  "시작점을 찍었습니다. {0}": "Startpunkt gesetzt. {0}",
+  "중심을 찍었습니다. {0}": "Mittelpunkt gesetzt. {0}",
+  "기준 방향을 찍었습니다. {0}": "Bezugsrichtung gesetzt. {0}",
+  "줄자·각도기를 켠 동안 3D 보기에 초점이 있을 때: 가상 커서 켜기, 켠 동안은 커서 자리에 점 찍기": "Mit eingeschaltetem Maßband oder Winkelmesser und Fokus auf der 3D-Ansicht: virtuellen Cursor einschalten; solange er an ist, einen Punkt am Cursor setzen",
+  "줄자·각도기의 가상 커서를 켠 동안: 커서 옮기기(Shift와 함께면 크게 — 그동안 방향 잠금은 Shift)": "Solange der virtuelle Cursor von Maßband oder Winkelmesser an ist: Cursor bewegen (mit Shift in größeren Schritten — die Richtung sperrt dann Shift)",
+  "줄자·각도기의 가상 커서를 켠 동안: 찍은 점·결과를 먼저 지우고, 없으면 커서 끄기": "Solange der virtuelle Cursor von Maßband oder Winkelmesser an ist: zuerst gesetzte Punkte und das Ergebnis löschen, danach den Cursor ausschalten"
 }

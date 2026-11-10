@@ -414,7 +414,8 @@ describe('목록 키와 고르기', () => {
 
   it('앱: 고르기 도구일 때만 켜고(키보드 고르기와 같은 자리), 문서를 바꾸거나 언어를 바꾸면 닫으며, 고른 것은 onPick과 같은 길(selectPicked)로 쓴다', () => {
     const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
-    expect(app).toMatch(/this\.keyPick\?\.set\(!mode\);\n\s*this\.pickList\?\.set\(!mode\);/);
+    // 59차: 키보드는 줄자·각도기에서 점 찍기 방식(keypick.ts setMode) — 목록은 고르기 도구일 때만
+    expect(app).toMatch(/this\.keyPick\?\.follow\(mode\);\n\s*this\.pickList\?\.set\(!mode\);/);
     expect(app).toMatch(/allowed: \(\) => !!this\.doc && !this\.measureTool\?\.active && !this\.walking/);
     // 58차: 고르기 직전 막힘(측정·걷기)은 목록이 allowed로 다시 본다(앱 choosePicked를 줄였다 — 첫 화면 조각)
     expect(app).toMatch(/choose: \(p, sel\) => this\.selectPicked\(this\.doc!, p, sel\),/);
