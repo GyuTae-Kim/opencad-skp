@@ -112,7 +112,7 @@ describe('여는 법', () => {
     expect(m.getAttribute('aria-label')).toBe('겹친 것 고르기');
     expect(m.hasAttribute('data-i18n-skip')).toBe(true);
     expect(m.classList.contains('menu')).toBe(true);
-    expect(pickCandidates).toHaveBeenCalledWith(401, 301, { ...PICK_CYCLE, pointerType: 'mouse', max: PICK_LIST_MAX });
+    expect(pickCandidates).toHaveBeenCalledWith(401, 301, { ...PICK_CYCLE, pointerType: 'mouse', max: PICK_LIST_MAX, group: expect.any(Function) });
     // 같은 상자의 뒷면은 앞면과 같은 고른 것이라 하나로
     expect(pickListTexts(m)).toEqual(['그룹 Row · 면', '그룹 Near · 면', '그룹 Far · 면']);
     expect(items().every((b) => b.getAttribute('role') === 'menuitem' && b.tabIndex === -1)).toBe(true);
@@ -159,7 +159,7 @@ describe('여는 법', () => {
     expect(menu()).toBeNull();
     vi.advanceTimersByTime(1);
     expect(claimPointer).toHaveBeenCalledWith(7, null);
-    expect(pickCandidates).toHaveBeenCalledWith(290, 180, { ...PICK_CYCLE, pointerType: 'touch', max: PICK_LIST_MAX });
+    expect(pickCandidates).toHaveBeenCalledWith(290, 180, { ...PICK_CYCLE, pointerType: 'touch', max: PICK_LIST_MAX, group: expect.any(Function) });
     expect(pickListTexts(menu())).toEqual(['그룹 Row · 면', '그룹 Near · 면', '그룹 Far · 면']);
     // 연 손가락을 떼도 그대로, 다음 바깥 누르기에 닫힌다
     ptr(cv, 'pointerup', { x: 306, y: 205, id: 7, pointerType: 'touch' });
@@ -201,7 +201,7 @@ describe('여는 법', () => {
     s.cv.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, ctrlKey: true, bubbles: true, cancelable: true }));
     expect(menu()).toBeNull();
     key(s.cv, 'F10', true);
-    expect(s.pickCandidates).toHaveBeenCalledWith(400, 300, { ...PICK_CYCLE, pointerType: 'keyboard', max: PICK_LIST_MAX });
+    expect(s.pickCandidates).toHaveBeenCalledWith(400, 300, { ...PICK_CYCLE, pointerType: 'keyboard', max: PICK_LIST_MAX, group: expect.any(Function) });
     expect(menu()).not.toBeNull();
     key(items()[0]!, 'Escape');
     expect(menu()).toBeNull();
@@ -215,24 +215,24 @@ describe('여는 법', () => {
     const ev = new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true, cancelable: true });
     s.cv.dispatchEvent(ev);
     expect(ev.defaultPrevented).toBe(true);
-    expect(s.pickCandidates).toHaveBeenLastCalledWith(400, 300, { ...PICK_CYCLE, pointerType: 'keyboard', max: PICK_LIST_MAX });
+    expect(s.pickCandidates).toHaveBeenLastCalledWith(400, 300, { ...PICK_CYCLE, pointerType: 'keyboard', max: PICK_LIST_MAX, group: expect.any(Function) });
     expect(menu()!.style.left).toBe('410px');
     expect(menu()!.style.top).toBe('324px');
     key(items()[0]!, 'Escape');
     // 마우스가 3D 보기 위에 있으면 그 자리(마우스 허용 거리)
     ptr(s.cv, 'pointermove', { x: 210, y: 120 });
     key(s.cv, 'ContextMenu');
-    expect(s.pickCandidates).toHaveBeenLastCalledWith(200, 100, { ...PICK_CYCLE, pointerType: 'mouse', max: PICK_LIST_MAX });
+    expect(s.pickCandidates).toHaveBeenLastCalledWith(200, 100, { ...PICK_CYCLE, pointerType: 'mouse', max: PICK_LIST_MAX, group: expect.any(Function) });
     expect(menu()!.style.left).toBe('210px');
     key(items()[0]!, 'Escape');
     // 손가락 자리는 마우스 자리가 아니다, 마우스가 3D 보기를 떠나면 가운데
     ptr(s.cv, 'pointermove', { x: 600, y: 500, pointerType: 'touch' });
     key(s.cv, 'F10', true);
-    expect(s.pickCandidates).toHaveBeenLastCalledWith(200, 100, { ...PICK_CYCLE, pointerType: 'mouse', max: PICK_LIST_MAX });
+    expect(s.pickCandidates).toHaveBeenLastCalledWith(200, 100, { ...PICK_CYCLE, pointerType: 'mouse', max: PICK_LIST_MAX, group: expect.any(Function) });
     key(items()[0]!, 'Escape');
     ptr(s.cv, 'pointerleave', { x: 0, y: 120 });
     key(s.cv, 'F10', true);
-    expect(s.pickCandidates).toHaveBeenLastCalledWith(400, 300, { ...PICK_CYCLE, pointerType: 'keyboard', max: PICK_LIST_MAX });
+    expect(s.pickCandidates).toHaveBeenLastCalledWith(400, 300, { ...PICK_CYCLE, pointerType: 'keyboard', max: PICK_LIST_MAX, group: expect.any(Function) });
     key(items()[0]!, 'Escape');
     // 키로 낸 contextmenu 사건(포인터 종류 없음)도 같은 자리, 막힌 때(걷기)·꺼진 목록은 브라우저 몫
     const cm = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
@@ -414,7 +414,8 @@ describe('목록 키와 고르기', () => {
 
   it('앱: 고르기 도구일 때만 켜고(키보드 고르기와 같은 자리), 문서를 바꾸거나 언어를 바꾸면 닫으며, 고른 것은 onPick과 같은 길(selectPicked)로 쓴다', () => {
     const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
-    expect(app).toMatch(/this\.keyPick\?\.set\(!mode\);\n\s*this\.pickList\?\.set\(!mode\);/);
+    // 59차: 키보드는 줄자·각도기에서 점 찍기 방식(keypick.ts setMode) — 목록은 고르기 도구일 때만
+    expect(app).toMatch(/this\.keyPick\?\.follow\(mode\);\n\s*this\.pickList\?\.set\(!mode\);/);
     expect(app).toMatch(/allowed: \(\) => !!this\.doc && !this\.measureTool\?\.active && !this\.walking/);
     // 58차: 고르기 직전 막힘(측정·걷기)은 목록이 allowed로 다시 본다(앱 choosePicked를 줄였다 — 첫 화면 조각)
     expect(app).toMatch(/choose: \(p, sel\) => this\.selectPicked\(this\.doc!, p, sel\),/);

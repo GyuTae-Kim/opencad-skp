@@ -17,6 +17,8 @@
  * 입력: 캔버스 포인터 이벤트를 엿본다(막지 않는다). 왼쪽 단추·탭을 코어의 끌기 시작 거리(tapSlopPx — 마우스·펜 4화소,
  * 터치 10화소) 안에서 떼면 점 찍기, 끌기·오른쪽·가운데 단추·두 손가락은 코어 궤도·이동·확대 그대로(그 거리 안의 손가락 떨림은
  * 코어도 돌리지 않고 누르기로 본다). 터치는 추정 반경을 넓힌다(커서 표식은 탭한 점에 남긴다).
+ * 키보드(59차): 3D 보기의 Enter로 켠 코어 가상 커서의 자리를 keypick.ts가 keyHover로 넘기면 마우스처럼 추정하고(머무르기 없이),
+ *   Enter는 keyPlace로 그 자리에 누르기와 같이 찍는다. 알림 글(KEY_MEASURE_TEXT·툴팁 글·좌표)은 keypick.ts가 알림 칸에 넣는다.
  * 정밀 조준(터치): 한 손가락을 끌기 시작 거리 안에서 AIM_HOLD_MS 동안 누르고 있으면 손가락 위 AIM_OFFSET_PX에 십자선을 띄우고,
  *   끌면 궤도 대신 십자선이 따라가며 마우스처럼 추정·고무줄·툴팁을 보인다. 떼면 십자선 자리에 점을 찍는다.
  *   그동안의 움직임은 캔버스 부모의 캡처 단계에서 막아 코어가 돌리지 않게 한다(떼기는 코어에 넘겨 끌기 상태를 끝낸다).
@@ -93,6 +95,7 @@ import { MeasureTracker, TRACK_DWELL_MS } from 'opencad-viewer3d/track';
 import { safeStorage } from './backdrop';
 import { icon } from './dom';
 import { digestHex, loadGuides, saveGuides, type GuideStorage } from './guidestore';
+import { measureLine } from './doc';
 import { isEditableTarget } from './keys';
 import { screenPoint, screenSegment, svgEl, type Overlay } from './overlay';
 import { formatAngle, formatLength, mmPerSceneUnit, type UnitsDisplay } from './units';
@@ -622,7 +625,7 @@ export interface GuideMenuItem {
 
 /** 이 도구가 쓰는 뷰어 기능(시험에서 가짜로 바꿀 수 있게) */
 export type MeasureViewer = Pick<Viewer3d, 'canvas' | 'pick' | 'getCamera' | 'onCameraChange' | 'getRenderMode' | 'section'> &
-  Partial<Pick<Viewer3d, 'sections' | 'viewCubeRect' | 'navigation'>>;
+  Partial<Pick<Viewer3d, 'sections' | 'viewCubeRect' | 'navigation' | 'keyboardCursor'>>;
 /** 이 도구가 쓰는 덧그림 기능 */
 export type MeasureOverlay = Pick<Overlay, 'svg' | 'labels' | 'set' | 'frame' | 'invalidate'>;
 
@@ -1007,6 +1010,18 @@ export function labelSpot(
 export function joinTip(label: string, value?: string | null): string {
   return [label, value].filter((s) => !!s).join(' · ');
 }
+
+/**
+ * 59차 키보드 점 찍기 알림 글(가상 커서 — keypick.ts가 알림 칸에 넣는다, 네 언어 사전 열쇠 — 자리 밖에 한글).
+ * 자리 글은 "추정 · 길이·각도: X …, Y …, Z …"(툴팁 글 + 좌표 — 이음 ': '와 좌표 틀은 한글이 없어 사전에 넣지 않는다), 다 잰 결과는 측정 기록 줄(measureLine)
+ */
+export const KEY_MEASURE_TEXT = {
+  noSnap: '붙잡을 점이 없습니다',
+  noPoint: '찍을 점이 없습니다',
+  start: '시작점을 찍었습니다. {0}',
+  center: '중심을 찍었습니다. {0}',
+  base: '기준 방향을 찍었습니다. {0}',
+} as const;
 
 /**
  * 상태 줄 안내. touch면 키 설명 대신 길게 누르기(정밀 조준)를 알린다.
@@ -2233,6 +2248,67 @@ export class MeasureTool {
     return applyMessage(angle ? this.applyAngle(value) : this.applyLength(value / mmPerUnit), angle);
   }
 
+  // ───────────────────────── 키보드 점 찍기(59차 — 가상 커서, keypick.ts KeyMeasureHost) ─────────────────────────
+
+  /**
+   * 가상 커서를 켜거나 옮겼다(캔버스 CSS 좌표): 마우스가 그 자리에 온 것처럼 추정하고(그리기를 기다리지 않고 — 끌어온 점 머무르기는 하지 않는다,
+   * 코어 README 0.46.0 "시간으로 정하는 몸짓을 쓰지 않는다") 그 자리 알림 글을 돌려준다
+   */
+  keyHover(x: number, y: number): string {
+    if (!this.modeValue) return '';
+    this.cursor = { x, y, type: 'keyboard' };
+    this.hoverDirty = true;
+    const snap = this.freshHover();
+    this.overlay.invalidate();
+    return this.keyText(snap);
+  }
+
+  /** 가상 커서를 껐다: keep이 아니면 커서 표식·툴팁을 거둔다(keep — 초점이 측정값 칸 등으로 가 그 칸에 친 길이의 방향으로 쓴다) */
+  keyEnd(keep: boolean): void {
+    if (keep || this.cursor?.type !== 'keyboard') return;
+    this.cursor = null;
+    this.hover = null;
+    this.hoverPoint = null;
+    this.overlay.invalidate();
+  }
+
+  /** Enter: 가상 커서 자리에 누르기와 같이 점을 찍고(shift = 각도기 평면 고정) 알림 글 — 시작점·중심·기준 방향, 다 쟀으면 결과 줄, 못 찍었으면 그 글 */
+  keyPlace(shift: boolean): string {
+    const tr = this.opts.localize ?? ((t: string) => t);
+    const c = this.cursor;
+    if (!this.modeValue || c?.type !== 'keyboard') return tr(KEY_MEASURE_TEXT.noPoint);
+    const desc = this.keyText(this.freshHover());
+    const n = this.pts.length;
+    const before = this.resultValue;
+    this.place(c.x, c.y, 'keyboard', shift);
+    const r = this.resultValue;
+    if (r && r !== before) {
+      const scene = this.opts.getScene();
+      return tr(measureLine(r, this.opts.getUnits(), mmPerSceneUnit(scene?.units)));
+    }
+    if (this.pts.length <= n) return tr(KEY_MEASURE_TEXT.noPoint);
+    const t = this.modeValue === 'tape' ? KEY_MEASURE_TEXT.start : n ? KEY_MEASURE_TEXT.base : KEY_MEASURE_TEXT.center;
+    return tr(t).replace('{0}', () => desc);
+  }
+
+  /** 가상 커서 자리 알림 글: 찍을 수 있는 추정이면 툴팁 글(추정 · 길이·각도)과 좌표, 아니면 붙잡을 점이 없다 */
+  private keyText(snap: Snap | null): string {
+    const tr = this.opts.localize ?? ((t: string) => t);
+    // 줄자·각도기 중심은 빈 곳(추정 없음)을 찍지 않는다
+    if (!snap || (snap.kind === 'free' && (this.modeValue === 'tape' || !this.pts.length))) return tr(KEY_MEASURE_TEXT.noSnap);
+    const k = mmPerSceneUnit(this.opts.getScene()?.units);
+    const units = this.opts.getUnits();
+    const len = (d: number): string => formatLength(d * k, units);
+    const [a, base] = this.pts;
+    const p = (a && this.modeValue === 'protractor' ? this.hoverPoint : null) ?? snap.point;
+    let value: string | null = null;
+    if (this.modeValue === 'tape' && a) value = len(Math.hypot(...sub((this.guideOn && this.startEdge ? edgeFoot(a, this.startEdge, p) : null) ?? p, a)));
+    else if (a && base && this.normal) value = formatAngle(planeAngle(sub(base, a), sub(p, a), this.normal), units);
+    const tip = joinTip(snapTipLabel(snap), value);
+    const at = `X ${len(p[0])}, Y ${len(p[1])}, Z ${len(p[2])}`;
+    return tip ? `${tr(tip)}: ${at}` : at;
+  }
+
   /** 도구 켜기·바꾸기·끄기(null). 진행 중 점과 결과는 지운다 */
   setMode(mode: MeasureMode | null): void {
     if (this.disposed) return;
@@ -2613,6 +2689,8 @@ export class MeasureTool {
     }
     const type = e.pointerType || 'mouse';
     if (type === 'touch' || e.buttons) return;
+    // 가상 커서가 켜진 동안의 작은 움직임(코어가 4화소 넘게 움직여야 커서를 끄고 포인터에 넘긴다)은 커서 자리 그대로(59차)
+    if (this.cursor?.type === 'keyboard' && this.viewer.keyboardCursor) return;
     // Shift 잠금은 옮기기 전 자리에서 보인 추론으로(키를 못 받은 사이 눌렀거나 뗐어도 이동의 shiftKey로 맞춘다)
     this.setShift(!!e.shiftKey);
     this.cursor = { x: p.x, y: p.y, type };
@@ -2646,7 +2724,7 @@ export class MeasureTool {
 
   private onLeave(): void {
     if (!this.modeValue || this.presses.size) return;
-    if (this.cursor?.type === 'touch') return;
+    if (this.cursor?.type === 'touch' || this.cursor?.type === 'keyboard') return;
     this.cancelDwell();
     this.cursor = null;
     this.hover = null;
@@ -3280,6 +3358,9 @@ export class MeasureTool {
     }
     // 지금 화면 언어의 글로 재어 놓는다(localize — 번역층이 나중에 바꾸면 한국어 글 크기로 놓인다)
     el.textContent = this.opts.localize ? this.opts.localize(text) : text;
+    // 가상 커서(59차)는 알림 칸이 이 글과 좌표를 함께 읽는다 — 툴팁 알림(role=status)은 두 번 읽히지 않게 감춘다
+    if (c.type === 'keyboard') el.setAttribute('aria-hidden', 'true');
+    else el.removeAttribute('aria-hidden');
     el.style.display = 'block';
     this.layer.append(el);
     const pos = tooltipPosition(c.x, c.y, el.offsetWidth || 0, el.offsetHeight || 0, f.width, f.height, c.type === 'aim', covers());

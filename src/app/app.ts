@@ -102,7 +102,7 @@ import {
 } from './doc';
 import { MAX_FILE_BYTES, SKP_ACCEPT, baseName, fmtCount, formatBytes, formatMs, rgbCss } from './format';
 import type { AnnotationMarks } from './dimmarks';
-import { VIEW_KEY_OF, VIEW_MENU, isEditableTarget, isViewKey, keyAction } from './keys';
+import { VIEW_KEY_OF, VIEW_MENU, inList, isEditableTarget, isViewKey, keyAction } from './keys';
 import type { LaunchRequest } from './launch';
 import {
   PANEL_WIDTH_DEFAULT,
@@ -429,9 +429,9 @@ export class SkpViewerApp implements PanelHost {
   private marks: AnnotationMarks | null = null;
   /** 선 색 대비로 바꾼 주석·모서리 선 색(id → 색) — 끝 표시도 같은 색 */
   private lineColorWant: ReadonlyMap<string, Rgba> = new Map();
-  /** 줄자·각도기(코어 두 점 측정 대신). 조각을 받으면 만든다(ensureMeasureTool) */
-  private measureTool: MeasureTool | null = null;
-  /** 3D 보기 키보드 고르기(keypick.ts — 56차): 고르기 도구일 때만 켠다(refreshToolbar) */
+  /** 줄자·각도기(코어 두 점 측정 대신). 조각을 받으면 만든다(ensureMeasureTool). 키보드 점 찍기(keypick.ts KeyPickApp — 59차)가 읽는다 */
+  measureTool: MeasureTool | null = null;
+  /** 3D 보기 키보드 고르기(keypick.ts — 56차): 고르기 도구에서 켜고, 줄자·각도기에서는 Enter로 켜는 점 찍기(59차 — refreshToolbar) */
   private keyPick: KeyPick | null = null;
   /** 3D 보기 겹친 것 고르기 목록(picklist.ts — 57차, 오른쪽 단추·길게 누르기·Shift+F10): 키보드 고르기와 같이 고르기 도구일 때만 켠다 */
   private pickList: PickList | null = null;
@@ -1350,8 +1350,8 @@ export class SkpViewerApp implements PanelHost {
         animate: 'auto',
       });
       v.onPick((p, e) => this.onPick(p, e));
-      // 키보드 고르기(가상 커서 — 고르기 선택은 위 onPick과 같다, keypick.ts PICK_CYCLE)
-      if (keyPicking) this.keyPick = new keyPicking.KeyPick(v, this.els.viewHost, () => this.doc);
+      // 키보드 고르기(가상 커서 — 고르기 선택은 위 onPick과 같다, keypick.ts PICK_CYCLE)와 줄자·각도기 키보드 점 찍기(59차 — 측정 도구)
+      if (keyPicking) this.keyPick = new keyPicking.KeyPick(v, this.els.viewHost, () => this.doc, this);
       // 겹친 것 고르기 목록(onPick의 측정·걷기 조건과 같을 때만 열고 고른다). 고른 것은 목록이 보인 그대로 onPick과 같은 길로
       // (안내 고르기·두 번 누르기 판별 없이 — 57차). 줄 미리 강조와 닫을 때 되돌리기는 고를 때와 같은 강조 길(58차)
       if (pickListing)
@@ -3329,19 +3329,18 @@ export class SkpViewerApp implements PanelHost {
       this.vcb.begin(ev.key);
       return;
     }
-    if (tool?.active && !isEditableTarget(ev.target)) {
-      // 화살표는 측정 잠금(SketchUp) — 패널 목록·메뉴·슬라이더에 초점이 있으면 그쪽 것
-      if (!(ev.key.startsWith('Arrow') && inList(ev.target)) && tool.handleKey(ev)) {
-        ev.stopPropagation();
-        return;
-      }
-      // 지울 것이 없는 Esc: 도구를 끈다
-      if (ev.key === 'Escape' && !this.busy) {
-        ev.preventDefault();
-        ev.stopPropagation();
-        this.setMeasureMode(null);
-        return;
-      }
+    // 줄자·각도기를 켠 동안(입력 칸 밖)의 측정 도구 키(화살표는 SketchUp 방향 잠금 — 패널 목록·메뉴·슬라이더에 초점이 있으면 그쪽 것)와
+    // Enter로 켠 가상 커서의 점 찍기(59차 — 켠 동안 화살표는 커서 옮기기): keypick.ts handleKey(코어와 함께 받는다 — 측정 도구가 있으면 있다)
+    if (this.keyPick?.handleKey(ev)) {
+      ev.stopPropagation();
+      return;
+    }
+    // 줄자·각도기를 켠 동안 지울 것이 없는 Esc: 도구를 끈다
+    if (tool?.active && !isEditableTarget(ev.target) && ev.key === 'Escape' && !this.busy) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.setMeasureMode(null);
+      return;
     }
     // 고르기 도구로 고른 안내(줄자·각도기를 끈 동안): Delete·Backspace로 지우고 Esc로 푼다. Ctrl+A·⌘A는 안내 모두 고르기, Ctrl+T·Shift+⌘A는 모두 풀기
     if (tool?.selectKey(ev)) {
@@ -3582,8 +3581,8 @@ export class SkpViewerApp implements PanelHost {
     press(e.cubeBtn, this.cubeOn);
     press(e.axesBtn, this.axesOn);
     const mode = this.measureModeNow;
-    // 키보드 고르기는 고르기 도구에서만(줄자·각도기는 화살표를 방향 잠금에 쓴다 — 받는 중인 도구도)
-    this.keyPick?.set(!mode);
+    // 키보드 고르기는 고르기 도구에서, 줄자·각도기는 Enter로 켜는 가상 커서 점 찍기(59차 — 받는 중인 도구는 끈다)
+    this.keyPick?.follow(mode);
     this.pickList?.set(!mode);
     press(e.measureBtn, mode === 'tape');
     press(e.protractorBtn, mode === 'protractor');
@@ -3911,12 +3910,6 @@ export class SkpViewerApp implements PanelHost {
 }
 
 /** 문서가 쓰던 그림 Blob 주소와 워커가 넘긴 무늬 ImageBitmap을 푼다(뷰어는 이미 다음 장면으로 바꿨다) */
-/** 키 대상이 화살표·PageUp·PageDown을 스스로 쓰는 곳(패널 목록·메뉴·장면 탭·패널 크기 손잡이·슬라이더 등 입력)인지 */
-function inList(t: EventTarget | null): boolean {
-  const el = t as Element | null;
-  return !!el && typeof el.closest === 'function' && !!el.closest('.panel, .menu, .scene-tabs, .resizer, .measure-log, input, select, [role="tree"], [role="listbox"]');
-}
-
 function revokeImages(d: SkpDoc): void {
   for (const u of d.images?.urls ?? [])
     try {

@@ -6,7 +6,10 @@
  */
 export interface FileText {
   readonly file: string;
-  /** 이름 칸에 든 앱 자리 글(isAppName): 그것만 따로 옮긴 뒤 파일 글처럼 끼운다 */
+  /**
+   * 앱 글 조각: 그것만 따로 옮긴 뒤 파일 글처럼 끼운다 — 이름 칸에 든 앱 자리 글(isAppName), 59차부터 해석기 까닭 글(warntext.ts — 앞 글 틀의 {0}에 이어 붙은 글).
+   * 옮길 때 사전 틀의 {0}에 든 글도 앱 글로 옮긴다(번역기 uiParameters — 까닭 글 안의 "{0}({1}바이트 자리)" 같은 틀)
+   */
   readonly ui?: boolean;
 }
 
@@ -41,13 +44,13 @@ export function joinMixed(list: readonly Mixed[], sep = ' · '): Mixed {
 export const plainText = (m: Mixed): string => m.map((p) => (typeof p === 'string' ? p : p.file)).join('');
 
 /**
- * 섞은 글 → (옮긴 글, 파일 글 목록): 파일 글 자리를 번역기가 보지 않는 사용 영역 글자(U+E000~)로 바꿔 tr로 옮긴다(앱 자리 글(ui)은 그것만 tr로 옮겨 끼운다).
- * 사전 틀의 {0}이 그 글자를 그대로 잡고, 나눔 글로 조각낼 때도 한글이 없는 조각이라 그대로 둔다. i18n.ts mixText·mixNodes가 지금 언어로 쓰고,
- * 시험은 언어를 정해 쓴다(53차 — 이 모듈은 번역기를 받기만 한다)
+ * 섞은 글 → (옮긴 글, 파일 글 목록): 파일 글 자리를 번역기가 보지 않는 사용 영역 글자(U+E000~)로 바꿔 tr로 옮긴다(앱 글 조각(ui)은 그것만 tr(글, true)로 옮겨 끼운다 —
+ * 둘째 인자는 그 틀의 {0}에 든 글도 앱 글로 옮기라는 표시, 59차). 사전 틀의 {0}이 그 글자를 그대로 잡고, 나눔 글로 조각낼 때도 한글이 없는 조각이라 그대로 둔다.
+ * i18n.ts mixText·mixNodes가 지금 언어로 쓰고, 시험은 언어를 정해 쓴다(53차 — 이 모듈은 번역기를 받기만 한다)
  */
-export function slotText(parts: Mixed, tr: (text: string) => string): [string, string[]] {
+export function slotText(parts: Mixed, tr: (text: string, ui?: boolean) => string): [string, string[]] {
   const files: string[] = [];
-  const text = tr(parts.map((p) => (typeof p === 'string' ? p : String.fromCharCode(0xe000 + files.push(p.ui ? tr(p.file) : p.file) - 1))).join(''));
+  const text = tr(parts.map((p) => (typeof p === 'string' ? p : String.fromCharCode(0xe000 + files.push(p.ui ? tr(p.file, true) : p.file) - 1))).join(''));
   return [text, files];
 }
 
