@@ -9,7 +9,7 @@ import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Pick3d } from 'opencad-viewer3d';
 import { catalogs, languages, registerCatalog, sourceMessage, translate } from '../../site/i18n.mjs';
-import { pickDeepest, selectionForPick, type Selection } from '../../src/app/doc';
+import { faceOrEdgeSelection, pickDeepest, selectionForPick, type Selection } from '../../src/app/doc';
 import { PICK_CYCLE } from '../../src/app/keypick';
 import { LONG_PRESS_MS, PICK_LIST_LABEL, PICK_LIST_MAX, PickList, pickListTexts, type PickListViewer } from '../../src/app/picklist';
 import { SHORTCUTS } from '../../src/app/shortcuts';
@@ -46,6 +46,8 @@ interface Setup {
   view: PickListViewer & { cursor: { x: number; y: number } | null };
   pickCandidates: ReturnType<typeof vi.fn>;
   claimPointer: ReturnType<typeof vi.fn>;
+  /** 60차 코어 덧그림 표식(setPickPreview — 후보, 선택) */
+  setPickPreview: ReturnType<typeof vi.fn>;
   chosen: [Pick3d, Selection | null][];
   allowed: { on: boolean };
   d: ReturnType<typeof rowDoc>;
@@ -62,7 +64,8 @@ function setup(picks?: Pick3d[], withPreview = true): Setup {
   const list = picks ?? candidates(d);
   const pickCandidates = vi.fn(() => list);
   const claimPointer = vi.fn(() => true);
-  const view = { canvas: cv, pickCandidates, claimPointer, cursor: null } as unknown as Setup['view'];
+  const setPickPreview = vi.fn();
+  const view = { canvas: cv, pickCandidates, claimPointer, setPickPreview, cursor: null } as unknown as Setup['view'];
   Object.defineProperty(view, 'keyboardCursor', { get: () => (view.cursor ? ({ x: view.cursor.x, y: view.cursor.y } as PickListViewer['keyboardCursor']) : null) });
   const chosen: [Pick3d, Selection | null][] = [];
   const calls: [string, Selection | null][] = [];
@@ -76,7 +79,7 @@ function setup(picks?: Pick3d[], withPreview = true): Setup {
     ...(withPreview ? { preview: (sel: Selection | null) => void calls.push(['preview', sel]) } : {}),
   });
   pl.set(true);
-  return { list: pl, cv, view, pickCandidates, claimPointer, chosen, allowed, d, calls };
+  return { list: pl, cv, view, pickCandidates, claimPointer, setPickPreview, chosen, allowed, d, calls };
 }
 
 /** 포인터 사건(jsdom에 PointerEvent가 없어 MouseEvent에 칸을 단다) */
@@ -330,6 +333,49 @@ describe('줄 미리 강조(58차)', () => {
     key(items()[0]!, 'ArrowDown');
     items()[1]!.click();
     expect(n.chosen.length).toBe(1);
+  });
+
+  it('60차: 줄의 후보도 코어 덧그림(setPickPreview)에 표식한다 — 면이면 그 SketchUp 면 구간, 닫거나 고르면 지운다(앱 강조는 그대로 그 줄로 고를 것)', () => {
+    const s = setup();
+    const c = candidates(s.d);
+    const face = (p: Pick3d): { start: number; count: number }[] => {
+      const f = faceOrEdgeSelection(s.d, p);
+      return f?.kind === 'face' ? [{ start: f.start, count: f.count }] : [];
+    };
+    ptr(s.cv, 'pointerdown', { x: 100, y: 100, button: 2 });
+    ptr(s.cv, 'pointerup', { x: 100, y: 100, button: 2 });
+    // 첫 줄 = 첫 후보(앞 상자 Near의 앞 면), 상자 면 하나는 삼각형 둘
+    expect(s.setPickPreview.mock.calls).toEqual([[c[0], { ranges: face(c[0]!) }]]);
+    expect(face(c[0]!)[0]!.count).toBe(2);
+    // 둘째 줄(Near — 둘째 후보), 셋째 줄(Far — 묶어 뺀 Near 뒷면 다음의 후보)
+    key(items()[0]!, 'ArrowDown');
+    expect(s.setPickPreview.mock.calls.at(-1)).toEqual([c[1], { ranges: face(c[1]!) }]);
+    key(items()[1]!, 'ArrowDown');
+    expect(s.setPickPreview.mock.calls.at(-1)).toEqual([c[2], { ranges: face(c[2]!) }]);
+    // 앱 강조는 그 줄로 고를 것(그룹)으로 따로 — 두 길이 같은 차례로 불린다
+    expect(s.calls.map((x) => x[0])).toEqual(['preview', 'preview', 'preview']);
+    key(items()[2]!, 'Escape');
+    expect(s.setPickPreview.mock.calls.at(-1)).toEqual([null]);
+    expect(s.setPickPreview.mock.calls.length).toBe(4);
+    // 고르면 지운 뒤 고른다, 모서리 후보는 면 구간 없이(코어가 그 선분을 긋는다)
+    ptr(s.cv, 'pointerdown', { x: 100, y: 100, button: 2 });
+    ptr(s.cv, 'pointerup', { x: 100, y: 100, button: 2 });
+    items()[0]!.click();
+    expect(s.setPickPreview.mock.calls.slice(4)).toEqual([[c[0], { ranges: face(c[0]!) }], [null]]);
+    expect(s.chosen.length).toBe(1);
+    document.body.innerHTML = '';
+    const line: Pick3d = { kind: 'line', id: 'no-such-line', index: 0, point: [0, 0, 0] };
+    const l = setup([line]);
+    ptr(l.cv, 'pointerdown', { x: 100, y: 100, button: 2 });
+    ptr(l.cv, 'pointerup', { x: 100, y: 100, button: 2 });
+    expect(l.setPickPreview.mock.calls).toEqual([[line, { ranges: null }]]);
+    // 후보가 없으면(고를 것이 없습니다 줄) 표식하지 않는다
+    document.body.innerHTML = '';
+    const e = setup([]);
+    ptr(e.cv, 'pointerdown', { x: 100, y: 100, button: 2 });
+    ptr(e.cv, 'pointerup', { x: 100, y: 100, button: 2 });
+    key(items()[0]!, 'Escape');
+    expect(e.setPickPreview).not.toHaveBeenCalled();
   });
 
   it('목록 위 브라우저 메뉴(오른쪽 단추·메뉴 키)는 막는다', () => {

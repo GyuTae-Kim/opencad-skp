@@ -4,6 +4,7 @@ import { VIEW_LABELS } from 'opencad-viewer3d/camera';
 /** Localize only presentation DOM. CAD data, input values and command keys stay intact. */
 import { currentLanguage, languages, languageUrl, metadataForLanguage, registerCatalog, sourceMessage, translate } from '../../site/i18n-core.mjs';
 import { isAppName, slotText, type Mixed } from './filetext';
+import { errorText } from './protocol';
 
 const loaders: Record<string, () => Promise<{default: Record<string,string>}>> = {
   en: () => import('../../site/locales/en.json'), ja: () => import('../../site/locales/ja.json'),
@@ -29,8 +30,9 @@ export const uiReady = (): Promise<void> => installed.catch(() => undefined);
  * 옮긴 글을 넣은 속성은 data-i18n-keep에, 마디를 담은 요소는 data-i18n-skip으로 번역층에서 빼고, 언어를 바꾸면 다시 그린다(app.ts).
  * 앱 글 조각(ui — 59차 해석기 까닭 글)은 틀의 {0}에 든 글도 앱 글로 옮긴다(번역기 uiParameters)
  */
+const activeText = (text: string, ui?: boolean): string => translate(text, active, ui);
 function mixed(parts: Mixed): [string, string[]] {
-  return slotText(parts, (text, ui) => translate(text, active, ui));
+  return slotText(parts, activeText);
 }
 export function mixText(parts: Mixed): string {
   const [text, files] = mixed(parts);
@@ -48,6 +50,16 @@ export function mixNodes(parts: Mixed): (string | Node)[] {
 }
 /** 이름 칸 글: 앱 자리 글("(이름 없음)" 등)만 지금 언어로, 파일 글은 그대로(번역층이 건너뛰는 칸에 넣을 때) */
 export const uiName = (name: string): string => isAppName(name) ? uiText(name) : name;
+/**
+ * 실행 중 오류(브라우저·워커·코어가 던진 것 — protocol.ts errorText) → 알림 글(60차): 사전 글이면(지금 언어로 다 옮겨진다 — 사전 열쇠, 틀 자리에 든 까닭 글까지 사전 글)
+ * 앱 글 조각(ui — 틀 자리 글도 옮긴다, 59차 해석기 까닭 글과 같은 길)으로 두어 화면 언어를 따르고, 옮긴 글에 한글이 남으면(사전에 없는 한국어 글을 번역기가
+ * 나눔 글 조각·틀 머리만 옮긴다) 파일 글로 두어 원문 그대로 보인다. 옮겨지지 않는 글(브라우저의 영어 글·한국어 화면)은 앱 글 조각 — 번역기도 그대로 둔다.
+ * 고르는 때는 알림을 띄울 때의 화면 언어다(한국어 화면에서 띄운 알림은 앱 글 조각 — 띄운 채 언어를 바꾸면 그 언어로 옮긴다)
+ */
+export function errorParts(e: unknown): Mixed {
+  const t = errorText(e), s = activeText(t, true);
+  return [{ file: t, ui: s === t || !/[가-힣]/.test(s) }];
+}
 
 /**
  * 뷰 큐브 면 글(코어 viewcube의 CUBE_FACES — 코어가 그 객체의 label로 그린다). 54차: 코어 0.44.0부터 viewcube 모듈이 커져(손가락 큐브)

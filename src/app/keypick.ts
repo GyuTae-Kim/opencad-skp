@@ -15,9 +15,14 @@
  * - 고른 것 이름: 코어는 그물 이름(재질 · 태그 묶음)을 끼우므로, 앱이 그 후보를 Enter로 고를 때의 그룹·컴포넌트 이름(고른 것 설명의 첫 조각 — 파일 글은 그대로)과
  *   모형 단위 좌표로 같은 틀에 다시 만든다. 이름과 맞은 것 종류는 코어 pickItem 대신 종류마다 한글이 든 사전 틀(KEY_PICK_ITEM — 58차, 언어마다 말 차례)로 잇는다.
  *   글은 보이지 않는 알림 칸(role=status, 번역층 밖 — 이미 옮긴 글)에 넣는다.
+ *   60차: 코어 0.54.0 고른 것 이름 함수(setKeyboardSnap pickName)로 바꾸지 않는다 — 이름은 후보 차례(첫째는 펼친 단계, 둘째부터 가장 안쪽)에 따라 다른데
+ *   pickName은 후보만 받고(pickGroupKey와 같은 까닭), 좌표는 모형 단위 글(formatLength — cm·피트 등)이라 코어 글(장면 수, 단위 없음)을 그대로 쓸 수 없어
+ *   글 전체를 앱이 만드는 길이 그대로 남는다(이름만 코어에 맡겨도 줄지 않는다).
+ * - 그물 면 후보 표식(60차 — 코어 0.54.0 pickCycle.facePreview): 지금 후보가 그물 면이면 코어가 그 SketchUp 면(pickFaceRanges — 해석기 면 경계)을
+ *   화면 덧그림에 강조 색으로 옅게 칠하고 테두리를 긋는다(깊이를 따지지 않는다 — 뒤 후보도 보인다). 줄자·각도기 방식은 후보 돌리기가 없어(pickCycle false) 그리지 않는다.
  * 코어 입구와 함께 받는다(core.ts loadViewerCore — 첫 화면 조각 밖).
  */
-import type { KeyboardSnapAnnouncement, KeyPickCycleOptions, Pick3d, PickGroupKey, Viewer3d } from 'opencad-viewer3d';
+import type { IndexRange, KeyboardSnapAnnouncement, KeyPickCycleOptions, Pick3d, PickGroupKey, Viewer3d } from 'opencad-viewer3d';
 import { KEY_SNAP_KEYS, formatKeySnapMessage, keySnapHint, keySnapMessages, orderedText, pointText, type KeySnapMessageKey, type KeySnapMessages } from 'opencad-viewer3d/keysnap';
 import { selectionForPick, selectionParts, type SkpDoc } from './doc';
 import { mixText, uiText } from './i18n';
@@ -49,6 +54,16 @@ export function pickGroupKey(doc: () => SkpDoc | null): PickGroupKey {
     const key = selKey(selectionForPick(d, p, false, true));
     return key && key === selKey(selectionForPick(d, p, false, false)) ? key : null;
   };
+}
+
+/**
+ * 60차 코어 0.54.0 그물 면 후보 표식의 면: 그물 면 후보가 든 SketchUp 면 하나의 삼각형 구간(해석기 meta.faceRuns — 면·모서리 방식으로 고를 때의 면:
+ * 그 방식의 selectionForPick이 doc.ts faceOrEdgeSelection을 먼저 본다. 첫 화면 조각에서 이 조각으로 내보내는 이름을 늘리지 않게 이미 쓰는 함수로 묻는다).
+ * 면 경계가 없는 그물(옛 장면)·잘린 면·선분·점은 null — 코어가 맞은 삼각형과 같은 평면으로 이어진 삼각형으로 어림한다(가상 커서는 그물 면만 묻는다)
+ */
+export function pickFaceRanges(d: SkpDoc | null, p: Pick3d): IndexRange[] | null {
+  const s = d && selectionForPick({ ...d, pickMode: 'face' }, p);
+  return s?.kind === 'face' ? [{ start: s.start, count: s.count }] : null;
 }
 
 /**
@@ -279,7 +294,9 @@ export class KeyPick {
     const M = keySnapMessages(messages);
     if (this.mode === 'pick') {
       const items = keyPickItems();
-      this.v.setKeyboardSnap({ pickCycle: { ...PICK_CYCLE, group: pickGroupKey(this.doc) }, messages, announce: (a) => this.say(a, M, items) });
+      // 60차: 지금 후보가 그물 면이면 그 SketchUp 면을 화면 덧그림에 표식(코어 0.54.0 facePreview — 선분·보조점 후보는 0.47.0부터 코어가 그린다)
+      const pickCycle = { ...PICK_CYCLE, group: pickGroupKey(this.doc), facePreview: true, faceRanges: (p: Pick3d) => pickFaceRanges(this.doc(), p) };
+      this.v.setKeyboardSnap({ pickCycle, messages, announce: (a) => this.say(a, M, items) });
     } else {
       // 줄자·각도기: 코어는 고르기 모드(후보 돌리기 없음 — Tab은 초점 이동), 자리만 받아 측정 도구가 추정한다
       const hint = KEY_MEASURE_HINT.map((t) => uiText(t)).join(M.hintJoin);

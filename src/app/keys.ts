@@ -3,14 +3,12 @@
  * 앱은 입력 칸 걸러내기·F7 격자·Ctrl/⌘+O 열기·Esc 차례(취소 → 측정 지우기 → 측정 끄기 → 고른 것 지우기)를 맡는다.
  * 창 캡처 단계에서 받으므로 캔버스에 초점이 없어도(단추 등) 같은 키가 뷰어로 간다.
  */
-// 숫자 키 → 표준 뷰 표는 코어의 작은 camera 모듈에서(0.10.0 — 코어 입구는 문서를 열 때 나눠 받으므로(core.ts) 첫 화면 메뉴 글도 이 모듈로 만든다)
-import { VIEW_KEYS, type ViewName } from 'opencad-viewer3d/camera';
+// 숫자 키 → 표준 뷰 표는 코어의 작은 viewkeys 모듈에서(0.10.0 camera, 코어 0.54.0부터 viewkeys — 코어 입구는 문서를 열 때 나눠 받으므로(core.ts)
+// 첫 화면 메뉴 글도 이 모듈로 만든다). 표준 뷰 → 키 글자(메뉴 안내)는 코어 viewKeyOf(60차 — 앱 표 VIEW_KEY_OF를 뺐다: 코어 입구가 내보내는 함수라 첫 화면 조각에 이미 든다)
+import { VIEW_KEYS, type ViewName } from 'opencad-viewer3d/viewkeys';
 
 /** 표준 뷰 메뉴 차례 */
 export const VIEW_MENU: readonly ViewName[] = ['top', 'front', 'right', 'left', 'back', 'bottom', 'seIso', 'swIso', 'neIso', 'nwIso'];
-
-/** 표준 뷰 → 키 글자(메뉴 안내, 코어 VIEW_KEYS에서) */
-export const VIEW_KEY_OF: Readonly<Partial<Record<ViewName, string>>> = Object.fromEntries(Object.entries(VIEW_KEYS).map(([k, v]) => [v, k]));
 
 /**
  * grid = 격자 켜고 끄기, viewer = Viewer3d.handleKey에 넘기기, clearSelection = 고른 것 지우기,

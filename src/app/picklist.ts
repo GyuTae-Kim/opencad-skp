@@ -5,6 +5,9 @@
  *   (코어에서 그 포인터를 맡는다 — 떼어도 고르거나 돌리지 않는다), 3D 보기에 초점이 있을 때 Shift+F10·메뉴 키
  *   (가상 커서를 켰으면 커서 자리, 아니면 3D 보기 위 마우스 자리, 마우스가 밖이면 3D 보기 가운데 — 58차).
  * - 미리 강조(58차): 줄에 초점이 가거나 마우스가 오르면 그 줄을 고를 때의 고른 것을 3D에 강조하고(앱 강조 길 — 고른 것·패널은 그대로), 목록을 닫으면 되돌린다.
+ *   60차: 그 줄의 후보(면이면 그 SketchUp 면, 모서리·보조점)도 코어 0.54.0 setPickPreview로 화면 덧그림에 표식한다 — 앱 강조는 깊이를 따져 그려
+ *   앞 형상에 가린 뒤 후보(목록이 있는 까닭)의 고른 것이 화면에 안 보일 수 있고, 덧그림 표식은 깊이를 따지지 않는다(가상 커서 면 표식과 같은 꼴).
+ *   앱 강조 길을 코어 표식으로 바꾸지는 않는다 — 코어 표식은 맞은 기본 도형(면 하나)만이라 그 줄로 고를 그룹·컴포넌트를 보이지 못한다.
  * - 후보: 그 자리의 pickCandidates(앱 onPick과 같은 선택 PICK_CYCLE, 최대 PICK_LIST_MAX). 잘린 면은 뺀다(앱이 고르지 않는다).
  *   앱 고르기로 묶는다(코어 후보는 기본 도형 단위 — 같은 그물의 앞·뒷면, 같은 그룹의 면·모서리): 첫째는 누르기와 같은 고르기(펼친 단계),
  *   둘째부터는 가상 커서로 돌려 고른 것과 같은 고르기(펼친 단계를 건너뛴 가장 안쪽 그룹·컴포넌트, 면·모서리 방식이면 그 면·모서리). 같은 고른 것은 처음 것 하나.
@@ -21,7 +24,7 @@ import { dragStartPx } from 'opencad-viewer3d/pointer';
 import { selectionForPick, type Selection, type SkpDoc } from './doc';
 import { uiText } from './i18n';
 import { listKeys } from './kbd';
-import { KEY_PICK_TEXT, PICK_CYCLE, keyPickName, pickGroupKey } from './keypick';
+import { KEY_PICK_TEXT, PICK_CYCLE, keyPickName, pickFaceRanges, pickGroupKey } from './keypick';
 import { selKey } from './panel';
 
 /** 손가락·펜 길게 누르기(ms) — 줄자·각도기 정밀 조준(350 ms)보다 길게, 브라우저·OS 길게 누르기 메뉴와 비슷하게 */
@@ -60,7 +63,7 @@ export function pickListItems(d: SkpDoc, picks: readonly Pick3d[], tr: (text: st
 }
 
 /** 목록이 쓰는 뷰어 부분(시험은 가짜로 준다) */
-export type PickListViewer = Pick<Viewer3d, 'canvas' | 'pickCandidates' | 'claimPointer' | 'keyboardCursor'>;
+export type PickListViewer = Pick<Viewer3d, 'canvas' | 'pickCandidates' | 'claimPointer' | 'keyboardCursor' | 'setPickPreview'>;
 
 export interface PickListHost {
   /** 지금 목록을 열 수 있는지(문서가 있고 걷기·측정 중이 아님) */
@@ -156,6 +159,7 @@ export class PickList {
     if (this.previewed) {
       this.previewed = false;
       this.host.preview?.(this.doc()?.selection ?? null);
+      this.v.setPickPreview(null);
     }
   }
 
@@ -182,7 +186,7 @@ export class PickList {
     menu.setAttribute('aria-label', uiText(PICK_LIST_LABEL));
     menu.setAttribute('data-i18n-skip', '');
     const buttons: HTMLButtonElement[] = [];
-    const add = (label: string, kind: string | null, run: (() => void) | null, sel?: Selection | null): void => {
+    const add = (label: string, kind: string | null, run: (() => void) | null, it?: PickListItem): void => {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'menu-item';
@@ -200,9 +204,9 @@ export class PickList {
       }
       if (run) b.addEventListener('click', run);
       else b.disabled = true;
-      if (sel !== undefined) {
+      if (it) {
         // 미리 강조: 초점이 간 줄(↑↓·처음 연 때 첫 줄). 마우스·펜이 오른 줄은 초점을 옮긴다(표준 메뉴처럼 — 강조 줄과 초점 줄을 하나로)
-        b.addEventListener('focus', () => this.previewSel(sel));
+        b.addEventListener('focus', () => this.previewItem(it));
         b.addEventListener('pointermove', (e) => {
           if (e.pointerType !== 'touch' && document.activeElement !== b) b.focus({ preventScroll: true });
         });
@@ -219,7 +223,7 @@ export class PickList {
           this.v.canvas.focus({ preventScroll: true });
           if (this.doc() && this.host.allowed()) this.host.choose(it.pick, it.sel);
         },
-        it.sel,
+        it,
       );
     if (!items.length) add(uiText(KEY_PICK_TEXT.noPick), null, null);
     menu.addEventListener('keydown', (e) => {
@@ -257,11 +261,12 @@ export class PickList {
     };
   }
 
-  /** 줄 미리 강조(열린 목록의 줄에 초점이 갈 때) */
-  private previewSel(sel: Selection | null): void {
-    if (!this.menu || !this.host.preview) return;
+  /** 줄 미리 강조(열린 목록의 줄에 초점이 갈 때): 앱 강조(그 줄로 고를 것)와 코어 덧그림 표식(그 줄의 후보 — 60차, 면이면 SketchUp 면 구간) */
+  private previewItem(it: PickListItem): void {
+    if (!this.menu) return;
     this.previewed = true;
-    this.host.preview(sel);
+    this.host.preview?.(it.sel);
+    this.v.setPickPreview(it.pick, { ranges: pickFaceRanges(this.doc(), it.pick) });
   }
 
   private onDown(e: PointerEvent): void {

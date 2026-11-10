@@ -15,7 +15,7 @@ import { entityInfo, type EntityInput } from '../../src/app/entity';
 import { DEFAULT_UNITS } from '../../src/app/units';
 import { fileText, fillSlots, isAppName, joinMixed, mix, nameText, plainText, slotText } from '../../src/app/filetext';
 import { warningParts } from '../../src/app/warntext';
-import { installLocalization, mixNodes, mixText, uiName } from '../../src/app/i18n';
+import { errorParts, installLocalization, mixNodes, mixText, uiName } from '../../src/app/i18n';
 import { Panel, type PanelHost } from '../../src/app/panel';
 import { catalogs, registerCatalog, sourceMessage, translate } from '../../site/i18n.mjs';
 import { dimPoint, edge, entities, face, f64, instance, materialXml, modelDat, sectionPlanes, skpFile, texts, tlv, utf8, val, vertex } from '../build';
@@ -301,6 +301,65 @@ describe('파일 글을 앱 글과 섞기(filetext·mixText)', () => {
     const w = 'model.dat를 끝까지 풀지 못해 앞부분만 읽었습니다(DEFLATE: 알 수 없는 블록 종류 3)';
     expect(mixText(warningParts(w))).toBe(show(w, 'ja'));
     expect(mixText(warningParts(w))).not.toMatch(HANGUL);
+  });
+
+  it('60차: 알림의 실행 중 오류 글은 사전 글일 때만 화면 언어로 옮기고(틀 자리의 까닭 글까지), 한글이 남는 글은 반쯤 옮기지 않고 원문 그대로', async () => {
+    const HANGUL = /[가-힣]/;
+    const CODES = ['en', 'de', 'ja', 'zh-CN'];
+    // 화면 언어마다 번역층을 깔고(알림을 띄울 때의 언어로 고른다) 알림 글 칸과 같은 길(mixText)로 본다
+    const parts: Record<string, Map<unknown, ReturnType<typeof errorParts>>> = {};
+    const shown: Record<string, Map<unknown, string>> = {};
+    const errs: unknown[] = [];
+    const use = async (code: string): Promise<void> => {
+      dispose?.();
+      history.replaceState(null, '', code === 'ko' ? '/opencad-skp/' : `/opencad-skp/${code}/`);
+      dispose = await installLocalization(document.body);
+      parts[code] = new Map(errs.map((e) => [e, errorParts(e)]));
+      shown[code] = new Map(errs.map((e) => [e, mixText(errorParts(e))]));
+    };
+    const show = (e: unknown, code: string): string => shown[code]!.get(e)!;
+    const errorPartsIn = (e: unknown, code: string): ReturnType<typeof errorParts> => parts[code]!.get(e)!;
+    // 사전 글: 코어·해석기가 던지는 글(열쇠), 틀 글(자리 값이 수), 틀 자리에 사전 까닭 글이 든 글 — 네 언어 모두 한글 없이
+    const dict = [
+      new Error('이 브라우저는 WebGL2를 지원하지 않아 3D 보기를 열 수 없습니다'),
+      new Error('ZIP64 꾸러미는 아직 읽지 못합니다'),
+      new Error('TLV 머리가 잘렸습니다(@120)'),
+      'SketchUp 파일을 읽지 못했습니다: ZIP 항목이 잘렸습니다: model.dat',
+    ];
+    const fetchFail = new TypeError('Failed to fetch');
+    // 사전에 없는 한국어 글: 예전(통째로 번역층)은 나눔 글 조각·틀 머리만 옮겨 한국어와 섞였다 → 원문 그대로(파일 글)
+    const BAD = '무늬 · 면 · 이';
+    const partial = [new Error('알 수 없는 오류 · 면'), new Error(`ZIP 항목이 잘렸습니다: materials/${BAD}/a.png`), new Error('SketchUp 파일을 읽지 못했습니다: 사전에 없는 까닭')];
+    errs.push(...dict, fetchFail, ...partial);
+    for (const code of ['ko', ...CODES]) await use(code);
+    for (const e of dict) {
+      expect(errorPartsIn(e, 'en'), String(e)).toEqual([{ file: e instanceof Error ? e.message : e, ui: true }]);
+      for (const code of CODES) expect(show(e, code), `${code}: ${e}`).not.toMatch(HANGUL);
+    }
+    expect(show(dict[3], 'en')).toBe('Failed to read SketchUp file: ZIP entry was truncated: model.dat');
+    // 브라우저 글(영어)·한국어 화면: 앱 글 조각이지만 번역기도 그대로 둔다
+    expect(errorPartsIn(fetchFail, 'de')).toEqual([{ file: 'Failed to fetch', ui: true }]);
+    expect(show(fetchFail, 'de')).toBe('Failed to fetch');
+    for (const e of [...dict, ...partial]) expect(errorPartsIn(e, 'ko')).toEqual([{ file: e instanceof Error ? e.message : e, ui: true }]);
+    expect(show(dict[1], 'ko')).toBe('ZIP64 꾸러미는 아직 읽지 못합니다');
+    let mixedBefore = 0;
+    for (const e of partial)
+      for (const code of CODES) {
+        const before = translate(e.message, code);
+        if (before !== e.message && HANGUL.test(before)) mixedBefore++;
+        expect(errorPartsIn(e, code), `${code}: ${e.message}`).toEqual([{ file: e.message, ui: false }]);
+        expect(show(e, code), `${code}: ${e.message}`).toBe(e.message);
+      }
+    expect(mixedBefore).toBe(partial.length * CODES.length);
+    // 화면 마디: 담는 알림 글 칸은 번역층 밖(data-i18n-skip), 원문 글은 translate="no" 묶음
+    const nodes = mixNodes(errorPartsIn(partial[0]!, 'en'));
+    expect(nodes.length).toBe(1);
+    expect((nodes[0] as HTMLElement).getAttribute('translate')).toBe('no');
+    expect((nodes[0] as HTMLElement).textContent).toBe('알 수 없는 오류 · 면');
+    const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
+    expect(app).not.toMatch(/errorText\(/);
+    expect(app.match(/this\.showNotice\('error', [^\n]*errorParts\((e|error)\)\)/g)?.length).toBe(6);
+    expect(app).toMatch(/h\('div', \{ class: 'notice-text', 'data-i18n-skip': '' \}/);
   });
 
   it('59차 해석기 글 열쇠(사전에 없던 까닭 글 4·조사가 붙은 이름을 틀이 잡던 경고 문장 19)는 네 언어에 있고, 사전 파일에 겹친 열쇠가 없고, 더해도 화면 번역층이 옮기는 다른 글은 바뀌지 않는다', () => {

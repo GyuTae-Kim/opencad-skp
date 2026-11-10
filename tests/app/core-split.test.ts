@@ -16,9 +16,10 @@ const CORE = join(ROOT, 'node_modules/opencad-viewer3d/src');
 /**
  * 첫 화면에서 바로 가져와도 되는 코어 모듈(작고 다른 코어 모듈을 거의 끌어오지 않는다 — inference는 측정 도구 조각과 함께 받는다).
  * extent는 코어 0.31.0에서 bounds의 itemExtent·itemsExtent를 옮긴 작은 모듈이다(bounds가 같은 이름으로 다시 내보내 그래프에 닿는다 — bounds·math만 가져오고,
- * 앱은 그 함수를 쓰지 않아 첫 화면 JS는 같다)
+ * 앱은 그 함수를 쓰지 않아 첫 화면 JS는 같다). viewkeys는 코어 0.54.0에서 camera의 표준 뷰 이름·키 표를 옮긴 아무것도 가져오지 않는 모듈이다
+ * (camera가 같은 객체를 다시 내보낸다 — 60차)
  */
-const SMALL = new Set(['camera', 'pointer', 'viewcube', 'theme', 'section', 'types', 'math', 'bounds', 'extent']);
+const SMALL = new Set(['camera', 'pointer', 'viewcube', 'theme', 'section', 'types', 'math', 'bounds', 'extent', 'viewkeys']);
 /** 문서를 열 때 나눠 받는 앱 모듈(첫 화면 그래프에 없어야 한다 — release.ts는 큰 모형 놓기·문맥 잃음과 되찾음) */
 const SPLIT_APP = [
   'src/app/measure.ts',
@@ -152,11 +153,15 @@ describe('코어 나눠 받기', () => {
     const { loadViewerCore } = await import('../../src/app/core');
     const a = loadViewerCore();
     expect(loadViewerCore()).toBe(a);
-    const m = await a;
-    expect(typeof m.Viewer3d).toBe('function');
+    const got = await a;
+    // 60차: 입구 이름공간 대신 앱이 쓰는 Viewer3d만 넘긴다(번들러가 입구의 다른 내보내기를 코어 조각에 남기지 않게)
+    expect(Object.keys(got)).toEqual(['Viewer3d']);
+    const m = await import('opencad-viewer3d');
+    expect(got.Viewer3d).toBe(m.Viewer3d);
     // 앱이 바로 가져온 작은 모듈과 코어가 같은 객체를 쓴다(뷰 이름 번역이 코어 그림에도 닿게, 테마 색이 같게)
     const { VIEW_LABELS } = await import('opencad-viewer3d/camera');
     expect(m.VIEW_LABELS).toBe(VIEW_LABELS);
+    expect((await import('opencad-viewer3d/viewkeys')).VIEW_LABELS).toBe(VIEW_LABELS);
     const { DARK_THEME } = await import('opencad-viewer3d/theme');
     expect(m.DARK_THEME).toBe(DARK_THEME);
     // 뷰 큐브 면 글은 코어와 함께 받은 객체를 번역층에 맡긴다(한국어면 그대로, 다시 맡겨도 원래 글을 지킨다)
