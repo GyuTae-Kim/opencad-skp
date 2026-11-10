@@ -9,8 +9,21 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Viewer3d, type Pick3d, type PickEvent } from 'opencad-viewer3d';
 import { KEY_SNAP_KEYS, KEY_SNAP_MESSAGES, keySnapAction, keySnapHint, keySnapMessages, type KeySnapMessageKey, type KeySnapMessages } from 'opencad-viewer3d/keysnap';
 import { catalogs, languages, registerCatalog, sourceMessage, translate } from '../../site/i18n.mjs';
-import { type createDoc, selectionForPick } from '../../src/app/doc';
-import { KEY_MEASURE_HINT, KEY_PICK_ITEM, KEY_PICK_TEXT, KeyPick, LIST_TARGETS, PICK_CYCLE, keyPickItems, keyPickMessages, keyPickName, keyPickText, type KeyMeasureHost } from '../../src/app/keypick';
+import { type createDoc, faceOrEdgeSelection, selectionForPick } from '../../src/app/doc';
+import {
+  KEY_MEASURE_HINT,
+  KEY_PICK_ITEM,
+  KEY_PICK_TEXT,
+  KeyPick,
+  LIST_TARGETS,
+  PICK_CYCLE,
+  keyPickItems,
+  keyPickMessages,
+  keyPickName,
+  keyPickText,
+  pickFaceRanges,
+  type KeyMeasureHost,
+} from '../../src/app/keypick';
 import { KEY_MEASURE_TEXT } from '../../src/app/measure';
 import { keyAction } from '../../src/app/keys';
 import { PICK_LIST_MAX, pickListItems } from '../../src/app/picklist';
@@ -291,8 +304,8 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
     expect(v.keyboardSnap).toBeNull();
     kp.set(true);
     const ks = v.keyboardSnap!;
-    // 59차: 앱 묶음 열쇠(pickGroupKey — tests/app/pickgroup.test.ts)
-    expect(ks.pickCycle).toEqual({ ...PICK_CYCLE, group: expect.any(Function) });
+    // 59차: 앱 묶음 열쇠(pickGroupKey — tests/app/pickgroup.test.ts), 60차: 그물 면 후보 표식(SketchUp 면 구간)
+    expect(ks.pickCycle).toEqual({ ...PICK_CYCLE, group: expect.any(Function), facePreview: true, faceRanges: expect.any(Function) });
     expect(ks.messages).toEqual(keyPickMessages());
     expect(cv.getAttribute('aria-keyshortcuts')).toBe('ArrowLeft ArrowRight ArrowUp ArrowDown Enter');
     kp.set(false);
@@ -346,6 +359,55 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
     expect(kp.text).toBe('가상 커서를 껐습니다');
     key(cv, 'Tab');
     expect(v.keyboardCursor).toBeNull();
+  });
+
+  it('60차 그물 면 후보 표식: 코어가 그릴 때 지금 후보의 SketchUp 면 구간(해석기 면 경계)을 묻고, 면이 아닌 후보·면 경계가 없는 그물은 null(코어 같은 평면 어림) — 줄자·각도기 방식은 묻지 않는다', () => {
+    const { v, d, cv, host } = setup();
+    let asked = 0;
+    const doc = (): typeof d => (asked++, d);
+    const measureTool: KeyMeasureHost = { active: true, handleKey: () => false, keyHover: () => '끝점', keyEnd: () => undefined, keyPlace: () => '' };
+    const kp = new KeyPick(v, host as unknown as HTMLElement, doc, { measureTool });
+    kp.set(true);
+    key(cv, 'ArrowLeft');
+    const c = v.keyboardCursor!;
+    expect(c.count).toBe(4);
+    const picks = v.pickCandidates(c.x, c.y, { ...PICK_CYCLE, pointerType: 'keyboard' });
+    expect(picks.map((p) => p.kind)).toEqual(['mesh', 'mesh', 'mesh', 'mesh']);
+    // 가운데 시선의 상자 면 = 사각형 하나 = 삼각형 둘(해석기 면 경계와 같은 구간)
+    for (const p of picks) {
+      const f = faceOrEdgeSelection(d, p);
+      expect(f?.kind).toBe('face');
+      if (f?.kind !== 'face') continue;
+      expect(pickFaceRanges(d, p)).toEqual([{ start: f.start, count: 2 }]);
+      expect(f.start).toBeLessThanOrEqual(p.index);
+      expect(p.index).toBeLessThan(f.start + f.count);
+    }
+    const fr = (v.keyboardSnap!.pickCycle as { faceRanges: (p: Pick3d) => unknown }).faceRanges;
+    expect(fr(picks[2]!)).toEqual(pickFaceRanges(d, picks[2]!));
+    // 코어가 덧그림을 그릴 때 지금 후보의 면을 앱에 묻는다(Tab으로 돌린 후보도)
+    asked = 0;
+    v.renderNow();
+    expect(asked).toBeGreaterThan(0);
+    key(cv, 'Tab');
+    asked = 0;
+    v.renderNow();
+    expect(asked).toBeGreaterThan(0);
+    // 면이 아닌 후보·잘린 면·문서 없음·면 경계가 없는 그물(옛 장면)은 null
+    const p = picks[0]!;
+    expect(pickFaceRanges(d, { ...p, kind: 'line' })).toBeNull();
+    expect(pickFaceRanges(d, { ...p, kind: 'point' })).toBeNull();
+    expect(pickFaceRanges(d, { ...p, section: true, index: -1 })).toBeNull();
+    expect(pickFaceRanges(null, p)).toBeNull();
+    expect(pickFaceRanges({ ...d, faceIndex: { ...d.faceIndex, faceRuns: d.faceIndex.faceRuns.map(() => null) } }, p)).toBeNull();
+    // 줄자·각도기(59차 — 후보 돌리기 없음): 켠 커서의 덧그림은 앱 면을 묻지 않는다(측정 도구 표식과 겹치지 않는다)
+    kp.setMode('tape');
+    expect(v.keyboardSnap!.pickCycle).toBe(false);
+    key(cv, 'Enter');
+    expect(v.keyboardCursor).not.toBeNull();
+    asked = 0;
+    v.renderNow();
+    expect(asked).toBe(0);
+    kp.set(false);
   });
 
   it('57차 겹친 것 목록 항목: 같은 자리 코어 pickCandidates를 앱 고르기로 묶는다(첫째 펼친 단계, 둘째부터 가장 안쪽·면 방식은 면마다)', () => {
@@ -505,7 +567,7 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
     expect(v.keyboardSnap!.pickCycle).toBe(false);
     kp.setMode('pick');
     expect(kp.enabled).toBe(true);
-    expect(v.keyboardSnap!.pickCycle).toEqual({ ...PICK_CYCLE, group: expect.any(Function) });
+    expect(v.keyboardSnap!.pickCycle).toEqual({ ...PICK_CYCLE, group: expect.any(Function), facePreview: true, faceRanges: expect.any(Function) });
     expect(kp.handleKey(ev('ArrowRight'))).toBe(false);
   });
 });
