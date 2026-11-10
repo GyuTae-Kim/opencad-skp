@@ -1,5 +1,5 @@
 /**
- * 3D 보기 키보드 고르기(56차 — 코어 0.46.0 가상 커서·0.47.0 겹친 것 고르기 돌리기)와 줄자·각도기의 키보드 점 찍기(59차 — setMode·measureKey).
+ * 3D 보기 키보드 고르기(56차 — 코어 0.46.0 가상 커서·0.47.0 겹친 것 고르기 돌리기)와 줄자·각도기의 키보드 점 찍기(59차 — setMode·handleKey).
  *
  * - 줄자·각도기(59차): 화살표는 방향 잠금(SketchUp)이라 가상 커서는 3D 보기의 Enter로만 켠다. 켠 동안 화살표는 커서 옮기기(방향 잠금은 Shift),
  *   Enter는 커서 자리에 측정 도구의 붙잡기로 점 찍기, Esc는 측정 도구가 지울 것이 먼저이고 없으면 커서 끄기(NC 56·57차와 같은 키).
@@ -21,7 +21,7 @@ import type { KeyboardSnapAnnouncement, KeyPickCycleOptions, Pick3d, PickGroupKe
 import { KEY_SNAP_KEYS, formatKeySnapMessage, keySnapHint, keySnapMessages, orderedText, pointText, type KeySnapMessageKey, type KeySnapMessages } from 'opencad-viewer3d/keysnap';
 import { selectionForPick, selectionParts, type SkpDoc } from './doc';
 import { mixText, uiText } from './i18n';
-import { inList } from './keys';
+import { isEditableTarget } from './keys';
 import { selKey } from './panel';
 import { formatLength, mmPerSceneUnit } from './units';
 
@@ -137,6 +137,13 @@ export function keyPickName(d: SkpDoc, p: Pick3d, cycle: boolean): string {
   return mixText(i < 0 ? parts : parts.slice(0, i)) || p.id;
 }
 
+/**
+ * 키 대상이 화살표를 스스로 쓰는 곳(패널 목록·메뉴·장면 탭·패널 크기 손잡이·슬라이더 등 입력)의 고르개 — app.ts inList와 같다(시험이 맞춰 본다).
+ * 첫 화면 조각이 함수를 내보내지 않게 이 조각에 따로 둔다(59차)
+ */
+export const LIST_TARGETS = '.panel, .menu, .scene-tabs, .resizer, .measure-log, input, select, [role="tree"], [role="listbox"]';
+const inList = (t: EventTarget | null): boolean => !!t && typeof (t as Element).closest === 'function' && !!(t as Element).closest(LIST_TARGETS);
+
 /** 59차 줄자·각도기 가상 커서의 키 안내(커서를 켤 때 알림 끝 — 고르기의 후보 Tab·고르기 Enter 대신, 사전 열쇠) */
 export const KEY_MEASURE_HINT = ['옮기기 ←→↑↓', '찍기 Enter', '방향 잠금 Shift', '끄기 Esc'] as const;
 
@@ -227,15 +234,15 @@ export class KeyPick {
   }
 
   /**
-   * 측정 도구를 켠 동안의 창 키(app.ts 캡처 단계): 측정 도구 키와 59차 가상 커서 점 찍기. 다뤘으면 true(앱은 전파를 막는다).
+   * 측정 도구를 켠 동안의 창 키(app.ts 캡처 단계 — 입력 칸의 키는 받지 않는다): 측정 도구 키와 59차 가상 커서 점 찍기. 다뤘으면 true(앱은 전파를 막는다).
    * - 가상 커서가 켜진 동안: 3D 보기의 Enter는 커서 자리에 점 찍기, 화살표는 코어로 넘겨 커서 옮기기(그동안 방향 잠금은 Shift — 측정 도구 몫),
    *   Esc는 측정 도구가 지울 것(점·결과)이 먼저, 없으면 커서 끄기
-   * - 그 밖: 측정 도구 키(handleKey — SketchUp 화살표 방향 잠금 등). 화살표는 초점이 그것을 스스로 쓰는 곳(keys.ts inList — 목록·메뉴·슬라이더)이면 그쪽 것이고,
+   * - 그 밖: 측정 도구 키(handleKey — SketchUp 화살표 방향 잠금 등). 화살표는 초점이 그것을 스스로 쓰는 곳(LIST_TARGETS — 목록·메뉴·슬라이더)이면 그쪽 것이고,
    *   도구가 다루지 않은 화살표도 코어로 보내지 않는다(커서는 Enter로만 켠다 — NC 56차와 같다)
    */
-  measureKey(e: KeyboardEvent): boolean {
+  handleKey(e: KeyboardEvent): boolean {
     const h = this.app.measureTool;
-    if (!h?.active) return false;
+    if (!h?.active || isEditableTarget(e.target)) return false;
     const arrow = e.key.startsWith('Arrow');
     const list = inList(e.target);
     const on = !!this.mode && this.mode !== 'pick';
@@ -281,7 +288,7 @@ export class KeyPick {
     cv.setAttribute('aria-keyshortcuts', KEY_SHORTCUTS);
   }
 
-  /** 줄자·각도기 알림: 커서를 켜고 옮길 때마다 측정 도구의 그 자리 추정 글, 끌 때 끈 글(Enter 찍기는 measureKey가 알린다) */
+  /** 줄자·각도기 알림: 커서를 켜고 옮길 때마다 측정 도구의 그 자리 추정 글, 끌 때 끈 글(Enter 찍기는 handleKey가 알린다) */
   private sayMeasure(a: KeyboardSnapAnnouncement, M: KeySnapMessages, hint: string): void {
     const h = this.app.measureTool;
     if (!h) return;

@@ -3329,20 +3329,18 @@ export class SkpViewerApp implements PanelHost {
       this.vcb.begin(ev.key);
       return;
     }
-    if (tool?.active && !isEditableTarget(ev.target)) {
-      // 측정 도구 키(화살표는 SketchUp 방향 잠금 — 패널 목록·메뉴·슬라이더에 초점이 있으면 그쪽 것)와
-      // Enter로 켠 가상 커서의 점 찍기(59차 — 켠 동안 화살표는 커서 옮기기): keypick.ts measureKey(코어와 함께 받는다 — 측정 도구가 있으면 있다)
-      if (this.keyPick?.measureKey(ev)) {
-        ev.stopPropagation();
-        return;
-      }
-      // 지울 것이 없는 Esc: 도구를 끈다
-      if (ev.key === 'Escape' && !this.busy) {
-        ev.preventDefault();
-        ev.stopPropagation();
-        this.setMeasureMode(null);
-        return;
-      }
+    // 줄자·각도기를 켠 동안(입력 칸 밖)의 측정 도구 키(화살표는 SketchUp 방향 잠금 — 패널 목록·메뉴·슬라이더에 초점이 있으면 그쪽 것)와
+    // Enter로 켠 가상 커서의 점 찍기(59차 — 켠 동안 화살표는 커서 옮기기): keypick.ts handleKey(코어와 함께 받는다 — 측정 도구가 있으면 있다)
+    if (this.keyPick?.handleKey(ev)) {
+      ev.stopPropagation();
+      return;
+    }
+    // 줄자·각도기를 켠 동안 지울 것이 없는 Esc: 도구를 끈다
+    if (tool?.active && !isEditableTarget(ev.target) && ev.key === 'Escape' && !this.busy) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.setMeasureMode(null);
+      return;
     }
     // 고르기 도구로 고른 안내(줄자·각도기를 끈 동안): Delete·Backspace로 지우고 Esc로 푼다. Ctrl+A·⌘A는 안내 모두 고르기, Ctrl+T·Shift+⌘A는 모두 풀기
     if (tool?.selectKey(ev)) {

@@ -10,7 +10,7 @@ import { Viewer3d, type Pick3d, type PickEvent } from 'opencad-viewer3d';
 import { KEY_SNAP_KEYS, KEY_SNAP_MESSAGES, keySnapAction, keySnapHint, keySnapMessages, type KeySnapMessageKey, type KeySnapMessages } from 'opencad-viewer3d/keysnap';
 import { catalogs, languages, registerCatalog, sourceMessage, translate } from '../../site/i18n.mjs';
 import { type createDoc, selectionForPick } from '../../src/app/doc';
-import { KEY_MEASURE_HINT, KEY_PICK_ITEM, KEY_PICK_TEXT, KeyPick, PICK_CYCLE, keyPickItems, keyPickMessages, keyPickName, keyPickText, type KeyMeasureHost } from '../../src/app/keypick';
+import { KEY_MEASURE_HINT, KEY_PICK_ITEM, KEY_PICK_TEXT, KeyPick, LIST_TARGETS, PICK_CYCLE, keyPickItems, keyPickMessages, keyPickName, keyPickText, type KeyMeasureHost } from '../../src/app/keypick';
 import { KEY_MEASURE_TEXT } from '../../src/app/measure';
 import { keyAction } from '../../src/app/keys';
 import { PICK_LIST_MAX, pickListItems } from '../../src/app/picklist';
@@ -242,9 +242,13 @@ describe('키 겹침', () => {
     const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
     expect(app).toMatch(/const mode = this\.measureModeNow;\n\s*\/\/[^\n]*\n\s*this\.keyPick\?\.follow\(mode\);/);
     expect(app).toMatch(/new keyPicking\.KeyPick\(v, this\.els\.viewHost, \(\) => this\.doc, this\)/);
-    // 창 키: 측정 도구를 켠 동안 측정 도구 키는 keypick.ts measureKey로(가상 커서 화살표·Enter·Esc 차례가 먼저)
-    expect(app).toMatch(/if \(tool\?\.active && !isEditableTarget\(ev\.target\)\) \{\n(\s*\/\/[^\n]*\n)+\s*if \(this\.keyPick\?\.measureKey\(ev\)\) \{/);
+    // 창 키: 측정 도구를 켠 동안 측정 도구 키는 keypick.ts handleKey로(가상 커서 화살표·Enter·Esc 차례가 먼저)
+    expect(app).toMatch(
+      /\n(\s*\/\/[^\n]*\n)+\s*if \(this\.keyPick\?\.handleKey\(ev\)\) \{\n\s*ev\.stopPropagation\(\);\n\s*return;\n\s*\}\n\s*\/\/[^\n]*\n\s*if \(tool\?\.active && !isEditableTarget\(ev\.target\) && ev\.key === 'Escape' && !this\.busy\) \{/,
+    );
     expect(app).not.toMatch(/tool\.handleKey\(ev\)/);
+    // 화살표를 스스로 쓰는 곳 고르개는 앱 창 키의 keys.ts inList와 같다(첫 화면 조각이 함수를 내보내지 않게 키보드 조각에 따로 둔 사본)
+    expect(readFileSync(resolve(__dirname, '../../src/app/keys.ts'), 'utf8')).toContain(`el.closest('${LIST_TARGETS}')`);
     const arrows = SHORTCUTS.flatMap((g) => g.items).filter((i) => i.label.startsWith('줄자 끝점·각도기 방향'));
     expect(arrows.flatMap((i) => i.keys).filter((k) => /[←→↑↓]/.test(k)).sort()).toEqual(['←', '↑', '→', '↓']);
     expect(SHORTCUT_GROUP.items[0]!.label).toContain('줄자·각도기를 끈 동안');
@@ -429,7 +433,7 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
         return '시작점을 찍었습니다. 끝점';
       },
     };
-    /** 앱 창 키 처리기가 measureKey에 넘기는 키 사건(대상 = 3D 보기) */
+    /** 앱 창 키 처리기가 handleKey에 넘기는 키 사건(대상 = 3D 보기) */
     const ev = (k: string, o: Record<string, unknown> = {}): KeyboardEvent =>
       ({ key: k, type: 'keydown', target: cv, shiftKey: false, ctrlKey: false, metaKey: false, altKey: false, defaultPrevented: false, preventDefault() {}, ...o }) as unknown as KeyboardEvent;
     // 측정 도구를 받기 전에는 줄자 방식이 아니라 끈다(측정 도구 키도 없다)
@@ -437,24 +441,24 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
     const kp = new KeyPick(v, el as unknown as HTMLElement, () => d, app);
     kp.follow('tape');
     expect(v.keyboardSnap).toBeNull();
-    expect(kp.measureKey(ev('ArrowRight'))).toBe(false);
+    expect(kp.handleKey(ev('ArrowRight'))).toBe(false);
     // 받는 중(측정 도구가 아직 꺼짐)도 끈다
     app.measureTool = { ...host, active: false };
     kp.follow('tape');
     expect(v.keyboardSnap).toBeNull();
-    expect(kp.measureKey(ev('ArrowRight'))).toBe(false);
+    expect(kp.handleKey(ev('ArrowRight'))).toBe(false);
     app.measureTool = host;
     kp.follow('tape');
     expect(v.keyboardSnap!.pickCycle).toBe(false);
     expect(kp.enabled).toBe(false);
     // 커서가 꺼진 동안 화살표: 측정 도구(방향 잠금)만 — 다루지 않았어도 커서를 켜지 않는다. 목록 안의 화살표는 그쪽 것
-    expect(kp.measureKey(ev('ArrowRight'))).toBe(true);
+    expect(kp.handleKey(ev('ArrowRight'))).toBe(true);
     expect(calls).toEqual(['key ArrowRight']);
     expect(v.keyboardCursor).toBeNull();
-    expect(kp.measureKey(ev('ArrowRight', { target: { closest: () => ({}) } }))).toBe(false);
+    expect(kp.handleKey(ev('ArrowRight', { target: { closest: () => ({}) } }))).toBe(false);
     expect(calls).toEqual(['key ArrowRight']);
     // 다른 키는 측정 도구 키 그대로(다루지 않았으면 앱 차례로 — 꺼진 동안 Enter는 앱이 코어로 넘긴다)
-    expect(kp.measureKey(ev('Enter'))).toBe(false);
+    expect(kp.handleKey(ev('Enter'))).toBe(false);
     expect(calls.at(-1)).toBe('key Enter');
     // 코어 Enter: 가운데에 켜고 측정 도구가 그 자리를 추정, 키 안내는 찍기·방향 잠금
     key(cv, 'Enter');
@@ -462,27 +466,27 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
     expect(kp.text).toBe('가상 커서를 켰습니다. 끝점: 400,300. 옮기기 ←→↑↓ · 찍기 Enter · 방향 잠금 Shift · 끄기 Esc');
     // 켠 동안 화살표는 코어 커서 옮기기(Shift는 크게) — 측정 도구의 방향 잠금으로 가지 않는다
     calls.length = 0;
-    expect(kp.measureKey(ev('ArrowRight'))).toBe(true);
-    expect(kp.measureKey(ev('ArrowDown', { shiftKey: true }))).toBe(true);
+    expect(kp.handleKey(ev('ArrowRight'))).toBe(true);
+    expect(kp.handleKey(ev('ArrowDown', { shiftKey: true }))).toBe(true);
     expect(v.keyboardCursor).toMatchObject({ x: 405, y: 350 });
     expect(kp.text).toBe('끝점: 405,350');
     expect(calls).toEqual(['hover 405,300', 'hover 405,350']);
     // Tab은 후보 돌리기가 아니다(측정 도구 키 → 앱 → 코어도 받지 않아 초점 이동 — 측정 도구에는 붙잡기 후보 목록이 없다)
-    expect(kp.measureKey(ev('Tab'))).toBe(false);
+    expect(kp.handleKey(ev('Tab'))).toBe(false);
     expect(v.handleKey(ev('Tab'))).toBe(false);
     // Enter: 커서 자리에 측정 도구로 찍기(코어 고르기 onPick 없이), Shift+Enter는 shift
-    expect(kp.measureKey(ev('Enter', { shiftKey: true }))).toBe(true);
+    expect(kp.handleKey(ev('Enter', { shiftKey: true }))).toBe(true);
     expect(calls.at(-1)).toBe('place true');
     expect(kp.text).toBe('시작점을 찍었습니다. 끝점');
     expect(picks).toEqual([]);
     // 3D 보기가 아닌 곳의 Enter는 찍지 않는다
-    expect(kp.measureKey(ev('Enter', { target: null }))).toBe(false);
+    expect(kp.handleKey(ev('Enter', { target: null }))).toBe(false);
     // Esc: 측정 도구가 지울 것(점·결과)이 먼저, 없으면 커서 끄기 — 초점이 3D 보기에 있으면 표식을 거둔다
     clearable = true;
-    expect(kp.measureKey(ev('Escape'))).toBe(true);
+    expect(kp.handleKey(ev('Escape'))).toBe(true);
     expect(v.keyboardCursor).not.toBeNull();
     cv.focus();
-    expect(kp.measureKey(ev('Escape'))).toBe(true);
+    expect(kp.handleKey(ev('Escape'))).toBe(true);
     expect(v.keyboardCursor).toBeNull();
     expect(calls.at(-1)).toBe('end false');
     expect(kp.text).toBe('가상 커서를 껐습니다');
@@ -502,6 +506,6 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
     kp.setMode('pick');
     expect(kp.enabled).toBe(true);
     expect(v.keyboardSnap!.pickCycle).toEqual({ ...PICK_CYCLE, group: expect.any(Function) });
-    expect(kp.measureKey(ev('ArrowRight'))).toBe(false);
+    expect(kp.handleKey(ev('ArrowRight'))).toBe(false);
   });
 });
