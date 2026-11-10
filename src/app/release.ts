@@ -18,7 +18,7 @@
  *   라벨 가림 판정을 다시 한다. 코어가 다시 달라는 무늬 가운데 쥐어 둔 색 바꾼 무늬는 작은 손질 워커(worker/recolor.worker.ts)가
  *   처음 열 때와 같은 손질로 다시 그림을 만들어 restoreTexture로 주고 워커를 끝낸다. 나머지 쥐어 둔 무늬는 Blob의 바이트를 읽어 그대로 준다
  *   (한 번에 RAW_RESTORE_LANES장까지 — 코어가 받는 대로 푸므로 코어가 스스로 풀 때와 같은 수만큼). 그동안 그 무늬 면은 평균색이다.
- *   손질하지 못하면 평균색으로 그린다고 알린다. 손질하는 동안 또 잃으면 받은 그림을 쥐었다가 되찾을 때 준다.
+ *   손질하지 못하면(62차부터 워커가 실패하면 화면에서 한 번 더 해 본 뒤) 평균색으로 그린다고 알린다. 손질하는 동안 또 잃으면 받은 그림을 쥐었다가 되찾을 때 준다.
  *   안내는 코어가 다시 올리기를 다 마쳤다고 알릴 때(코어 0.29.0 onContextRestoreDone — 나눠 올리기, 앱이 다시 줄 것, 코어가 장면의 그림 바이트를
  *   다시 풀어 올리기까지 모두) 거둔다(30차). 29차까지는 되찾음 알림(또는 앱이 다 준 때)에 거둬, 놓아 올린 큰 모형은 코어가 남은 무늬를 다시 푸는 동안에도
  *   안내 없이 무늬 면이 평균색이었다. 놓아 올린 문서는 그동안 무늬를 다시 준비한다고 알리고(RESTORE_TITLE), 그 밖의 문서는 잃음 안내를 그대로 둔다
@@ -28,10 +28,18 @@
  *   (그림 머리에 알파 칸이 없는 무늬)를 손질하지 않고 pending으로 넘긴다(바이트는 deferredData). 놓기 준비가 그 바이트를 색 바꾼 무늬로 쥐고,
  *   setSource 뒤 ContextWatch.fill이 같은 손질 워커로 손질해(견본 PNG까지 — 해석 워커와 같은 그림) restoreTexture로 주고 재질 목록 견본을 바꾼다.
  *   그동안 그 무늬 면은 그물 색(평균색)이고 알림은 띄우지 않는다. 165 MB 표본에서 해석 워커가 결과를 보내기 전 손질 57장 가운데 48장이 이 몫이었다
+ *
+ * 받기 실패 대비(62차): 61차는 놓기 조각이나 손질 워커를 받지 못하거나 워커가 멈추면 미룬 무늬가 평균색으로 남았다(원래 색 그림은 틀린 색이라 그리지 않는다).
+ *   - 놓기 조각: 해석 워커는 화면이 이 조각을 받았다고 알린 뒤에만 미룬다(protocol.ts DeferNotice) — 받지 못하면 예전처럼 워커가 손질해 넘긴다.
+ *   - 손질 워커: 만들지 못하거나(스크립트를 받지 못함 등) 오류·멈춤으로 끝나면 같은 손질(worker/textures.ts recolorTextures — 같은 한도·견본)을
+ *     화면에서 한다(recolorHere — 이 조각에 함께 실어 조각을 받았으면 늘 있다). 문맥 복구 길도 같다. 워커가 손질해 보냈는데 빠진 무늬(그림을 풀지 못함)는
+ *     해석 워커가 손질하지 못한 무늬를 빼던 것과 같이 평균색으로 둔다
  */
 import type { ContextRestoreNeed, TextureSource } from 'opencad-viewer3d';
+import { TEXTURE_LIMIT } from 'opencad-viewer3d/texture';
 import type { Scene3d } from 'opencad-viewer3d/types';
 import type { SkpTextureInfo } from '../index';
+import { recolorTextures } from '../worker/textures';
 import type { DocImages } from './doc';
 import type { DeferredTexture, HeldTexture, RecolorRequest, RecolorResponse, RecolorResult } from './protocol';
 
@@ -131,10 +139,45 @@ export type WorkerFactory = () => Worker;
 
 const newRecolorWorker: WorkerFactory = () => new Worker(new URL('../worker/recolor.worker.ts', import.meta.url), { type: 'module', name: 'opencad-skp-recolor' });
 
+/** 62차: 손질 워커로 손질하지 못했을 때 같은 손질을 화면에서 하기(시험은 가짜를 준다) */
+export type HereRecolor = (req: Omit<RecolorRequest, 'id' | 'type'>) => Promise<RecolorResult>;
+
+/**
+ * 손질 워커(recolor.worker.ts)와 같은 손질을 화면 스레드에서(한도·견본 선택도 그 워커와 같게 — 같은 그림·견본이 나온다).
+ * 무늬 하나씩 풀기를 기다리는 사이 화면이 쉰다(색 바꾸기 계산은 무늬 하나만큼 — 165 MB 표본 48장 34.6 Mpx 합이 Node에서 0.2초 남짓)
+ */
+const recolorHere: HereRecolor = (req) =>
+  recolorTextures(req.textures, req.textureLimit && req.textureLimit > 0 ? req.textureLimit : TEXTURE_LIMIT, { swatches: !!req.swatches });
+
 /** 다시 손질 하나: 다 받거나 실패하거나 멈추면 워커를 끝낸다 */
 export interface RecolorJob {
   readonly done: Promise<RecolorResult>;
   cancel(): void;
+}
+
+/** 62차: 화면에서 하는 다시 손질 하나(recolorJob과 같은 꼴). 멈추면 거부하고, 하던 손질이 끝나 받은 그림은 닫는다 */
+export function hereJob(here: HereRecolor, req: Omit<RecolorRequest, 'id' | 'type'>): RecolorJob {
+  let stopped = false;
+  let fail: (e: Error) => void = () => undefined;
+  const done = new Promise<RecolorResult>((resolve, reject) => {
+    fail = (e) => {
+      stopped = true;
+      reject(e);
+    };
+    let p: Promise<RecolorResult>;
+    try {
+      p = here(req);
+    } catch (e) {
+      fail(e instanceof Error ? e : new Error(String(e)));
+      return;
+    }
+    p.then(
+      (res) => (stopped ? dropResult(res) : resolve(res)),
+      (e: unknown) => fail(e instanceof Error ? e : new Error(String(e))),
+    );
+  });
+  done.catch(() => undefined);
+  return { done, cancel: () => fail(new Error('cancelled')) };
 }
 
 export function recolorJob(make: WorkerFactory, req: Omit<RecolorRequest, 'id' | 'type'>): RecolorJob {
@@ -250,12 +293,18 @@ export class ContextWatch {
   private paused: false | 'restore' | 'fill' = false;
   /** 61차: 처음 열 때 미룬 손질을 주는 중(fill — 알림 없이). 잃거나 거두면 문맥 복구 길이 잇는다 */
   private filling = false;
+  /**
+   * 62차: 재질 목록 견본을 아직 바꾸지 못한 문서(미룬 손질을 시작했고 견본을 받지 못함). 그 사이 문맥을 잃어 문맥 복구 길이 손질을 이으면
+   * 그 손질도 견본을 묻는다(61차는 견본 없이 손질해 견본이 원래 색 그림으로 남았다)
+   */
+  private owed: ReleaseSource | null = null;
   private readonly offs: (() => void)[];
 
   constructor(
     private readonly v: WatchViewer,
     private readonly ui: ContextUi,
     private readonly makeWorker: WorkerFactory = newRecolorWorker,
+    private readonly here: HereRecolor = recolorHere,
   ) {
     this.offs = [v.onContextLost(() => this.lost()), v.onContextRestore((need) => this.restored(need)), v.onContextRestoreDone(() => this.done())];
   }
@@ -269,6 +318,7 @@ export class ContextWatch {
     this.stash = null;
     this.paused = false;
     this.filling = false;
+    this.owed = null;
     this.src = src;
     if (this.state !== 'lost') this.state = 'ok';
     // 61차: 해석 워커가 첫 그림 뒤로 미룬 색 바꾸기가 있으면 곧바로 손질해 준다
@@ -277,8 +327,9 @@ export class ContextWatch {
 
   /**
    * 61차: 처음 열 때 해석 워커가 첫 그림 뒤로 미룬 색 바꾸기(Texture3d.pending — 쥐어 둔 색 바꾼 무늬 가운데 코어가 기다리는 것)를 손질 워커로
-   * 손질해 준다(setSource 바로 뒤). 알림 없이 — 그동안 그 무늬 면은 그물 색(평균색)이고, 손질하지 못한 무늬도 그대로 평균색이다.
-   * 손질한 재질 목록 견본은 ui.swatches로 넘긴다. 그 사이 문맥을 잃으면 문맥 복구 길(start)이 이어받는다(받은 손질은 쥐었다가 되찾을 때 준다)
+   * 손질해 준다(setSource 바로 뒤). 알림 없이 — 그동안 그 무늬 면은 그물 색(평균색)이다. 62차: 워커로 손질하지 못하면 화면에서 같은 손질을 한다(recolor) —
+   * 그래도 못 한 무늬(그림을 풀지 못함)는 평균색이다(해석 워커가 손질하지 못한 무늬를 빼던 것과 같은 모습).
+   * 손질한 재질 목록 견본은 swapSwatches로 바꾼다. 그 사이 문맥을 잃으면 문맥 복구 길(start)이 이어받는다(받은 손질은 쥐었다가 되찾을 때 준다)
    */
   fill(): void {
     const src = this.src;
@@ -287,6 +338,7 @@ export class ContextWatch {
     const list = src.textures.filter((t) => !t.raw && want.has(t.id));
     if (!list.length) return;
     this.filling = true;
+    this.owed = src;
     this.t0 = now();
     this.parts = 1;
     this.given = 0;
@@ -391,16 +443,21 @@ export class ContextWatch {
     this.parts++;
     // 앞서 다시 손질해 쥐고 있던 것을 바로 준다
     if (stashed) void this.apply(src, stashed.res);
-    // 앞서 잃기 전에 시작한 다시 손질이 아직 돈다 — 끝나면 준다
-    else if (!this.job) this.recolor(src, recolor);
+    // 앞서 잃기 전에 시작한 다시 손질이 아직 돈다 — 끝나면 준다(62차: 견본을 아직 못 바꾼 문서는 견본도 묻는다)
+    else if (!this.job) this.recolor(src, recolor, this.owed === src);
   }
 
-  private recolor(src: ReleaseSource, list: readonly HeldTexture[], swatches = false): void {
-    const job = recolorJob(this.makeWorker, {
+  /**
+   * 손질 워커로 손질한다. 62차: 워커로 손질하지 못하면(만들기·스크립트 받기 실패, 오류, 멈춤) 같은 손질을 화면에서 한 번 더 한다(here) —
+   * 그래도 못 하면 그 몫은 0장(fill은 평균색, 문맥 복구는 평균색 안내). 잃은 동안 실패하면 되찾을 때 문맥 복구 길이 처음(워커)부터 다시 한다
+   */
+  private recolor(src: ReleaseSource, list: readonly HeldTexture[], swatches = false, onMain = false): void {
+    const req = {
       textures: list.map((t) => ({ id: t.id, blob: t.blob, info: t.info })),
       textureLimit: src.textureLimit,
       ...(swatches ? { swatches: true } : {}),
-    });
+    };
+    const job = onMain ? hereJob(this.here, req) : recolorJob(this.makeWorker, req);
     this.job = job;
     job.done.then(
       (res) => {
@@ -413,14 +470,19 @@ export class ContextWatch {
       () => {
         if (this.job !== job) return;
         this.job = null;
-        if (this.state !== 'lost') this.partDone(src, 0);
+        if (this.state === 'lost') return;
+        if (onMain || this.src !== src || this.v.scene !== src.scene) this.partDone(src, 0);
+        else this.recolor(src, list, swatches, true);
       },
     );
   }
 
   private async apply(src: ReleaseSource, res: RecolorResult): Promise<void> {
     // 61차: 처음 열 때 미룬 손질의 재질 목록 견본(해석 워커가 하던 견본 바꾸기)
-    if (res.swatches?.length) swapSwatches(sceneImages.get(src.scene), res.swatches);
+    if (res.swatches) {
+      swapSwatches(sceneImages.get(src.scene), res.swatches);
+      if (this.owed === src) this.owed = null;
+    }
     let textures = 0;
     // 코어가 기다리지 않는 무늬면 false(받은 그림은 코어가 닫는다)
     for (const t of res.textures) if (await this.v.restoreTexture(t.id, t.bitmap)) textures++;

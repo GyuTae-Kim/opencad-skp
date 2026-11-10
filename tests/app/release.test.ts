@@ -20,10 +20,12 @@ import {
   RELEASE_OPTIONS,
   RESTORE_FAIL_TITLE,
   RESTORE_TITLE,
+  hereJob,
   prepareRelease,
   recolorJob,
   swapSwatches,
   type ContextUi,
+  type HereRecolor,
   type WatchViewer,
 } from '../../src/app/release';
 
@@ -47,6 +49,16 @@ class FakeWorker {
   }
 }
 const make = (): Worker => new FakeWorker() as unknown as Worker;
+
+/**
+ * 62차: 손질 워커로 손질하지 못하면 화면에서 하는 같은 손질(가짜 — 받은 요청을 적는다). 기본은 실패라 61차까지의 시험은 예전 차례(평균색 길)를 그대로 본다
+ */
+let hereCalls: Parameters<HereRecolor>[0][] = [];
+let hereAnswer: () => Promise<RecolorResult> = () => Promise.reject(new Error('화면 손질 실패'));
+const here: HereRecolor = (req) => {
+  hereCalls.push(req);
+  return hereAnswer();
+};
 
 /**
  * 가짜 뷰어: 기다리는 무늬(코어가 원본을 놓았고 장면에 바이트가 없는 무늬)를 들고, 받은 것을 지운다. meshes는 놓은 배열(이 앱은 놓지 않는다).
@@ -159,7 +171,7 @@ const result = (...ids: string[]): RecolorResult => ({ textures: ids.map((id) =>
 function setup(): { v: FakeViewer; ui: FakeUi; w: ContextWatch; s: Scene3d; textures: HeldTexture[] } {
   const v = new FakeViewer();
   const ui = new FakeUi();
-  const w = new ContextWatch(v, ui, make);
+  const w = new ContextWatch(v, ui, make, here);
   const s = sceneOf();
   const textures = [held('t1'), held('t2')];
   v.scene = s;
@@ -169,6 +181,8 @@ function setup(): { v: FakeViewer; ui: FakeUi; w: ContextWatch; s: Scene3d; text
 
 beforeEach(() => {
   FakeWorker.all = [];
+  hereCalls = [];
+  hereAnswer = () => Promise.reject(new Error('화면 손질 실패'));
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -352,7 +366,7 @@ describe('그래픽 문맥 잃음·되찾음', () => {
   it('놓아 올리지 않은 문서(작은 모형): 코어가 쥔 그림을 다시 올리는 동안 잃음 안내를 그대로 두고 끝 알림에 거둔다', () => {
     const v = new FakeViewer();
     const ui = new FakeUi();
-    const w = new ContextWatch(v, ui, make);
+    const w = new ContextWatch(v, ui, make, here);
     v.scene = sceneOf();
     w.setSource(null);
     v.lose();
@@ -600,7 +614,7 @@ const drain = async (v: GatedViewer): Promise<void> => {
 function setupRaw(): { v: GatedViewer; ui: FakeUi; w: ContextWatch; s: Scene3d; textures: HeldTexture[] } {
   const v = new GatedViewer();
   const ui = new FakeUi();
-  const w = new ContextWatch(v, ui, make);
+  const w = new ContextWatch(v, ui, make, here);
   const s = sceneOf();
   const textures = [1, 2, 3, 4, 5, 6].map((k) => rawHeld(`r${k}`, [k, k])).concat([held('t1')]);
   v.scene = s;
@@ -726,10 +740,10 @@ describe('61차 처음 열 때 첫 그림 뒤로 미룬 색 바꾸기(pending �
     urls: ['blob:old-t1', 'blob:old-t2'],
   });
   /** 놓아 올린 문서를 연다: 코어는 wait 무늬(장면에 바이트가 없는 pending)를 기다린다. t1·t2는 쥔 색 바꾼 무늬, t3은 raw */
-  function opened(wait: string[] = ['t1', 't2']): { v: FakeViewer; ui: FakeUi; w: ContextWatch; s: Scene3d; images: DocImages } {
+  function opened(wait: string[] = ['t1', 't2'], makeWorker: () => Worker = make): { v: FakeViewer; ui: FakeUi; w: ContextWatch; s: Scene3d; images: DocImages } {
     const v = new FakeViewer();
     const ui = new FakeUi();
-    const w = new ContextWatch(v, ui, make);
+    const w = new ContextWatch(v, ui, makeWorker, here);
     const s = sceneOf();
     const images = swatchImages();
     // 화면 차례: 놓기 준비(문서 그림을 적는다) → setScene → setSource
@@ -795,10 +809,12 @@ describe('61차 처음 열 때 첫 그림 뒤로 미룬 색 바꾸기(pending �
     expect(FakeWorker.all).toHaveLength(0);
   });
 
-  it('손질하지 못해도 알림 없이 평균색으로 둔다(해석 워커가 손질하지 못한 무늬를 빼던 것과 같은 모습)', async () => {
+  it('워커도 화면도 손질하지 못하면 알림 없이 평균색으로 둔다(해석 워커가 손질하지 못한 무늬를 빼던 것과 같은 모습 — 62차: 워커가 실패하면 화면에서 한 번 더)', async () => {
     const { ui, w } = opened();
     FakeWorker.all[0]!.emit({ id: 1, type: 'error', message: 'x' });
     await flush();
+    expect(hereCalls.map((r) => [r.textures.map((t) => t.id), r.textureLimit, r.swatches])).toEqual([[['t1', 't2'], 1024, true]]);
+    expect(FakeWorker.all).toHaveLength(1);
     expect(ui.shown).toEqual([]);
     expect(w.state).toBe('ok');
     expect(w.last).toMatchObject({ textures: 0, left: 2 });
@@ -857,5 +873,157 @@ describe('61차 처음 열 때 첫 그림 뒤로 미룬 색 바꾸기(pending �
     expect(b.type).toBe('image/png');
     expect([...new Uint8Array(await b.arrayBuffer())]).toEqual([5, 6]);
     URL.revokeObjectURL(a.url);
+  });
+
+  describe('62차 손질 워커를 받지 못하거나 멈추면 화면에서 같은 손질', () => {
+    /** 화면 손질이 바로 답한다(견본은 t1 폴더) */
+    const answerHere = (): void => {
+      hereAnswer = () => Promise.resolve({ ...result('t1', 't2'), swatches: [{ folder: 't1', png: new Uint8Array([7]) }] });
+    };
+    /** 다 받은 모습: 코어가 두 무늬를 받고, t1 견본이 바뀌고, 알림이 없다 */
+    async function expectFilled(o: ReturnType<typeof opened>): Promise<void> {
+      expect(o.v.gotTex.map(([id]) => id)).toEqual(['t1', 't2']);
+      const t1 = o.images.materials.get('t1')!.url;
+      expect(t1).not.toBe('blob:old-t1');
+      const { resolveObjectURL } = await import('node:buffer');
+      expect([...new Uint8Array(await resolveObjectURL(t1)!.arrayBuffer())]).toEqual([7]);
+      URL.revokeObjectURL(t1);
+      expect(o.ui.shown).toEqual([]);
+      expect(o.w.state).toBe('ok');
+      expect(o.w.last).toMatchObject({ textures: 2, left: 0 });
+    }
+
+    it('워커가 오류로 끝나면 같은 요청(무늬·한도·견본)을 화면에서 손질해 주고 견본도 바꾼다(알림 없음)', async () => {
+      answerHere();
+      const o = opened();
+      FakeWorker.all[0]!.emit({ id: 1, type: 'error', message: '풀지 못함' });
+      await flush();
+      expect(hereCalls).toHaveLength(1);
+      expect(hereCalls[0]!.textures.map((t) => [t.id, t.blob])).toEqual(FakeWorker.all[0]!.posted[0]!.msg.textures.map((t) => [t.id, t.blob]));
+      expect(hereCalls[0]).toMatchObject({ textureLimit: 1024, swatches: true });
+      await expectFilled(o);
+    });
+
+    it('워커 스크립트를 받지 못하거나(오류 사건) 워커를 만들지 못해도 화면에서 손질한다', async () => {
+      answerHere();
+      const a = opened();
+      FakeWorker.all[0]!.onerror!({ message: '', preventDefault: vi.fn() } as unknown as ErrorEvent);
+      await flush();
+      expect(FakeWorker.all[0]!.terminated).toBe(true);
+      await expectFilled(a);
+      const b = opened(['t1', 't2'], () => {
+        throw new Error('워커를 만들 수 없음');
+      });
+      await flush();
+      expect(hereCalls).toHaveLength(2);
+      await expectFilled(b);
+    });
+
+    it('화면 손질이 덜 주면(그림을 풀지 못한 무늬) 그 무늬만 평균색 — 알림 없음', async () => {
+      hereAnswer = () => Promise.resolve(result('t2'));
+      const { v, ui, w } = opened();
+      FakeWorker.all[0]!.emit({ id: 1, type: 'error', message: 'x' });
+      await flush();
+      expect(v.gotTex.map(([id]) => id)).toEqual(['t2']);
+      expect(ui.shown).toEqual([]);
+      expect(w.last).toMatchObject({ textures: 1, left: 1 });
+    });
+
+    it('문맥을 잃은 동안 워커가 실패하면 화면 손질은 하지 않고, 되찾으면 문맥 복구 길이 워커부터 다시 한다(견본을 아직 못 바꿨으면 견본도 묻는다)', async () => {
+      answerHere();
+      const { v, ui, w, images } = opened();
+      v.lose();
+      FakeWorker.all[0]!.emit({ id: 1, type: 'error', message: 'x' });
+      await flush();
+      expect(hereCalls).toEqual([]);
+      v.restore();
+      expect(FakeWorker.all).toHaveLength(2);
+      expect(FakeWorker.all[1]!.posted[0]!.msg.swatches).toBe(true);
+      FakeWorker.all[1]!.emit({ id: 1, type: 'recolored', result: { ...result('t1', 't2'), swatches: [{ folder: 't2', png: new Uint8Array([3]) }] } });
+      await flush();
+      expect(v.gotTex.map(([id]) => id)).toEqual(['t1', 't2']);
+      expect(images.materials.get('t2')!.url).not.toBe('blob:old-t2');
+      URL.revokeObjectURL(images.materials.get('t2')!.url);
+      expect(w.state).toBe('ok');
+      expect(ui.open).toBeNull();
+      expect(hereCalls).toEqual([]);
+      // 견본을 받은 뒤 또 잃었다 되찾으면 예전처럼 견본 없이
+      v.lose();
+      v.restore(['t1']);
+      expect(FakeWorker.all[2]!.posted[0]!.msg.swatches).toBeUndefined();
+    });
+
+    it('화면에서 손질하는 동안 문맥을 잃으면 받은 것을 쥐었다가 되찾을 때 준다(다시 손질하지 않는다)', async () => {
+      let answer: (r: RecolorResult) => void = () => undefined;
+      hereAnswer = () => new Promise((r) => (answer = r));
+      const { v, ui, w } = opened();
+      FakeWorker.all[0]!.emit({ id: 1, type: 'error', message: 'x' });
+      await flush();
+      expect(hereCalls).toHaveLength(1);
+      v.lose();
+      answer(result('t1', 't2'));
+      await flush();
+      expect(v.gotTex).toEqual([]);
+      v.restore();
+      await flush();
+      expect(v.gotTex.map(([id]) => id)).toEqual(['t1', 't2']);
+      expect(FakeWorker.all).toHaveLength(1);
+      expect(hereCalls).toHaveLength(1);
+      expect(w.state).toBe('ok');
+      expect(ui.open).toBeNull();
+    });
+
+    it('화면에서 손질하는 동안 새 문서로 바꾸면 받은 그림을 닫고 주지 않는다', async () => {
+      let answer: (r: RecolorResult) => void = () => undefined;
+      hereAnswer = () => new Promise((r) => (answer = r));
+      const { v, w } = opened();
+      FakeWorker.all[0]!.emit({ id: 1, type: 'error', message: 'x' });
+      await flush();
+      v.scene = sceneOf();
+      w.setSource(null);
+      const late = result('t1', 't2');
+      answer(late);
+      await flush();
+      expect(v.gotTex).toEqual([]);
+      for (const t of late.textures) expect(t.bitmap.close).toHaveBeenCalled();
+    });
+
+    it('문맥 복구 길도 워커가 실패하면 화면에서 손질해 주고, 둘 다 못 하면 예전처럼 평균색 안내', async () => {
+      hereAnswer = () => Promise.resolve(result('t1', 't2'));
+      const a = setup();
+      a.v.restore(['t1', 't2']);
+      FakeWorker.all[0]!.emit({ id: 1, type: 'error', message: 'x' });
+      await flush();
+      expect(hereCalls.at(-1)).toMatchObject({ textureLimit: 1024 });
+      expect(hereCalls.at(-1)!.swatches).toBeUndefined();
+      expect(a.v.gotTex.map(([id]) => id)).toEqual(['t1', 't2']);
+      expect(a.w.state).toBe('ok');
+      expect(a.ui.open).toBeNull();
+      hereAnswer = () => Promise.reject(new Error('x'));
+      const b = setup();
+      b.v.restore(['t1', 't2']);
+      FakeWorker.all.at(-1)!.emit({ id: 1, type: 'error', message: 'x' });
+      await flush();
+      expect(b.w.state).toBe('partial');
+      expect(b.ui.open).toBe(RESTORE_FAIL_TITLE);
+    });
+
+    it('화면 손질 하나(hereJob): 받으면 풀리고, 멈추면 거부하고 늦게 받은 그림은 닫는다, 던지면 거부', async () => {
+      const ok = result('a');
+      await expect(hereJob(() => Promise.resolve(ok), { textures: [] }).done).resolves.toBe(ok);
+      let answer: (r: RecolorResult) => void = () => undefined;
+      const job = hereJob(() => new Promise((r) => (answer = r)), { textures: [] });
+      job.cancel();
+      await expect(job.done).rejects.toThrow('cancelled');
+      const late = result('b');
+      answer(late);
+      await flush();
+      expect(late.textures[0]!.bitmap.close).toHaveBeenCalled();
+      const bad = hereJob(() => {
+        throw new Error('던짐');
+      }, { textures: [] });
+      await expect(bad.done).rejects.toThrow('던짐');
+      await expect(hereJob(() => Promise.reject('글'), { textures: [] }).done).rejects.toThrow('글');
+    });
   });
 });

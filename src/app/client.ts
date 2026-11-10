@@ -6,7 +6,7 @@
  * 남던 배열 — 165 MB 표본에서 화면이 장면을 올리는 동안 렌더러 프로세스 메모리 최고치의 2할)를 한꺼번에 놓고, 지문은 해석기를 싣지 않은
  * 작은 지문 워커(worker/print.worker.ts)가 구한다. 다음 열기는 새 해석 워커로 한다.
  */
-import type { ParseRequest, ParseResponse, ParseResult, PrintRequest } from './protocol';
+import type { DeferNotice, ParseRequest, ParseResponse, ParseResult, PrintRequest } from './protocol';
 
 interface Pending {
   resolve: (r: ParseResult) => void;
@@ -28,9 +28,10 @@ export class ParseClient {
 
   /**
    * 파일 해석(Blob은 복사 없이 넘어간다). textureLimit: 워커가 푸는 무늬 그림의 긴 변 한도.
+   * defer(62차): 놓기 조각 받기 — 받으면 이 열기의 워커에 알린다(DeferNotice — 그 뒤에만 워커가 큰 모형의 색 바꾸기를 첫 그림 뒤로 미룬다. 받지 못하면 알리지 않는다).
    * 결과의 print는 파일 내용 SHA-256(워커가 결과 뒤에 구해 보낸다 — 못 구했거나 워커가 멈추면 null)
    */
-  open(name: string, file: Blob, progress?: (fraction: number, stage: string) => void, opts: { textureLimit?: number } = {}): Promise<ParseResult> {
+  open(name: string, file: Blob, progress?: (fraction: number, stage: string) => void, opts: { textureLimit?: number; defer?: Promise<unknown> } = {}): Promise<ParseResult> {
     let w: Worker;
     try {
       w = this.ensure();
@@ -48,6 +49,10 @@ export class ParseClient {
         this.pending.delete(id);
         reject(e instanceof Error ? e : new Error(String(e)));
       }
+      opts.defer?.then(
+        () => w.postMessage({ type: 'defer' } satisfies DeferNotice),
+        () => undefined,
+      );
     });
   }
 

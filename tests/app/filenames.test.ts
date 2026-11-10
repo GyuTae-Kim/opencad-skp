@@ -306,15 +306,16 @@ describe('파일 글을 앱 글과 섞기(filetext·mixText)', () => {
   it('60차: 알림의 실행 중 오류 글은 사전 글일 때만 화면 언어로 옮기고(틀 자리의 까닭 글까지), 한글이 남는 글은 반쯤 옮기지 않고 원문 그대로', async () => {
     const HANGUL = /[가-힣]/;
     const CODES = ['en', 'de', 'ja', 'zh-CN'];
-    // 화면 언어마다 번역층을 깔고(알림을 띄울 때의 언어로 고른다) 알림 글 칸과 같은 길(mixText)로 본다
+    // 화면 언어마다 번역층을 깔고(그 글을 그릴 때의 언어로 고른다 — 62차부터 ui는 읽을 때마다 고르므로 그 언어에서 읽은 값을 적어 둔다) 알림 글 칸과 같은 길(mixText)로 본다
     const parts: Record<string, Map<unknown, ReturnType<typeof errorParts>>> = {};
     const shown: Record<string, Map<unknown, string>> = {};
     const errs: unknown[] = [];
+    const snap = (m: ReturnType<typeof errorParts>): ReturnType<typeof errorParts> => m.map((p) => (typeof p === 'string' ? p : { file: p.file, ui: p.ui }));
     const use = async (code: string): Promise<void> => {
       dispose?.();
       history.replaceState(null, '', code === 'ko' ? '/opencad-skp/' : `/opencad-skp/${code}/`);
       dispose = await installLocalization(document.body);
-      parts[code] = new Map(errs.map((e) => [e, errorParts(e)]));
+      parts[code] = new Map(errs.map((e) => [e, snap(errorParts(e))]));
       shown[code] = new Map(errs.map((e) => [e, mixText(errorParts(e))]));
     };
     const show = (e: unknown, code: string): string => shown[code]!.get(e)!;
@@ -360,6 +361,49 @@ describe('파일 글을 앱 글과 섞기(filetext·mixText)', () => {
     expect(app).not.toMatch(/errorText\(/);
     expect(app.match(/this\.showNotice\('error', [^\n]*errorParts\((e|error)\)\)/g)?.length).toBe(6);
     expect(app).toMatch(/h\('div', \{ class: 'notice-text', 'data-i18n-skip': '' \}/);
+  });
+
+  it('62차: 한국어 화면에서 띄운 오류 알림을 연 채 언어를 바꾸면 새 언어로 다시 고른다(사전 글은 옮기고, 사전에 없는 글은 조각마다 옮기지 않고 원문)', async () => {
+    const HANGUL = /[가-힣]/;
+    const go = async (code: string): Promise<void> => {
+      dispose?.();
+      history.replaceState(null, '', code === 'ko' ? '/opencad-skp/' : `/opencad-skp/${code}/`);
+      dispose = await installLocalization(document.body);
+    };
+    const dict = new Error('ZIP64 꾸러미는 아직 읽지 못합니다');
+    const partial = [new Error('알 수 없는 오류 · 면'), new Error('SketchUp 파일을 읽지 못했습니다: 사전에 없는 까닭')];
+    const fetchFail = new TypeError('Failed to fetch');
+    const errs = [dict, ...partial, fetchFail];
+    const plain = errs.map((e) => e.message);
+    await go('ko');
+    // 알림을 띄울 때(한국어 화면) 만든 글 — 알림 띠는 이 섞은 글을 들고 있다가 언어를 바꾸면 다시 그린다(app.ts noticeText)
+    const opened = errs.map((e) => errorParts(e));
+    expect(opened.map((m) => mixText(m))).toEqual(plain);
+    let mixedBefore = 0;
+    for (const code of ['en', 'de', 'ja', 'zh-CN']) {
+      await go(code);
+      const now = opened.map((m) => mixText(m));
+      // 사전 글은 그 언어로(새로 만든 글과 같다), 브라우저 글은 그대로
+      expect(now[0], code).toBe(mixText(errorParts(dict)));
+      expect(now[0], code).not.toMatch(HANGUL);
+      expect(now[3], code).toBe('Failed to fetch');
+      partial.forEach((e, k) => {
+        // 60·61차(띄울 때 고른 앱 글 조각)는 번역기가 나눔 글 조각·틀 머리만 옮겨 한국어와 섞였다
+        const frozen = mixText([{ file: e.message, ui: true }]);
+        if (frozen !== e.message && HANGUL.test(frozen)) mixedBefore++;
+        expect(now[k + 1], `${code}: ${e.message}`).toBe(e.message);
+      });
+    }
+    expect(mixedBefore).toBe(partial.length * 4);
+    // 한국어로 되돌리면 다시 원문
+    await go('ko');
+    expect(opened.map((m) => mixText(m))).toEqual(plain);
+    // 화면 마디도 그릴 때의 언어로(원문은 translate="no" 묶음)
+    await go('en');
+    const nodes = mixNodes(opened[1]!);
+    expect(nodes.length).toBe(1);
+    expect((nodes[0] as HTMLElement).getAttribute('translate')).toBe('no');
+    expect((nodes[0] as HTMLElement).textContent).toBe(partial[0]!.message);
   });
 
   it('59차 해석기 글 열쇠(사전에 없던 까닭 글 4·조사가 붙은 이름을 틀이 잡던 경고 문장 19)는 네 언어에 있고, 사전 파일에 겹친 열쇠가 없고, 더해도 화면 번역층이 옮기는 다른 글은 바뀌지 않는다', () => {

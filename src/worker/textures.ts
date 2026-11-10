@@ -161,6 +161,17 @@ export function markDeferredRecolor(scene: Scene3d): Set<string> {
   return out;
 }
 
+/**
+ * 62차: 첫 그림 뒤로 미뤄도 되는지 — 화면이 놓기 조각(미룬 무늬를 손질해 줄 app/release.ts)을 받았다고 알렸으면(ready) 참.
+ * 아직이면 한 번 쉬어(해석이 쉬지 않고 이어 돌면 그동안 온 알림이 줄에 남는다) 다시 본다. 그래도 아니면(받기 실패·아직 받는 중) 거짓 — 예전처럼 워커가 손질한다
+ * (61차는 그 조각을 받지 못하면 미룬 무늬가 평균색으로 남았다)
+ */
+export async function deferAllowed(ready: () => boolean): Promise<boolean> {
+  if (ready()) return true;
+  await new Promise((r) => setTimeout(r, 0));
+  return ready();
+}
+
 /** RGBA 화소에 투명 화소(알파 < ALPHA_CUT)가 있는지 */
 export function usesAlpha(data: ArrayLike<number>): boolean {
   for (let i = 3; i < data.length; i += 4) if (data[i]! < ALPHA_CUT) return true;

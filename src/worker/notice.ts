@@ -6,9 +6,23 @@
  * 53차: 파일 이름과 경고 끝의 꾸러미 항목 이름은 파일 글 자리로 둔다(filetext.ts — 사전 틀이 맞지 않아 글을 조각내 옮겨도 이름은 그대로).
  */
 import type { Scene3d } from 'opencad-viewer3d/types';
+import { releaseName, unsupportedVersion } from '../app/edition';
 import { fileText, mix } from '../app/filetext';
 import type { EmptyNotice, ParseNotice } from '../app/protocol';
 import { warningParts } from '../app/warntext';
+
+/**
+ * 아직 읽지 못하는 아주 옛 판(SketchUp 3보다 옛 판 — app/edition.ts unsupportedVersion)이면 그 알림, 아니면 null.
+ * 62차: 61차까지 화면(app.ts openBlob)이 만들던 글을 위 알림들처럼 워커로 옮겨 첫 화면 JS에서 뺐다(글은 같다)
+ */
+export function unsupportedNotice(scene: Scene3d, name: string): ParseNotice | null {
+  const old = unsupportedVersion(scene);
+  if (old === null) return null;
+  return {
+    title: [`아직 읽지 못하는 판입니다: ${releaseName(old)} (${old})`],
+    text: mix`"${fileText(name)}" 파일은 SketchUp 3보다 옛 형식으로 저장되어 있습니다. 이 뷰어는 SketchUp 3~8·2013~2026 파일을 읽습니다. SketchUp 3 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.`,
+  };
+}
 
 /** 고쳐 읽은 파일의 경고 머리(src/mfcmodel.ts finishPass가 적는 글 — 시험이 실제로 고쳐 읽은 장면으로 본다) */
 export const MENDED_HEAD = '글로 한 번 저장되며 깨진 파일을 고쳐 읽었습니다';
