@@ -364,9 +364,11 @@ describe('language URLs and UI presentation', () => {
     const kp = new KeyPick(viewer as unknown as Viewer3d, document.getElementById('view')!, () => null);
     root.addEventListener('languagechange', () => kp.relocalize());
     kp.set(true);
+    // 코어 0.53.0부터 messages는 틀 객체 또는 글 함수 — 앱은 틀 객체를 준다
+    const msgs = (o: KeyboardSnapOptions): Partial<Record<string, string>> => o.messages as Partial<Record<string, string>>;
     const first = given.at(-1) as KeyboardSnapOptions;
-    expect(first.messages?.start).toBe('Virtual cursor on. {0}. {1}');
-    expect(first.messages?.['pick.line']).toBe('Edge');
+    expect(msgs(first).start).toBe('Virtual cursor on. {0}. {1}');
+    expect(msgs(first)['pick.line']).toBe('Edge');
     // 알림 칸 글은 앱이 이미 옮긴 글 — 번역층이 파일 글("모서리 · Layer0"처럼 사전 낱말과 같은 이름)을 바꾸지 않는다
     first.announce!({ reason: 'move', mode: 'pick', x: 0, y: 0, snap: null, index: 0, count: 0, pick: null, text: '모서리 · Layer0' });
     await new Promise(resolve=>setTimeout(resolve,0));
@@ -376,7 +378,7 @@ describe('language URLs and UI presentation', () => {
     expect(plain.textContent).toBe('Edge · Layer0');
     (document.querySelector('.language-list [data-language="ja"]') as HTMLButtonElement).click();
     for (let i=0;i<4;i++) await new Promise(resolve=>setTimeout(resolve,0));
-    expect((given.at(-1) as KeyboardSnapOptions).messages?.start).toBe(translate('가상 커서를 켰습니다. {0}. {1}','ja'));
+    expect(msgs(given.at(-1) as KeyboardSnapOptions).start).toBe(translate('가상 커서를 켰습니다. {0}. {1}','ja'));
     expect(kp.text).toBe('모서리 · Layer0');
     kp.set(false);
     expect(given.at(-1)).toBe(false);
