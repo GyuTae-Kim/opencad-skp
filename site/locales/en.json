@@ -1153,6 +1153,5 @@
   "깨진 치수를 건너뛰었습니다": "Skipped a broken dimension",
   "깨진 보조선을 건너뛰었습니다": "Skipped a broken auxiliary line",
   "깨진 보조점을 건너뛰었습니다": "Skipped a broken auxiliary point",
-  "깨진 단면을 건너뛰었습니다": "Skipped a broken section",
-  "모형 요소(01f6)를 찾지 못했습니다": "Model elements (01f6) were not found"
+  "깨진 단면을 건너뛰었습니다": "Skipped a broken section"
 }

@@ -6,6 +6,8 @@
  * 사전 열쇠·번역 글과 같은 이름, 나눔 글을 품은 이름, HTML 같은 이름을 가진 합성 모형을 패널(태그·구성·선택·정보 탭, 속성 사전, 아래 띠)로
  * 그리고 영어·독일어·일본어·중국어와 다시 한국어로 바꾸며, 이름이었던 글 마디·속성이 다른 글로 바뀐 일이 없는지와 앱 글은 옮겨지는지 본다.
  */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { skpToScene } from '../../src/index';
 import { createDoc, selectionParts, selectionText, type Selection, type SkpDoc } from '../../src/app/doc';
@@ -301,7 +303,7 @@ describe('파일 글을 앱 글과 섞기(filetext·mixText)', () => {
     expect(mixText(warningParts(w))).not.toMatch(HANGUL);
   });
 
-  it('59차 해석기 글 열쇠(사전에 없던 까닭 글 4·조사가 붙은 이름을 틀이 잡던 경고 문장 20)는 네 언어에 있고, 더해도 화면 번역층이 옮기는 다른 글은 바뀌지 않는다', () => {
+  it('59차 해석기 글 열쇠(사전에 없던 까닭 글 4·조사가 붙은 이름을 틀이 잡던 경고 문장 19)는 네 언어에 있고, 사전 파일에 겹친 열쇠가 없고, 더해도 화면 번역층이 옮기는 다른 글은 바뀌지 않는다', () => {
     const lists = ['요소 묶음', '정점 목록', '모서리 목록', '면 목록', '인스턴스 목록', '문자 목록', '치수 목록', '보조선 목록', '보조점 목록', '단면 목록'];
     const items = ['정점을', '모서리를', '면을', '인스턴스를', '문자를', '치수를', '보조선을', '보조점을', '단면을'];
     const added = [
@@ -311,10 +313,14 @@ describe('파일 글을 앱 글과 섞기(filetext·mixText)', () => {
       'ZIP 중앙 목록이 주어진 바이트 밖에 있습니다',
       ...lists.map((l) => `${l}이 깨져 뒷부분을 읽지 못했습니다`),
       ...items.map((i) => `깨진 ${i} 건너뛰었습니다`),
-      '모형 요소(01f6)를 찾지 못했습니다',
     ];
-    expect(added.length).toBe(24);
+    expect(added.length).toBe(23);
     const CODES = ['en', 'de', 'ja', 'zh-CN'];
+    // 사전 파일의 열쇠 줄 수 = 읽은 열쇠 수(같은 열쇠를 두 번 적으면 뒤의 것이 앞 번역을 몰래 덮는다)
+    for (const code of CODES) {
+      const raw = readFileSync(resolve(__dirname, `../../site/locales/${code}.json`), 'utf8');
+      expect(raw.split('\n').filter((l) => /^\s*"/.test(l)).length, code).toBe(Object.keys(JSON.parse(raw)).length);
+    }
     for (const code of CODES)
       for (const k of added) {
         expect(catalogs[code]![k], `${code}: ${k}`).toBeTruthy();
