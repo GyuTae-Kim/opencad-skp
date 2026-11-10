@@ -119,7 +119,7 @@ import {
 } from './layout';
 import { Panel, type PanelHost } from './panel';
 import { RecentStore, canKeepRecent, nameOfRecentId, recentTimeText, type RecentEntry } from './recent';
-import { errorText, sceneHasGeometry } from './protocol';
+import { sceneHasGeometry } from './protocol';
 import { deviceHints, textureLimitsFor, type TextureLimits } from './texlimits';
 import { THEME_CHOICES, applyThemeChoice, readStoredTheme, resolveTheme, storeTheme, systemPrefersDark, themeChoiceOf, type ThemeChoice, type ThemeName } from './theme';
 import { childrenOf, isAncestor, isSplit, nodeBox, nodePath, normalizeRanges, type PickMode } from './tree';
@@ -132,7 +132,7 @@ import type { Rgb, SkpEdgeColorMode, SkpShadowMeta, SkpStyleMeta } from '../meta
 import { WalkStick } from './joystick';
 import { Vcb, vcbStartKey, type VcbKind } from './vcb';
 import { FlashNote } from './flash';
-import { mixNodes, mixText, uiName, uiReady, uiText } from './i18n';
+import { errorParts, mixNodes, mixText, uiName, uiReady, uiText } from './i18n';
 import { fileText, mix, plainText, type Mixed } from './filetext';
 
 export const APP_TITLE = 'OpenCAD SketchUp 뷰어';
@@ -1074,7 +1074,7 @@ export class SkpViewerApp implements PanelHost {
     } catch (e) {
       if (seq === this.openSeq) {
         this.setBusy(null);
-        this.showNotice('error', mix`"${fileText(name)}" 파일을 받지 못했습니다`, errorText(e));
+        this.showNotice('error', mix`"${fileText(name)}" 파일을 받지 못했습니다`, errorParts(e));
         attempt.error('fetch_error');
       }
       return;
@@ -1100,7 +1100,7 @@ export class SkpViewerApp implements PanelHost {
     } catch (e) {
       if (seq === this.openSeq) {
         this.setBusy(null);
-        this.showNotice('error', '예제를 만들지 못했습니다', errorText(e));
+        this.showNotice('error', '예제를 만들지 못했습니다', errorParts(e));
         attempt.error('read_error');
       }
       return;
@@ -1189,7 +1189,7 @@ export class SkpViewerApp implements PanelHost {
       return true;
     } catch (e) {
       if (seq !== this.openSeq) return false;
-      this.showNotice('error', mix`"${fileText(name)}" 파일을 열지 못했습니다`, errorText(e));
+      this.showNotice('error', mix`"${fileText(name)}" 파일을 열지 못했습니다`, errorParts(e));
       attempt.error('parse_error');
       return false;
     } finally {
@@ -1397,7 +1397,7 @@ export class SkpViewerApp implements PanelHost {
       );
       return true;
     } catch (e) {
-      this.showNotice('error', '3D 보기를 열 수 없습니다', isChunkLoadError(e) ? chunkFailText('viewer', navigator.onLine !== false) : errorText(e));
+      this.showNotice('error', '3D 보기를 열 수 없습니다', isChunkLoadError(e) ? chunkFailText('viewer', navigator.onLine !== false) : errorParts(e));
       return false;
     }
   }
@@ -2835,7 +2835,7 @@ export class SkpViewerApp implements PanelHost {
   /** 처음 켤 때 받던 측정 도구 조각이 왔다(또는 받지 못했다): 그때까지 바란 도구를 켜고, 받지 못했으면 바랐을 때만 알린다 */
   private measureArrived(want: MeasureMode | null, error: unknown): void {
     if (error) {
-      if (want) this.showNotice('error', '측정 도구를 열 수 없습니다', isChunkLoadError(error) ? chunkFailText('measure', navigator.onLine !== false) : errorText(error));
+      if (want) this.showNotice('error', '측정 도구를 열 수 없습니다', isChunkLoadError(error) ? chunkFailText('measure', navigator.onLine !== false) : errorParts(error));
     } else if (want && this.measureTool && this.doc) {
       this.setMeasureMode(want);
       return;
@@ -3055,7 +3055,7 @@ export class SkpViewerApp implements PanelHost {
       x.open();
     } else if (!this.exportLoading && this.stageEl) {
       // 처음: 그림 저장 조각을 받아 창을 만든다(오프라인 앱은 서비스 워커가 미리 담아 둔다)
-      const notify = (e: unknown): void => this.showNotice('error', '그림을 저장하지 못했습니다', errorText(e));
+      const notify = (e: unknown): void => this.showNotice('error', '그림을 저장하지 못했습니다', errorParts(e));
       const stage = this.stageEl;
       this.exportLoading = true;
       void import('./exporter')
