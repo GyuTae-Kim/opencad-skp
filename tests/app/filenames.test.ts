@@ -15,7 +15,7 @@ import { fileText, fillSlots, isAppName, joinMixed, mix, nameText, plainText, sl
 import { warningParts } from '../../src/app/warntext';
 import { installLocalization, mixNodes, mixText, uiName } from '../../src/app/i18n';
 import { Panel, type PanelHost } from '../../src/app/panel';
-import { translate } from '../../site/i18n.mjs';
+import { catalogs, registerCatalog, sourceMessage, translate } from '../../site/i18n.mjs';
 import { dimPoint, edge, entities, face, f64, instance, materialXml, modelDat, sectionPlanes, skpFile, texts, tlv, utf8, val, vertex } from '../build';
 
 const XSS_IMG = '<img src=x onerror="window.__xss=1">';
@@ -218,9 +218,10 @@ describe('파일 글을 앱 글과 섞기(filetext·mixText)', () => {
       'SketchUp 파일을 읽지 못했습니다: ZIP 항목이 잘렸습니다: ',
       { file: `materials/${BAD}/a.png` },
     ]);
+    // 59차: 앞 글에 이어 붙은 해석기 까닭 글은 앱 글 조각(ui)으로 — 끝의 항목 이름에 한글이 없으면 까닭 글째(아래 59차 시험)
     expect(warningParts('model.dat를 끝까지 풀지 못해 앞부분만 읽었습니다(ZIP 항목이 잘렸습니다: model.dat)')).toEqual([
-      'model.dat를 끝까지 풀지 못해 앞부분만 읽었습니다(ZIP 항목이 잘렸습니다: ',
-      { file: 'model.dat' },
+      'model.dat를 끝까지 풀지 못해 앞부분만 읽었습니다(',
+      { file: 'ZIP 항목이 잘렸습니다: model.dat', ui: true },
       ')',
     ]);
     expect(warningParts('지원하지 않는 ZIP 압축 방식 9: styles/면.style')).toEqual(['지원하지 않는 ZIP 압축 방식 9: ', { file: 'styles/면.style' }]);
@@ -240,6 +241,112 @@ describe('파일 글을 앱 글과 섞기(filetext·mixText)', () => {
     history.replaceState(null, '', '/opencad-skp/de/');
     dispose = await installLocalization(document.body);
     expect(mixText(warningParts(w))).toBe(fillSlots(...slotText(warningParts(w), (s) => translate(s, 'de'))));
+  });
+
+  it('59차: 앞 글 틀의 {0}에 이어 붙은 해석기 까닭 글도 화면 언어로 옮긴다(앱 글 조각 — 까닭 글 안의 틀까지), 항목 이름은 그대로', async () => {
+    const HANGUL = /[가-힣]/;
+    const tr = (code: string) => (s: string, ui?: boolean): string => translate(s, code, ui);
+    const show = (w: string, code: string): string => fillSlots(...slotText(warningParts(w), tr(code)));
+    // 머리마다(끝·괄호 안) 해석기가 던지는 까닭 글(사전 틀 글 — 두 겹: "{0}({1}바이트 자리)" 안의 까닭, 항목 이름이 붙은 까닭)
+    const reasons = [
+      'ZIP 중앙 목록이 깨졌습니다',
+      'TLV 머리가 잘렸습니다(@120)',
+      '파일이 끝나기 전에 잘렸습니다(1,234바이트 자리)',
+      'DEFLATE: 알 수 없는 블록 종류 3',
+      'ZIP 항목이 잘렸습니다: model.dat',
+      '파일을 끝까지 읽지 못했습니다',
+      '형상 앞에서 읽기를 멈췄습니다: 파일이 끝나기 전에 잘렸습니다(88바이트 자리)',
+    ];
+    const heads: [string, string][] = [
+      ['SketchUp 파일을 읽지 못했습니다: ', ''],
+      ['SketchUp 꾸러미(ZIP)가 깨졌습니다: ', ''],
+      ['장면을 만들지 못했습니다: ', ''],
+      ['형상을 읽다 멈췄습니다 — 그 앞까지만 그립니다: ', ''],
+      ['형상 뒤의 장면·스타일을 읽지 못했습니다(형상은 다 읽었습니다): ', ''],
+      ['model.dat를 끝까지 풀지 못해 앞부분만 읽었습니다(', ')'],
+      ['장면 목록을 풀지 못했습니다(', ')'],
+    ];
+    let before = 0;
+    for (const [head, close] of heads)
+      for (const r of reasons) {
+        const w = `${head}${r}${close}`;
+        expect(warningParts(w), w).toEqual(close ? [head, { file: r, ui: true }, close] : [head, { file: r, ui: true }]);
+        for (const code of ['en', 'de', 'ja', 'zh-CN']) {
+          expect(show(w, code), `${code}: ${w}`).not.toMatch(HANGUL);
+          if (HANGUL.test(translate(w, code))) before++;
+        }
+      }
+    // 예전(경고 한 글을 통째로 옮김)은 까닭 글이 한국어로 남았다
+    expect(before).toBe(heads.length * reasons.length * 4);
+    expect(show('SketchUp 파일을 읽지 못했습니다: ZIP 항목이 잘렸습니다: model.dat', 'en')).toBe('Failed to read SketchUp file: ZIP entry was truncated: model.dat');
+    expect(show('형상을 읽다 멈췄습니다 — 그 앞까지만 그립니다: 파일이 끝나기 전에 잘렸습니다(1,234바이트 자리)', 'en')).toBe(
+      'Stopped while reading geometry — only what came before is drawn: The file was truncated before reaching its end. (at byte 1,234)',
+    );
+    // 까닭 끝의 항목 이름에 한글이 있으면 이름을 파일 글로(예전처럼 — 까닭 머리는 한국어로 남지만 이름 조각이 바뀌지 않는다)
+    const BAD = '무늬 · 면 · 이';
+    const named = `SketchUp 파일을 읽지 못했습니다: ZIP 항목이 잘렸습니다: materials/${BAD}/a.png`;
+    expect(warningParts(named)).toEqual(['SketchUp 파일을 읽지 못했습니다: ZIP 항목이 잘렸습니다: ', { file: `materials/${BAD}/a.png` }]);
+    for (const code of ['en', 'de', 'ja', 'zh-CN']) expect(show(named, code)).toContain(`materials/${BAD}/a.png`);
+    // 이름 칸의 앱 자리 글(ui — 52차)은 틀에 한글이 든 값이 없어 예전과 같게 옮긴다
+    for (const code of ['en', 'de', 'ja', 'zh-CN'])
+      for (const n of ['기본 재질', '모형에 바로 놓인 형상', '(이름 없음)', '(이름 없는 폴더)', '재질 12']) {
+        expect(isAppName(n)).toBe(true);
+        expect(translate(n, code, true), `${code}: ${n}`).toBe(translate(n, code));
+      }
+    // 화면 번역층 길(i18n.ts mixText)도 같은 글
+    history.replaceState(null, '', '/opencad-skp/ja/');
+    dispose = await installLocalization(document.body);
+    const w = 'model.dat를 끝까지 풀지 못해 앞부분만 읽었습니다(DEFLATE: 알 수 없는 블록 종류 3)';
+    expect(mixText(warningParts(w))).toBe(show(w, 'ja'));
+    expect(mixText(warningParts(w))).not.toMatch(HANGUL);
+  });
+
+  it('59차 해석기 글 열쇠(사전에 없던 까닭 글 4·조사가 붙은 이름을 틀이 잡던 경고 문장 20)는 네 언어에 있고, 더해도 화면 번역층이 옮기는 다른 글은 바뀌지 않는다', () => {
+    const lists = ['요소 묶음', '정점 목록', '모서리 목록', '면 목록', '인스턴스 목록', '문자 목록', '치수 목록', '보조선 목록', '보조점 목록', '단면 목록'];
+    const items = ['정점을', '모서리를', '면을', '인스턴스를', '문자를', '치수를', '보조선을', '보조점을', '단면을'];
+    const added = [
+      '파일을 끝까지 읽지 못했습니다',
+      '모서리 번호가 표 밖입니다',
+      '표를 비운 정의를 다시 삼각화하려 했습니다',
+      'ZIP 중앙 목록이 주어진 바이트 밖에 있습니다',
+      ...lists.map((l) => `${l}이 깨져 뒷부분을 읽지 못했습니다`),
+      ...items.map((i) => `깨진 ${i} 건너뛰었습니다`),
+      '모형 요소(01f6)를 찾지 못했습니다',
+    ];
+    expect(added.length).toBe(24);
+    const CODES = ['en', 'de', 'ja', 'zh-CN'];
+    for (const code of CODES)
+      for (const k of added) {
+        expect(catalogs[code]![k], `${code}: ${k}`).toBeTruthy();
+        expect(translate(k, code), `${code}: ${k}`).not.toMatch(/[가-힣]/);
+      }
+    const samples = ['A', '3', '벽', '그룹 1', 'Wood · Layer0', '면을', '요소 묶음이'];
+    const keys = Object.keys(catalogs.en!).filter((k) => !added.includes(k));
+    const corpus = new Set<string>(['깨진 무늬 투영을 건너뛰었습니다(기본 투영으로 칠합니다)', '장면 목록이 깨져 뒷부분을 읽지 못했습니다', '곡선 목록이 깨져 뒷부분을 읽지 못했습니다', '면 · 넓이 12.5 m²']);
+    for (const k of keys) {
+      corpus.add(k);
+      if (/\{\d+\}/.test(k)) for (const s of samples) corpus.add(k.replace(/\{\d+\}/g, s));
+    }
+    // 틀을 채운 글이 새 열쇠 글 그대로면(예: "깨진 {0} 건너뛰었습니다" + "면을") 그것은 바뀌어야 하는 글이다
+    for (const k of added) corpus.delete(k);
+    const full = Object.fromEntries(CODES.map((c) => [c, { ...catalogs[c] }]));
+    const run = (): Map<string, string> => {
+      const out = new Map<string, string>();
+      for (const c of CODES) {
+        for (const t of corpus) out.set(`${c}\t${t}`, translate(t, c));
+        for (const k of keys) out.set(`src\t${c}\t${k}`, sourceMessage(full[c]![k]!));
+      }
+      return out;
+    };
+    const after = run();
+    try {
+      for (const c of CODES) registerCatalog(c, Object.fromEntries(Object.entries(full[c]!).filter(([k]) => !added.includes(k))));
+      const before = run();
+      expect(before.size).toBe(after.size);
+      expect([...before].filter(([k, v]) => after.get(k) !== v)).toEqual([]);
+    } finally {
+      for (const c of CODES) registerCatalog(c, full[c]!);
+    }
   });
 
   it('번역층: data-i18n-keep 속성과 translate="no" 이름은 두고, 다른 언어 사전의 번역 글과 같은 이름도 되찾아 바꾸지 않는다', async () => {

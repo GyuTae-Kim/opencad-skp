@@ -26,10 +26,11 @@ export const uiReady = (): Promise<void> => installed.catch(() => undefined);
 /**
  * 파일 글이 섞인 글(filetext.ts)을 지금 언어로(52차): 파일 글 자리를 번역기가 보지 않는 사용 영역 글자(U+E000~)로 바꿔 옮긴 뒤 되돌린다
  * (사전 틀의 {0}이 그 글자를 그대로 잡고, 나눔 글로 조각낼 때도 한글이 없는 조각이라 그대로 둔다).
- * 옮긴 글을 넣은 속성은 data-i18n-keep에, 마디를 담은 요소는 data-i18n-skip으로 번역층에서 빼고, 언어를 바꾸면 다시 그린다(app.ts)
+ * 옮긴 글을 넣은 속성은 data-i18n-keep에, 마디를 담은 요소는 data-i18n-skip으로 번역층에서 빼고, 언어를 바꾸면 다시 그린다(app.ts).
+ * 앱 글 조각(ui — 59차 해석기 까닭 글)은 틀의 {0}에 든 글도 앱 글로 옮긴다(번역기 uiParameters)
  */
 function mixed(parts: Mixed): [string, string[]] {
-  return slotText(parts, text => translate(text, active));
+  return slotText(parts, (text, ui) => translate(text, active, ui));
 }
 export function mixText(parts: Mixed): string {
   const [text, files] = mixed(parts);
