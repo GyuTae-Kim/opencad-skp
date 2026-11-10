@@ -16,7 +16,7 @@
 import { TEXTURE_LIMIT } from 'opencad-viewer3d/texture';
 import { skpFileToScene, STREAM_MIN_BYTES, type SkpFileResult, type SkpImages } from '../index';
 import { collectTransfers, errorText, isBigScene, sceneHasGeometry, type ParseRequest, type ParseResponse, type ParseResult } from '../app/protocol';
-import { dropPbrMaps, PBR_MIN_TEXTURE_LIMIT, prepareSceneTextures } from './textures';
+import { dropPbrMaps, markDeferredRecolor, PBR_MIN_TEXTURE_LIMIT, prepareSceneTextures } from './textures';
 import { damageNotice, emptySceneNotice } from './notice';
 import { packBigScene } from './pack';
 import { filePrint } from './print';
@@ -73,7 +73,10 @@ async function open(req: ParseRequest): Promise<ParseResult> {
     const limit = req.textureLimit && req.textureLimit > 0 ? req.textureLimit : TEXTURE_LIMIT;
     // 휴대 기기·작은 메모리(무늬 한도가 작다)는 PBR 그림을 넣지 않는다(값만 준 거칠기·금속은 둔다)
     if (limit < PBR_MIN_TEXTURE_LIMIT) dropPbrMaps(scene);
-    const prep = await prepareSceneTextures(scene, limit, (d, n) => progress(0.96 + (0.02 * d) / Math.max(1, n), '무늬 그림 손질하는 중'));
+    // 61차: 큰 모형(화면이 놓아 올린다)은 알파를 잴 필요 없는 색 바꾸기를 첫 그림 뒤로 미룬다 — pending을 달고 바이트는 그대로 넘기면
+    // 화면이 쥐었다가 손질 워커(recolor.worker.ts)로 손질해 준다(app/release.ts ContextWatch.fill. 165 MB 표본에서 손질 57장 가운데 48장)
+    const skip = isBigScene({ scene }) ? markDeferredRecolor(scene) : undefined;
+    const prep = await prepareSceneTextures(scene, limit, (d, n) => progress(0.96 + (0.02 * d) / Math.max(1, n), '무늬 그림 손질하는 중'), skip?.size ? { skip } : {});
     // 색을 바꾼 무늬는 재질 목록 견본도 바꾼 색으로
     if (images && prep.swatches.size)
       images.materials = images.materials.map((m) => {

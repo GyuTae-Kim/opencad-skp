@@ -47,7 +47,8 @@ export interface SkpImages {
   warnings: string[];
   /**
    * 무늬 재질의 PBR 그림(material.xml <mat:pbrMR>에서 켠 법선·거칠기·금속 그림 — 55차). 2021+ 꾸러미에서 무늬(색 그림)가 있는 재질(56차부터 색 무늬 없이 그림 한 장 크기가 있는 재질도, 57차부터 그림이 하나뿐인 재질 폴더도)만, 다른 그림을 다 넣은 뒤
-   * 남은 한도 안에서. 그림 하나가 여러 쓰임이면 roles가 여럿. 없으면 칸이 없다(앱 워커는 화면에 넘기기 전에 이 칸을 뗀다 — 바이트는 장면 무늬가 든다)
+   * 남은 한도 안에서. 그림 하나가 여러 쓰임이면 roles가 여럿. 없으면 칸이 없다(앱 워커는 화면에 넘기기 전에 이 칸을 뗀다 — 바이트는 장면 무늬가 든다).
+   * skpFileToScene(앱 워커)은 61차부터 모형을 읽은 뒤 모형이 쓰는 재질(면 앞·뒤, 그룹·컴포넌트)의 PBR 그림만 꺼낸다(readSkpImages는 모두)
    */
   pbr?: (SkpImage & { folder: string; roles: SkpPbrRole[] })[];
   /** 한도로 넣지 못한 PBR 그림 수(경고 없이 — PBR 그림이 없으면 그 재질은 색 무늬만 그린다) */
@@ -172,25 +173,119 @@ export function readSkpImages(bytes: Uint8Array, opts: SkpImageOptions = {}): Sk
   return runZipReads(zipImageReads(dir, opts, out), bytes);
 }
 
+type ImageKind = 'model' | 'preview' | 'material' | 'component' | 'scene' | 'pbr';
+
+/** 꺼낼 그림 하나. rank: 같은 종류 안의 차례(작은 것이 먼저 — PBR 그림만 쓴다) */
+interface ImageWant {
+  item: ZipItem;
+  kind: ImageKind;
+  name: string;
+  folder?: string;
+  roles?: SkpPbrRole[];
+  rank?: number;
+}
+
+/** 그림 한도(선택의 기본값을 채운 것) */
+interface ImageLimits {
+  maxCount: number;
+  maxEach: number;
+  maxTotal: number;
+}
+
+/**
+ * 뒤로 미룬 PBR 그림 꺼내기(61차 — zipImageReads의 deferPbr가 받는다): PBR 그림 후보(넣을 차례 — 색 무늬 없는 재질의 그림이 먼저)와
+ * 그 앞 그림까지 넣은 수·바이트(같은 한도를 이어 건다). pbrImageReads로 이어 꺼낸다
+ */
+export interface SkpPbrReads {
+  readonly want: readonly ImageWant[];
+  readonly count: number;
+  readonly total: number;
+  readonly limits: ImageLimits;
+}
+
+/** 이 그림을 넣으면 한도를 넘는지(꾸러미 목록의 크기로 — 받은 바이트의 크기는 받은 뒤 다시 본다) */
+const overLimit = (w: ImageWant, count: number, total: number, l: ImageLimits): boolean =>
+  count >= l.maxCount || w.item.size > l.maxEach || w.item.compressedSize > l.maxEach || total + w.item.size > l.maxTotal || !!w.item.truncated;
+
+/** 미리 읽기 차례 어림(48차): 그림마다 목록의 크기만큼 받는다고 보고 readWants와 같은 한도를 건다 */
+function planWants(wants: readonly ImageWant[], count: number, total: number, model: boolean, l: ImageLimits): ZipItem[] {
+  const list: ZipItem[] = [];
+  let n = count;
+  let sum = total;
+  for (const w of wants) {
+    if ((w.kind === 'preview' && model) || overLimit(w, n, sum, l)) continue;
+    list.push(w.item);
+    n++;
+    sum += w.item.size;
+    if (w.kind === 'model' || w.kind === 'preview') model = true;
+  }
+  return list;
+}
+
+/** 그림을 차례대로 꺼내 out에 넣는다(한도·꼴 거르기). count·total은 앞서 넣은 그림 수·바이트, 넣은 뒤의 값을 돌려준다 */
+function* readWants(
+  wants: readonly ImageWant[],
+  count: number,
+  total: number,
+  l: ImageLimits,
+  out: SkpImages,
+): Generator<ZipItem, { count: number; total: number }, Uint8Array> {
+  for (const w of wants) {
+    if (w.kind === 'preview' && out.model) continue;
+    // PBR 그림은 건너뛰어도 경고·건너뜀 수에 넣지 않는다(예전 그림·경고가 그대로 — 따로 센다)
+    const miss = (): void => {
+      if (w.kind === 'pbr') out.pbrSkipped = (out.pbrSkipped ?? 0) + 1;
+      else out.skipped++;
+    };
+    if (overLimit(w, count, total, l)) {
+      miss();
+      continue;
+    }
+    let data: Uint8Array;
+    try {
+      data = yield w.item;
+    } catch {
+      miss();
+      continue;
+    }
+    const mime = imageMime(data);
+    if (!mime || data.length > l.maxEach) {
+      miss();
+      continue;
+    }
+    count++;
+    total += data.length;
+    const img: SkpImage = { path: w.item.name, name: w.name, mime, bytes: data };
+    if (w.kind === 'model' || w.kind === 'preview') out.model = img;
+    else if (w.kind === 'pbr') (out.pbr ??= []).push({ ...img, folder: w.folder!, roles: w.roles! });
+    else if (w.kind === 'material') out.materials.push({ ...img, folder: w.folder! });
+    else if (w.kind === 'component') out.components.push(img);
+    else out.scenes.push(img);
+  }
+  return { count, total };
+}
+
 /**
  * 2021+ 꾸러미 목록에서 그림을 꺼낸다(readSkpImages의 꾸러미 쪽). 항목 내용은 내어(yield) 받는다 — 파일 전체 바이트로도(runZipReads),
  * 필요한 자리만 읽는 곳으로도(src/range.ts) 같은 차례·같은 결과로 돈다.
  * plan을 주면 곧 내어 받을 항목 차례를 미리 알린다(48차 — 자리만 읽는 곳이 읽기를 앞질러 보내 둔다). 알린 차례는 어림이라(그림을 받아 봐야 아는
- * 한도·꼴은 그림 머리의 크기로 어림한다) 실제로 내어 받는 차례와 다를 수 있고, 그래도 결과는 같다
+ * 한도·꼴은 그림 머리의 크기로 어림한다) 실제로 내어 받는 차례와 다를 수 있고, 그래도 결과는 같다.
+ * deferPbr를 주면(61차 — skpFileToScene) PBR 그림(맨 뒤 차례)은 꺼내지 않고 그 후보와 한도 상태를 넘긴다 — 모형을 읽은 뒤 쓰는 재질의 것만
+ * pbrImageReads로 꺼낸다. 다른 그림·경고는 같다(PBR 그림은 경고·건너뜀 수에 들지 않는다)
  */
 export function* zipImageReads(
   dir: readonly ZipItem[],
   opts: SkpImageOptions = {},
   out: SkpImages = { materials: [], components: [], scenes: [], skipped: 0, warnings: [] },
   plan?: (items: readonly ZipItem[]) => void,
+  deferPbr?: (later: SkpPbrReads) => void,
 ): ZipReads<SkpImages> {
-  const maxCount = opts.maxCount ?? MAX_IMAGE_COUNT;
-  const maxEach = opts.maxBytesEach ?? MAX_IMAGE_BYTES;
-  const maxTotal = opts.maxTotalBytes ?? MAX_IMAGE_TOTAL;
-
-  type Kind = 'model' | 'preview' | 'material' | 'component' | 'scene' | 'pbr';
-  /** rank: 같은 종류 안의 차례(작은 것이 먼저 — PBR 그림만 쓴다) */
-  const want: { item: ZipItem; kind: Kind; name: string; folder?: string; roles?: SkpPbrRole[]; rank?: number }[] = [];
+  const limits: ImageLimits = {
+    maxCount: opts.maxCount ?? MAX_IMAGE_COUNT,
+    maxEach: opts.maxBytesEach ?? MAX_IMAGE_BYTES,
+    maxTotal: opts.maxTotalBytes ?? MAX_IMAGE_TOTAL,
+  };
+  const want: ImageWant[] = [];
   /** 재질 폴더 → 그림 후보(꾸러미 차례)·material.xml */
   const folders = new Map<string, { images: ZipItem[]; xml?: ZipItem }>();
   for (const item of dir) {
@@ -262,57 +357,25 @@ export function* zipImageReads(
     }
   }
   // 한도 안에서 먼저 넣을 차례: 모형 → 장면 → 재질 → 컴포넌트 → PBR 그림(55차 — 예전 그림을 그대로 넣고 남은 한도만 쓴다)
-  const order: Record<Kind, number> = { model: 0, preview: 1, scene: 2, material: 3, component: 4, pbr: 5 };
+  const order: Record<ImageKind, number> = { model: 0, preview: 1, scene: 2, material: 3, component: 4, pbr: 5 };
   want.sort((a, b) => order[a.kind] - order[b.kind] || (a.rank ?? 0) - (b.rank ?? 0));
-  const over = (w: (typeof want)[number], count: number, total: number): boolean =>
-    count >= maxCount || w.item.size > maxEach || w.item.compressedSize > maxEach || total + w.item.size > maxTotal || !!w.item.truncated;
-  if (plan) {
-    // 아래 차례 어림: 그림마다 목록의 크기만큼 받는다고 보고 같은 한도를 건다
-    const list: ZipItem[] = [];
-    let model = !!out.model;
-    let sum = 0;
-    for (const w of want) {
-      if ((w.kind === 'preview' && model) || over(w, list.length, sum)) continue;
-      list.push(w.item);
-      sum += w.item.size;
-      if (w.kind === 'model' || w.kind === 'preview') model = true;
-    }
-    plan(list);
-  }
-  let count = 0;
-  let total = 0;
-  for (const w of want) {
-    if (w.kind === 'preview' && out.model) continue;
-    // PBR 그림은 건너뛰어도 경고·건너뜀 수에 넣지 않는다(예전 그림·경고가 그대로 — 따로 센다)
-    const miss = (): void => {
-      if (w.kind === 'pbr') out.pbrSkipped = (out.pbrSkipped ?? 0) + 1;
-      else out.skipped++;
-    };
-    if (over(w, count, total)) {
-      miss();
-      continue;
-    }
-    let data: Uint8Array;
-    try {
-      data = yield w.item;
-    } catch {
-      miss();
-      continue;
-    }
-    const mime = imageMime(data);
-    if (!mime || data.length > maxEach) {
-      miss();
-      continue;
-    }
-    count++;
-    total += data.length;
-    const img: SkpImage = { path: w.item.name, name: w.name, mime, bytes: data };
-    if (w.kind === 'model' || w.kind === 'preview') out.model = img;
-    else if (w.kind === 'pbr') (out.pbr ??= []).push({ ...img, folder: w.folder!, roles: w.roles! });
-    else if (w.kind === 'material') out.materials.push({ ...img, folder: w.folder! });
-    else if (w.kind === 'component') out.components.push(img);
-    else out.scenes.push(img);
-  }
+  // 61차: PBR 그림을 미루면 그 앞 그림만 꺼낸다(PBR 그림은 맨 뒤 차례라 앞 그림의 차례·한도는 같다)
+  const first = deferPbr ? want.filter((w) => w.kind !== 'pbr') : want;
+  if (plan) plan(planWants(first, 0, 0, !!out.model, limits));
+  const at = yield* readWants(first, 0, 0, limits, out);
+  if (deferPbr) deferPbr({ want: want.filter((w) => w.kind === 'pbr'), count: at.count, total: at.total, limits });
   if (out.skipped) out.warnings.push(`그림 ${out.skipped}개는 너무 크거나 많거나 모르는 꼴이라 건너뛰었습니다`);
+  return out;
+}
+
+/**
+ * 미룬 PBR 그림 꺼내기(61차 — zipImageReads의 deferPbr로 받은 later): keep이 참인 재질 폴더의 그림만, 미루지 않았을 때와 같은 차례로
+ * 앞 그림까지 넣은 수·바이트에서 같은 한도를 이어 건다. 고르지 않은 폴더의 그림은 읽지 않고 pbrSkipped에도 세지 않는다(한도는 꺼낸 그림만 쓴다).
+ * 그림은 out.pbr에 더한다
+ */
+export function* pbrImageReads(later: SkpPbrReads, keep: (folder: string) => boolean, out: SkpImages, plan?: (items: readonly ZipItem[]) => void): ZipReads<SkpImages> {
+  const wants = later.want.filter((w) => keep(w.folder!));
+  if (plan) plan(planWants(wants, later.count, later.total, true, later.limits));
+  yield* readWants(wants, later.count, later.total, later.limits, out);
   return out;
 }

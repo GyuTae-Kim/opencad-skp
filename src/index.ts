@@ -14,7 +14,7 @@
 import type { Scene3d, Texture3d } from 'opencad-viewer3d/types';
 import { imageInfo } from 'opencad-viewer3d/texture';
 import { readSkpHeader } from './header';
-import { readSkpImages, zipImageReads, type SkpImageOptions, type SkpImages } from './images';
+import { pbrImageReads, readSkpImages, zipImageReads, type SkpImageOptions, type SkpImages, type SkpPbrReads } from './images';
 import { parseMaterialXml, type SkpMaterialInfo, type SkpPbrRole } from './materials';
 import type { SkpMetaExtras } from './meta';
 import { MfcRefused, readMfcModel, rememberMfcImages, takeMfcResult } from './mfcmodel';
@@ -288,6 +288,8 @@ export interface SkpFileResult {
  * 파일(Blob·File 또는 SkpSource)을 앱 워커 차례로 해석한다: 그림을 꺼내고(readSkpImages) 그 무늬 그림으로 장면(skpToSceneAsync)을 만든다.
  * 2021+ 꾸러미는 파일 전체를 들지 않는다 — 머리·끝 레코드·중앙 목록과 필요한 항목만 읽고, 압축된 model.dat는 덩이씩 읽으며 푼다(src/range.ts).
  * 결과는 파일 전체 바이트로 readSkpImages → skpToSceneAsync(같은 선택, textures = 꺼낸 무늬 그림, releaseBytes)를 부른 것과 같다.
+ * 다만 2021+ 꾸러미의 PBR 그림(images.pbr)은 61차부터 모형을 읽은 뒤 모형이 쓰는 재질(usedMaterialFolders)의 것만 꺼낸다(장면은 같다 —
+ * 쓰지 않는 재질의 그림은 원래 장면에 들지 않았다. 한도는 꺼낸 그림만 쓴다).
  * 2020 이하(꾸러미 없는 객체 직렬화 — 모형을 읽으며 그림 자리를 찾는다), 끝 목록이 없거나 깨진 꾸러미(앞에서부터 항목을 찾는다),
  * SketchUp 파일이 아닌 것은 파일 전체를 읽어 그 길로 간다
  */
@@ -336,12 +338,14 @@ export async function skpFileToScene(file: Blob | SkpSource, opts: SkpFileOption
   const read = (item: ZipItem): Promise<Uint8Array> => items.content(item);
   // 48차: 그림·재질 항목(큰 모형은 수백 개)을 하나씩 기다리지 않게 곧 읽을 차례를 알려 읽기를 겹친다(SourceItems.plan — 읽는 자리·값은 같다)
   const plan = (list: readonly ZipItem[]): void => items.plan(list);
+  // 61차: PBR 그림은 모형을 읽은 뒤 쓰는 재질의 것만 꺼낸다(아래) — 여기서는 그 후보와 한도 상태만 받는다
+  const later: { pbr?: SkpPbrReads } = {};
   try {
-    images = await runZipReadsAsync(zipImageReads(dir, imageOpts, undefined, plan), read);
+    images = await runZipReadsAsync(zipImageReads(dir, imageOpts, undefined, plan, (p) => (later.pbr = p)), read);
   } catch (e) {
     imageError = errText(e);
   }
-  const o: SkpAsyncOptions = { ...sceneOpts, textures: images?.materials, pbrTextures: images?.pbr };
+  const o: SkpAsyncOptions = { ...sceneOpts, textures: images?.materials };
   const st = startScene(head, o);
   if (!('header' in st)) return out(st, images, imageError);
   st.progress(0.05, '꾸러미(ZIP) 목록 읽는 중');
@@ -354,7 +358,54 @@ export async function skpFileToScene(file: Blob | SkpSource, opts: SkpFileOption
     done: () => undefined,
   };
   const got = 'modelItem' in pkg ? await streamPackageModel(model, pkg, st, o) : pkg;
+  // 61차: 모형이 쓰는 재질(면 앞·뒤, 그룹·컴포넌트)의 PBR 그림만 꺼낸다 — 쓰지 않는 재질의 그림을 해석하는 동안 들지 않게(55~60차는 모두 꺼냈다).
+  // 장면은 원래 그물이 쓰는 그림만 넣으므로 같다. 한도는 꺼낸 그림만 쓴다(쓰지 않는 재질의 그림이 한도를 먹지 않는다)
+  if (images && later.pbr?.want.length && 'model' in got) {
+    const used = usedMaterialFolders(got.model);
+    try {
+      await runZipReadsAsync(pbrImageReads(later.pbr, (f) => used.has(f), images, plan), read);
+    } catch {
+      // PBR 그림은 없어도 된다(그 재질은 색 무늬·값만 — 항목 읽기 실패는 그림마다 pbrSkipped로 세므로 여기 오지 않는다)
+      delete images.pbr;
+    }
+    items.plan([]);
+    if (images.pbr) o.pbrTextures = images.pbr;
+  }
   return out(sceneFrom(got, st, o), images, imageError);
+}
+
+/**
+ * 모형이 쓰는 재질 폴더(61차 — skpFileToScene이 이 재질의 PBR 그림만 꺼낸다): 뿌리와 거기서 인스턴스로 닿는 정의(숨긴 인스턴스도)의 면 앞·뒤 재질과
+ * 그룹·컴포넌트 재질(재질 없는 면이 물려받는다). 장면은 뿌리에서 인스턴스를 따라 펼치므로 장면 그물의 재질은 모두 이 안에 든다
+ * (넉넉하게 — 장면은 이 가운데 그물이 실제로 쓰는 그림만 넣는다). 배치하지 않은 정의(모형 안 컴포넌트 목록에만 있는 것)의 재질은 들지 않는다
+ */
+export function usedMaterialFolders(model: SkpModel): Set<string> {
+  const ids = new Set<number>();
+  const seen = new Set<number>();
+  const stack: SkpModel['root'][] = [model.root];
+  while (stack.length) {
+    const e = stack.pop()!;
+    const F = e.faces;
+    for (let i = 0; i < F.length; i++) {
+      const fr = F.front[i]!;
+      const bk = F.back[i]!;
+      if (fr === fr) ids.add(fr);
+      if (bk === bk) ids.add(bk);
+    }
+    for (const inst of e.instances) {
+      if (inst.material !== undefined) ids.add(inst.material);
+      if (seen.has(inst.definition)) continue;
+      seen.add(inst.definition);
+      const d = model.definitions.get(inst.definition);
+      if (d) stack.push(d.entities);
+    }
+  }
+  const folders = new Set<string>();
+  for (const id of ids) {
+    const f = model.materials.get(id);
+    if (f !== undefined) folders.add(f);
+  }
+  return folders;
 }
 
 /** 중간 모형 → 장면(두 판의 해석기가 같은 중간 모형을 내서 여기는 하나다) */
