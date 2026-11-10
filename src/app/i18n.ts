@@ -54,11 +54,12 @@ export const uiName = (name: string): string => isAppName(name) ? uiText(name) :
  * 실행 중 오류(브라우저·워커·코어가 던진 것 — protocol.ts errorText) → 알림 글(60차): 사전 글이면(지금 언어로 다 옮겨진다 — 사전 열쇠, 틀 자리에 든 까닭 글까지 사전 글)
  * 앱 글 조각(ui — 틀 자리 글도 옮긴다, 59차 해석기 까닭 글과 같은 길)으로 두어 화면 언어를 따르고, 옮긴 글에 한글이 남으면(사전에 없는 한국어 글을 번역기가
  * 나눔 글 조각·틀 머리만 옮긴다) 파일 글로 두어 원문 그대로 보인다. 옮겨지지 않는 글(브라우저의 영어 글·한국어 화면)은 앱 글 조각 — 번역기도 그대로 둔다.
- * 고르는 때는 알림을 띄울 때의 화면 언어다(한국어 화면에서 띄운 알림은 앱 글 조각 — 띄운 채 언어를 바꾸면 그 언어로 옮긴다)
+ * 62차: 고르는 때는 그 글을 그릴 때의 화면 언어다(ui를 읽을 때마다 고른다 — 알림을 띄운 채 언어를 바꾸면 알림 띠가 다시 그리며 새 언어로 고른다).
+ * 60·61차는 띄울 때 골라, 한국어 화면에서 띄운 알림(앱 글 조각)을 연 채 언어를 바꾸면 사전에 없는 글이 조각마다 옮겨졌다. 번역 함수(slotText·mixNodes)는 그대로다
  */
 export function errorParts(e: unknown): Mixed {
-  const t = errorText(e), s = activeText(t, true);
-  return [{ file: t, ui: s === t || !/[가-힣]/.test(s) }];
+  const t = errorText(e);
+  return [{ file: t, get ui() { const s = activeText(t, true); return s === t || !/[가-힣]/.test(s); } }];
 }
 
 /**
