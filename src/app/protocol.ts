@@ -27,6 +27,14 @@ export interface ParseRequest {
 }
 
 /**
+ * 62차: 화면이 놓기 조각(release.ts)을 받았다는 알림(파일을 열 때 그 조각을 받으면 그 열기의 워커에 보낸다 — client.ts open의 defer).
+ * 해석 워커는 이 알림을 받은 뒤에만 큰 모형의 색 바꾸기를 첫 그림 뒤로 미룬다(미룬 무늬는 그 조각이 손질해 준다). 받지 못했으면 예전처럼 워커가 손질한다
+ */
+export interface DeferNotice {
+  type: 'defer';
+}
+
+/**
  * 쥐어 둔 무늬 하나(29차): 큰 모형을 놓아 올릴 때 쥔 원래 그림 파일 바이트(Blob — 그림 꼴은 type)와 그 무늬의 손질 정보(meta.textures — 색 바꾸기·알파).
  * 문맥을 되찾으면 색 바꾼 무늬는 처음 열 때와 같은 손질(worker/textures.ts)로 다시 그림을 만들고, raw(41차 — 코어가 푸는 무늬·워커가 알파만 잰 무늬)는
  * 바이트를 그대로 코어에 다시 준다
@@ -40,8 +48,8 @@ export interface HeldTexture {
 
 /**
  * 61차: 해석 워커가 첫 그림 뒤로 미룬 색 바꾸기 무늬(큰 모형 — worker/textures.ts markDeferredRecolor). pending을 달고 그림 바이트는 data 대신
- * deferredData에 둔다 — 화면이 놓기 조각(release.ts prepareRelease)에서 쥐고 손질 워커로 손질해 준다. 그 조각을 받지 못하면 코어는 그 무늬를
- * 기다린 채 그물 색(평균색)으로 그린다(원래 색 그림을 그리지 않는다)
+ * deferredData에 둔다 — 화면이 놓기 조각(release.ts prepareRelease)에서 쥐고 손질 워커로 손질해 준다. 62차: 워커는 화면이 그 조각을 받았다고
+ * 알린 뒤에만 미룬다(DeferNotice — 61차는 받지 못하면 코어가 그 무늬를 기다린 채 그물 색(평균색)으로 남겼다)
  */
 export interface DeferredTexture extends Texture3d {
   deferredData?: Uint8Array;
@@ -101,6 +109,8 @@ export interface ParseResult {
   notice?: ParseNotice;
   /** 그릴 것이 없는 장면이면 그 알림(53차 — worker/notice.ts emptySceneNotice, 같은 까닭으로 워커가 만든다) */
   empty?: EmptyNotice;
+  /** 아직 읽지 못하는 옛 판이면 그 알림(62차 — worker/notice.ts unsupportedNotice, 같은 까닭으로 워커가 만든다. 화면은 장면을 보이지 않는다) */
+  unsupported?: ParseNotice;
   /** 앞부분만 넘긴 아주 긴 속성 글 값의 원래 글(47차 — worker/attrlong.ts, 펼칠 때 app/attrview.ts가 잘라 읽는다) */
   attrLong?: AttrLong;
 }

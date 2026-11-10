@@ -1,8 +1,10 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Scene3d } from 'opencad-viewer3d/types';
 import { plainText } from '../../src/app/filetext';
 import { collectTransfers, errorText, sceneHasGeometry } from '../../src/app/protocol';
-import { emptySceneNotice } from '../../src/worker/notice';
+import { emptySceneNotice, unsupportedNotice } from '../../src/worker/notice';
 import { skpToScene } from '../../src/index';
 import { entities, modelDat, skpFile } from '../build';
 
@@ -83,5 +85,26 @@ describe('빈 장면 알림', () => {
     // 경고 끝의 꾸러미 항목 이름도 파일 글 자리로
     const zip = scene({ warnings: ['SketchUp 파일을 읽지 못했습니다: ZIP 항목이 잘렸습니다: materials/면/a.png'], meta: { version: '21.0.339' } });
     expect(emptySceneNotice(zip, 'w.skp').text).toEqual(['SketchUp 파일을 읽지 못했습니다: ZIP 항목이 잘렸습니다: ', { file: 'materials/면/a.png' }]);
+  });
+});
+
+describe('옛 판 알림(62차 — 화면이 만들던 글을 해석 워커로)', () => {
+  it('SketchUp 3보다 옛 판이면 61차 화면 글과 같은 제목·글(파일 이름은 파일 글 자리), 읽는 판이면 null', () => {
+    const TEXT = '" 파일은 SketchUp 3보다 옛 형식으로 저장되어 있습니다. 이 뷰어는 SketchUp 3~8·2013~2026 파일을 읽습니다. SketchUp 3 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.';
+    expect(unsupportedNotice(scene({ meta: { version: '2.0.1', container: 'mfc', unsupported: true } }), 'old.skp')).toEqual({
+      title: ['아직 읽지 못하는 판입니다: SketchUp 2 (2.0.1)'],
+      text: ['"', { file: 'old.skp' }, TEXT],
+    });
+    // 판 번호를 모르는 거절 파일
+    expect(unsupportedNotice(scene({ meta: { unsupported: true } }), 'x.skp')!.title).toEqual(['아직 읽지 못하는 판입니다: SketchUp (알 수 없음)']);
+    expect(unsupportedNotice(scene({ meta: { version: '3.0.1', container: 'mfc' } }), 'a.skp')).toBeNull();
+    expect(unsupportedNotice(scene({ meta: { version: '26.1.194' } }), 'a.skp')).toBeNull();
+    expect(unsupportedNotice(scene(), 'a.skp')).toBeNull();
+    // 해석 워커가 결과에 달고, 화면은 그 알림으로(글을 첫 화면 JS에 두지 않는다)
+    const worker = readFileSync(resolve(__dirname, '../../src/worker/parse.worker.ts'), 'utf8');
+    expect(worker).toContain('const old = unsupportedNotice(scene, req.name);');
+    const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
+    expect(app).toContain('const old = res.unsupported;');
+    expect(app).not.toContain('SketchUp 3보다 옛 형식');
   });
 });

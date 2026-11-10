@@ -77,7 +77,6 @@ import {
   annotationHiddenRanges,
   nodeSelection,
   pickDeepest,
-  releaseName,
   revealGhostRanges,
   revealNodesFor,
   selectedNode,
@@ -96,7 +95,6 @@ import {
   annotationShown,
   tagHidden,
   unitSummary,
-  unsupportedVersion,
   type Selection,
   type SkpDoc,
 } from './doc';
@@ -1130,8 +1128,7 @@ export class SkpViewerApp implements PanelHost {
     if (!this.viewer) void loadViewerCore().catch(() => undefined);
     // 측정 도구 조각도 함께(처음 켤 때 기다리지 않게 — 실패는 처음 켤 때 알린다)
     if (!this.measureTool) void loadMeasure().catch(() => undefined);
-    // 큰 모형 놓기·문맥 복구 조각도(받지 못하면 놓지 않는다). 열려 있던 큰 모형의 무늬 다시 손질은 이 열기가 끝날 때까지 멈춘다
-    void loadRelease().catch(() => undefined);
+    // 열려 있던 큰 모형의 무늬 다시 손질은 이 열기가 끝날 때까지 멈춘다
     const before = this.doc;
     this.ctxWatch?.pause();
     try {
@@ -1141,17 +1138,16 @@ export class SkpViewerApp implements PanelHost {
         (f, stage) => {
           if (seq === this.openSeq) this.setBusy(name, f, stage);
         },
-        { textureLimit: this.texLimits.limit },
+        // 큰 모형 놓기·문맥 복구 조각도 함께 받는다(받지 못하면 놓지 않는다). 받으면 워커에 알린다 — 62차: 워커는 그 뒤에만 색 바꾸기를 첫 그림 뒤로 미룬다
+        // (미룬 무늬는 그 조각이 손질해 준다 — 61차는 받지 못하면 그 무늬가 평균색으로 남았다)
+        { textureLimit: this.texLimits.limit, defer: loadRelease() },
       );
       if (seq !== this.openSeq) return false;
-      const old = unsupportedVersion(res.scene);
+      // 아직 읽지 못하는 옛 판(글은 해석 워커가 만든다 — 62차, worker/notice.ts unsupportedNotice)
+      const old = res.unsupported;
       if (old) {
         attempt.error('unsupported');
-        this.showNotice(
-          'warn',
-          `아직 읽지 못하는 판입니다: ${releaseName(old)} (${old})`,
-          mix`"${fileText(name)}" 파일은 SketchUp 3보다 옛 형식으로 저장되어 있습니다. 이 뷰어는 SketchUp 3~8·2013~2026 파일을 읽습니다. SketchUp 3 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.`,
-        );
+        this.showNotice('warn', old.title, old.text);
         return false;
       }
       if (!sceneHasGeometry(res.scene)) {
@@ -1267,7 +1263,7 @@ export class SkpViewerApp implements PanelHost {
     else v.setScene(d.scene);
     // 코어가 빼거나 고쳐 그린 깨진 입력(0.50.0 — setScene 안에서 정한다, 멀쩡하면 빈 배열): 정보 탭 경고 칸·상태 줄 경고 수에 잇는다
     d.coreIssues = v.sceneIssues;
-    // 61차: setSource는 해석 워커가 첫 그림 뒤로 미룬 색 바꾸기도 손질해 준다(ContextWatch.fill — 놓기 조각을 받지 못하면 그 무늬는 평균색)
+    // 61차: setSource는 해석 워커가 첫 그림 뒤로 미룬 색 바꾸기도 손질해 준다(ContextWatch.fill — 62차부터 워커는 놓기 조각을 받았다고 알린 뒤에만 미룬다)
     if (rel) this.watchContext(rel, v).setSource({ scene: d.scene, textures: held, textureLimit: this.texLimits.limit });
     // 장면을 올리면 코어가 겉모습(선 색)을 풀었다 — 끝의 applyTheme에서 다시 건다
     this.lineContrast.reset();

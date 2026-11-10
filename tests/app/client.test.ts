@@ -150,6 +150,34 @@ describe('ParseClient', () => {
     expect(await ra.print).toBe(d);
   });
 
+  it('62차: 놓기 조각을 받으면(defer) 그 열기의 워커에 열기 뒤로 알리고, 받지 못하면 알리지 않는다(워커는 그 알림 뒤에만 색 바꾸기를 미룬다)', async () => {
+    const c = new ParseClient();
+    let got: () => void = () => undefined;
+    const a = c.open('a.skp', new Blob([]), undefined, { defer: new Promise<void>((r) => (got = r)) });
+    const w = FakeWorker.all[0]!;
+    expect(w.posted.map((p) => p.msg.type)).toEqual(['open']);
+    got();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(w.posted.map((p) => p.msg)).toEqual([expect.objectContaining({ type: 'open' }), { type: 'defer' }]);
+    w.emit({ id: w.posted[0]!.msg.id, type: 'done', result: result() });
+    await a;
+    // 이미 받은 조각(풀린 약속)이면 열기 바로 뒤에
+    void c.open('b.skp', new Blob([]), undefined, { defer: Promise.resolve() });
+    expect(w.posted.at(-1)!.msg.type).toBe('open');
+    await Promise.resolve();
+    expect(w.posted.at(-1)!.msg).toEqual({ type: 'defer' });
+    // 받지 못하면 알리지 않는다(거부도 처리한다)
+    const n = w.posted.length;
+    void c.open('c.skp', new Blob([]), undefined, { defer: Promise.reject(new Error('조각을 받지 못함')) });
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+    expect(w.posted.slice(n).map((p) => p.msg.type)).toEqual(['open']);
+    // defer를 주지 않으면 예전처럼 열기만
+    void c.open('d.skp', new Blob([]));
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+    expect(w.posted.slice(n + 1).map((p) => p.msg.type)).toEqual(['open']);
+  });
+
   it('지문 워커가 지문을 구하는 동안 dispose하면 지문은 null이고 지문 워커도 끝난다', async () => {
     const c = new ParseClient();
     const a = c.open('big.skp', new Blob([]));

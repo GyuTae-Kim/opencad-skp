@@ -15,9 +15,9 @@
 /// <reference lib="webworker" />
 import { TEXTURE_LIMIT } from 'opencad-viewer3d/texture';
 import { skpFileToScene, STREAM_MIN_BYTES, type SkpFileResult, type SkpImages } from '../index';
-import { collectTransfers, errorText, isBigScene, sceneHasGeometry, type ParseRequest, type ParseResponse, type ParseResult } from '../app/protocol';
-import { dropPbrMaps, markDeferredRecolor, PBR_MIN_TEXTURE_LIMIT, prepareSceneTextures } from './textures';
-import { damageNotice, emptySceneNotice } from './notice';
+import { collectTransfers, errorText, isBigScene, sceneHasGeometry, type DeferNotice, type ParseRequest, type ParseResponse, type ParseResult } from '../app/protocol';
+import { deferAllowed, dropPbrMaps, markDeferredRecolor, PBR_MIN_TEXTURE_LIMIT, prepareSceneTextures } from './textures';
+import { damageNotice, emptySceneNotice, unsupportedNotice } from './notice';
 import { packBigScene } from './pack';
 import { filePrint } from './print';
 import { splitLongAttrs } from './attrlong';
@@ -74,8 +74,9 @@ async function open(req: ParseRequest): Promise<ParseResult> {
     // 휴대 기기·작은 메모리(무늬 한도가 작다)는 PBR 그림을 넣지 않는다(값만 준 거칠기·금속은 둔다)
     if (limit < PBR_MIN_TEXTURE_LIMIT) dropPbrMaps(scene);
     // 61차: 큰 모형(화면이 놓아 올린다)은 알파를 잴 필요 없는 색 바꾸기를 첫 그림 뒤로 미룬다 — pending을 달고 바이트는 그대로 넘기면
-    // 화면이 쥐었다가 손질 워커(recolor.worker.ts)로 손질해 준다(app/release.ts ContextWatch.fill. 165 MB 표본에서 손질 57장 가운데 48장)
-    const skip = isBigScene({ scene }) ? markDeferredRecolor(scene) : undefined;
+    // 화면이 쥐었다가 손질 워커(recolor.worker.ts)로 손질해 준다(app/release.ts ContextWatch.fill. 165 MB 표본에서 손질 57장 가운데 48장).
+    // 62차: 화면이 놓기 조각을 받았다고 알린 뒤에만(DeferNotice — 받지 못했으면 예전처럼 여기서 손질한다)
+    const skip = isBigScene({ scene }) && (await deferAllowed(() => deferOk)) ? markDeferredRecolor(scene) : undefined;
     const prep = await prepareSceneTextures(scene, limit, (d, n) => progress(0.96 + (0.02 * d) / Math.max(1, n), '무늬 그림 손질하는 중'), skip?.size ? { skip } : {});
     // 색을 바꾼 무늬는 재질 목록 견본도 바꾼 색으로
     if (images && prep.swatches.size)
@@ -92,6 +93,9 @@ async function open(req: ParseRequest): Promise<ParseResult> {
   if (notice) result.notice = notice;
   // 그릴 것이 없는 장면의 알림도(53차 — 같은 까닭으로 여기서 만든다)
   if (!sceneHasGeometry(scene)) result.empty = emptySceneNotice(scene, req.name);
+  // 아직 읽지 못하는 옛 판의 알림도(62차 — 같은 까닭으로 여기서 만든다. 화면은 이 알림이 있으면 장면을 보이지 않는다)
+  const old = unsupportedNotice(scene, req.name);
+  if (old) result.unsupported = old;
   // 아주 긴 속성 글 값은 앞부분만 장면 정보로, 원래 글은 Blob으로(47차 — 펼칠 때 화면이 잘라 읽는다)
   const long = splitLongAttrs((scene.meta as { attributes?: SkpAttrDictsMeta[] } | undefined)?.attributes);
   if (long) result.attrLong = long;
@@ -100,8 +104,15 @@ async function open(req: ParseRequest): Promise<ParseResult> {
   return result;
 }
 
-ctx.onmessage = async (ev: MessageEvent<ParseRequest>) => {
+/** 62차: 화면이 놓기 조각을 받았다고 알렸는지(DeferNotice — 받은 조각은 그 페이지에 남으므로 이 워커가 끝날 때까지 참) */
+let deferOk = false;
+
+ctx.onmessage = async (ev: MessageEvent<ParseRequest | DeferNotice>) => {
   const req = ev.data;
+  if (req?.type === 'defer') {
+    deferOk = true;
+    return;
+  }
   if (!req || req.type !== 'open') return;
   let result: ParseResult;
   try {

@@ -5,12 +5,13 @@
  * - 48차: 작은 무늬는 푼 화소 합 한도(DECODE_PIXELS장) 안에서 DECODE_AHEAD개까지 앞서 풀고, 큰 무늬는 예전처럼 다음 하나만 앞서 푼다.
  * Node에는 그림 풀기가 없어 가짜 createImageBitmap·OffscreenCanvas로 차례와 결과를 본다.
  */
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Scene3d } from 'opencad-viewer3d/types';
 import type { SkpTextureInfo } from '../src/index';
 import type { DeferredTexture } from '../src/app/protocol';
 import { colorizeRgba, type ColorizeSpec } from '../src/colorize';
-import { DECODE_AHEAD, decodedPixels, deferrableRecolor, markDeferredRecolor, prepareSceneTextures, recolorTextures } from '../src/worker/textures';
+import { DECODE_AHEAD, decodedPixels, deferAllowed, deferrableRecolor, markDeferredRecolor, prepareSceneTextures, recolorTextures } from '../src/worker/textures';
 
 const SPECS: ColorizeSpec[] = [
   { type: 'shift', color: [64, 64, 66], average: [139, 140, 143] },
@@ -338,5 +339,24 @@ describe('61차 첫 그림 뒤로 미루는 색 바꾸기(큰 모형)', () => {
     const plain = await recolorTextures(held, 128);
     expect(plain.swatches).toBeUndefined();
     expect(plain.textures.map((t) => t.id)).toEqual(['a', 'c']);
+  });
+
+  it('62차: 화면이 놓기 조각을 받았다고 알린 뒤에만 미룬다 — 아직이면 한 번 쉬며 그동안 온 알림을 받고, 그래도 없으면(받기 실패) 미루지 않는다', async () => {
+    expect(await deferAllowed(() => true)).toBe(true);
+    // 받기 실패·아직 받는 중: 미루지 않는다(워커가 예전처럼 손질 — 미룬 무늬가 평균색으로 남지 않는다)
+    expect(await deferAllowed(() => false)).toBe(false);
+    // 해석이 쉬지 않고 돌던 사이 줄에 남은 알림(다음 차례의 일)은 한 번 쉬는 동안 받는다
+    let ok = false;
+    setTimeout(() => (ok = true), 0);
+    expect(await deferAllowed(() => ok)).toBe(true);
+    // 쉰 뒤에 오는 알림은 기다리지 않는다
+    let late = false;
+    setTimeout(() => (late = true), 20);
+    expect(await deferAllowed(() => late)).toBe(false);
+    // 해석 워커는 큰 모형이면서 이 판정이 참일 때만 미루고, 알림은 'defer' 메시지로만 받는다
+    const src = readFileSync(new URL('../src/worker/parse.worker.ts', import.meta.url), 'utf8');
+    expect(src).toContain('const skip = isBigScene({ scene }) && (await deferAllowed(() => deferOk)) ? markDeferredRecolor(scene) : undefined;');
+    expect(src.match(/deferOk = true/g)).toHaveLength(1);
+    expect(src).toMatch(/if \(req\?\.type === 'defer'\) \{\s*deferOk = true;\s*return;\s*\}/);
   });
 });

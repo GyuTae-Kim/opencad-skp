@@ -22,6 +22,7 @@ import type {
   SkpTextMeta,
   SkpTreeInfo,
 } from '../meta';
+import { majorOf, releaseName } from './edition';
 import { nodeEntity, type EntityInput } from './entity';
 import { fileText, joinMixed, mix, nameText, plainText, type Mixed } from './filetext';
 import { definitionNodes } from './search';
@@ -304,18 +305,8 @@ function meta(scene: Scene3d): Record<string, unknown> {
   return scene.meta && typeof scene.meta === 'object' ? scene.meta : {};
 }
 
-/** 판 문자열의 주 번호("26.1.194" → 26) */
-export function majorOf(version: string | null | undefined): number | null {
-  const m = /^(\d+)\./.exec(version ?? '');
-  return m ? Number(m[1]) : null;
-}
-
-/** 판 → 제품 이름("26.1.194" → "SketchUp 2026", "8.0.1" → "SketchUp 8") */
-export function releaseName(version: string | null | undefined): string {
-  const major = majorOf(version);
-  if (major === null) return 'SketchUp';
-  return major >= 13 ? `SketchUp 20${String(major).padStart(2, '0')}` : `SketchUp ${major}`;
-}
+// 판 번호·제품 이름·옛 판 판정(62차에 edition.ts로 옮김 — 해석 워커도 쓴다)
+export { majorOf, releaseName, unsupportedVersion } from './edition';
 
 /** meta → 정보 */
 export function readInfo(scene: Scene3d): SkpInfo {
@@ -336,16 +327,6 @@ export function readInfo(scene: Scene3d): SkpInfo {
     triangles: num(m.triangles),
     segments: num(m.segments),
   };
-}
-
-/**
- * 아직 읽지 못하는 아주 옛 판(SketchUp 3보다 옛 판)이면 판 문자열, 아니면 null.
- * 해석기가 거절한 파일(meta.unsupported)이거나 판 번호가 3보다 낮으면 그렇다. 3·4·5·6·7·8·2013~2020은 읽는다.
- */
-export function unsupportedVersion(scene: Scene3d): string | null {
-  const info = readInfo(scene);
-  if (meta(scene).unsupported === true || (info.major !== null && info.major < 3)) return info.version ?? '알 수 없음';
-  return null;
 }
 
 /** 장면 단위 → 글 */
