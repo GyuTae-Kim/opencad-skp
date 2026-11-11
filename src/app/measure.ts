@@ -1196,6 +1196,8 @@ export class MeasureTool {
   private labelQueue: { el: HTMLDivElement; x: number; y: number; seg: [number[], number[]] | null; soft: LabelCircle[] }[] = [];
   private readonly painter = (f: ViewFrame): void => this.paint(f);
   private readonly g: SVGGElement;
+  /** 글자 색 선의 테두리 색(그릴 때마다 처음 쓸 때 잰다) */
+  private haloNow: string | null = null;
   private readonly layer: HTMLDivElement;
   private readonly tip: HTMLDivElement;
   private readonly off: (() => void)[] = [];
@@ -3089,7 +3091,21 @@ export class MeasureTool {
     }
   }
 
+  /**
+   * 글자 색(currentColor) 선의 테두리: 선과 반대 밝기. 덧그림의 글자 색은 앱 테마를 따르고 3D 보기 바탕은 파일 배경·면 색이라,
+   * 어두운 앱 테마의 밝은 선이 흰 파일 배경에 묻히지 않게 한다(그리기 한 번에 한 번만 잰다)
+   */
+  private halo(): string {
+    return (this.haloNow ??= haloFor(typeof getComputedStyle === 'function' ? getComputedStyle(this.g).color : ''));
+  }
+
+  /** 선 색에 맞는 테두리: 글자 색이면 반대 밝기, 정해진 색(축·나란함·추정 — 모두 흰색과 3:1 이상)이면 흰색 */
+  private haloOf(stroke: string | number): string {
+    return stroke === 'currentColor' ? this.halo() : '#ffffff';
+  }
+
   private paint(f: ViewFrame): void {
+    this.haloNow = null;
     const mode = this.modeValue;
     if (mode && this.hoverDirty) {
       this.hoverDirty = false;
@@ -3107,10 +3123,7 @@ export class MeasureTool {
     const sel = this.selGuides;
 
     // 안내선은 맨 아래(결과 선·표식이 그 위에 보이게). 테두리는 선 색(글자 색)과 반대 밝기 — 어두운 테마의 흰 점선이 흰 테두리에 묻히지 않게
-    if (shown && vis.vl.length) {
-      const halo = haloFor(typeof getComputedStyle === 'function' ? getComputedStyle(this.g).color : '');
-      for (const gl of vis.vl) this.guideLineMark(f, gl, halo, sel.includes(gl) ? 'is-selected' : '');
-    }
+    if (shown && vis.vl.length) for (const gl of vis.vl) this.guideLineMark(f, gl, this.halo(), sel.includes(gl) ? 'is-selected' : '');
     // 도구를 끈 동안: 안내만(SketchUp처럼 늘 보인다 — 고르기 도구로 고른 안내는 파랑)과 고르기 상자
     if (!mode) {
       if (shown) for (const g of vis.vp) this.guideMark(f, g, sel.includes(g));
@@ -3145,7 +3158,7 @@ export class MeasureTool {
           const edge = this.guideOn ? this.startEdge : null;
           const foot = edge ? edgeFoot(a, edge, live.point) : null;
           if (edge && foot) {
-            this.guideLineMark(f, { point: foot, dir: unit(sub(edge[1], edge[0])) }, haloFor(typeof getComputedStyle === 'function' ? getComputedStyle(this.g).color : ''), 'is-preview');
+            this.guideLineMark(f, { point: foot, dir: unit(sub(edge[1], edge[0])) }, this.halo(), 'is-preview');
             this.rubber(f, a, foot, live);
           } else this.rubber(f, a, live.point, live);
           tip = joinTip(snapTipLabel(live), len(Math.hypot(...sub(foot ?? live.point, a))));
@@ -3169,7 +3182,7 @@ export class MeasureTool {
             const deg = planeAngle(sub(base, c), sub(cur, c), n);
             // 안내 두기: 중심을 지나 커서 쪽으로 둘 안내선 미리 보기
             if (this.guideOn && !samePoint(c, cur))
-              this.guideLineMark(f, { point: c, dir: unit(sub(cur, c)) }, haloFor(typeof getComputedStyle === 'function' ? getComputedStyle(this.g).color : ''), 'is-preview');
+              this.guideLineMark(f, { point: c, dir: unit(sub(cur, c)) }, this.halo(), 'is-preview');
             this.drawAngle(f, c, base, cur, n, null, false);
             this.rubber(f, c, cur, snap);
             tip = joinTip(snap ? snapTipLabel(snap) : '', ang(deg));
@@ -3286,16 +3299,16 @@ export class MeasureTool {
     this.g.append(g);
   }
 
-  /** 안내 두기 표시: 커서 오른쪽 위의 작은 +(흰 테두리) */
+  /** 안내 두기 표시: 커서 오른쪽 위의 작은 +(글자 색과 반대 밝기 테두리) */
   private guidePlus(x: number, y: number): void {
     const cx = x + 11, cy = y - 11;
     const d = `M${cx - 4},${cy}h8M${cx},${cy - 4}v8`;
     const g = svgEl('g', { class: 'measure-guide-plus' });
-    g.append(svgEl('path', { d, stroke: '#ffffff', 'stroke-width': 4, 'stroke-linecap': 'round' }), svgEl('path', { d, stroke: 'currentColor', 'stroke-width': 1.75, 'stroke-linecap': 'round' }));
+    g.append(svgEl('path', { d, stroke: this.halo(), 'stroke-width': 4, 'stroke-linecap': 'round' }), svgEl('path', { d, stroke: 'currentColor', 'stroke-width': 1.75, 'stroke-linecap': 'round' }));
     this.g.append(g);
   }
 
-  /** 안내점 표식: 흰 테두리를 두른 작은 ×(SketchUp 안내점). 고른 안내점은 조금 크게 파랑 */
+  /** 안내점 표식: 테두리(글자 색과 반대 밝기, 고른 것은 흰색)를 두른 작은 ×(SketchUp 안내점). 고른 안내점은 조금 크게 파랑 */
   private guideMark(f: ViewFrame, p: readonly number[], selected = false): void {
     const s = screenPoint(f, p, 20);
     if (!s) return;
@@ -3304,7 +3317,7 @@ export class MeasureTool {
     const d = `M${x - r},${y - r}L${x + r},${y + r}M${x + r},${y - r}L${x - r},${y + r}`;
     const g = svgEl('g', { class: selected ? 'measure-guide is-selected' : 'measure-guide' });
     g.append(
-      svgEl('path', { d, stroke: '#ffffff', 'stroke-width': selected ? 4.5 : 3.5, 'stroke-linecap': 'round' }),
+      svgEl('path', { d, stroke: selected ? '#ffffff' : this.halo(), 'stroke-width': selected ? 4.5 : 3.5, 'stroke-linecap': 'round' }),
       svgEl('path', { d, stroke: selected ? GUIDE_SELECTED_COLOR : 'currentColor', 'stroke-width': selected ? 2.25 : 1.5, 'stroke-linecap': 'round' }),
     );
     this.g.append(g);
@@ -3334,15 +3347,16 @@ export class MeasureTool {
     );
   }
 
-  /** 정밀 조준 십자선(가운데는 비워 추정 표식이 보이게, 흰 테두리로 어느 바탕에서도 보이게) */
+  /** 정밀 조준 십자선(가운데는 비워 추정 표식이 보이게, 글자 색과 반대 밝기 테두리로 어느 바탕에서도 보이게) */
   private reticle(x: number, y: number): void {
     const r = 16;
     const gap = 6;
     const d = `M${x - r - 6} ${y}H${x - gap}M${x + gap} ${y}H${x + r + 6}M${x} ${y - r - 6}V${y - gap}M${x} ${y + gap}V${y + r + 6}`;
     const g = svgEl('g', { class: 'measure-aim' });
+    const halo = this.halo();
     g.append(
-      svgEl('circle', { cx: x, cy: y, r, fill: 'none', stroke: '#ffffff', 'stroke-width': 3.5, 'stroke-opacity': 0.85 }),
-      svgEl('path', { d, fill: 'none', stroke: '#ffffff', 'stroke-width': 3.5, 'stroke-opacity': 0.85 }),
+      svgEl('circle', { cx: x, cy: y, r, fill: 'none', stroke: halo, 'stroke-width': 3.5, 'stroke-opacity': 0.85 }),
+      svgEl('path', { d, fill: 'none', stroke: halo, 'stroke-width': 3.5, 'stroke-opacity': 0.85 }),
       svgEl('circle', { cx: x, cy: y, r, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5 }),
       svgEl('path', { d, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5 }),
     );
@@ -3381,7 +3395,13 @@ export class MeasureTool {
   private segment(f: ViewFrame, a: readonly number[], b: readonly number[], cls: string, attrs: Record<string, string | number> = {}): void {
     const s = screenSegment(f, a, b);
     if (!s) return;
-    this.g.append(svgEl('line', { class: cls, x1: s[0], y1: s[1], x2: s[2], y2: s[3], stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linecap': 'round', ...attrs }));
+    const at = { x1: s[0], y1: s[1], x2: s[2], y2: s[3] };
+    const width = Number(attrs['stroke-width'] ?? 1.5);
+    // 아래에 테두리 선(점선도 끊기지 않는 띠) — 어느 바탕·면 색 위에서도 선이 테두리와 대비된다
+    this.g.append(
+      svgEl('line', { class: 'measure-halo', ...at, stroke: this.haloOf(attrs.stroke ?? 'currentColor'), 'stroke-width': width + 2, 'stroke-opacity': 0.85, 'stroke-linecap': 'round' }),
+      svgEl('line', { class: cls, ...at, stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linecap': 'round', ...attrs }),
+    );
   }
 
   /**
@@ -3440,9 +3460,10 @@ export class MeasureTool {
       const r = on ? 6 : 4.5;
       const d = `M${s[0] - r},${s[1]}h${2 * r}M${s[0]},${s[1] - r}v${2 * r}`;
       const g = svgEl('g', { class: on ? 'measure-track is-from' : 'measure-track' });
+      const stroke = on1 ? color : on2 ? AXIS_COLORS[other!.axis] : 'currentColor';
       g.append(
-        svgEl('path', { d, stroke: '#ffffff', 'stroke-width': on ? 4.5 : 3.5, 'stroke-linecap': 'round' }),
-        svgEl('path', { d, stroke: on1 ? color : on2 ? AXIS_COLORS[other!.axis] : 'currentColor', 'stroke-width': on ? 2.25 : 1.5, 'stroke-linecap': 'round' }),
+        svgEl('path', { d, stroke: this.haloOf(stroke), 'stroke-width': on ? 4.5 : 3.5, 'stroke-linecap': 'round' }),
+        svgEl('path', { d, stroke, 'stroke-width': on ? 2.25 : 1.5, 'stroke-linecap': 'round' }),
       );
       this.g.append(g);
     }
@@ -3459,7 +3480,7 @@ export class MeasureTool {
   private dot(f: ViewFrame, p: readonly number[]): void {
     const s = screenPoint(f, p, 40);
     if (!s) return;
-    this.g.append(svgEl('circle', { class: 'measure-point', cx: s[0], cy: s[1], r: 3.5, fill: 'currentColor', stroke: '#ffffff', 'stroke-width': 1 }));
+    this.g.append(svgEl('circle', { class: 'measure-point', cx: s[0], cy: s[1], r: 3.5, fill: 'currentColor', stroke: this.halo(), 'stroke-width': 1 }));
   }
 
   /**
@@ -3533,7 +3554,11 @@ export class MeasureTool {
       pts.push(`${s[0].toFixed(1)},${s[1].toFixed(1)}`);
     }
     const g = svgEl('g', { class: locked ? 'measure-protractor is-locked' : 'measure-protractor', 'data-axis': axis ?? '' });
-    g.append(svgEl('polygon', { points: pts.join(' '), fill: color, 'fill-opacity': 0.08, stroke: color, 'stroke-width': locked ? 2 : 1.25 }));
+    const halo = this.haloOf(color);
+    g.append(
+      svgEl('polygon', { points: pts.join(' '), fill: 'none', stroke: halo, 'stroke-width': locked ? 4 : 3.25, 'stroke-opacity': 0.85 }),
+      svgEl('polygon', { points: pts.join(' '), fill: color, 'fill-opacity': 0.08, stroke: color, 'stroke-width': locked ? 2 : 1.25 }),
+    );
     let ticks = '';
     for (let i = 0; i < 24; i++) {
       const t = (i / 24) * 2 * Math.PI;
@@ -3541,7 +3566,7 @@ export class MeasureTool {
       const b = at(t, R);
       if (a && b) ticks += `M${a[0].toFixed(1)} ${a[1].toFixed(1)}L${b[0].toFixed(1)} ${b[1].toFixed(1)}`;
     }
-    if (ticks) g.append(svgEl('path', { d: ticks, fill: 'none', stroke: color, 'stroke-width': 1 }));
+    if (ticks) g.append(svgEl('path', { d: ticks, fill: 'none', stroke: halo, 'stroke-width': 3, 'stroke-opacity': 0.85 }), svgEl('path', { d: ticks, fill: 'none', stroke: color, 'stroke-width': 1 }));
     this.g.append(g);
   }
 
@@ -3573,7 +3598,10 @@ export class MeasureTool {
       if (!s) return;
       d += `${i ? 'L' : 'M'}${s[0].toFixed(1)} ${s[1].toFixed(1)}`;
     }
-    this.g.append(svgEl('path', { class: 'measure-arc', d, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5 }));
+    this.g.append(
+      svgEl('path', { class: 'measure-halo', d, fill: 'none', stroke: this.halo(), 'stroke-width': 3.5, 'stroke-opacity': 0.85 }),
+      svgEl('path', { class: 'measure-arc', d, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5 }),
+    );
     if (text) {
       const t = theta / 2;
       const s = screenPoint(f, addScaled(addScaled(c, ua, Math.cos(t) * R * 1.9), w, Math.sin(t) * R * 1.9));

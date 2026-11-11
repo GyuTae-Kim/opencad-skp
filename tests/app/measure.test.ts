@@ -64,6 +64,7 @@ import {
   GUIDE_KIND_NAMES,
 } from '../../src/app/measure';
 import { AXIS_COLORS, AXIS_LABELS, SNAP_COLORS, SNAP_LABELS, TRACK_ALIGN_LABEL, TRACK_AXIS_LABELS, TRACK_PAIR_LABELS } from '../../src/app/snap';
+import { contrastRatio } from '../../src/app/linecontrast';
 import { TRACK_DWELL_MS } from 'opencad-viewer3d/track';
 import { GUIDE_STORE_KEY, readGuideFiles, saveGuides } from '../../src/app/guidestore';
 import {
@@ -503,6 +504,79 @@ describe('측정 도구: 터치', () => {
     expect(r.tool.pointCount).toBe(1);
     r.click(195, 104, { pointerType: 'touch' });
     expect(r.results.at(-1)).toMatchObject({ kind: 'tape', distance: 100 });
+  });
+});
+
+describe('측정 덧그림 테두리(64차 — 글자 색은 앱 테마를 따르고 3D 보기 바탕은 파일 배경·면 색이다)', () => {
+  /** 앱 --text: 어두운 테마·밝은 테마 */
+  const INKS = [
+    ['rgb(232, 235, 240)', '#000000'],
+    ['rgb(29, 37, 48)', '#ffffff'],
+  ] as const;
+  const rgbOf = (s: string): [number, number, number] => {
+    const m = /rgb\((\d+), (\d+), (\d+)\)/.exec(s);
+    const h = (i: number): number => parseInt(s.slice(i, i + 2), 16) / 255;
+    return m ? [Number(m[1]) / 255, Number(m[2]) / 255, Number(m[3]) / 255] : [h(1), h(3), h(5)];
+  };
+  /** 첫 그리기로 g.measure를 붙인 뒤 글자 색을 준다 */
+  const inked = (ink: string, mode: 'tape' | 'protractor'): ReturnType<typeof rig> => {
+    const r = rig(EDGES());
+    r.tool.setMode(mode);
+    r.move(102, 103);
+    (r.q('g.measure') as SVGGElement).style.color = ink;
+    r.move(102, 103);
+    return r;
+  };
+
+  it('줄자 결과 선 아래에 글자 색과 반대 밝기 띠, 끝점 표시도 같은 테두리(어두운 앱 테마의 밝은 선이 흰 파일 배경에 묻히던 것)', () => {
+    for (const [ink, halo] of INKS) {
+      const r = inked(ink, 'tape');
+      r.click(102, 103);
+      r.click(198, 101);
+      const line = r.q('line.measure-result-line')!;
+      const band = line.previousElementSibling!;
+      expect(band.classList.contains('measure-halo')).toBe(true);
+      expect(band.getAttribute('stroke')).toBe(halo);
+      expect(['x1', 'y1', 'x2', 'y2'].map((a) => band.getAttribute(a))).toEqual(['x1', 'y1', 'x2', 'y2'].map((a) => line.getAttribute(a)));
+      expect(Number(band.getAttribute('stroke-width'))).toBeGreaterThan(Number(line.getAttribute('stroke-width')));
+      expect(line.getAttribute('stroke')).toBe('currentColor');
+      expect(r.qa('circle.measure-point').length).toBe(2);
+      for (const dot of r.qa('circle.measure-point')) expect(dot.getAttribute('stroke')).toBe(halo);
+      expect(contrastRatio(rgbOf(ink), rgbOf(halo))).toBeGreaterThan(10);
+    }
+  });
+
+  it('점선 고무줄의 테두리는 끊기지 않는 띠이고, 안내선과 같은 테두리 색이다', () => {
+    const r = inked(INKS[0][0], 'tape');
+    r.click(102, 103);
+    r.move(153, 101);
+    const rubber = r.q('line.measure-rubber')!;
+    expect(rubber.getAttribute('stroke-dasharray')).toBe('6 4');
+    const band = rubber.previousElementSibling!;
+    expect(band.getAttribute('stroke')).toBe('#000000');
+    expect(band.getAttribute('stroke-dasharray')).toBeNull();
+  });
+
+  it('각도기: 호는 글자 색과 반대 밝기 띠, 축 색 원판·눈금은 흰 띠(축 색은 앱 테마와 상관없음)', () => {
+    const r = inked(INKS[0][0], 'protractor');
+    const [band, disk] = r.qa('.measure-protractor polygon');
+    expect(band!.getAttribute('stroke')).toBe('#ffffff');
+    expect(band!.getAttribute('fill')).toBe('none');
+    expect(disk!.getAttribute('stroke')).toBe(AXIS_COLORS.z);
+    const [tickBand, ticks] = r.qa('.measure-protractor path');
+    expect(tickBand!.getAttribute('stroke')).toBe('#ffffff');
+    expect(ticks!.getAttribute('stroke')).toBe(AXIS_COLORS.z);
+    r.click(101, 101);
+    r.click(197, 102);
+    r.move(101, 52);
+    const arc = r.q('.measure-arc')!;
+    expect(arc.previousElementSibling!.classList.contains('measure-halo')).toBe(true);
+    expect(arc.previousElementSibling!.getAttribute('stroke')).toBe('#000000');
+    expect(arc.previousElementSibling!.getAttribute('d')).toBe(arc.getAttribute('d'));
+  });
+
+  it('흰 띠를 두르는 정해진 색은 모두 흰색과 3:1 이상', () => {
+    for (const c of [...Object.values(AXIS_COLORS), SNAP_COLORS.parallel, SNAP_COLORS.perpendicular]) expect(contrastRatio(rgbOf(c), [1, 1, 1])).toBeGreaterThanOrEqual(3);
   });
 });
 
