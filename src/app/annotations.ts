@@ -17,9 +17,13 @@
  *   화면 자리에서 부른 쪽의 가림 판정(코어 고르기 — 단면에 잘린 쪽·숨긴 항목은 고르지 않는다)으로 형상에 가린 라벨을 숨긴다.
  *   움직이는 동안은 앞의 판정을 쓰고(참조 뷰어처럼 멈춘 뒤 CPU 광선), 화면 고정 글은 가리지 않는다. 한 번에 OCCLUSION_LIMIT개까지 판정한다.
  * 규칙은 참조 뷰어의 문자·치수 라벨 코드에서 옮겼다.
+ * 주석 선분(치수선·지시선·단면 기호)의 숨긴 노드 구간(annotationHiddenRanges)과 장면을 고를 때 숨긴 노드 바꾸기(applySceneHidden —
+ * 장면이 숨기는 맨 위 주석 묶음)도 여기 둔다(70차 — 코어 입구와 함께 받는 조각이라 첫 화면 조각에 싣지 않는다).
  */
+import type { IndexRange } from 'opencad-viewer3d';
 import { projectToScreen, worldPerPixel, type ViewFrame } from 'opencad-viewer3d/camera';
-import type { SkpDimensionMeta, SkpFontMeta, Vec3 } from '../meta';
+import type { SkpDimensionMeta, SkpFontMeta, SkpPageMeta, Vec3 } from '../meta';
+import { nodeHiddenByUser, type SkpDoc } from './doc';
 import type { Overlay } from './overlay';
 import { DEFAULT_UNITS, formatLength, mmPerSceneUnit, type UnitsDisplay } from './units';
 
@@ -520,6 +524,56 @@ export function layoutAnnotations(items: readonly AnnotationItem[], cand: readon
     out.push({ item: i, x: left - ox, y: top - oy, align: angle ? 'center' : align, angle, px, box, crowded });
   }
   return out;
+}
+
+// ───────────────────────── 주석 선분 숨김·장면이 숨기는 주석 ─────────────────────────
+
+/**
+ * 주석 선분 묶음에서 숨긴 노드의 구간(항목 차례 → 선분 구간). 묶음의 모든 구간을 숨겼으면 넣지 않는다(itemVisible이 묶음째 숨긴다).
+ * 70차에 첫 화면 조각(doc.ts)에서 옮겼다 — 뷰어가 있어야 쓰고, 이 조각은 코어 입구와 함께 받는다
+ */
+export function annotationHiddenRanges(d: SkpDoc): Map<number, IndexRange[]> {
+  const out = new Map<number, IndexRange[]>();
+  if (!d.annotationRuns.size || (!d.hiddenNodes.size && !d.hiddenOutline.size)) return out;
+  const memo = new Map<number, boolean>();
+  const hidden = (n: number): boolean => {
+    let v = memo.get(n);
+    if (v === undefined) memo.set(n, (v = nodeHiddenByUser(d, n)));
+    return v;
+  };
+  for (const [id, runs] of d.annotationRuns) {
+    const li = d.lineIndex.get(id);
+    const line = li === undefined ? undefined : d.scene.lines[li];
+    if (!line) continue;
+    const total = Math.floor(line.positions.length / 6);
+    const list: IndexRange[] = [];
+    let all = true;
+    for (let k = 0; k < runs.node.length; k++) {
+      if (!hidden(runs.node[k]!)) {
+        all = false;
+        continue;
+      }
+      const start = runs.start[k]!;
+      const end = k + 1 < runs.start.length ? runs.start[k + 1]! : total;
+      if (end <= start) continue;
+      const last = list[list.length - 1];
+      if (last && last.start + last.count === start) last.count += end - start;
+      else list.push({ start, count: end - start });
+    }
+    if (list.length && !all) out.set(d.scene.meshes.length + li!, list);
+  }
+  return out;
+}
+
+/**
+ * 장면을 고를 때 숨긴 노드를 그 장면 목록 쪽으로(70차): 숨긴 개체를 기억하는 장면이면 나무 노드(0 이상)를 비우고(부른 쪽이 장면 목록을 넣는다),
+ * 숨긴 형상을 기억하는 장면이면 맨 위 주석 묶음 노드(−2 − k — meta.pages[].hiddenAnnotations)를 그 장면이 숨기는 묶음으로 바꾼다.
+ * 기억하지 않는 쪽은 그대로 둔다(SketchUp 장면 고르기와 같게)
+ */
+export function applySceneHidden(hidden: Set<number>, page: Pick<SkpPageMeta, 'hiddenNodes' | 'hiddenAnnotations'>): void {
+  const notes = page.hiddenAnnotations;
+  for (const n of hidden) if (n < 0 ? notes : page.hiddenNodes) hidden.delete(n);
+  for (const k of notes ?? []) hidden.add(-2 - k);
 }
 
 // ───────────────────────── DOM ─────────────────────────

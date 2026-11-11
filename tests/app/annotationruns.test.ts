@@ -3,7 +3,8 @@
  * 화면은 숨긴 그룹·컴포넌트 안 치수선·지시선 구간만 숨긴다(라벨과 같게). 예전에는 모형에 바로 놓인 형상을 숨길 때만 모두 함께 숨겼다.
  */
 import { describe, expect, it } from 'vitest';
-import { annotationHiddenRanges, createDoc, itemVisible, readAnnotationRuns } from '../../src/app/doc';
+import { annotationHiddenRanges } from '../../src/app/annotations';
+import { createDoc, itemVisible, readAnnotationRuns } from '../../src/app/doc';
 import { skpToScene } from '../../src/index';
 import { dimPoint, entities, IDENTITY13, instance, linearDims, modelDat, skpFile } from '../build';
 
@@ -85,5 +86,8 @@ describe('주석 선분 노드 구간', () => {
     expect(readAnnotationRuns({ 'skp-dims-1': { start: [0, 3], node: [-1, 2] } }, kinds, 3).size).toBe(0);
     expect(readAnnotationRuns({ 'skp-dims-1': { start: Uint32Array.from([3, 0]), node: Int32Array.from([-1, 2]) } }, kinds, 3).size).toBe(0);
     expect(readAnnotationRuns(null, kinds, 3).size).toBe(0);
+    // −1 아래(장면이 숨기는 맨 위 주석 묶음 노드)는 나무가 없어도 쓴다
+    const notes = { start: Uint32Array.from([0, 3]), node: Int32Array.from([-1, -3]) };
+    expect(readAnnotationRuns({ 'skp-dims-1': notes }, kinds, 0).get('skp-dims-1')).toEqual(notes);
   });
 });

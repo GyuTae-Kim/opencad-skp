@@ -904,7 +904,7 @@ function extrasMeta(
   if (style) out.style = style;
   try {
     if (model.pages?.length) {
-      const p = pagesMeta(model, scale, { styles, nodePids: parts.nodePids, sectionPids: parts.sectionPids });
+      const p = pagesMeta(model, scale, { styles, nodePids: parts.nodePids, sectionPids: parts.sectionPids, hiddenAnnotations: parts.pageAnnotations });
       out.pages = p.pages;
       if (p.activePage !== undefined) out.activePage = p.activePage;
     }

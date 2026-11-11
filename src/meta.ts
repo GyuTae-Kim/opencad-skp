@@ -141,6 +141,12 @@ export interface SkpPageMeta {
   hiddenFolders?: number[];
   /** 숨길 나무 노드(숨긴 개체를 기억하는 장면만). 정의 안 인스턴스 하나를 숨기면 그 정의가 놓인 모든 자리의 노드 */
   hiddenNodes?: number[];
+  /**
+   * 이 장면이 숨기는 맨 위 주석 묶음 k(오름차순 — 묶음 k의 문자·치수 라벨과 주석 선분 구간·끝 표시의 노드는 −2 − k, 목록에 없는 묶음은 보인다).
+   * 숨긴 형상(use 깃발 0x80 — 맨 위 요소 가운데 인스턴스가 아닌 것)을 기억하는 장면이고, 모형에서는 보이는데 그런 장면이 숨기는
+   * 맨 위 문자·치수·단면 평면이 있을 때만. 없으면 그 보임을 그대로 둔다
+   */
+  hiddenAnnotations?: number[];
   /** 활성 단면(meta.sectionPlanes 차례, 단면을 기억하는 장면만) */
   sectionPlanes?: number[];
   style?: SkpStyleMeta;
@@ -191,7 +197,7 @@ export interface SkpTextMeta {
   tag: string;
   /** 요소 자신이나 감싼 인스턴스가 숨김 */
   hidden: boolean;
-  /** 이 글이 든 배치의 나무 노드(-1 = 모형 바로 아래) */
+  /** 이 글이 든 배치의 나무 노드(-1 = 모형 바로 아래, −2 − k = 모형 바로 아래이고 장면이 숨기는 주석 묶음 k — SkpPageMeta.hiddenAnnotations) */
   node: number;
 }
 
@@ -211,6 +217,7 @@ export interface SkpDimensionMeta {
   color?: Rgb;
   tag: string;
   hidden: boolean;
+  /** SkpTextMeta.node와 같다 */
   node: number;
 }
 
@@ -222,7 +229,7 @@ export interface SkpAnnotationMarks {
   kind: Uint8Array;
   /** 표시마다 그 표시가 붙은 선(치수선·지시선·반지름)의 세계 길이 — 화면에서 짧은 선은 표시를 줄인다 */
   span: Float64Array;
-  /** 표시마다 놓인 나무 노드(-1 = 모형에 바로) — 숨긴 그룹·컴포넌트 안 표시는 숨긴다 */
+  /** 표시마다 놓인 나무 노드(-1 = 모형에 바로, −2 − k = 장면이 숨기는 주석 묶음 k) — 숨긴 그룹·컴포넌트 안 표시는 숨긴다 */
   node: Int32Array;
 }
 
@@ -308,8 +315,9 @@ export interface SkpMetaExtras {
   sectionPlanes?: SkpSectionPlaneMeta[];
   annotationItems?: SkpAnnotationItems;
   /**
-   * 주석 선분 묶음(annotationItems의 선분 묶음 id)마다 나무 노드 구간: 선분 차례 start[k]부터 다음 구간 전까지가 노드 node[k](-1 = 모형에 바로) 안의 주석.
-   * 나무(outline)가 있고 그룹·컴포넌트 안에 주석이 있을 때만. 화면은 숨긴 노드의 구간을 숨긴다(문자·치수 라벨과 같게)
+   * 주석 선분 묶음(annotationItems의 선분 묶음 id)마다 나무 노드 구간: 선분 차례 start[k]부터 다음 구간 전까지가 노드 node[k](-1 = 모형에 바로,
+   * −2 − k = 모형에 바로 놓였고 장면이 숨기는 주석 묶음 k) 안의 주석. 나무(outline)가 있고 그룹·컴포넌트 안에 주석이 있거나, 장면이 숨기는 주석 묶음이 있을 때만.
+   * 화면은 숨긴 노드의 구간을 숨긴다(문자·치수 라벨과 같게)
    */
   annotationRuns?: Record<string, { start: Uint32Array; node: Int32Array }>;
   /**

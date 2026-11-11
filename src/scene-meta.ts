@@ -3,7 +3,8 @@
  *
  * - 단위: UnitsOptions/LengthUnit → 장면 단위와 인치에서의 배율(unitsFor).
  * - 카메라: 위치·평행 투영 높이는 인치 → 장면 단위(× scale), 위 벡터·시야각(도)·종횡비는 그대로(cameraMeta).
- * - 장면: use 깃발(0x1 카메라, 0x2 스타일, 0x4 그림자, 0x20 숨긴 태그, 0x40 단면, 0x100 숨긴 개체)이 켜진 것만 그 칸을 적는다(pagesMeta).
+ * - 장면: use 깃발(0x1 카메라, 0x2 스타일, 0x4 그림자, 0x20 숨긴 태그, 0x40 단면, 0x80 숨긴 형상, 0x100 숨긴 개체)이 켜진 것만 그 칸을 적는다(pagesMeta —
+ *   숨긴 형상은 장면 만들기가 정한 맨 위 주석 묶음으로).
  * - 위치·그림자·그리기 축: 그림자 설정(0204·CShadowInfo)과 모형 속성 GeoReference → 위치(locationMeta), 축 원점은 장면 단위(axesMeta).
  *   숨긴 개체 목록은 영구 번호라 나무 노드로 바꾼다: 정의 안 인스턴스 하나의 번호는 그 정의가 놓인 모든 자리의 노드가 된다.
  *   활성 단면 번호는 meta.sectionPlanes 차례(배치마다 하나)로 바꾼다.
@@ -20,6 +21,8 @@ export const PAGE_USE_CAMERA = 0x001;
 export const PAGE_USE_STYLE = 0x002;
 export const PAGE_USE_HIDDEN_TAGS = 0x020;
 export const PAGE_USE_SECTIONS = 0x040;
+/** 숨긴 형상: 맨 위(모형에 바로 놓인) 요소 가운데 인스턴스가 아닌 것의 보임(공개 Ruby API Page#hidden_entities) */
+export const PAGE_USE_HIDDEN_GEOMETRY = 0x080;
 export const PAGE_USE_HIDDEN_OBJECTS = 0x100;
 export const PAGE_USE_SHADOW = 0x004;
 
@@ -142,6 +145,8 @@ export interface PagesContext {
   nodePids?: readonly (number | undefined)[];
   /** meta.sectionPlanes 차례마다 단면 영구 번호 */
   sectionPids?: readonly (number | undefined)[];
+  /** 장면 차례마다 그 장면이 숨기는 맨 위 주석 묶음(숨긴 형상을 기억하지 않는 장면은 undefined — 장면 만들기가 정한다) */
+  hiddenAnnotations?: readonly (readonly number[] | undefined)[];
 }
 
 const clampTime = (v: number | undefined, max: number): number | undefined => (v !== undefined && Number.isFinite(v) && v >= 0 ? Math.min(v, max) : undefined);
@@ -199,6 +204,8 @@ export function pagesMeta(model: SkpModel, scale: number, ctx: PagesContext = {}
       for (const id of p.hiddenIds ?? []) for (const k of nodesOf.get(id) ?? []) set.add(k);
       out.hiddenNodes = [...set].sort((a, b) => a - b);
     }
+    const annotations = ctx.hiddenAnnotations?.[pages.length];
+    if (annotations) out.hiddenAnnotations = [...annotations];
     // 장면 값이 없으면 모형 기본(Model Info > Animation). 장면 전환을 끈 모형은 0초
     const anim = model.animation;
     const tr = anim?.showTransition === false ? 0 : clampTime(clampTime(p.transition, Infinity) ?? anim?.transitionTime, MAX_TRANSITION_S);
