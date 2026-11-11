@@ -59,7 +59,8 @@ async function blobPixels(b: Blob): Promise<ImageData> {
 
 /**
  * 투명 배경 두 장: 바탕만 검정·흰색으로 바꿔 찍는다. 하늘·땅 기울기 바탕(파일 스타일의 하늘·지면)은 테마 바탕 위에 그려져
- * 두 장에서 같으므로(불투명으로 남는다) 찍는 동안 끄고, 끝나면 바탕과 테마를 되돌린다
+ * 두 장에서 같으므로(불투명으로 남는다) 찍는 동안 끄고, 끝나면 바탕과 테마를 되돌린다.
+ * 66차: 좌표축 대비(axisContrast — 화면의 파일 배경 테마)는 주지 않는다. 주면 코어가 검정·흰 바탕마다 축 색을 따로 고쳐 두 장의 축 색이 달라진다
  */
 export async function matteShots<T>(ctx: Pick<ExportContext, 'viewer' | 'base' | 'restoreTheme'>, shoot: () => Promise<T>): Promise<[T, T]> {
   const v = ctx.viewer;

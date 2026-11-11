@@ -33,6 +33,7 @@ describe('그림 내보내기 셈', () => {
     let bg: typeof sky | null = sky;
     let theme = '#1b2027';
     const calls: string[] = [];
+    const themes: object[] = [];
     const hex = (c: string): number[] => [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16));
     const viewer = {
       get background() {
@@ -44,6 +45,7 @@ describe('그림 내보내기 셈', () => {
       },
       setTheme: (t: { background: string }) => {
         calls.push(`theme ${t.background}`);
+        themes.push(t);
         theme = t.background;
       },
     };
@@ -61,6 +63,11 @@ describe('그림 내보내기 셈', () => {
     expect(bg).toEqual(sky);
     expect(restoreTheme).toHaveBeenCalledTimes(1);
     expect(calls).toEqual(['bg none', 'theme #000000', 'theme #ffffff', 'bg sky']);
+    // 66차: 두 장은 좌표축 대비(axisContrast) 없이 — 코어가 바탕마다 축 색을 고치면 두 장의 축 색이 달라 매트가 축을 반투명으로 푼다
+    expect(themes).toStrictEqual([
+      { base: 'dark', background: '#000000' },
+      { base: 'dark', background: '#ffffff' },
+    ]);
     // 찍다가 실패해도 되돌린다, 하늘·땅이 없는 보기는 바탕을 건드리지 않는다
     await expect(matteShots(ctx, async () => Promise.reject(new Error('x')))).rejects.toThrow('x');
     expect(bg).toEqual(sky);

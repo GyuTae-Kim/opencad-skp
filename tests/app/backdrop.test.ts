@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { DARK_THEME, LIGHT_THEME, contrastRatio, cssRgba, fitContrast, parseColor } from 'opencad-viewer3d/theme';
 import { FILE_BACKGROUND_KEY, cssHex, isLightBackground, loadFileBackground, luminance, skyBackground, storeFileBackground, styleBackground, viewerTheme } from '../../src/app/backdrop';
 import { pagePlan } from '../../src/app/pages';
 import { createDoc } from '../../src/app/doc';
@@ -17,10 +18,59 @@ describe('파일·장면 배경', () => {
     expect(luminance([1, 1, 1])).toBeCloseTo(1);
     expect(isLightBackground([1, 1, 1])).toBe(true);
     expect(isLightBackground([0.13, 0.16, 0.19])).toBe(false);
-    // 어두운 앱 테마여도 흰 배경 파일은 밝은 쪽 색으로 격자를 그린다
-    expect(viewerTheme('dark', [1, 1, 1])).toEqual({ base: 'light', background: '#ffffff' });
-    expect(viewerTheme('light', [0, 0, 0])).toEqual({ base: 'dark', background: '#000000' });
+    // 어두운 앱 테마여도 흰 배경 파일은 밝은 쪽 색으로 격자를 그린다(66차 — 파일 배경이면 좌표축 대비도 켠다)
+    expect(viewerTheme('dark', [1, 1, 1])).toEqual({ base: 'light', background: '#ffffff', axisContrast: true });
+    expect(viewerTheme('light', [0, 0, 0])).toEqual({ base: 'dark', background: '#000000', axisContrast: true });
+    // 앱 테마 바탕(파일 배경을 끔)은 테마 이름 그대로 — 축 색을 고치지 않는다
     expect(viewerTheme('dark', null)).toBe('dark');
+    expect(viewerTheme('light', null)).toBe('light');
+  });
+
+  it('66차 좌표축 대비: 파일 배경과 3:1이 안 되는 축만 코어가 고치고, 이미 닿는 바탕(흰색)은 받은 색 그대로', () => {
+    // 표본에 있는 배경(0~255): 회색 204·191 계열, 노란 회색, 어두운 70 — 고치기 전에는 축 하나 이상이 3:1 아래
+    const low: [number, number, number][] = [
+      [204, 204, 201],
+      [191, 191, 198],
+      [210, 208, 185],
+      [218, 216, 212],
+      [196, 207, 210],
+      [70, 70, 70],
+    ];
+    const axes = ['axisX', 'axisY', 'axisZ'] as const;
+    const fitted = (rgb255: [number, number, number]) => {
+      const t = viewerTheme('dark', rgb255.map((v) => v / 255) as [number, number, number]);
+      if (typeof t !== 'object' || !t.axisContrast) throw new Error('파일 배경 테마가 아니다');
+      const base = t.base === 'light' ? LIGHT_THEME : DARK_THEME;
+      const bg = parseColor(t.background!)!;
+      return axes.map((a) => {
+        const was = parseColor(base[a])!;
+        const fit = fitContrast(was, bg);
+        return { was, fit, before: contrastRatio(was, bg), after: contrastRatio(fit, bg) };
+      });
+    };
+    for (const c of low) {
+      const r = fitted(c);
+      expect(Math.min(...r.map((x) => x.before)), c.join()).toBeLessThan(3);
+      for (const x of r) {
+        expect(x.after, c.join()).toBeGreaterThanOrEqual(3);
+        // 이미 닿은 축은 받은 값 그대로(같은 그림)
+        if (x.before >= 3) expect(x.fit).toBe(x.was);
+      }
+    }
+    // 회색 204(가장 많은 회색 배경): X·Y만 불투명도를 올리고 Z는 그대로
+    const g204 = fitted([204, 204, 201]);
+    expect(g204.map((x) => x.before.toFixed(2))).toEqual(['2.54', '2.88', '3.01']);
+    expect(g204.map((x) => (x.fit === x.was ? null : cssRgba(x.fit)))).toEqual(['rgba(205,50,50,0.9373)', 'rgba(25,120,25,0.8902)', null]);
+    // 흰 바탕(표본 대부분)과 거의 흰 바탕은 셋 모두 이미 3:1 이상 — 코어가 테마 글을 그대로 둔다
+    for (const c of [
+      [255, 255, 255],
+      [254, 254, 255],
+      [255, 255, 251],
+    ] as [number, number, number][])
+      for (const x of fitted(c)) {
+        expect(x.before).toBeGreaterThanOrEqual(3);
+        expect(x.fit).toBe(x.was);
+      }
   });
 
   it('사용자 설정: 기본 켬, 끄면 기억하고 못 쓰는 저장소는 무시한다', () => {

@@ -60,12 +60,16 @@ export function luminance(c: Rgb): number {
 export const isLightBackground = (c: Rgb): boolean => luminance(c) > 0.18;
 
 /**
- * 코어 테마: 파일 배경을 쓰면 { base: 배경 밝기 쪽, background: 파일 색 }, 아니면 앱 테마 그대로.
- * base는 격자·축·뷰 큐브·측정 글처럼 배경 위에 그리는 색을 고른다(흰 배경에 흰 격자가 보이지 않게)
+ * 코어 테마: 파일 배경을 쓰면 { base: 배경 밝기 쪽, background: 파일 색, axisContrast: true }, 아니면 앱 테마 그대로.
+ * base는 격자·축·뷰 큐브·측정 글처럼 배경 위에 그리는 색을 고른다(흰 배경에 흰 격자가 보이지 않게).
+ * 66차 axisContrast(코어 0.59.0): 테마 축 색(격자 축 선·왼쪽 아래 축 표시·측정 축 안내선)이 파일 배경과 3:1이 안 되면 코어가 같은 색상으로
+ * 가장 적게 고친다(회색 204 바탕의 X·Y, 회색 191 바탕의 셋, 어두운 70 바탕의 X·Z — 흰 바탕은 셋 모두 이미 닿아 그대로). 하늘·땅 기울기 바탕은 코어가 보지 않는다.
+ * 파일 배경을 끈 앱 테마 바탕은 이 선택을 주지 않는다(두 테마 모두 축이 이미 3:1 이상). 그림 저장의 투명 배경 두 장(exporter.ts matteShots)은
+ * 이 선택 없이 검정·흰 바탕을 준다(두 장의 축 색이 같아야 차이 매트가 축을 제 색으로 푼다)
  */
 export function viewerTheme(app: 'dark' | 'light', background: Rgb | null): NonNullable<Viewer3dOptions['theme']> {
   if (!background) return app;
-  return { base: isLightBackground(background) ? 'light' : 'dark', background: cssHex(background) };
+  return { base: isLightBackground(background) ? 'light' : 'dark', background: cssHex(background), axisContrast: true };
 }
 
 /** localStorage(막혀 있으면 null — 접근만으로 예외가 나는 브라우저가 있다) */
