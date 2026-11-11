@@ -11,8 +11,8 @@
  * - 후보: 그 자리의 pickCandidates(앱 onPick과 같은 선택 PICK_CYCLE, 최대 PICK_LIST_MAX). 잘린 면은 뺀다(앱이 고르지 않는다).
  *   앱 고르기로 묶는다(코어 후보는 기본 도형 단위 — 같은 그물의 앞·뒷면, 같은 그룹의 면·모서리): 첫째는 누르기와 같은 고르기(펼친 단계),
  *   둘째부터는 가상 커서로 돌려 고른 것과 같은 고르기(펼친 단계를 건너뛴 가장 안쪽 그룹·컴포넌트, 면·모서리 방식이면 그 면·모서리). 같은 고른 것은 처음 것 하나.
- *   59차: 코어 0.53.0 묶음 열쇠(keypick.ts pickGroupKey — 차례와 상관없이 고를 것이 같은 후보만)를 주어 그런 후보는 코어가 하나로 센다(한도가 묶음 수 —
- *   촘촘한 자리에서 뒤의 것이 목록에 든다). 접힌 그룹 안 후보는 열쇠가 없어 위 같은 고른 것 빼기가 맡는다.
+ *   59차: 코어 0.53.0 묶음 열쇠(keypick.ts pickGroupKey)로 같은 고른 것을 코어가 하나로 센다(한도가 묶음 수 — 촘촘한 자리에서 뒤의 것이 목록에 든다).
+ *   63차: 코어 0.56.0 후보 차례로 접힌 그룹 안 후보까지 코어가 묶어 앱의 같은 고른 것 빼기를 없앴다.
  * - 항목: 그 고르기의 그룹·컴포넌트 이름(keyPickName — 파일 글은 그대로)과 맞은 것의 종류(면·모서리·보조점 — 가상 커서 알림과 같은 사전 열쇠).
  *   고르면 앱 처리기에 그 후보와 고른 것을 넘긴다(목록이 보인 그대로 고른다).
  * - 목록은 메뉴(role=menu — 표준 뷰 메뉴와 같은 꼴, 손가락 기기는 항목 높이 44px): ↑↓·Home·End로 오가고 Enter·Space로 고르며,
@@ -25,7 +25,6 @@ import { selectionForPick, type Selection, type SkpDoc } from './doc';
 import { uiText } from './i18n';
 import { listKeys } from './kbd';
 import { KEY_PICK_TEXT, PICK_CYCLE, keyPickName, pickFaceRanges, pickGroupKey } from './keypick';
-import { selKey } from './panel';
 
 /** 손가락·펜 길게 누르기(ms) — 줄자·각도기 정밀 조준(350 ms)보다 길게, 브라우저·OS 길게 누르기 메뉴와 비슷하게 */
 export const LONG_PRESS_MS = 500;
@@ -45,19 +44,14 @@ export interface PickListItem {
   kind: string;
 }
 
-/** 코어 후보 → 목록 항목(잘린 면은 빼고, 같은 고른 것은 처음 것 하나). tr = 사전 번역 */
+/** 코어 후보(묶음 열쇠로 묶은 — 같은 고른 것은 처음 것 하나) → 목록 항목(잘린 면은 뺀다). tr = 사전 번역 */
 export function pickListItems(d: SkpDoc, picks: readonly Pick3d[], tr: (text: string) => string = uiText): PickListItem[] {
   const out: PickListItem[] = [];
-  const seen = new Set<string>();
   picks.forEach((p, i) => {
     if (p.section) return;
     const cycle = i > 0;
-    const sel = selectionForPick(d, p, false, cycle);
-    const key = selKey(sel);
-    if (seen.has(key)) return;
-    seen.add(key);
     const kind = KEY_PICK_TEXT[`pick.${p.kind}` as 'pick.mesh' | 'pick.line' | 'pick.edge' | 'pick.point'] ?? KEY_PICK_TEXT['pick.mesh'];
-    out.push({ pick: p, sel, name: keyPickName(d, p, cycle), kind: tr(kind) });
+    out.push({ pick: p, sel: selectionForPick(d, p, false, cycle), name: keyPickName(d, p, cycle), kind: tr(kind) });
   });
   return out;
 }

@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Pick3d } from 'opencad-viewer3d';
+import type { Pick3d, PickGroupKey } from 'opencad-viewer3d';
 import { catalogs, languages, registerCatalog, sourceMessage, translate } from '../../site/i18n.mjs';
 import { faceOrEdgeSelection, pickDeepest, selectionForPick, type Selection } from '../../src/app/doc';
 import { PICK_CYCLE } from '../../src/app/keypick';
@@ -62,7 +62,20 @@ function setup(picks?: Pick3d[], withPreview = true): Setup {
   document.body.append(cv);
   cv.getBoundingClientRect = () => ({ left: 10, top: 20, width: 800, height: 600, right: 810, bottom: 620, x: 10, y: 20, toJSON: () => ({}) });
   const list = picks ?? candidates(d);
-  const pickCandidates = vi.fn(() => list);
+  // 코어처럼 묶음 열쇠가 앞 후보와 같은 후보는 더하지 않는다(63차 — 앱은 같은 고른 것 빼기를 코어 묶음에 맡긴다)
+  const pickCandidates = vi.fn((_x: number, _y: number, o: { group?: PickGroupKey | null }) => {
+    const out: Pick3d[] = [];
+    const seen = new Set<string>();
+    for (const p of list) {
+      const k = o.group?.(p, out.length);
+      if (typeof k === 'string') {
+        if (seen.has(k)) continue;
+        seen.add(k);
+      }
+      out.push(p);
+    }
+    return out;
+  });
   const claimPointer = vi.fn(() => true);
   const setPickPreview = vi.fn();
   const view = { canvas: cv, pickCandidates, claimPointer, setPickPreview, cursor: null } as unknown as Setup['view'];

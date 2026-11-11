@@ -7,7 +7,20 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Viewer3d, type Pick3d, type PickEvent } from 'opencad-viewer3d';
-import { KEY_SNAP_KEYS, KEY_SNAP_MESSAGES, keySnapAction, keySnapHint, keySnapMessages, type KeySnapMessageKey, type KeySnapMessages } from 'opencad-viewer3d/keysnap';
+import {
+  KEY_SNAP_KEYS,
+  KEY_SNAP_MESSAGES,
+  formatKeySnapMessage,
+  keySnapAction,
+  keySnapHint,
+  keySnapMessages,
+  keySnapText,
+  orderedText,
+  pointText,
+  type KeySnapMessageFn,
+  type KeySnapMessageKey,
+  type KeySnapMessages,
+} from 'opencad-viewer3d/keysnap';
 import { catalogs, languages, registerCatalog, sourceMessage, translate } from '../../site/i18n.mjs';
 import { type createDoc, faceOrEdgeSelection, selectionForPick } from '../../src/app/doc';
 import {
@@ -18,10 +31,11 @@ import {
   LIST_TARGETS,
   PICK_CYCLE,
   keyPickItems,
+  keyPickMessageFn,
   keyPickMessages,
   keyPickName,
-  keyPickText,
   pickFaceRanges,
+  pickGroupKey,
   type KeyMeasureHost,
 } from '../../src/app/keypick';
 import { KEY_MEASURE_TEXT } from '../../src/app/measure';
@@ -29,6 +43,7 @@ import { keyAction } from '../../src/app/keys';
 import { PICK_LIST_MAX, pickListItems } from '../../src/app/picklist';
 import { SHORTCUTS } from '../../src/app/shortcuts';
 import { childrenOf, nodeName } from '../../src/app/tree';
+import { formatLength, mmPerSceneUnit } from '../../src/app/units';
 import { type FakeElement, installDom } from '../fakegl/fakedom';
 import { rowDoc } from './rowdoc';
 
@@ -103,44 +118,52 @@ describe('알림 틀(네 언어 사전 열쇠)', () => {
     expect(Object.keys(catalogs.en).length).toBe(keys.length + ADDED.length);
   });
 
-  it('고르기 알림 글: 코어와 같은 틀·차례로 앱 이름·좌표를 끼우고, 네 언어 모두 한글이 남지 않는다', () => {
-    const pick: Pick3d = { kind: 'mesh', id: 'skp-mesh-0', index: 0, point: [1, 2, 3] };
+  it('고르기 알림 글(63차 — 코어 글 함수): 코어 틀에 앱 이름·좌표가 끼고, 네 언어 모두 말 차례 틀로 이어 한글이 남지 않는다', () => {
     const num = (v: number): string => `${v} mm`;
-    const ko = keySnapMessages(keyPickMessages((t) => t));
-    const items = keyPickItems((t) => t);
-    const base = { index: 1, count: 4, pick, text: '' };
-    expect(keyPickText({ ...base, reason: 'move' }, ko, items, '그룹 Row', num)).toBe('그룹 Row의 면 2/4: X 1 mm, Y 2 mm, Z 3 mm');
-    expect(keyPickText({ ...base, reason: 'start', index: 0 }, ko, items, '그룹 Row', num)).toBe(
-      '가상 커서를 켰습니다. 그룹 Row의 면 1/4: X 1 mm, Y 2 mm, Z 3 mm. 옮기기 ←→↑↓ · 후보 Tab · 고르기 Enter · 끄기 Esc',
-    );
-    expect(keyPickText({ ...base, reason: 'commit' }, ko, items, '그룹 Row', num)).toBe('골랐습니다: 그룹 Row의 면');
-    expect(keyPickText({ ...base, reason: 'cycle', index: 0, count: 1 }, ko, items, 'Row', num)).toBe('Row의 면: X 1 mm, Y 2 mm, Z 3 mm (후보 하나)');
-    expect(keyPickText({ ...base, reason: 'cycle', pick: { ...pick, kind: 'line' } }, ko, items, 'Row', num)).toBe('Row의 모서리 2/4: X 1 mm, Y 2 mm, Z 3 mm');
-    expect(keyPickText({ ...base, reason: 'move', pick: { ...pick, kind: 'point' } }, ko, items, 'Row', num)).toContain('Row의 보조점 2/4');
-    expect(keyPickText({ ...base, reason: 'move', pick: { ...pick, section: true } }, ko, items, 'Row', num)).toContain('Row의 잘린 면 2/4');
-    // 고른 것이 없으면 코어 글 그대로
-    expect(keyPickText({ ...base, reason: 'end', pick: null, text: '가상 커서를 껐습니다' }, ko, items, '', num)).toBe('가상 커서를 껐습니다');
+    const point = [1, 2, 3] as const;
+    /** 코어 뷰어가 만드는 글(viewer.ts pickText·keyAnnounce — 틀 함수로 만드는 조각의 차례) */
+    const label = (M: KeySnapMessageFn, name: string, kind: 'mesh' | 'line' | 'edge' | 'point' | 'section' = 'mesh'): string =>
+      keySnapText(M, 'pickItem', [name, keySnapText(M, `pick.${kind}` as KeySnapMessageKey)]);
+    const body = (M: KeySnapMessageFn, name: string, kind?: 'mesh' | 'line' | 'edge' | 'point' | 'section', index = 1, count = 4): string =>
+      orderedText(label(M, name, kind), index, count, pointText(point, num, M), null, M);
+    const start = (M: KeySnapMessageFn, name: string): string => keySnapText(M, 'start', [body(M, name, 'mesh', 0), keySnapHint(KEY_SNAP_KEYS, 'pick', true, M)]);
+    const picked = (M: KeySnapMessageFn, name: string): string => keySnapText(M, 'picked', [label(M, name)]);
+    const ko = keyPickMessageFn((t) => t);
+    expect(body(ko, '그룹 Row')).toBe('그룹 Row의 면 2/4: X 1 mm, Y 2 mm, Z 3 mm');
+    expect(start(ko, '그룹 Row')).toBe('가상 커서를 켰습니다. 그룹 Row의 면 1/4: X 1 mm, Y 2 mm, Z 3 mm. 옮기기 ←→↑↓ · 후보 Tab · 고르기 Enter · 끄기 Esc');
+    expect(picked(ko, '그룹 Row')).toBe('골랐습니다: 그룹 Row의 면');
+    expect(keySnapText(ko, 'only', [body(ko, 'Row', 'mesh', 0, 1)])).toBe('Row의 면: X 1 mm, Y 2 mm, Z 3 mm (후보 하나)');
+    expect(body(ko, 'Row', 'line')).toBe('Row의 모서리 2/4: X 1 mm, Y 2 mm, Z 3 mm');
+    expect(body(ko, 'Row', 'point')).toContain('Row의 보조점 2/4');
+    expect(body(ko, 'Row', 'section')).toContain('Row의 잘린 면 2/4');
+    // 이름의 틀 글자는 틀로 보지 않는다(한 번만 바꾼다)
+    expect(label(ko, '{0}')).toBe('{0}의 면');
     for (const code of CODES) {
-      const M = keySnapMessages(keyPickMessages((t) => translate(t, code)));
-      const I = keyPickItems((t) => translate(t, code));
-      for (const reason of ['start', 'move', 'cycle', 'commit', 'refresh'] as const)
-        for (const kind of ['mesh', 'line', 'edge', 'point'] as const) {
-          const t = keyPickText({ ...base, reason, pick: { ...pick, kind } }, M, I, 'Group Row', num);
-          expect(t, `${code} ${reason} ${kind}`).not.toMatch(HANGUL);
-        }
-      for (const k of ['end', 'noPick', 'pickedNothing'] as KeySnapMessageKey[]) expect(M[k], code).not.toMatch(HANGUL);
+      const tr = (t: string): string => translate(t, code);
+      const M = keyPickMessageFn(tr);
+      const K = keySnapMessages(keyPickMessages(tr));
+      for (const kind of ['mesh', 'line', 'edge', 'point', 'section'] as const) {
+        // 말 차례 틀(사전 — 이름 뒤에 종류를 붙이는 코어 틀이 아니다), 한글 없음
+        expect(label(M, 'Group Row', kind), `${code} ${kind}`).toBe(formatKeySnapMessage(tr(KEY_PICK_ITEM[kind]), ['Group Row']));
+        expect(body(M, 'Group Row', kind), `${code} ${kind}`).not.toMatch(HANGUL);
+        expect(keySnapText(M, 'picked', [label(M, 'Group Row', kind)]), `${code} ${kind}`).not.toMatch(HANGUL);
+      }
+      expect(start(M, 'Group Row'), code).not.toMatch(HANGUL);
+      // 그 밖의 틀은 keyPickMessages 그대로(값을 끼운 글)
+      for (const k of Object.keys(KEY_SNAP_MESSAGES) as KeySnapMessageKey[]) {
+        if (k === 'pickItem' || k.startsWith('pick.')) continue;
+        expect(keySnapText(M, k, ['A', 'B', 'C', 'D']), `${code} ${k}`).toBe(formatKeySnapMessage(K[k], ['A', 'B', 'C', 'D']));
+      }
+      for (const k of ['end', 'noPick', 'pickedNothing'] as KeySnapMessageKey[]) expect(K[k], code).not.toMatch(HANGUL);
     }
-    const lang = (code: string): [KeySnapMessages, ReturnType<typeof keyPickItems>] => [keySnapMessages(keyPickMessages((t) => translate(t, code))), keyPickItems((t) => translate(t, code))];
-    expect(keyPickText({ ...base, reason: 'start', index: 0 }, ...lang('en'), 'Group Row', num)).toBe(
-      'Virtual cursor on. Face of Group Row 1/4: X 1 mm, Y 2 mm, Z 3 mm. Move ←→↑↓ · Next candidate Tab · Select Enter · Exit Esc',
-    );
+    const lang = (code: string): KeySnapMessageFn => keyPickMessageFn((t) => translate(t, code));
+    expect(start(lang('en'), 'Group Row')).toBe('Virtual cursor on. Face of Group Row 1/4: X 1 mm, Y 2 mm, Z 3 mm. Move ←→↑↓ · Next candidate Tab · Select Enter · Exit Esc');
     // 58차 말 차례: 이름 뒤에 종류를 붙이던 코어 틀("Group Row Face") 대신 언어마다 자연스러운 차례
-    const commit = { ...base, reason: 'commit' } as const;
-    expect(keyPickText(commit, ...lang('en'), 'Group Row', num)).toBe('Selected Face of Group Row');
-    expect(keyPickText(commit, ...lang('de'), 'Gruppe Row', num)).toBe('Fläche von Gruppe Row ausgewählt');
-    expect(keyPickText(commit, ...lang('ja'), 'グループ Row', num)).toBe('選択しました: グループ Rowの面');
-    expect(keyPickText(commit, ...lang('zh-CN'), '组 Row', num)).toBe('已选择：组 Row的面');
-    expect(keyPickText({ ...base, reason: 'move', pick: { ...pick, kind: 'line' } }, ...lang('en'), 'Group Row', num)).toBe('Edge of Group Row 2/4: X 1 mm, Y 2 mm, Z 3 mm');
+    expect(picked(lang('en'), 'Group Row')).toBe('Selected Face of Group Row');
+    expect(picked(lang('de'), 'Gruppe Row')).toBe('Fläche von Gruppe Row ausgewählt');
+    expect(picked(lang('ja'), 'グループ Row')).toBe('選択しました: グループ Rowの面');
+    expect(picked(lang('zh-CN'), '组 Row')).toBe('已选择：组 Row的面');
+    expect(body(lang('en'), 'Group Row', 'line')).toBe('Edge of Group Row 2/4: X 1 mm, Y 2 mm, Z 3 mm');
   });
 
   it('58차 "이름 + 종류" 틀: 자리 밖에 한글이 든 사전 열쇠(네 언어), 옮긴 틀에 한글이 없고, 더해도 화면 번역층이 옮기는 다른 글은 바뀌지 않는다', () => {
@@ -306,7 +329,10 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
     const ks = v.keyboardSnap!;
     // 59차: 앱 묶음 열쇠(pickGroupKey — tests/app/pickgroup.test.ts), 60차: 그물 면 후보 표식(SketchUp 면 구간)
     expect(ks.pickCycle).toEqual({ ...PICK_CYCLE, group: expect.any(Function), facePreview: true, faceRanges: expect.any(Function) });
-    expect(ks.messages).toEqual(keyPickMessages());
+    // 63차: 글 전체를 코어가 만든다 — 말 차례 글 함수·그 차례의 앱 이름·모형 단위 수
+    expect(ks.messages).toEqual(expect.any(Function));
+    expect(ks.pickName).toEqual(expect.any(Function));
+    expect(ks.formatNumber).toEqual(expect.any(Function));
     expect(cv.getAttribute('aria-keyshortcuts')).toBe('ArrowLeft ArrowRight ArrowUp ArrowDown Enter');
     kp.set(false);
     expect(v.keyboardSnap).toBeNull();
@@ -323,19 +349,19 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
     key(cv, 'ArrowLeft');
     const c = v.keyboardCursor!;
     expect(c.mode).toBe('pick');
-    // 가운데 시선: Near 앞·뒤 면, Far 앞·뒤 면
-    expect(c.count).toBe(4);
-    expect(kp.text).toMatch(/^가상 커서를 켰습니다\. 그룹 Row의 면 1\/4: X [^,]+, Y [^,]+, Z [^.]+\. 옮기기 ←→↑↓ · 후보 Tab · 고르기 Enter · 끄기 Esc$/);
+    // 가운데 시선: Near 앞면(첫 후보 — Row를 고른다), Near 뒷면(가장 안쪽 Near), Far 앞면(Far) — 63차: Far 뒷면은 앞 후보와 고를 것이 같아 묶인다(62차까지 넷)
+    expect(c.count).toBe(3);
+    expect(kp.text).toMatch(/^가상 커서를 켰습니다\. 그룹 Row의 면 1\/3: X [^,]+, Y [^,]+, Z [^.]+\. 옮기기 ←→↑↓ · 후보 Tab · 고르기 Enter · 끄기 Esc$/);
     key(cv, 'Tab');
     expect(v.keyboardCursor!.index).toBe(1);
     // 둘째 후보 이름은 펼친 단계를 건너뛴 가장 안쪽 노드(Near)
-    expect(kp.text).toMatch(/^그룹 Near의 면 2\/4: /);
+    expect(kp.text).toMatch(/^그룹 Near의 면 2\/3: /);
     key(cv, 'Tab');
-    expect(kp.text).toMatch(/^그룹 Far의 면 3\/4: /);
+    expect(kp.text).toMatch(/^그룹 Far의 면 3\/3: /);
     key(cv, 'Enter');
     expect(picks.length).toBe(1);
     const [p, e] = picks[0]!;
-    expect(e.cycle).toEqual({ index: 2, count: 4 });
+    expect(e.cycle).toEqual({ index: 2, count: 3 });
     expect(e.pointerType).toBe('keyboard');
     // 앱 고르기: 보통(펼친 단계) = Row, 돌린 후보(e.cycle) = Far
     expect(selectionForPick(d, p)).toEqual({ kind: 'outline', index: d.outline.findIndex((r) => r.node === row) });
@@ -361,6 +387,75 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
     expect(v.keyboardCursor).toBeNull();
   });
 
+  it('63차 알림 글: 네 언어에서 62차까지 앱이 만들던 글과 틀·차례·이름·좌표가 같다(시작·돌리기·Enter 고름·후보 하나 — 코어 뷰어가 만든 글)', () => {
+    // 62차까지의 keyPickText 그대로 — 코어 글로 맡긴 뒤에도 글이 같은지 보는 비교 기준
+    const before = (
+      a: { reason: string; index: number; count: number; pick: Pick3d },
+      M: KeySnapMessages,
+      items: ReturnType<typeof keyPickItems>,
+      name: string,
+      num: (v: number) => string,
+    ): string => {
+      const p = a.pick;
+      const label = formatKeySnapMessage(items[p.section ? 'section' : p.kind], [name]);
+      if (a.reason === 'commit') return formatKeySnapMessage(M.picked, [label]);
+      const body = orderedText(label, a.index, a.count, pointText(p.point, num, M), null, M);
+      if (a.reason === 'start') return formatKeySnapMessage(M.start, [body, keySnapHint(KEY_SNAP_KEYS, 'pick', true, M)]);
+      if (a.reason === 'cycle' && a.count === 1) return formatKeySnapMessage(M.only, [body]);
+      return body;
+    };
+    for (const code of ['ko', ...CODES]) {
+      const tr = (t: string): string => (code === 'ko' ? t : translate(t, code));
+      const { v, kp, d, cv } = setup();
+      kp.set(true);
+      const ks = v.keyboardSnap!;
+      const seen: { reason: string; index: number; count: number; pick: Pick3d; text: string }[] = [];
+      /** 앱이 켠 그대로(이름·수 꼴·알림), 글 함수만 이 언어로 */
+      const on = (pickCycle: typeof ks.pickCycle): void =>
+        v.setKeyboardSnap({
+          ...ks,
+          pickCycle,
+          messages: keyPickMessageFn(tr),
+          announce: (a) => {
+            if (a.pick) seen.push({ reason: a.reason, index: a.index, count: a.count, pick: a.pick, text: a.text });
+            ks.announce!(a);
+          },
+        });
+      on(ks.pickCycle);
+      const M = keySnapMessages(keyPickMessages(tr));
+      const items = keyPickItems(tr);
+      const mm = mmPerSceneUnit(d.scene.units);
+      const check = (reason: string): void => {
+        const a = seen.at(-1)!;
+        const name = keyPickName(d, a.pick, a.index > 0);
+        expect(a.reason, code).toBe(reason);
+        expect(kp.text, code).toBe(a.text);
+        expect(a.text, `${code} ${reason}`).toBe(before(a, M, items, name, (x) => formatLength(x * mm, d.units)));
+        // 좌표는 모형 단위 글(코어 기본의 장면 수가 아니다), 옮긴 글에는 이름(시험 앱 언어는 한국어) 밖에 한글이 남지 않는다
+        if (reason !== 'commit') expect(a.text, code).toContain(formatLength(a.pick.point[0]! * mm, d.units));
+        if (code !== 'ko') expect(a.text.replaceAll(name, ''), code).not.toMatch(HANGUL);
+      };
+      key(cv, 'ArrowLeft');
+      check('start');
+      expect(seen.at(-1)!.count).toBe(3);
+      key(cv, 'Tab');
+      check('cycle');
+      key(cv, 'Tab');
+      check('cycle');
+      key(cv, 'Enter');
+      check('commit');
+      expect(seen.at(-1)!.index).toBe(2);
+      key(cv, 'ArrowUp');
+      check('move');
+      // 후보 하나인 자리(모든 후보를 한 묶음으로): Tab이 그 자리에 머문다
+      on({ ...(ks.pickCycle as object), group: () => 'one' });
+      key(cv, 'Tab');
+      expect(seen.at(-1)!.count).toBe(1);
+      check('cycle');
+      kp.set(false);
+    }
+  });
+
   it('60차 그물 면 후보 표식: 코어가 그릴 때 지금 후보의 SketchUp 면 구간(해석기 면 경계)을 묻고, 면이 아닌 후보·면 경계가 없는 그물은 null(코어 같은 평면 어림) — 줄자·각도기 방식은 묻지 않는다', () => {
     const { v, d, cv, host } = setup();
     let asked = 0;
@@ -370,7 +465,7 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
     kp.set(true);
     key(cv, 'ArrowLeft');
     const c = v.keyboardCursor!;
-    expect(c.count).toBe(4);
+    expect(c.count).toBe(3);
     const picks = v.pickCandidates(c.x, c.y, { ...PICK_CYCLE, pointerType: 'keyboard' });
     expect(picks.map((p) => p.kind)).toEqual(['mesh', 'mesh', 'mesh', 'mesh']);
     // 가운데 시선의 상자 면 = 사각형 하나 = 삼각형 둘(해석기 면 경계와 같은 구간)
@@ -410,16 +505,17 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
     kp.set(false);
   });
 
-  it('57차 겹친 것 목록 항목: 같은 자리 코어 pickCandidates를 앱 고르기로 묶는다(첫째 펼친 단계, 둘째부터 가장 안쪽·면 방식은 면마다)', () => {
+  it('57차 겹친 것 목록 항목: 같은 자리 코어 pickCandidates를 앱 고르기로 묶는다(첫째 펼친 단계, 둘째부터 가장 안쪽·면 방식은 면마다 — 63차 코어 후보 차례)', () => {
     const { v, d } = setup();
     const t = d.tree!;
     const row = childrenOf(t, -1)[0]!;
     const [far, near] = childrenOf(t, row);
     const cx = v.canvas.clientWidth / 2 || 400;
     const cy = v.canvas.clientHeight / 2 || 300;
-    const picks = v.pickCandidates(cx, cy, { ...PICK_CYCLE, pointerType: 'mouse', max: PICK_LIST_MAX });
-    // 가운데 시선: Near 앞·뒤 면, Far 앞·뒤 면(가상 커서 Tab 차례와 같다)
-    expect(picks.length).toBe(4);
+    const candidates = (): Pick3d[] => v.pickCandidates(cx, cy, { ...PICK_CYCLE, pointerType: 'mouse', max: PICK_LIST_MAX, group: pickGroupKey(() => d) });
+    const picks = candidates();
+    // 가운데 시선: Near 앞면(Row를 고른다), Near 뒷면(Near), Far 앞면(Far — 뒷면은 같은 고른 것이라 묶인다, 가상 커서 Tab 차례와 같다)
+    expect(picks.length).toBe(3);
     const items = pickListItems(d, picks);
     expect(items.map((i) => [i.name, i.kind])).toEqual([
       ['그룹 Row', '면'],
@@ -437,7 +533,7 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
     expect(items[2]!.pick).toEqual(picks[2]);
     // 면·모서리 방식: 면마다 하나(넷), 이름은 그 면을 품은 가장 안쪽 그룹
     d.pickMode = 'face';
-    const faces = pickListItems(d, picks);
+    const faces = pickListItems(d, candidates());
     expect(faces.map((i) => [i.name, i.sel?.kind])).toEqual([
       ['그룹 Near', 'face'],
       ['그룹 Near', 'face'],

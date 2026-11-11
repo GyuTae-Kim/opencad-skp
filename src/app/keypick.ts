@@ -8,22 +8,21 @@
  *   Enter로 고른다. 둘째 이후 후보는 onPick의 e.cycle로 오고 앱은 펼친 단계 규칙을 건너뛰어 그것을 그대로 고른다(doc.ts selectionForPick).
  * - 후보 고르기 선택(PICK_CYCLE)은 앱 onPick 선택과 같다(앱은 반투명 너머·면만 고르기를 쓰지 않는다).
  *   59차: 코어 0.53.0 후보 묶음 열쇠(group — pickGroupKey)로 같은 고른 것이 될 후보를 하나로 센다(후보 한도·Tab 수·알림 수가 묶음 수 — 겹친 것 목록과 같다).
+ *   63차: 코어 0.56.0 열쇠 둘째 인수(후보 차례)로 첫 후보(펼친 단계)와 둘째 이후(가장 안쪽)를 나눠 접힌 그룹 안 후보까지 묶는다.
  * - 알림 글: 코어 알림 틀 가운데 이 앱이 보일 수 있는 것(고르기 모드)만 네 언어 사전 열쇠(KEY_PICK_TEXT)로 옮겨 setKeyboardSnap({ messages })로 준다.
  *   한글이 없는 틀(pickItem '{0} {1}'·candidate '{0}: {1}'·order '{0} {1}/{2}'·point 'X {0}, Y {1}, Z {2}'·hintJoin)은 사전에 넣지 않는다 —
  *   사전의 {0} 틀은 화면 번역층이 모든 글에 맞춰 보므로 그런 틀은 아무 글이나 잡는다. 키 안내 틀은 이 앱 키(코어 기본 키)를 끼운 글로 둔다('옮기기 ←→↑↓' — 자리 없는 열쇠).
  *   측정 모드 틀(첫 점·둘째 점·붙잡은 종류 등)은 이 앱이 코어 측정을 쓰지 않아 넣지 않는다(줄자·각도기 알림 글은 measure.ts KEY_MEASURE_TEXT).
- * - 고른 것 이름: 코어는 그물 이름(재질 · 태그 묶음)을 끼우므로, 앱이 그 후보를 Enter로 고를 때의 그룹·컴포넌트 이름(고른 것 설명의 첫 조각 — 파일 글은 그대로)과
- *   모형 단위 좌표로 같은 틀에 다시 만든다. 이름과 맞은 것 종류는 코어 pickItem 대신 종류마다 한글이 든 사전 틀(KEY_PICK_ITEM — 58차, 언어마다 말 차례)로 잇는다.
- *   글은 보이지 않는 알림 칸(role=status, 번역층 밖 — 이미 옮긴 글)에 넣는다.
- *   60차: 코어 0.54.0 고른 것 이름 함수(setKeyboardSnap pickName)로 바꾸지 않는다 — 이름은 후보 차례(첫째는 펼친 단계, 둘째부터 가장 안쪽)에 따라 다른데
- *   pickName은 후보만 받고(pickGroupKey와 같은 까닭), 좌표는 모형 단위 글(formatLength — cm·피트 등)이라 코어 글(장면 수, 단위 없음)을 그대로 쓸 수 없어
- *   글 전체를 앱이 만드는 길이 그대로 남는다(이름만 코어에 맡겨도 줄지 않는다).
+ * - 고른 것 이름·좌표(63차 — 코어 0.56.0 pickName 후보 차례·formatNumber로 글 전체를 코어가 만든다): 코어는 그물 이름(재질 · 태그 묶음)을 끼우므로,
+ *   이름은 앱이 그 후보를 Enter로 고를 때의 그룹·컴포넌트 이름(고른 것 설명의 첫 조각 — 파일 글은 그대로, 차례에 따라 첫째는 펼친 단계, 둘째부터 가장 안쪽),
+ *   좌표는 모형 단위 글(formatLength — cm·피트 등)을 쓴다. 이름과 맞은 것 종류는 코어 pickItem 대신 종류마다 한글이 든 사전 틀(KEY_PICK_ITEM — 58차,
+ *   언어마다 말 차례)로 잇는다(keyPickMessageFn). 글은 보이지 않는 알림 칸(role=status, 번역층 밖 — 이미 옮긴 글)에 넣는다.
  * - 그물 면 후보 표식(60차 — 코어 0.54.0 pickCycle.facePreview): 지금 후보가 그물 면이면 코어가 그 SketchUp 면(pickFaceRanges — 해석기 면 경계)을
  *   화면 덧그림에 강조 색으로 옅게 칠하고 테두리를 긋는다(깊이를 따지지 않는다 — 뒤 후보도 보인다). 줄자·각도기 방식은 후보 돌리기가 없어(pickCycle false) 그리지 않는다.
  * 코어 입구와 함께 받는다(core.ts loadViewerCore — 첫 화면 조각 밖).
  */
 import type { IndexRange, KeyboardSnapAnnouncement, KeyPickCycleOptions, Pick3d, PickGroupKey, Viewer3d } from 'opencad-viewer3d';
-import { KEY_SNAP_KEYS, formatKeySnapMessage, keySnapHint, keySnapMessages, orderedText, pointText, type KeySnapMessageKey, type KeySnapMessages } from 'opencad-viewer3d/keysnap';
+import { formatKeySnapMessage, keySnapMessages, type KeySnapMessageFn, type KeySnapMessageKey, type KeySnapMessages } from 'opencad-viewer3d/keysnap';
 import { selectionForPick, selectionParts, type SkpDoc } from './doc';
 import { mixText, uiText } from './i18n';
 import { isEditableTarget } from './keys';
@@ -37,22 +36,19 @@ export const PICK_CYCLE: KeyPickCycleOptions = { throughTranslucent: false, mesh
 export const SECTION_GROUP = '§';
 
 /**
- * 59차 코어 0.53.0 후보 묶음 열쇠(pickCandidates·pickCycle의 group): 후보를 그 후보로 앱이 고를 것의 열쇠(panel.ts selKey)로 묶는다.
- * 앱은 첫째 후보를 누르기와 같은 고르기(펼친 단계), 둘째부터 펼친 단계를 건너뛴 가장 안쪽 그룹·컴포넌트로 고르는데(doc.ts selectionForPick의 cycle),
- * 열쇠 함수는 후보 하나만 받아 그 차례를 모른다. 그래서 두 고르기가 같은 후보만 그 열쇠로 묶고 다른 후보는 묶지 않는다(null — 코어는 0.47.0처럼 기본 도형마다,
- * 겹친 것 목록이 같은 고른 것을 뺀다): 가장 안쪽 방식·면 방식은 모든 후보가, 펼친 단계 방식은 접힌 그룹·컴포넌트 안에 들지 않은 후보(맨 위 단계 그룹의 면,
- * 펼친 단계의 면·모서리, 맨 위 낱 형상)가 묶인다. 접힌 그룹 안 후보까지 가장 안쪽 열쇠로 묶으면 첫 후보와 같은 안쪽 그룹의 뒤 후보(닫힌 몸의 뒷면)가 빠져,
- * 그 안쪽 그룹을 고르는 줄·Tab 차례가 없어진다(첫 후보 줄은 펼친 단계를 고른다).
- * 이렇게 묶어 빠지는 후보는 늘 앞 후보와 고를 것이 같아 목록이 빼던 것뿐이라 목록 줄·Enter로 고르는 것은 그대로이고, 한도(16)는 묶음 수라
- * 촘촘한 자리에서 뒤 후보가 목록·Tab 차례에 든다. 잘린 면은 앱이 고르지 않으므로 하나로 묶는다(SECTION_GROUP)
+ * 59차 코어 0.53.0 후보 묶음 열쇠(pickCandidates·pickCycle의 group): 후보를 그 차례에 앱이 고를 것의 열쇠(panel.ts selKey)로 묶는다.
+ * 앱은 첫째 후보를 누르기와 같은 고르기(펼친 단계), 둘째부터 펼친 단계를 건너뛴 가장 안쪽 그룹·컴포넌트로 고른다(doc.ts selectionForPick의 cycle) —
+ * 63차: 코어 0.56.0 둘째 인수 index(이 후보가 더해지면 들 차례 — 앞서 더한 후보 수)로 그 차례의 고르기를 그대로 열쇠로 쓴다. 59차는 차례를 몰라 두 고르기가 같은
+ * 후보만 묶어 접힌 그룹 안 후보는 코어가 낱낱이 세고 목록이 같은 고른 것을 뺐다(촘촘한 자리에서 같은 그룹이 한도 16을 채웠다, Tab은 같은 그룹을 거듭 돌았다).
+ * 첫 후보와 뒤 후보의 열쇠가 달라 첫 후보와 같은 안쪽 그룹의 뒤 후보(닫힌 몸의 뒷면 — 그 안쪽 그룹을 고르는 줄)도 그대로 남는다.
+ * 잘린 면은 앱이 고르지 않으므로 하나로 묶는다(SECTION_GROUP)
  */
 export function pickGroupKey(doc: () => SkpDoc | null): PickGroupKey {
-  return (p) => {
+  return (p, index = 0) => {
     const d = doc();
     if (!d) return null;
     if (p.section) return SECTION_GROUP;
-    const key = selKey(selectionForPick(d, p, false, true));
-    return key && key === selKey(selectionForPick(d, p, false, false)) ? key : null;
+    return selKey(selectionForPick(d, p, false, index > 0)) || null;
   };
 }
 
@@ -116,30 +112,22 @@ export function keyPickItems(tr: (text: string) => string = uiText): KeyPickItem
   return out;
 }
 
+/**
+ * 고르기 모드 알림 틀(63차 — 코어 글 함수 messages로 말 차례까지 코어 글에 맡긴다): 틀은 keyPickMessages 그대로이고, "이름 + 종류"만 코어 pickItem('{0} {1}' — 이름 뒤에 종류) 대신
+ * 사전의 말 차례 틀(KEY_PICK_ITEM)로 잇는다 — pick.* 열쇠는 종류 낱말 대신 그 말 차례 틀을 돌려주고, pickItem은 그 틀({1} 자리 값)에 이름({0})을 끼운다
+ */
+export function keyPickMessageFn(tr: (text: string) => string = uiText): KeySnapMessageFn {
+  const M = keySnapMessages(keyPickMessages(tr));
+  const items = keyPickItems(tr);
+  return (key, values) => {
+    if (key === 'pickItem') return formatKeySnapMessage(String(values[1]), [values[0]!]);
+    if (key.startsWith('pick.')) return items[key.slice(5) as keyof KeyPickItems];
+    return formatKeySnapMessage(M[key], values);
+  };
+}
+
 /** 캔버스가 받는 키(aria-keyshortcuts — Tab은 커서가 켜진 동안만이라 적지 않는다) */
 const KEY_SHORTCUTS = 'ArrowLeft ArrowRight ArrowUp ArrowDown Enter';
-
-/**
- * 고르기 모드 알림 글: 코어 글(a.text)과 같은 틀·차례로, 고른 것 이름(name)과 좌표 글(num)만 앱 것으로(고른 것이 없으면 코어 글 그대로).
- * 이름과 종류는 items(keyPickItems — 58차, 언어마다 말 차례)로 잇는다.
- * 'start' 커서 켬(키 안내를 붙인다), 'commit' Enter로 고름, 후보가 하나인 자리에서 돌리면 only, 그 밖은 후보 글
- */
-export function keyPickText(
-  a: Pick<KeyboardSnapAnnouncement, 'reason' | 'index' | 'count' | 'pick' | 'text'>,
-  M: KeySnapMessages,
-  items: KeyPickItems,
-  name: string,
-  num: (v: number) => string,
-): string {
-  const p = a.pick;
-  if (!p) return a.text;
-  const label = formatKeySnapMessage(items[p.section ? 'section' : p.kind], [name]);
-  if (a.reason === 'commit') return formatKeySnapMessage(M.picked, [label]);
-  const body = orderedText(label, a.index, a.count, pointText(p.point, num, M), null, M);
-  if (a.reason === 'start') return formatKeySnapMessage(M.start, [body, keySnapHint(KEY_SNAP_KEYS, 'pick', true, M)]);
-  if (a.reason === 'cycle' && a.count === 1) return formatKeySnapMessage(M.only, [body]);
-  return body;
-}
 
 /**
  * 후보를 Enter로 고를 때의 그룹·컴포넌트 이름(고른 것 설명의 첫 조각, 지금 언어 — 파일 글은 그대로). cycle = 둘째 이후 후보(펼친 단계를 건너뛴다).
@@ -290,15 +278,29 @@ export class KeyPick {
       this.live.textContent = '';
       return;
     }
-    const messages = keyPickMessages();
-    const M = keySnapMessages(messages);
     if (this.mode === 'pick') {
-      const items = keyPickItems();
       // 60차: 지금 후보가 그물 면이면 그 SketchUp 면을 화면 덧그림에 표식(코어 0.54.0 facePreview — 선분·보조점 후보는 0.47.0부터 코어가 그린다)
       const pickCycle = { ...PICK_CYCLE, group: pickGroupKey(this.doc), facePreview: true, faceRanges: (p: Pick3d) => pickFaceRanges(this.doc(), p) };
-      this.v.setKeyboardSnap({ pickCycle, messages, announce: (a) => this.say(a, M, items) });
+      // 63차: 글 전체를 코어가 만든다 — 이름은 그 차례의 앱 이름, 좌표는 모형 단위 글, 말 차례는 글 함수(문서가 없으면 코어 글)
+      this.v.setKeyboardSnap({
+        pickCycle,
+        messages: keyPickMessageFn(),
+        pickName: (p, index = 0) => {
+          const d = this.doc();
+          return d && keyPickName(d, p, index > 0);
+        },
+        formatNumber: (v) => {
+          const d = this.doc();
+          return d && formatLength(v * mmPerSceneUnit(d.scene.units), d.units);
+        },
+        announce: (a) => {
+          this.live.textContent = a.text;
+        },
+      });
     } else {
       // 줄자·각도기: 코어는 고르기 모드(후보 돌리기 없음 — Tab은 초점 이동), 자리만 받아 측정 도구가 추정한다
+      const messages = keyPickMessages();
+      const M = keySnapMessages(messages);
       const hint = KEY_MEASURE_HINT.map((t) => uiText(t)).join(M.hintJoin);
       this.v.setKeyboardSnap({ pickCycle: false, messages, announce: (a) => this.sayMeasure(a, M, hint) });
     }
@@ -317,16 +319,5 @@ export class KeyPick {
     }
     const body = h.keyHover(a.x, a.y);
     this.live.textContent = a.reason === 'start' ? formatKeySnapMessage(M.start, [body, hint]) : body;
-  }
-
-  private say(a: KeyboardSnapAnnouncement, M: KeySnapMessages, items: KeyPickItems): void {
-    const d = this.doc();
-    const p = a.mode === 'pick' && d ? a.pick : null;
-    if (!d || !p) {
-      this.live.textContent = a.text;
-      return;
-    }
-    const mm = mmPerSceneUnit(d.scene.units);
-    this.live.textContent = keyPickText(a, M, items, keyPickName(d, p, a.index > 0), (x) => formatLength(x * mm, d.units));
   }
 }

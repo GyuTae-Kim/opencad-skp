@@ -1,8 +1,8 @@
 /**
  * 59차 코어 0.53.0 후보 묶음 열쇠(keypick.ts pickGroupKey — pickCandidates·가상 커서 pickCycle의 group)를 가짜 WebGL2 위 코어 뷰어로 본다.
- * - 묶어 빠지는 후보는 앞 후보와 고를 것이 같은 것뿐: 한도가 넉넉하면 겹친 것 목록 줄(이름·고를 것·후보)이 묶지 않은 것과 같다(세 방식·펼침, 화면 여러 자리)
+ * - 묶어 빠지는 후보는 앞 후보와 고를 것이 같은 것뿐: 한도가 넉넉하면 겹친 것 목록 줄(이름·고를 것·후보)이 묶지 않고 같은 고른 것을 뺀 것과 같다(세 방식·펼침, 화면 여러 자리)
  * - 촘촘한 자리(판 20장 뒤 상자): 묶지 않으면 한도 16을 판이 채워 뒤 상자가 목록·Tab 차례에 들지 못하고, 묶으면 든다
- * - 펼친 단계 방식에서 접힌 그룹 안 후보는 묶지 않는다(첫 후보 줄은 펼친 단계, 뒤 후보 줄은 가장 안쪽이라 열쇠 하나로 나타낼 수 없다 — 앱의 같은 고른 것 빼기 그대로)
+ * - 63차 코어 0.56.0 후보 차례: 펼친 단계 방식에서 접힌 그룹 안 후보도 첫째는 펼친 단계, 둘째부터 가장 안쪽 열쇠로 묶는다(59차는 묶지 못해 한도를 같은 그룹이 채웠다)
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Viewer3d, type Pick3d, type PickEvent } from 'opencad-viewer3d';
@@ -41,9 +41,12 @@ function picks(v: Viewer3d, d: Doc, x: number, y: number, max: number, grouped: 
   return v.pickCandidates(x, y, { ...PICK_CYCLE, pointerType: 'mouse', max, ...(grouped ? { group: pickGroupKey(() => d) } : {}) });
 }
 
-/** 목록 줄: 이름·고를 것 열쇠·그 줄의 후보(그물·삼각형) */
+/** 목록 줄: 이름·고를 것 열쇠·그 줄의 후보(그물·삼각형) — 같은 고른 것은 처음 것 하나(앱은 코어 묶음에 맡기고, 시험의 묶지 않은 후보는 여기서 뺀다) */
 function rows(d: Doc, list: readonly Pick3d[]): [string, string, string, string, number][] {
-  return pickListItems(d, list, (t) => t).map((i) => [i.name, i.kind, selKey(i.sel), i.pick.id, i.pick.index]);
+  const seen = new Set<string>();
+  return pickListItems(d, list, (t) => t)
+    .filter((i) => !seen.has(selKey(i.sel)) && !!seen.add(selKey(i.sel)))
+    .map((i) => [i.name, i.kind, selKey(i.sel), i.pick.id, i.pick.index]);
 }
 
 /** 모형의 노드 번호(이름으로) */
@@ -63,14 +66,17 @@ function node(d: Doc, name: string): number {
 const key = (cv: FakeElement, k: string, shiftKey = false): void => cv.fire('keydown', { key: k, shiftKey, defaultPrevented: false });
 
 describe('pickGroupKey', () => {
-  it('차례와 상관없이 고를 것이 같은 후보만 그 고른 것 열쇠로 묶고, 잘린 면은 하나로, 문서가 없으면 묶지 않는다', () => {
+  it('그 차례에 앱이 고를 것의 열쇠로 묶고(63차 후보 차례 — 첫째 펼친 단계, 둘째부터 가장 안쪽), 잘린 면은 하나로, 문서가 없으면 묶지 않는다', () => {
     const d = rowDoc();
     const { v } = view(d);
     const [front, back] = picks(v, d, 400, 300, 4, false);
     const g = pickGroupKey(() => d);
-    // 펼친 단계 방식: Near 앞면은 첫째면 Row(펼친 단계), 뒤면 Near(가장 안쪽) — 묶지 않는다
+    // 펼친 단계 방식: Near 앞면은 첫째면 Row(펼친 단계), 뒤면 Near(가장 안쪽) — 차례마다 그 고른 것의 열쇠
     expect(selKey(selectionForPick(d, front!))).not.toBe(selKey(selectionForPick(d, front!, false, true)));
-    expect(g(front!)).toBeNull();
+    expect(g(front!, 0)).toBe(selKey(selectionForPick(d, front!)));
+    expect(g(front!, 1)).toBe(`n:${node(d, 'Near')}`);
+    // 한 인수로 부르면 첫 후보의 열쇠
+    expect(g(front!)).toBe(g(front!, 0));
     // 가장 안쪽 방식: 둘 다 Near — 같은 열쇠
     d.pickMode = 'deepest';
     expect(g(front!)).toBe(`n:${node(d, 'Near')}`);
@@ -173,14 +179,37 @@ describe('촘촘한 자리(판 20장 뒤 상자 — 가짜 WebGL2 코어 뷰어)
     v.setKeyboardSnap(false);
   });
 
-  it('펼친 단계 방식에서 접힌 그룹 안이면 묶지 않아 예전처럼 한도를 판이 채운다 — 가장 안쪽 방식이나 그룹을 펼치면 상자가 든다', () => {
+  it('63차: 펼친 단계 방식에서 접힌 그룹 안도 후보 차례로 묶어 뒤 상자가 든다(59차는 한도를 판이 채워 상자가 빠졌다) — 가장 안쪽 방식·펼침은 그대로', () => {
     const d = stackDoc(20, true);
-    const { v } = view(d);
+    const { v, host } = view(d);
     const raw = picks(v, d, 400, 300, PICK_LIST_MAX, false);
     const grouped = picks(v, d, 400, 300, PICK_LIST_MAX, true);
-    // 첫 줄은 펼친 단계(Site), 둘째 줄은 판의 가장 안쪽 그룹 — 상자는 한도 밖
-    expect(rows(d, grouped)).toEqual(rows(d, raw));
-    expect(rows(d, grouped).map((r) => r[0])).toEqual(['그룹 Site', '그룹 Slats']);
+    // 묶지 않으면 첫 줄 펼친 단계(Site), 둘째 줄 판 — 상자는 한도 밖
+    expect(raw.length).toBe(16);
+    expect(rows(d, raw).map((r) => r[0])).toEqual(['그룹 Site', '그룹 Slats']);
+    // 묶으면 판이 한 줄이 되어 상자가 든다(첫 후보 줄은 그대로 펼친 단계를 고른다)
+    expect(rows(d, grouped).map((r) => r[0])).toEqual(['그룹 Site', '그룹 Slats', '그룹 Wall']);
+    expect(rows(d, grouped)[0]).toEqual(rows(d, raw)[0]);
+    expect(rows(d, grouped)[1]).toEqual(rows(d, raw)[1]);
+    // 가상 커서 Tab 차례도 같은 세 줄이고, 둘째부터 Enter가 그 가장 안쪽 그룹을 고른다
+    const got: [Pick3d | null, PickEvent][] = [];
+    v.onPick((p, e) => got.push([p, e]));
+    const kp = new KeyPick(v, host as unknown as HTMLElement, () => d);
+    kp.set(true);
+    const cv = v.canvas as unknown as FakeElement;
+    key(cv, 'ArrowLeft');
+    expect(v.keyboardCursor!.count).toBe(3);
+    expect(kp.text).toMatch(/^가상 커서를 켰습니다\. 그룹 Site의 면 1\/3: /);
+    key(cv, 'Tab');
+    expect(kp.text).toMatch(/^그룹 Slats의 면 2\/3: /);
+    key(cv, 'Tab');
+    expect(kp.text).toMatch(/^그룹 Wall의 면 3\/3: /);
+    key(cv, 'Enter');
+    const [p, e] = got.at(-1)!;
+    expect(e.cycle).toEqual({ index: 2, count: 3 });
+    expect(selKey(selectionForPick(d, p, false, true))).toBe(rows(d, grouped)[2]![2]);
+    expect(kp.text).toBe('골랐습니다: 그룹 Wall의 면');
+    kp.set(false);
     d.pickMode = 'deepest';
     expect(rows(d, picks(v, d, 400, 300, PICK_LIST_MAX, true)).map((r) => r[0])).toEqual(['그룹 Slats', '그룹 Wall']);
     d.pickMode = 'open';
