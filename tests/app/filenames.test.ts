@@ -245,6 +245,43 @@ describe('파일 글을 앱 글과 섞기(filetext·mixText)', () => {
     expect(mixText(warningParts(w))).toBe(fillSlots(...slotText(warningParts(w), (s) => translate(s, 'de'))));
   });
 
+  it('65차: 이름을 끼워 만든 해석기 경고와 수 꼬리가 붙은 경고도 네 언어에서 한글 없이 옮긴다', () => {
+    const HANGUL = /[가-힣]/;
+    const tr = (code: string) => (s: string, ui?: boolean): string => translate(s, code, ui);
+    const show = (w: string, code: string): string => fillSlots(...slotText(warningParts(w), tr(code)));
+    const codes = ['en', 'de', 'ja', 'zh-CN'];
+    const josa = (w: string): boolean => { const c = w.charCodeAt(w.length - 1) - 0xac00; return c >= 0 && c < 11172 && c % 28 !== 0; };
+    // 해석기 소스의 이름 표에서 바로 뽑는다 — 이름을 늘리면 사전에 넣을 때까지 이 시험이 실패한다
+    const model = readFileSync(resolve(process.cwd(), 'src/model.ts'), 'utf8');
+    const root = readFileSync(resolve(process.cwd(), 'src/vffroot.ts'), 'utf8');
+    const sections = [...model.matchAll(/this\.section\([^,]+,\s*TAG\.\w+,\s*'([^']+)'/g)].map((m) => m[1]!);
+    const pages = [...root.matchAll(/\bids\(TAG\.\w+,\s*'([^']+)'\)/g)].map((m) => m[1]!);
+    expect(sections.length).toBeGreaterThanOrEqual(12);
+    expect(pages.length).toBe(3);
+    const warnings = [
+      ...sections.map((w) => `${w}${josa(w) ? '을' : '를'} 읽지 못했습니다`),
+      ...pages.flatMap((w) => [`깨진 장면 ${w} 목록의 뒷부분을 건너뛰었습니다`, `장면 ${w} 목록의 너무 큰 번호를 건너뛰었습니다`]),
+      '"항상 카메라 보기" 컴포넌트가 너무 많아(500개 한도) 12개는 저장된 방향 그대로 둡니다',
+      '깨진 면을 건너뛰었습니다',
+      '모서리 목록이 깨져 뒷부분을 읽지 못했습니다',
+    ];
+    for (const w of warnings)
+      for (const tail of ['', ' (3개)', ' (1,234개)']) for (const code of codes) expect(show(`${w}${tail}`, code), `${code}: ${w}${tail}`).not.toMatch(HANGUL);
+    // 사전 틀 "{0} ({1}개)"는 앞 글을 그대로 끼우므로 예전(경고 한 글을 통째로 옮김)은 앞 글이 한국어로 남았다
+    expect(translate('깨진 면을 건너뛰었습니다 (3개)', 'en')).toMatch(HANGUL);
+    expect(warningParts('깨진 면을 건너뛰었습니다 (3개)')).toEqual([{ file: '깨진 면을 건너뛰었습니다', ui: true }, ' (3개)']);
+    expect(show('깨진 면을 건너뛰었습니다 (3개)', 'en')).toBe('Skipped a broken face (3 pieces)');
+    expect(show('글꼴 목록을 읽지 못했습니다', 'en')).toBe('Could not read the font list');
+    // 한국어 화면은 원문 그대로
+    expect(show('깨진 면을 건너뛰었습니다 (3개)', 'ko')).toBe('깨진 면을 건너뛰었습니다 (3개)');
+    // 이름이 붙은 글·까닭 글은 수 꼬리처럼 다루지 않는다(이름·까닭은 예전 길)
+    expect(warningParts('재질 파일을 읽지 못했습니다: materials/a (2개)')).toEqual(['재질 파일을 읽지 못했습니다: ', { file: 'materials/a (2개)' }]);
+    expect(warningParts('SketchUp 파일을 읽지 못했습니다: 파일을 끝까지 읽지 못했습니다 (2개)')).toEqual([
+      'SketchUp 파일을 읽지 못했습니다: ',
+      { file: '파일을 끝까지 읽지 못했습니다 (2개)', ui: true },
+    ]);
+  });
+
   it('59차: 앞 글 틀의 {0}에 이어 붙은 해석기 까닭 글도 화면 언어로 옮긴다(앱 글 조각 — 까닭 글 안의 틀까지), 항목 이름은 그대로', async () => {
     const HANGUL = /[가-힣]/;
     const tr = (code: string) => (s: string, ui?: boolean): string => translate(s, code, ui);
