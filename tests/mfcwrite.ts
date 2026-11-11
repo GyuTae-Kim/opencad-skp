@@ -558,7 +558,8 @@ export interface MfcStyleSpec {
 
 /** 장면 숨긴 개체: 요소 종류와 차례(def가 있으면 그 정의 안) */
 export interface MfcHiddenRef {
-  kind: 'face' | 'edge' | 'instance' | 'text' | 'guide' | 'section';
+  kind: 'face' | 'edge' | 'instance' | 'text' | 'dimension' | 'guide' | 'section';
+  /** 그 묶음 목록 차례(치수는 선형 치수 다음 반지름 치수) */
   index: number;
   def?: number;
 }
@@ -1345,7 +1346,7 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
           w.u32(hidden.length);
           for (const h of hidden) {
             const s = h.def === undefined ? rootSlots : defEntSlots[h.def]!;
-            const list = { face: s.faces, edge: s.edges, instance: s.instances, text: s.texts, guide: s.guides, section: s.sections }[h.kind];
+            const list = { face: s.faces, edge: s.edges, instance: s.instances, text: s.texts, dimension: s.dims, guide: s.guides, section: s.sections }[h.kind];
             w.ref(list[h.index]!);
           }
         }

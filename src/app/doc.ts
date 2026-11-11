@@ -728,16 +728,19 @@ export interface AnnotationRuns {
   node: Int32Array;
 }
 
-/** meta.annotationRuns → 주석 항목 id → 구간. 주석 항목이 아니거나 꼴·노드 차례가 맞지 않는 칸은 버린다 */
+/**
+ * meta.annotationRuns → 주석 항목 id → 구간. 주석 항목이 아니거나 꼴·노드 차례가 맞지 않는 칸은 버린다
+ * (노드는 나무 노드 수 아래 정수 — −1 아래는 장면이 숨기는 맨 위 주석 묶음이라 나무가 없어도 쓴다)
+ */
 export function readAnnotationRuns(v: unknown, kinds: ReadonlyMap<string, AnnotationKind>, nodeCount: number): Map<string, AnnotationRuns> {
   const out = new Map<string, AnnotationRuns>();
-  if (!v || typeof v !== 'object' || !nodeCount) return out;
+  if (!v || typeof v !== 'object') return out;
   for (const [id, r] of Object.entries(v as Record<string, unknown>)) {
     if (!kinds.has(id) || !r || typeof r !== 'object') continue;
     const { start, node } = r as Partial<AnnotationRuns>;
     if (!(start instanceof Uint32Array) || !(node instanceof Int32Array) || start.length !== node.length || !start.length) continue;
     let ok = true;
-    for (let k = 0; k < node.length && ok; k++) ok = node[k]! >= -1 && node[k]! < nodeCount && (k === 0 || start[k]! > start[k - 1]!);
+    for (let k = 0; k < node.length && ok; k++) ok = node[k]! < nodeCount && (k === 0 || start[k]! > start[k - 1]!);
     if (ok) out.set(id, { start, node });
   }
   return out;
@@ -1133,7 +1136,7 @@ export function itemVisible(d: SkpDoc, item: number): boolean {
     if (!annotationShown(d, ak)) return false;
     const runs = d.annotationRuns.get(id);
     if (runs) {
-      // 구간마다 놓인 노드를 안다: 모든 구간의 노드를 숨겼으면 묶음째(일부만이면 annotationHiddenRanges가 그 구간만)
+      // 구간마다 놓인 노드를 안다: 모든 구간의 노드를 숨겼으면 묶음째(일부만이면 annotations.ts annotationHiddenRanges가 그 구간만)
       if (runs.node.every((n) => nodeHiddenByUser(d, n))) return false;
     } else {
       // 노드를 모르는 주석 선분(나무 없음): 모형에 바로 놓인 형상을 숨기면(분리해서 보기 등) 함께 숨긴다
@@ -1245,53 +1248,17 @@ export function treeKindLabel(kind: number): string {
 
 /**
  * 노드를 사용자가 보기에서 숨겼는지(나무 체크·숨기기·분리해서 보기 — 노드나 조상, 그 노드의 윗단계 목록 항목). 노드 -1(모형에 바로 놓인 것)은
- * "바로 놓인 형상" 목록 항목을 숨겼을 때. 태그는 보지 않는다(주석 선분은 태그 묶음이라 뷰어가 따로 가린다)
+ * "바로 놓인 형상" 목록 항목을 숨겼을 때. 노드 −2 − k(모형에 바로 놓였고 장면이 숨기는 주석 묶음 k)는 그 장면을 고른 동안(hiddenNodes에 든다)도.
+ * 태그는 보지 않는다(주석 선분은 태그 묶음이라 뷰어가 따로 가린다)
  */
 export function nodeHiddenByUser(d: Pick<SkpDoc, 'tree' | 'outline' | 'hiddenOutline' | 'hiddenNodes' | 'nodeOutline'>, node: number): boolean {
   const t = d.tree;
   if (node < 0 || !t || node >= t.count) {
-    const loose = d.outline.findIndex((r) => r.kind === 'loose');
-    return loose >= 0 && d.hiddenOutline.has(loose);
+    return d.hiddenNodes.has(node) || d.hiddenOutline.has(d.outline.findIndex((r) => r.kind === 'loose'));
   }
   if (hiddenByNodes(t, d.hiddenNodes, node)) return true;
   const o = d.nodeOutline.get(nodePath(t, node)[0]!);
   return o !== undefined && d.hiddenOutline.has(o);
-}
-
-/**
- * 주석 선분 묶음에서 숨긴 노드의 구간(항목 차례 → 선분 구간). 묶음의 모든 구간을 숨겼으면 넣지 않는다(itemVisible이 묶음째 숨긴다)
- */
-export function annotationHiddenRanges(d: SkpDoc): Map<number, IndexRange[]> {
-  const out = new Map<number, IndexRange[]>();
-  if (!d.annotationRuns.size || (!d.hiddenNodes.size && !d.hiddenOutline.size)) return out;
-  const memo = new Map<number, boolean>();
-  const hidden = (n: number): boolean => {
-    let v = memo.get(n);
-    if (v === undefined) memo.set(n, (v = nodeHiddenByUser(d, n)));
-    return v;
-  };
-  for (const [id, runs] of d.annotationRuns) {
-    const li = d.lineIndex.get(id);
-    const line = li === undefined ? undefined : d.scene.lines[li];
-    if (!line) continue;
-    const total = Math.floor(line.positions.length / 6);
-    const list: IndexRange[] = [];
-    let all = true;
-    for (let k = 0; k < runs.node.length; k++) {
-      if (!hidden(runs.node[k]!)) {
-        all = false;
-        continue;
-      }
-      const start = runs.start[k]!;
-      const end = k + 1 < runs.start.length ? runs.start[k + 1]! : total;
-      if (end <= start) continue;
-      const last = list[list.length - 1];
-      if (last && last.start + last.count === start) last.count += end - start;
-      else list.push({ start, count: end - start });
-    }
-    if (list.length && !all) out.set(d.scene.meshes.length + li!, list);
-  }
-  return out;
 }
 
 /**

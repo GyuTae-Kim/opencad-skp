@@ -482,7 +482,7 @@ export function readPage(v: unknown, index: number): SkpPageMeta {
   if (cam) page.camera = cam;
   if (Array.isArray(o.hiddenTags)) page.hiddenTags = o.hiddenTags.filter((t): t is string => typeof t === 'string');
   // 차례 목록(0 이상 정수만)
-  for (const k of ['hiddenNodes', 'hiddenFolders', 'sectionPlanes'] as const) {
+  for (const k of ['hiddenNodes', 'hiddenFolders', 'sectionPlanes', 'hiddenAnnotations'] as const) {
     const a = o[k];
     if (Array.isArray(a)) page[k] = a.filter((n): n is number => Number.isInteger(n) && (n as number) >= 0);
   }

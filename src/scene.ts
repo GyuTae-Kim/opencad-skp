@@ -59,7 +59,7 @@ import type {
   Vec3,
 } from './meta';
 import * as A from './scene-annotations';
-import { AttrPool, PAGE_USE_HIDDEN_OBJECTS } from './scene-meta';
+import { AttrPool, PAGE_USE_HIDDEN_GEOMETRY, PAGE_USE_HIDDEN_OBJECTS } from './scene-meta';
 import { cornerNormals, faceUnitNormal } from './scene-smooth';
 import { emptyEdges, emptyFaces, MAP_STRIDE, opt, type SkpFaces } from './entities';
 import { F32, F64, I32, U32, freeTyped } from './grow';
@@ -1331,6 +1331,11 @@ export interface SceneParts {
   annotationMarks?: Record<string, SkpAnnotationMarks>;
   /** sectionPlanes 차례마다 단면 영구 번호(장면의 활성 단면 잇기용) */
   sectionPids?: (number | undefined)[];
+  /**
+   * model.pages 차례마다 그 장면이 숨기는 맨 위 주석 묶음(meta.pages[].hiddenAnnotations — 숨긴 형상을 기억하지 않는 장면은 undefined).
+   * 장면이 숨기는 맨 위 주석이 있을 때만
+   */
+  pageAnnotations?: (number[] | undefined)[];
   /** 나무 노드·정의의 더 많은 정보(tree가 있을 때) */
   treeInfo?: SkpTreeInfo;
   /** 나무 노드마다 인스턴스 영구 번호(장면의 숨긴 개체 잇기용) */
@@ -2314,6 +2319,31 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   };
   const hasAnnotations = (e: SkpEntities): boolean => !!(e.texts?.length || e.dimensions?.length || e.guides?.length || e.sections?.length);
   const midpoint = (a: Vec3, b: Vec3): Vec3 => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
+  // 장면이 숨기는 맨 위 주석: 숨긴 형상(0x080)을 기억하는 장면의 숨긴 목록은 맨 위(모형에 바로 놓인) 요소 가운데 인스턴스가 아닌 것의 보임을 정한다
+  // (공개 Ruby API Page#hidden_entities — 장면 보임은 맨 위 요소만, 안쪽은 인스턴스만). 모형에서는 보이는데 그런 장면이 숨기는 문자·치수·단면 평면은
+  // 숨기는 장면이 같은 것끼리 묶음 k로 모아 노드 −2 − k에 둔다(라벨·선분 구간·끝 표시가 그 노드로 숨는다). 단면 meta의 node는 자르는 범위라 그대로 둔다
+  const geoPages: number[] = [];
+  const geoHidden: Set<number>[] = [];
+  model.pages?.forEach((pg, i) => {
+    if (!(Number.isFinite(pg.flags) && pg.flags & PAGE_USE_HIDDEN_GEOMETRY)) return;
+    geoPages.push(i);
+    geoHidden.push(new Set(pg.hiddenIds));
+  });
+  const annGroupOf = new Map<string, number>();
+  const annGroupPages: number[][] = [];
+  /** 맨 위 주석 하나의 노드: 모형에서 보이는데 숨기는 장면이 있으면 그 장면 묶음의 노드(−2 − k), 아니면 node 그대로 */
+  const sceneNode = (ents: SkpEntities, pid: number | undefined, hidden: boolean, node: number): number => {
+    if (ents !== model.root || hidden || pid === undefined || !geoPages.length) return node;
+    const by = geoPages.filter((_, j) => geoHidden[j]!.has(pid));
+    if (!by.length) return node;
+    const key = by.join();
+    let k = annGroupOf.get(key);
+    if (k === undefined) {
+      annGroupOf.set(key, (k = annGroupPages.length));
+      annGroupPages.push(by);
+    }
+    return -2 - k;
+  };
 
   const collectAnnotations = (ents: SkpEntities, m: Float64Array, here: number, node: number, hiddenSub: boolean): void => {
     annSeen = true;
@@ -2325,7 +2355,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       const hidden = hiddenSub || (t.flags & FLAG_HIDDEN) !== 0;
       const tag = elemTag(t.layer, here);
       const leaderType = t.leaderType ?? 'none';
-      const tm: SkpTextMeta = { text: typeof t.text === 'string' ? t.text : '', leaderType, tag, hidden, node };
+      const tn = sceneNode(ents, t.pid, hidden, node);
+      const tm: SkpTextMeta = { text: typeof t.text === 'string' ? t.text : '', leaderType, tag, hidden, node: tn };
       const at = A.isVec(t.point) ? A.xfPoint(m, t.point) : undefined;
       if (at && A.isVec(at)) tm.point = at;
       const withLeader = leaderType !== 'none' && !!tm.point;
@@ -2346,7 +2377,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
           kind: 'leaders',
           tag,
           hidden,
-          node,
+          node: tn,
           color: lineColor(color, ANNOTATION_COLOR),
           first: a,
           draw: (out, _clip, marks) => {
@@ -2363,6 +2394,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       }
       const hidden = hiddenSub || (d.flags & FLAG_HIDDEN) !== 0;
       const tag = elemTag(d.layer, here);
+      const dn = sceneNode(ents, d.pid, hidden, node);
       const color = matRgb(d.material) ?? (defaults.dimColor ? rgb01(defaults.dimColor) : undefined);
       const arrow = d.arrow ?? defaults.dimArrow ?? 'closed';
       const nrm = A.isVec(d.normal) ? A.xfNormal(m, d.normal) : null;
@@ -2379,7 +2411,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
         const lay = A.linearLayout(S, E, off, axis);
         if (![...lay.a, ...lay.b, lay.value].every(Number.isFinite)) continue;
         const dir = A.unit(A.sub(lay.b, lay.a)) ?? axis ?? A.unit(A.sub(E, S));
-        dm = { kind: 'linear', text: typeof d.text === 'string' ? d.text : '', value: lay.value, textPoint: midpoint(lay.a, lay.b), tag, hidden, node };
+        dm = { kind: 'linear', text: typeof d.text === 'string' ? d.text : '', value: lay.value, textPoint: midpoint(lay.a, lay.b), tag, hidden, node: dn };
         if (dir) dm.direction = dir;
         const perp: Vec3 = !dir ? [0, 0, 1] : off ? A.perpendicular(dir, A.unit(off)) : nrm ? (A.unit(A.cross(nrm, dir)) ?? A.perpendicular(dir)) : A.perpendicular(dir);
         first = lay.a;
@@ -2396,7 +2428,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
         const r = A.len(A.sub(ap, c));
         const diameter = d.kind === 'diameter';
         if (![...c, ...ap, ...at, r].every(Number.isFinite)) continue;
-        dm = { kind: diameter ? 'diameter' : 'radial', text: typeof d.text === 'string' ? d.text : '', value: r * (diameter ? 2 : 1), textPoint: at, tag, hidden, node };
+        dm = { kind: diameter ? 'diameter' : 'radial', text: typeof d.text === 'string' ? d.text : '', value: r * (diameter ? 2 : 1), textPoint: at, tag, hidden, node: dn };
         const dir = A.unit(A.sub(ap, c));
         if (dir) dm.direction = dir;
         const perp: Vec3 = !dir ? [0, 0, 1] : nrm ? (A.unit(A.cross(nrm, dir)) ?? A.perpendicular(dir)) : A.perpendicular(dir);
@@ -2421,7 +2453,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       if (font) dm.font = font;
       if (color) dm.color = color;
       dims.push(dm);
-      if (keepLines(hidden)) recs.push({ kind: 'dimensions', tag, hidden, node, color: lineColor(color, ANNOTATION_COLOR), first, draw });
+      if (keepLines(hidden)) recs.push({ kind: 'dimensions', tag, hidden, node: dn, color: lineColor(color, ANNOTATION_COLOR), first, draw });
     }
     for (const g of ents.guides ?? []) {
       if (guideCount >= MAX_GUIDES) {
@@ -2490,7 +2522,9 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       sections.push({ name: sp.name || sp.symbol || '', plane, active: !!sp.active, tag, hidden, node, size });
       sectionPids.push(sp.pid);
       extendAnn(center);
-      if (keepLines(hidden)) recs.push({ kind: 'sectionPlanes', tag, hidden, node, color: SECTION_COLOR, first: center, draw: (out) => A.sectionSymbol(out, center, n, size) });
+      // 기호만 장면 묶음 노드로(자르기는 장면이 숨겨도 그대로 — 숨긴 단면 평면과 같게)
+      if (keepLines(hidden))
+        recs.push({ kind: 'sectionPlanes', tag, hidden, node: sceneNode(ents, sp.pid, hidden, node), color: SECTION_COLOR, first: center, draw: (out) => A.sectionSymbol(out, center, n, size) });
     }
   };
 
@@ -3244,10 +3278,10 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
           node: Int32Array.from(sk.markNode),
         };
       }
-      // 나무가 있으면 선분 구간마다 놓인 노드(화면이 그룹·컴포넌트를 숨기면 그 안 주석 선도 숨긴다)
-      if (T) {
+      // 나무가 있으면 선분 구간마다 놓인 노드(화면이 그룹·컴포넌트를 숨기면 그 안 주석 선도 숨긴다 — 장면이 숨기는 맨 위 주석 묶음 노드도)
+      if (T || annGroupPages.length) {
         annRuns[id] = { start: Uint32Array.from(sk.runStart), node: Int32Array.from(sk.runNode) };
-        if (sk.runNode.some((x) => x >= 0)) annNodes = true;
+        if (sk.runNode.some((x) => x !== -1)) annNodes = true;
       }
     }
     if (annNodes) annotationRuns = annRuns;
@@ -3315,6 +3349,15 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     parts.sectionPlanes = sections;
     parts.sectionPids = sectionPids;
     parts.annotationItems = annItems;
+    if (annGroupPages.length)
+      parts.pageAnnotations = model.pages!.map((_, i) => {
+        if (!geoPages.includes(i)) return undefined;
+        const out: number[] = [];
+        annGroupPages.forEach((by, k) => {
+          if (by.includes(i)) out.push(k);
+        });
+        return out;
+      });
     if (annotationRuns) parts.annotationRuns = annotationRuns;
     if (annotationMarks) parts.annotationMarks = annotationMarks;
   }

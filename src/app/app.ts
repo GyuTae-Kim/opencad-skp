@@ -74,7 +74,6 @@ import {
   isBigScene,
   itemVisible,
   nodeHiddenByUser,
-  annotationHiddenRanges,
   nodeSelection,
   pickDeepest,
   revealGhostRanges,
@@ -2006,9 +2005,10 @@ export class SkpViewerApp implements PanelHost {
     if (plan.hiddenTags) d.hiddenTags = new Set([...plan.hiddenTags].filter((t) => d.tags.some((x) => x.name === t)));
     // 장면이 숨긴 태그 폴더(안쪽 태그는 tagHidden이 폴더로 숨긴다 — 목록에 없는 폴더는 보인다)
     if (plan.hiddenFolders) d.hiddenFolders = plan.hiddenFolders;
+    // 숨긴 개체(나무 노드)·숨긴 형상(장면이 숨기는 맨 위 문자·치수·단면 기호 묶음 노드 −2 − k)을 기억하는 쪽만 장면 목록으로(annotations.ts — 뷰어가 있으면 받아 둠)
+    annotating?.applySceneHidden(d.hiddenNodes, page);
     if (plan.hiddenNodes) {
-      // 숨긴 개체 목록은 저장 당시 전체 상태다: 보기에서 숨긴 것은 버리고 장면 목록으로 바꾼다
-      d.hiddenNodes.clear();
+      // 숨긴 개체 목록은 저장 당시 전체 상태다: 보기에서 숨긴 것은 버리고(위에서 비움) 장면 목록으로 바꾼다
       d.hiddenOutline.clear();
       for (const n of plan.hiddenNodes) if (canHideNode(d, n)) d.hiddenNodes.add(n);
       this.isolatedOn = false;
@@ -2346,8 +2346,8 @@ export class SkpViewerApp implements PanelHost {
     }
     // 나누지 않은 깊은 노드 숨김: 항목마다 구간을 합쳐 한 번에 넘기고, 더는 숨길 것이 없는 항목은 푼다
     this.hiddenRanges = hiddenNodeRanges(d);
-    // 숨긴 그룹·컴포넌트 안의 주석 선(치수선·지시선·보조선·단면 기호) 구간 — 라벨과 같이 숨긴다
-    for (const [item, list] of annotationHiddenRanges(d)) this.hiddenRanges.set(item, list);
+    // 숨긴 그룹·컴포넌트 안·장면이 숨기는 맨 위 주석 선(치수선·지시선·보조선·단면 기호) 구간 — 라벨과 같이 숨긴다(annotations.ts — 뷰어가 있으면 받아 둠)
+    for (const [item, list] of annotating?.annotationHiddenRanges(d) ?? []) this.hiddenRanges.set(item, list);
     // 장면이 다시 보이게 한 숨김 개체: 반투명 숨긴 형상은 숨긴다(보통 색 그림과 겹치지 않게)
     for (const [item, list] of revealGhostRanges(d)) {
       const cur = this.hiddenRanges.get(item);
