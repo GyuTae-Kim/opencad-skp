@@ -481,8 +481,11 @@ export function readPage(v: unknown, index: number): SkpPageMeta {
   const cam = readCamera(o.camera);
   if (cam) page.camera = cam;
   if (Array.isArray(o.hiddenTags)) page.hiddenTags = o.hiddenTags.filter((t): t is string => typeof t === 'string');
-  if (Array.isArray(o.hiddenNodes)) page.hiddenNodes = o.hiddenNodes.filter((n): n is number => Number.isInteger(n) && (n as number) >= 0);
-  if (Array.isArray(o.sectionPlanes)) page.sectionPlanes = o.sectionPlanes.filter((n): n is number => Number.isInteger(n) && (n as number) >= 0);
+  // 차례 목록(0 이상 정수만)
+  for (const k of ['hiddenNodes', 'hiddenFolders', 'sectionPlanes'] as const) {
+    const a = o[k];
+    if (Array.isArray(a)) page[k] = a.filter((n): n is number => Number.isInteger(n) && (n as number) >= 0);
+  }
   const style = readStyle(o.style);
   if (style) page.style = style;
   const transition = seconds(o.transition);
@@ -732,8 +735,6 @@ export function delaySeconds(page: Pick<SkpPageMeta, 'delay'> | null | undefined
 export interface PageContext {
   /** meta.sectionPlanes(차례 그대로 — 장면의 활성 단면 차례가 가리킨다) */
   sectionPlanes?: readonly unknown[];
-  /** 조상 폴더가 숨겨 숨는 태그(folderHiddenTags) — 장면이 숨긴 태그에 더한다(장면별 폴더 보임은 파일에서 읽지 않는다) */
-  folderHidden?: ReadonlySet<string>;
   /** 뷰어 시야각(평행 카메라 변환용, 라디안) */
   viewerFovY?: number;
   /** 3D 보기 종횡비(가로/세로) — 세로 화면이면 장면이 만든 가로 범위를 지키게 맞춘다(fitSceneCamera). 없으면 맞추지 않음 */
@@ -750,8 +751,13 @@ export interface PagePlan {
   fit: SceneFit | null;
   /** 카메라 전환 시간(초, 0 = 바로) */
   seconds: number;
-  /** 숨길 태그 이름 전체(목록에 없는 태그는 보인다). null = 그대로 */
+  /** 숨길 태그 이름 전체(목록에 없는 태그는 보인다 — 숨긴 폴더 안 태그는 앱이 폴더로 숨긴다). null = 그대로 */
   hiddenTags: Set<string> | null;
+  /**
+   * 숨길 태그 폴더 전체(meta.tagFolders 차례 — 안쪽 폴더·태그도 숨고, 목록에 없는 폴더는 보인다).
+   * null = 그대로(숨긴 태그를 기억하지 않는 장면이거나 장면의 폴더 목록을 모름)
+   */
+  hiddenFolders: Set<number> | null;
   /** 숨길 나무 노드 전체(목록에 없는 노드는 보인다). null = 그대로 */
   hiddenNodes: Set<number> | null;
   /** 단면을 바꾸는지(장면이 단면을 기억하거나, 기억한 스타일이 단면 자르기를 껐으면 참) */
@@ -769,7 +775,7 @@ export interface PagePlan {
 /**
  * 장면 적용 계획: 장면이 기억하는 것만 바꾼다(SketchUp 장면 고르기와 같게).
  * - 카메라 → 코어 카메라 + 전환 시간
- * - 숨긴 태그 → 모든 태그를 그 값으로(+ 숨긴 폴더 아래 태그)
+ * - 숨긴 태그 → 모든 태그를 그 값으로, 장면이 폴더 목록을 가지면 모든 태그 폴더도 그 값으로(공개 C API SUSceneAddLayerFolder — 넣은 폴더는 숨김, 뺀 폴더는 보임)
  * - 숨긴 개체 → 숨긴 노드를 그 목록으로(목록은 저장 당시 전체 상태다)
  * - 활성 단면 → 모형 단면 하나(pickSection) 또는 끄기. 장면 스타일이 단면 자르기를 껐으면 끈다.
  * - 스타일 → 그리기 방식
@@ -778,11 +784,6 @@ export function pagePlan(page: SkpPageMeta, ctx: PageContext = {}): PagePlan {
   const raw = page.camera ? cameraFromSkp(page.camera, ctx.viewerFovY) : null;
   const fitted = raw && ctx.viewAspect !== undefined ? fitSceneCamera(raw, ctx.viewAspect, page.camera?.aspect) : null;
   const camera = fitted?.camera ?? raw;
-  let hiddenTags: Set<string> | null = null;
-  if (page.hiddenTags) {
-    hiddenTags = new Set(page.hiddenTags);
-    for (const t of ctx.folderHidden ?? []) hiddenTags.add(t);
-  }
   const style = page.style ?? null;
   const cutsOff = style?.sectionCuts === false;
   const setsSection = !!page.sectionPlanes || cutsOff;
@@ -793,7 +794,8 @@ export function pagePlan(page: SkpPageMeta, ctx: PageContext = {}): PagePlan {
     camera,
     fit: fitted?.fit ?? null,
     seconds: camera ? transitionSeconds(page, ctx.transition) : 0,
-    hiddenTags,
+    hiddenTags: page.hiddenTags ? new Set(page.hiddenTags) : null,
+    hiddenFolders: page.hiddenTags && page.hiddenFolders ? new Set(page.hiddenFolders) : null,
     hiddenNodes: page.hiddenNodes ? new Set(page.hiddenNodes) : null,
     setsSection,
     section,

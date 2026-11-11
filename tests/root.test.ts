@@ -162,6 +162,48 @@ describe('태그·태그 폴더·선 종류', () => {
     expect(m.tags!.map((t) => t.folder ?? null)).toEqual([null, null, 0, 1, null, 2]);
   });
 
+  it('68차: 장면이 숨긴 태그 폴더(7148 → 7159 폴더 번호 목록)는 목록 그대로 폴더 차례로, 모르는 번호는 버리고 목록이 없는 장면 기록은 칸 없음', () => {
+    const folders = [
+      { id: 17, name: 'Furniture', tags: [22], children: [{ id: 18, name: 'Hardware', tags: [24] }] },
+      { id: 19, name: 'Hidden folder', hidden: true, tags: [28] },
+    ];
+    const tags = [
+      { id: 3, name: 'Layer0' },
+      { id: 22, name: 'Doors' },
+      { id: 24, name: 'Hinges' },
+      { id: 28, name: 'Archived' },
+    ];
+    const m = readModelDat(
+      modelDat({
+        root: tri(),
+        tags,
+        tagFolders: folders,
+        pages: {
+          list: [
+            // 실제 2026 표본처럼 폴더 하나를 숨긴 장면(번호 3바이트) — 폴더는 Furniture(차례 0)
+            { id: 60, name: 'A', flags: 0x20, tags: [22], folders: [17] },
+            { id: 61, name: 'B', flags: 0x20, folders: [19, 99, 18, 19] },
+            { id: 62, name: 'C', flags: 0x20 },
+          ],
+        },
+      }),
+    );
+    expect(m.pages!.map((p) => p.hiddenFolders)).toEqual([[0], [1, 2], []]);
+    // 숨긴 태그는 예전 그대로(폴더와 따로)
+    expect(m.pages![0]!.hiddenTags).toEqual([1]);
+    expect(m.warnings).toEqual([]);
+    // 7159가 없는 장면 기록: 폴더 보임을 모른다
+    const page = tlv(0x7148, tlv(0x6f54, tlv(0x05dc, tlv(0x05de, uintLE(63))), tlv(0x6f55)), tlv(0x7149, i32(0x20)), tlv(0x7150));
+    const old = readModelDat(modelDat({ root: tri(), tags, tagFolders: folders, sections: [tlv(0x0207, tlv(0x6d60, tlv(0x6d61, page)))] }));
+    expect(old.pages).toHaveLength(1);
+    expect(old.pages![0]!.hiddenFolders).toBeUndefined();
+    // 깨진 목록은 앞부분만 쓰고 알린다
+    const broken = tlv(0x7148, tlv(0x6f54, tlv(0x05dc, tlv(0x05de, uintLE(64))), tlv(0x6f55)), tlv(0x7149, i32(0x20)), tlv(0x7150), tlv(0x7159, packedIds([18]), new Uint8Array([9, 1])));
+    const b = readModelDat(modelDat({ root: tri(), tags, tagFolders: folders, sections: [tlv(0x0207, tlv(0x6d60, tlv(0x6d61, broken)))] }));
+    expect(b.pages![0]!.hiddenFolders).toEqual([1]);
+    expect(b.warnings).toContain('깨진 장면 태그 폴더 목록의 뒷부분을 건너뛰었습니다');
+  });
+
   it('기본 태그 = 목록 첫째, 3a9a는 활성 태그(다를 수 있다)', () => {
     const m = readModelDat(layersModel(20));
     expect(m.defaultLayer).toBe(3);

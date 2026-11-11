@@ -2004,6 +2004,8 @@ export class SkpViewerApp implements PanelHost {
     if (!fromSlideshow) this.stopSlideshow();
     const plan = pagePlan(page, { sectionPlanes: d.sectionPlanesRaw, viewerFovY: this.sceneBaseFov(v), viewAspect: this.viewAspect(v) });
     if (plan.hiddenTags) d.hiddenTags = new Set([...plan.hiddenTags].filter((t) => d.tags.some((x) => x.name === t)));
+    // 장면이 숨긴 태그 폴더(안쪽 태그는 tagHidden이 폴더로 숨긴다 — 목록에 없는 폴더는 보인다)
+    if (plan.hiddenFolders) d.hiddenFolders = plan.hiddenFolders;
     if (plan.hiddenNodes) {
       // 숨긴 개체 목록은 저장 당시 전체 상태다: 보기에서 숨긴 것은 버리고 장면 목록으로 바꾼다
       d.hiddenNodes.clear();
@@ -2058,7 +2060,7 @@ export class SkpViewerApp implements PanelHost {
       this.applyTheme();
     } else if (edgeChanged) this.applyLineContrast();
     d.page = index;
-    for (const t of d.tags) v.setGroupVisible(t.name, !tagHidden(d, t.name));
+    this.applyTagVisibility();
     this.refreshItemVisibility();
     this.refreshAnnotations();
     if (plan.camera) {

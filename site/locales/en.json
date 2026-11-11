@@ -1163,6 +1163,8 @@
   "장면 숨긴 개체 목록의 너무 큰 번호를 건너뛰었습니다": "Skipped numbers that were too large in a scene hidden-object list",
   "장면 태그 목록의 너무 큰 번호를 건너뛰었습니다": "Skipped numbers that were too large in a scene tag list",
   "장면 단면 목록의 너무 큰 번호를 건너뛰었습니다": "Skipped numbers that were too large in a scene section list",
+  "깨진 장면 태그 폴더 목록의 뒷부분을 건너뛰었습니다": "Skipped the rest of a broken scene tag folder list",
+  "장면 태그 폴더 목록의 너무 큰 번호를 건너뛰었습니다": "Skipped numbers that were too large in a scene tag folder list",
   "\"항상 카메라 보기\" 컴포넌트가 너무 많아({0}개 한도) {1}개는 저장된 방향 그대로 둡니다": "Too many \"Always face camera\" components (limit {0}); {1} keep their saved orientation",
   "깨진 정점을 건너뛰었습니다": "Skipped a broken vertex",
   "깨진 모서리를 건너뛰었습니다": "Skipped a broken edge",

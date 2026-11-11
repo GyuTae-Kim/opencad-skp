@@ -257,7 +257,8 @@ describe('파일 글을 앱 글과 섞기(filetext·mixText)', () => {
     const sections = [...model.matchAll(/this\.section\([^,]+,\s*TAG\.\w+,\s*'([^']+)'/g)].map((m) => m[1]!);
     const pages = [...root.matchAll(/\bids\(TAG\.\w+,\s*'([^']+)'\)/g)].map((m) => m[1]!);
     expect(sections.length).toBeGreaterThanOrEqual(12);
-    expect(pages.length).toBe(3);
+    // 숨긴 개체·태그·태그 폴더(68차)·단면
+    expect(pages.length).toBe(4);
     const warnings = [
       ...sections.map((w) => `${w}${josa(w) ? '을' : '를'} 읽지 못했습니다`),
       ...pages.flatMap((w) => [`깨진 장면 ${w} 목록의 뒷부분을 건너뛰었습니다`, `장면 ${w} 목록의 너무 큰 번호를 건너뛰었습니다`]),

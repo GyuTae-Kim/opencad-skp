@@ -597,6 +597,8 @@ export interface PageOpts {
   render?: Uint8Array;
   /** 기본과 보임이 다른 태그 번호 */
   tags?: number[];
+  /** 이 장면에서 숨긴 태그 폴더 번호(FolderSpec.id) */
+  folders?: number[];
   sections?: number[];
   include?: boolean;
   /** 초(음수 = 모형 기본) */
@@ -615,7 +617,7 @@ const pageItem = (p: PageOpts): Uint8Array =>
     ...(p.style !== undefined ? [tlv(0x714c, uintLE(p.style))] : []),
     ...(p.render ? [tlv(0x714d, p.render)] : []),
     tlv(0x7150, packedIds(p.tags ?? [])),
-    tlv(0x7159),
+    tlv(0x7159, packedIds(p.folders ?? [])),
     tlv(0x7151, packedIds(p.sections ?? [])),
     tlv(0x7152, u8(p.include === false ? 0 : 1)),
     tlv(0x7153),

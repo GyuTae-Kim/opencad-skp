@@ -134,6 +134,11 @@ export interface SkpPageMeta {
   camera?: SkpCameraMeta;
   /** 이 장면에서 숨긴 태그 이름(숨긴 태그를 기억하는 장면만) */
   hiddenTags?: string[];
+  /**
+   * 이 장면에서 숨긴 태그 폴더(meta.tagFolders 차례 — 그 안쪽 폴더·태그도 숨는다, 목록에 없는 폴더는 보인다).
+   * 숨긴 태그를 기억하는 장면이고 모형에 태그 폴더가 있으며 장면 기록이 폴더 목록을 가질 때만(2021+). 없으면 폴더 보임을 모른다(그대로 둔다)
+   */
+  hiddenFolders?: number[];
   /** 숨길 나무 노드(숨긴 개체를 기억하는 장면만). 정의 안 인스턴스 하나를 숨기면 그 정의가 놓인 모든 자리의 노드 */
   hiddenNodes?: number[];
   /** 활성 단면(meta.sectionPlanes 차례, 단면을 기억하는 장면만) */
