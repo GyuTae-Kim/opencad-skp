@@ -115,6 +115,8 @@ describe('코어 나눠 받기', () => {
     expect(dynamic).toBe(2);
     // 뷰 큐브 모듈은 첫 화면 그래프에 없다(코어 0.44.0부터 손가락 큐브로 커졌다 — 코어 조각과 함께 받는다)
     expect(core.has('viewcube')).toBe(false);
+    // 코어 theme 모듈도 첫 화면 그래프에 없다(66차 — 코어 뷰어가 쓰는 대비 함수까지 첫 화면 조각에 들었다. 앱은 바탕 색 값만 둔다, linecontrast.ts)
+    expect(core.has('theme')).toBe(false);
     // 측정 도구 조각도 core.ts의 import() 하나로만 받는다
     const measureDyn: string[] = [];
     for (const f of files) if (!f.startsWith(CORE) && dynamicSpecs(readFileSync(f, 'utf8')).includes('./measure')) measureDyn.push(relative(ROOT, f));

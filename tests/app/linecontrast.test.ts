@@ -8,6 +8,7 @@ import {
   billboardEdgeColor,
   edgeLooks,
   isModelEdgeSet,
+  THEME_BACKGROUND,
   THEME_LINE,
   contrastRatio,
   lineBackdrops,
@@ -54,6 +55,8 @@ describe('선 색 대비(WCAG)', () => {
     expect(viewBackground('light', null)).toEqual([0xf4 / 255, 0xf5 / 255, 0xf7 / 255]);
     expect(DARK_THEME.background).toBe('#212830');
     expect(LIGHT_THEME.background).toBe('#f4f5f7');
+    // 66차: 첫 화면에 코어 theme 모듈을 넣지 않으려고 앱이 둔 바탕 색이 코어 값과 같다
+    expect(THEME_BACKGROUND).toEqual({ light: LIGHT_THEME.background, dark: DARK_THEME.background });
     expect(contrastRatio(THEME_LINE.dark, viewBackground('dark', null))).toBeGreaterThan(10);
     expect(contrastRatio(THEME_LINE.light, viewBackground('light', null))).toBeGreaterThan(10);
     // 파일 배경: 코어가 배경 밝기 쪽(base) 선 색을 쓰므로 흰·검은 배경에서도 읽힌다

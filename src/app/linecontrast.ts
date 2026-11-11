@@ -10,8 +10,6 @@
  * 뒤 모서리 점선·외곽선(실루엣)·카메라를 보는 컴포넌트 윤곽선 색은 edgeLooks로 구해 코어 0.8.0 setRenderOptions에 넘긴다.
  */
 import type { BackgroundOptions, RenderMode, Rgba } from 'opencad-viewer3d';
-// 테마 색은 작은 모듈에서(다른 코어 모듈을 끌어오지 않는다 — 코어 입구는 문서를 열 때 나눠 받는다, core.ts)
-import { DARK_THEME, LIGHT_THEME } from 'opencad-viewer3d/theme';
 import type { Rgb } from '../meta';
 import { isLightBackground, luminance } from './backdrop';
 
@@ -54,9 +52,16 @@ const hexRgb = (s: string): Rgb => {
   return [ch(0), ch(2), ch(4)];
 };
 
+/**
+ * 코어 테마 바탕 색(opencad-viewer3d theme.ts DARK_THEME·LIGHT_THEME의 background와 같은 값 — 시험이 맞춘다).
+ * 66차: 코어 theme 모듈을 가져오지 않고 값만 둔다. 첫 화면이 그 모듈을 가져오면 번들러가 모듈 전체(코어 뷰어가 쓰는 함수까지 —
+ * 0.59.0 fitContrast·cssRgba)를 첫 화면 조각에 넣는다
+ */
+export const THEME_BACKGROUND: Readonly<Record<'light' | 'dark', string>> = { light: '#f4f5f7', dark: '#212830' };
+
 /** 코어가 그리는 바탕 색(파일 배경이 없으면 앱 테마 바탕) */
 export function viewBackground(theme: 'light' | 'dark', backdrop: Rgb | null): Rgb {
-  return backdrop ?? hexRgb(theme === 'dark' ? DARK_THEME.background : LIGHT_THEME.background);
+  return backdrop ?? hexRgb(THEME_BACKGROUND[theme]);
 }
 
 /** 코어 테마 바탕 쪽(격자·선 색을 고른다 — backdrop.ts viewerTheme과 같은 규칙) */
