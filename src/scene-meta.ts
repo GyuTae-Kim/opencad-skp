@@ -186,6 +186,9 @@ export function pagesMeta(model: SkpModel, scale: number, ctx: PagesContext = {}
       }
       out.hiddenTags = names;
     }
+    const folderCount = model.tagFolders?.length ?? 0;
+    if (flags & PAGE_USE_HIDDEN_TAGS && folderCount && p.hiddenFolders)
+      out.hiddenFolders = [...new Set(p.hiddenFolders.filter((i) => Number.isInteger(i) && i >= 0 && i < folderCount))].sort((a, b) => a - b);
     if (flags & PAGE_USE_SECTIONS && sectionsOf) {
       const set = new Set<number>();
       for (const id of p.sectionIds ?? []) for (const k of sectionsOf.get(id) ?? []) set.add(k);

@@ -240,6 +240,8 @@ export const TAG = {
   PAGE_TRANSITION: 0x7154,
   PAGE_DELAY: 0x7155,
   PAGE_THUMBNAIL: 0x7158,
+  /** 이 장면에서 숨긴 태그 폴더 번호(묶은 번호 목록 — 목록에 든 폴더와 그 안쪽은 숨고 나머지 폴더는 보인다) */
+  PAGE_FOLDERS: 0x7159,
   TEXTURE_PATH: 0x2134,
 
   // ── 글꼴·문자·치수 기본값 ──

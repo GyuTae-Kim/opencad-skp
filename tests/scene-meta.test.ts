@@ -116,6 +116,27 @@ describe('장면(페이지)', () => {
     expect(pagesMeta(model({ pages: [page({})] }), 1).pages[0]!.transition).toBeUndefined();
   });
 
+  it('68차: 숨긴 태그 폴더는 숨긴 태그를 기억하는 장면(0x20)이고 모형에 폴더가 있을 때만, 범위 밖·겹친 차례는 버린다', () => {
+    const tagFolders = [
+      { name: '가구', visible: true, parent: -1 },
+      { name: '철물', visible: false, parent: 0 },
+    ];
+    const m = model({
+      tags,
+      tagFolders,
+      pages: [
+        page({ flags: 0x020, hiddenFolders: [1, 0, 1, 5] }),
+        page({ flags: 0x020, hiddenFolders: [] }),
+        page({ flags: 0x001, hiddenFolders: [0] }),
+        page({ flags: 0x020 }),
+      ],
+    });
+    const p = pagesMeta(m, 1).pages;
+    expect(p.map((x) => x.hiddenFolders)).toEqual([[0, 1], [], undefined, undefined]);
+    // 폴더가 없는 모형은 칸을 두지 않는다(장면 정보가 예전과 같다)
+    expect(pagesMeta(model({ tags, pages: [page({ flags: 0x020, hiddenFolders: [] })] }), 1).pages[0]!.hiddenFolders).toBeUndefined();
+  });
+
   it('스타일을 기억하는 장면(0x2)만 그 렌더링 + style.xml로 스타일을 푼다', () => {
     const styles = new Map([['Scene style', new Map([[2002, '-1']])]]);
     const rendering = { values: new Map<number, Uint8Array>(), styleName: 'Scene style' };

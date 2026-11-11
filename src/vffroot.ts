@@ -166,6 +166,8 @@ export interface LayerSet {
   folders: SkpTagFolder[];
   /** 태그 번호 → tags 차례 */
   index: Map<number, number>;
+  /** 태그 폴더 번호(3e80 → 05dc) → folders 차례 */
+  folderIndex: Map<number, number>;
   /** 새 장면에서 기본 숨김(0x3c90 = 1)인 태그 차례 */
   defaultHidden: Set<number>;
   /** 기본 태그(목록 첫째) 번호 */
@@ -176,7 +178,7 @@ export interface LayerSet {
 
 /** 태그 절 0x01f8 → 3a98(목록 3a99, 활성 3a9a, 폴더 3a9b) */
 export function readLayers(r: TlvReader, sec: TlvNode, lineStyles: Map<number, string>, warn: Warn): LayerSet {
-  const out: LayerSet = { layers: new Map(), tags: [], folders: [], index: new Map(), defaultHidden: new Set() };
+  const out: LayerSet = { layers: new Map(), tags: [], folders: [], index: new Map(), folderIndex: new Map(), defaultHidden: new Set() };
   const list = r.firstSafe(sec, TAG.LAYER_LIST, true);
   if (!list) return out;
   const items = r.firstSafe(list, TAG.LAYER_ITEMS, true);
@@ -216,6 +218,7 @@ export function readLayers(r: TlvReader, sec: TlvNode, lineStyles: Map<number, s
     readFolders(r, r.firstSafe(list, TAG.LAYER_FOLDERS), out, warn);
   } catch {
     out.folders = [];
+    out.folderIndex.clear();
     for (const t of out.tags) delete t.folder;
     warn('태그 폴더를 읽지 못했습니다');
   }
@@ -232,6 +235,10 @@ function readFolders(r: TlvReader, holder: TlvNode | undefined, set: LayerSet, w
       const f: SkpTagFolder = { name: r.str(r.firstSafe(n, TAG.FOLDER_NAME)) ?? '', visible: !r.flag(r.firstSafe(n, TAG.FOLDER_HIDDEN)), parent };
       index = set.folders.length;
       set.folders.push(f);
+      // 장면이 숨긴 폴더(7159)가 가리키는 번호
+      const box = r.firstSafe(n, TAG.ID_BOX);
+      const id = box && r.uint(r.firstSafe(box, TAG.ID));
+      if (id !== undefined && !set.folderIndex.has(id)) set.folderIndex.set(id, index);
       const listed = r.packedIds(r.firstSafe(n, TAG.FOLDER_LAYERS));
       for (const id of listed.ids) {
         const t = set.index.get(id);
@@ -373,6 +380,16 @@ function readPage(r: TlvReader, n: TlvNode, layers: LayerSet, styles: StyleSet, 
     else hidden.add(t);
   }
   page.hiddenTags = [...hidden].sort((a, b) => a - b);
+  // 숨긴 태그 폴더: 태그(기본 보임과 XOR)와 달리 목록 그대로 — 공개 C API SUSceneAddLayerFolder는 장면에 넣은 폴더를 그 장면에서 숨김으로,
+  // 빼면 보임으로 적는다. 목록이 없는 장면 기록이면 모른다(칸 없음)
+  if (r.first(n, TAG.PAGE_FOLDERS)) {
+    const folders = new Set<number>();
+    for (const id of ids(TAG.PAGE_FOLDERS, '태그 폴더')) {
+      const f = layers.folderIndex.get(id);
+      if (f !== undefined) folders.add(f);
+    }
+    page.hiddenFolders = [...folders].sort((a, b) => a - b);
+  }
   page.sectionIds = ids(TAG.PAGE_SECTIONS, '단면');
   const renderHolder = r.first(n, TAG.PAGE_RENDERING);
   const render = renderHolder && r.first(renderHolder, TAG.RENDERING);

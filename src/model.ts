@@ -391,6 +391,11 @@ export interface SkpPage {
   hiddenIds: number[];
   /** 이 장면에서 숨긴 태그(SkpModel.tags 차례) — 0x7150 목록 XOR 기본 숨김(0x3c90) */
   hiddenTags: number[];
+  /**
+   * 이 장면에서 숨긴 태그 폴더(SkpModel.tagFolders 차례, 겹침 없이 오름차순) — 0x7159 목록 그대로(태그와 달리 기본 보임과 XOR하지 않는다:
+   * 목록에 든 폴더와 그 안쪽은 숨고 빠진 폴더는 보인다). 2021+ 장면 기록에 0x7159가 있을 때만(2020 이하는 읽지 않아 없다)
+   */
+  hiddenFolders?: number[];
   /** 활성 단면 영구 번호(0x7151) */
   sectionIds: number[];
   rendering?: SkpRenderingRaw;
@@ -1414,6 +1419,7 @@ export class ModelParse {
       tags: [],
       folders: [],
       index: new Map(),
+      folderIndex: new Map(),
       defaultHidden: new Set(),
     };
     this.readFonts();

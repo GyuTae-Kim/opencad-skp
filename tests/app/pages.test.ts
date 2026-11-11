@@ -224,13 +224,13 @@ describe('장면 읽기', () => {
   it('차례를 지키고 꼴이 다른 칸은 버린다', () => {
     const pages = readPages({
       pages: [
-        { name: '평면', hiddenTags: ['벽', 3], hiddenNodes: [1, -2, 2.5, 4], sectionPlanes: [0, 'x'], transition: -1, delay: 2, camera: { eye: [0, 0, 1] } },
+        { name: '평면', hiddenTags: ['벽', 3], hiddenFolders: [2, -1, 'a', 0], hiddenNodes: [1, -2, 2.5, 4], sectionPlanes: [0, 'x'], transition: -1, delay: 2, camera: { eye: [0, 0, 1] } },
         'broken',
         { name: '', style: { faceStyle: 'bogus', xray: true, background: [2, 0.5, -1], sky: null } },
       ],
     });
     expect(pages).toHaveLength(3);
-    expect(pages[0]).toEqual({ name: '평면', hiddenTags: ['벽'], hiddenNodes: [1, 4], sectionPlanes: [0], delay: 2 });
+    expect(pages[0]).toEqual({ name: '평면', hiddenTags: ['벽'], hiddenFolders: [2, 0], hiddenNodes: [1, 4], sectionPlanes: [0], delay: 2 });
     expect(pages[1]).toEqual({ name: '장면 2' });
     expect(pages[2]!.name).toBe('장면 3');
     expect(pages[2]!.style).toEqual({ xray: true, background: [1, 0.5, 0], sky: null });
@@ -372,15 +372,18 @@ describe('장면 적용 계획', () => {
       name: '평면',
       camera: cam({ eye: [0, 0, 100], up: [0, 1, 0], perspective: false, height: 40 }),
       hiddenTags: ['지붕'],
+      hiddenFolders: [2],
       hiddenNodes: [4, 9],
       sectionPlanes: [1, 0],
       style: { faceStyle: 'shaded', edges: false },
       transition: 0.5,
     };
-    const p = pagePlan(page, { sectionPlanes: planes, folderHidden: new Set(['보관']), viewerFovY: DEFAULT_FOV });
+    const p = pagePlan(page, { sectionPlanes: planes, viewerFovY: DEFAULT_FOV });
     expect(p.camera!.projection).toBe('orthographic');
     expect(p.seconds).toBe(0.5);
-    expect([...p.hiddenTags!].sort()).toEqual(['보관', '지붕'].sort());
+    // 숨긴 폴더 안 태그는 태그 목록에 더하지 않고 폴더로 숨긴다(68차 — 앱 tagHidden)
+    expect([...p.hiddenTags!]).toEqual(['지붕']);
+    expect([...p.hiddenFolders!]).toEqual([2]);
     expect([...p.hiddenNodes!]).toEqual([4, 9]);
     expect(p.setsSection).toBe(true);
     expect(p.section!.index).toBe(0);
@@ -395,6 +398,15 @@ describe('장면 적용 계획', () => {
     expect(cuts.section).toBeNull();
     // 빈 목록 = 모든 태그를 보인다
     expect(pagePlan({ name: '모두', hiddenTags: [] }).hiddenTags!.size).toBe(0);
+  });
+
+  it('68차: 장면의 태그 폴더 목록 — 숨긴 태그를 기억하는 장면만, 빈 목록은 모든 폴더를 보인다, 목록을 모르면 그대로', () => {
+    expect([...pagePlan({ name: '폴더', hiddenTags: [], hiddenFolders: [0, 3] }).hiddenFolders!]).toEqual([0, 3]);
+    expect(pagePlan({ name: '모두', hiddenTags: ['벽'], hiddenFolders: [] }).hiddenFolders!.size).toBe(0);
+    // 폴더 목록이 없는 장면(2020 이하·폴더 없는 모형)은 지금 폴더 보임 그대로
+    expect(pagePlan({ name: '모름', hiddenTags: ['벽'] }).hiddenFolders).toBeNull();
+    // 숨긴 태그를 기억하지 않는 장면은 폴더도 그대로
+    expect(pagePlan({ name: '카메라만', camera: cam({}), hiddenFolders: [1] }).hiddenFolders).toBeNull();
   });
 });
 
