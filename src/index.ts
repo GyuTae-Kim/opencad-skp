@@ -506,6 +506,9 @@ function sceneFrom(read: Package | Scene3d, st: Start, opts: SkpOptions): Scene3
   const scene: Scene3d = { name, units: u.units, meshes: parts.meshes, lines: parts.lines, warnings, meta };
   if (parts.points.length) scene.points = parts.points;
   if (parts.bounds) scene.bounds = parts.bounds;
+  // 76차: 화면 맞춤(전체 보기·표준 뷰·첫 장면 맞춤)은 숨김과 상관없이 보이는 묶음(형상·치수선·지시선·단면 기호 등) 범위의 합으로(코어 0.65.0 fitRange).
+  // 장면 범위(bounds — 형상만)는 격자·단면 위치·측정 자릿수에만 쓰인다(주석을 넣으면 격자가 단면 기호 아래 끝으로 내려간다 — 73차)
+  scene.fitRange = 'visible';
   // 그물이 쓰는 무늬만 장면에 넣는다(55차: 색 무늬 다음에 PBR 그림 — 색 무늬 차례는 예전과 같다)
   if (sceneTex.size) {
     const used = new Set<string>();
