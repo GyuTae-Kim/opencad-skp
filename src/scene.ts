@@ -3264,6 +3264,9 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       segmentCurves.push(null);
       const l: LineSet3d = { id, name: `${sk.hidden ? '숨긴 ' : ''}${ANNOTATION_LABEL[sk.kind]} · ${sk.tag}`, positions: toF32(sk.pos, sk.origin), color: sk.color, group: sk.tag };
       if (sk.kind === 'guides' || sk.hidden) l.dashed = true;
+      // 76차: 보조선은 화면 맞춤 범위에서 뺀다(코어 0.65.0 fit: false — 끝없는 보조선은 위 clip의 여유만큼 그린 길이가 맞춤을 넓혔다. README 「화면 맞춤 범위」).
+      // 그리기·고르기·측정과 가까운·먼 면은 그대로이고, 맞출 다른 묶음이 보이지 않으면 코어가 보이는 범위(보조선 포함)로 맞춘다
+      if (sk.kind === 'guides') l.fit = false;
       if (sk.origin) l.origin = sk.origin;
       lines.push(l);
       annItems[sk.kind].push(id);
@@ -3296,6 +3299,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     for (const sk of ptSinks.values()) {
       const id = `skp-guide-points-${points.length}`;
       const ps: PointSet3d = { id, name: `${sk.hidden ? '숨긴 ' : ''}보조점 · ${sk.tag}`, positions: toF32(sk.pos, sk.origin), color: GUIDE_COLOR, size: 5, group: sk.tag };
+      // 76차: 보조점도 보조선처럼 화면 맞춤 범위에서 뺀다(fit: false)
+      ps.fit = false;
       if (sk.origin) ps.origin = sk.origin;
       points.push(ps);
       annItems.guides.push(id);

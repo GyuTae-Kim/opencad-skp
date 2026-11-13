@@ -3,6 +3,8 @@
  * 화면을 맞춘다(SketchUp 도움말 Zoom Extents: 모형 전체가 보이게). 72차까지는 숨김이 없으면 장면 범위(형상만)로 맞춰 치수선·단면 기호가 빠지고, 안쪽 배치 하나만 숨겨도
  * 들어가 맞춤 거리가 달라졌다. 73~75차는 앱이 어떤 묶음도 쓰지 않는 그룹을 늘 숨겨(FIT_GROUP 우회) 같은 범위를 얻었다 — 76차에 걷고 이 규칙으로 바꿨다.
  * 장면 범위(Scene3d.bounds — 형상만)·격자·단면 범위는 그대로다(장면 범위에 주석을 넣으면 격자가 단면 기호 아래 끝으로 내려가고 단면 평면 크기·위치 범위가 바뀌었다).
+ * 76차: 보조선·보조점 묶음은 맞춤에서 뺀다(fit: false — 73~75차는 넣었다). 끝없는 보조선은 해석기가 형상 범위의 10% 여유까지 잘라 그려 그 여유가 맞춤을 넓혔다.
+ * 그리기·가까운·먼 면(보이는 범위)에는 그대로 들고, 맞출 다른 묶음이 보이지 않으면 코어가 보이는 범위(보조 포함)로 맞춘다.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Viewer3d } from 'opencad-viewer3d';
@@ -54,12 +56,17 @@ function view(s: Scene3d): Viewer3d {
   v.setView('seIso', false);
   return v;
 }
+/** 맞춤 규칙·맞춤 빼기 표시가 없는 장면(73~75차 해석기와 같은 꼴) */
+function scene73(s: Scene3d): Scene3d {
+  const old: Scene3d = { ...s, lines: s.lines.map(({ fit: _f, ...l }) => l) };
+  if (s.points) old.points = s.points.map(({ fit: _f, ...p }) => p);
+  delete old.fitRange;
+  return old;
+}
 /** 73~75차 길: 맞춤 규칙 표시가 없는 장면(0.64.0 기본)에서 어떤 묶음도 쓰지 않는 그룹을 늘 숨겨 둔다 */
 const FIT_GROUP_73 = '\u0000fit';
 function view73(s: Scene3d): Viewer3d {
-  const old: Scene3d = { ...s };
-  delete old.fitRange;
-  const v = view(old);
+  const v = view(scene73(s));
   v.setGroupVisible(FIT_GROUP_73, false);
   return v;
 }
@@ -166,5 +173,92 @@ describe('화면 맞춤 범위와 주석', () => {
     // 보이는 묶음(형상 y 0~10, 치수선 y −30쪽, 단면 기호)의 가운데 — 숨긴 보조선까지 들면 y 가운데가 200을 넘는다
     expect(c.target[1]).toBeLessThan(100);
     expect(v.fitBounds.max[1]).toBeLessThan(100);
+  });
+});
+
+/** 뿌리: 판 하나(0~10), 치수 하나(y −30쪽), 보이는 보조 셋 — 판을 지나는 끝없는 선(y = 5), 끝 있는 선(y = 300, x 0~10), 보조점(y = −400) */
+function guideSpec(withFaces = true): MfcSpec {
+  const guides: MfcSpec['root'] = {
+    guides: [
+      { kind: 'line', point: [0, 5, 0], dir: [1, 0, 0] },
+      { kind: 'line', point: [0, 300, 0], dir: [1, 0, 0], range: [0, 10] },
+      { kind: 'point', point: [5, -400, 0] },
+    ],
+  };
+  return { schemas: 'v15', root: withFaces ? squareEntities({ linearDims: [dim(-30)], ...guides }) : guides };
+}
+type Item = { id: string; fit?: boolean; positions: ArrayLike<number> };
+const guideIdsOf = (s: Scene3d): string[] => (s.meta as { annotationItems?: { guides: string[] } }).annotationItems?.guides ?? [];
+
+describe('보조선·보조점은 화면 맞춤에서 뺀다(76차)', () => {
+  it('해석기: 보조선·보조점 묶음만 fit: false(형상·치수선은 표시 없음)', () => {
+    const s = skpToScene(mfcFile(guideSpec()), { outline: true });
+    const guides = new Set(guideIdsOf(s));
+    expect(guides.size).toBeGreaterThanOrEqual(2);
+    const all: Item[] = [...s.meshes, ...s.lines, ...(s.points ?? [])];
+    for (const it of all) expect(it.fit).toBe(guides.has(it.id) ? false : undefined);
+    expect((s.points ?? []).length).toBe(1);
+    expect(s.points![0]!.fit).toBe(false);
+  });
+
+  it('맞춤 범위는 보조를 뺀 보이는 묶음 합(숨김과 상관없이), 보이는 범위에는 들고, 73~75차 길은 보조까지 넣었다', () => {
+    const s = skpToScene(mfcFile(guideSpec()), { outline: true });
+    const guides = new Set(guideIdsOf(s));
+    // 보조를 아예 뺀 장면의 맞춤 범위와 같다
+    const bare: Scene3d = { ...s, lines: s.lines.filter((l) => !guides.has(l.id)) };
+    delete bare.points;
+    const ref = view(bare);
+    const v = view(s);
+    sameBox(v.fitBounds, ref.fitBounds);
+    close(fitCam(v), fitCam(ref));
+    expect(v.fitBounds.min[1]).toBeGreaterThan(-100);
+    expect(v.fitBounds.max[1]).toBeLessThan(100);
+    // 끝없는 보조선을 자른 여유(형상 범위 대각선의 10%)도 맞춤을 넓히지 않는다: x는 형상·치수선 범위 그대로
+    expect(v.fitBounds.min[0]).toBeGreaterThanOrEqual(-1e-6);
+    expect(v.fitBounds.max[0]).toBeLessThanOrEqual(10 + 1e-6);
+    // 보이는 범위(가까운·먼 면·그림자)에는 보조가 든다
+    const vis = at(v).visibleBox();
+    expect(vis.min[1]).toBeLessThanOrEqual(-400);
+    expect(vis.max[1]).toBeGreaterThanOrEqual(300);
+    // 보조 하나를 숨겨도 맞춤은 같다
+    const pointId = s.points![0]!.id;
+    v.setItemVisible(pointId, false);
+    sameBox(v.fitBounds, ref.fitBounds);
+    v.setItemVisible(pointId, true);
+    // 73~75차 길: 보조까지 넣어 맞춤이 멀었다(이 차수 결정이 바꾼 칸)
+    const v73 = view73(s);
+    expect(v73.fitBounds.min[1]).toBeLessThanOrEqual(-400);
+    expect(v73.fitBounds.max[1]).toBeGreaterThanOrEqual(300);
+    expect(fitCam(v73).distance).toBeGreaterThan(fitCam(v).distance * 5);
+    // 격자(장면 범위 — 형상만)는 같다
+    expect(JSON.stringify(at(v).grid)).toBe(JSON.stringify(at(v73).grid));
+  });
+
+  it('고른 보조는 fitItems로 맞춰 본다', () => {
+    const s = skpToScene(mfcFile(guideSpec()), { outline: true });
+    const v = view(s);
+    void v.fitItems([s.points![0]!.id], false);
+    const c = v.getCamera();
+    expect(c.target[0]).toBeCloseTo(5, 6);
+    expect(c.target[1]).toBeCloseTo(-400, 6);
+  });
+
+  it('맞출 다른 묶음이 보이지 않으면(보조만 있는 파일·형상과 치수를 모두 숨김) 보이는 범위(보조 포함)로 맞춘다', () => {
+    // 보조만 있는 파일: 장면 범위 없음, 맞춤 범위 = 보이는 범위
+    const only = skpToScene(mfcFile(guideSpec(false)), { outline: true });
+    expect(only.bounds).toBeUndefined();
+    expect(only.meshes.length).toBe(0);
+    const g = view(only);
+    sameBox(g.fitBounds, at(g).visibleBox());
+    expect(g.fitBounds.min[1]).toBeLessThanOrEqual(-400);
+    expect(g.fitBounds.max[1]).toBeGreaterThanOrEqual(300);
+    expect(Number.isFinite(fitCam(g).distance)).toBe(true);
+    // 형상·치수선을 모두 숨긴 때
+    const s = skpToScene(mfcFile(guideSpec()), { outline: true });
+    const guides = new Set(guideIdsOf(s));
+    const v = view(s);
+    for (const it of [...s.meshes, ...s.lines]) if (!guides.has(it.id)) v.setItemVisible(it.id, false);
+    sameBox(v.fitBounds, at(v).visibleBox());
+    expect(v.fitBounds.min[1]).toBeLessThanOrEqual(-400);
   });
 });
