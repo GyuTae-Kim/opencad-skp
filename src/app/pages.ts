@@ -497,20 +497,17 @@ export function readPage(v: unknown, index: number): SkpPageMeta {
   const shadow = readShadow(o.shadow);
   if (shadow) page.shadow = shadow;
   // 73차: 장면이 기억하는 그리기 축(null = 기본 축, 꼴이 다르면 기억하지 않는 장면처럼)
-  if (o.axes === null) page.axes = null;
-  else {
-    const axes = readAxes(o.axes);
-    if (axes) page.axes = axes;
-  }
+  const axes = readAxes(o.axes);
+  if (axes !== undefined) page.axes = axes;
   return page;
 }
 
 const isVec3 = (v: unknown): v is [number, number, number] => Array.isArray(v) && v.length === 3 && v.every(isNum);
 
-/** meta.axes·장면 axes(꼴이 다르면 null) */
-export function readAxes(v: unknown): SkpAxesMeta | null {
+/** meta.axes·장면 axes: null이면 null(장면이 기억한 기본 축), 꼴이 다르면 undefined */
+export function readAxes(v: unknown): SkpAxesMeta | null | undefined {
   const o = obj(v);
-  return o && isVec3(o.origin) && isVec3(o.x) && isVec3(o.y) && isVec3(o.z) ? { origin: o.origin, x: o.x, y: o.y, z: o.z } : null;
+  return v === null ? null : o && isVec3(o.origin) && isVec3(o.x) && isVec3(o.y) && isVec3(o.z) ? { origin: o.origin, x: o.x, y: o.y, z: o.z } : undefined;
 }
 
 /** 그림자 설정(모르는 꼴이어도 안전하게 — 수·참거짓·북쪽 벡터만 남긴다). 객체가 아니면 null */

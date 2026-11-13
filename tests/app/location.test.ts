@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { computeFrame, type CameraState } from 'opencad-viewer3d/camera';
-import { latLonText, readAxes, readLocation, shadowTimeText, tzText } from '../../src/app/doc';
+import { readAxes, readLocation } from '../../src/app/doc';
+import { latLonText, shadowTimeText, tzText } from '../../src/app/placetext';
 import { axisLock, axisOf } from '../../src/app/snap';
 import { protractorPlane } from '../../src/app/measure';
 
@@ -18,8 +19,10 @@ describe('위치 글', () => {
   it('meta 꼴 검사', () => {
     expect(readLocation({ city: '서울', latitude: 37.5, georeferenced: true, tz: 'x' })).toEqual({ georeferenced: true, city: '서울', latitude: 37.5 });
     expect(readLocation(null)).toBeNull();
-    expect(readAxes({ origin: [0, 0, 0], x: [0, 1, 0], y: [-1, 0, 0], z: [0, 0, 1] })).not.toBeNull();
-    expect(readAxes({ origin: [0, 0], x: [0, 1, 0], y: [-1, 0, 0], z: [0, 0, 1] })).toBeNull();
+    expect(readAxes({ origin: [0, 0, 0], x: [0, 1, 0], y: [-1, 0, 0], z: [0, 0, 1] })).toEqual({ origin: [0, 0, 0], x: [0, 1, 0], y: [-1, 0, 0], z: [0, 0, 1] });
+    // 꼴이 다르면 undefined, null은 null(73차 — 장면이 기억한 기본 축)
+    expect(readAxes({ origin: [0, 0], x: [0, 1, 0], y: [-1, 0, 0], z: [0, 0, 1] })).toBeUndefined();
+    expect(readAxes(null)).toBeNull();
   });
 });
 

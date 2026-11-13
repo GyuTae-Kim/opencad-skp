@@ -120,7 +120,7 @@ import { sceneHasGeometry } from './protocol';
 import { deviceHints, textureLimitsFor, type TextureLimits } from './texlimits';
 import { THEME_CHOICES, applyThemeChoice, readStoredTheme, resolveTheme, storeTheme, systemPrefersDark, themeChoiceOf, type ThemeChoice, type ThemeName } from './theme';
 import { childrenOf, isAncestor, isSplit, nodeBox, nodePath, normalizeRanges, type PickMode } from './tree';
-import { cameraForBox, keepFitVisible, keepViewOnHeightChange } from './view';
+import { FIT_GROUP, cameraForBox, keepViewOnHeightChange } from './view';
 import { cssHex, isLightBackground, loadFileBackground, safeStorage, skyBackground, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
 import type { BackgroundOptions, Rgba } from 'opencad-viewer3d';
 import { DEFAULT_EDGE_COLOR, LineContrast, edgeLooks, lineColorOverrides } from './linecontrast';
@@ -1279,7 +1279,7 @@ export class SkpViewerApp implements PanelHost {
     // 파일에서 숨긴 태그·태그 폴더는 처음부터 숨긴다
     for (const t of d.tags) if (tagHidden(d, t.name)) v.setGroupVisible(t.name, false);
     // 73차: 화면 맞춤은 숨김 여부와 상관없이 보이는 묶음(형상·주석) 범위로(view.ts FIT_GROUP)
-    keepFitVisible(v);
+    v.setGroupVisible(FIT_GROUP, false);
     this.isolatedOn = false;
     this.userMoved = false;
     this.history.reset(null);

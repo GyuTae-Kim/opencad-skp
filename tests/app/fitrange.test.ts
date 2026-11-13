@@ -9,7 +9,7 @@ import { Viewer3d } from 'opencad-viewer3d';
 import type { CameraState } from 'opencad-viewer3d/camera';
 import type { Scene3d } from 'opencad-viewer3d/types';
 import { skpToScene } from '../../src/index';
-import { FIT_GROUP, keepFitVisible } from '../../src/app/view';
+import { FIT_GROUP } from '../../src/app/view';
 import { installDom } from '../fakegl/fakedom';
 import { mfcFile, move13, squareEntities, type MfcLinearDimSpec, type MfcSpec } from '../mfcwrite';
 
@@ -53,6 +53,8 @@ function view(s: Scene3d): Viewer3d {
   return v;
 }
 const fitCam = (v: Viewer3d): CameraState => (v.fit(false), v.getCamera());
+/** 앱이 장면을 올린 뒤 하는 것(app.ts — 어떤 묶음도 쓰지 않는 그룹을 숨김) */
+const keepFitVisible = (v: Viewer3d): void => v.setGroupVisible(FIT_GROUP, false);
 const close = (a: CameraState, b: CameraState): void => {
   expect(a.distance).toBeCloseTo(b.distance, 6);
   for (let k = 0; k < 3; k++) expect(a.target[k]!).toBeCloseTo(b.target[k]!, 6);

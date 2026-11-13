@@ -5,7 +5,8 @@
  */
 import type { SkpAxesMeta } from '../meta';
 import { h, icon } from './dom';
-import { docLabel, latLonText, releaseName, shadowTimeText, tzText, unitLabel, unitSummary, type SkpDoc } from './doc';
+import { docLabel, releaseName, unitLabel, unitSummary, type SkpDoc } from './doc';
+import { latLonText, shadowTimeText, tzText } from './placetext';
 import { fileText as F, mix } from './filetext';
 import { fmtCount, fmtNum, fmtPt, formatBytes, formatMs } from './format';
 import { mixNodes, mixText, uiText } from './i18n';

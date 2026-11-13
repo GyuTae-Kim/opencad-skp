@@ -813,7 +813,7 @@ export function readMetaExtras(scene: Scene3d): Pick<
   const annotationMarks = readAnnotationMarks(m.annotationMarks, annotationKind);
   const info = m.treeInfo && typeof m.treeInfo === 'object' ? (m.treeInfo as SkpTreeInfo) : null;
   const infoOk = !!info && !!tree && info.attrs instanceof Int32Array && info.attrs.length === tree.count && info.size instanceof Float32Array && info.size.length === tree.count * 3;
-  const axes = readAxes(m.axes);
+  const axes = readAxes(m.axes) ?? null;
   return {
     units: readUnits(m.units, str(m.lengthUnit)),
     camera: cam && Array.isArray(cam.eye) && Array.isArray(cam.target) ? cam : null,
@@ -861,32 +861,8 @@ export function readLocation(v: unknown): SkpLocationMeta | null {
   return out;
 }
 
-/** meta.axes(꼴이 다르면 null) — 73차에 장면 그리기 축도 읽느라 pages.ts로 옮김 */
+/** meta.axes(꼴이 다르면 undefined, null이면 null) — 73차에 장면 그리기 축도 읽느라 pages.ts로 옮김 */
 export { readAxes };
-
-/** 위도·경도 글("37.5665° N, 126.9780° E") */
-export function latLonText(lat: number, lon: number): string {
-  const ns = lat >= 0 ? 'N' : 'S';
-  const ew = lon >= 0 ? 'E' : 'W';
-  return `${Math.abs(lat).toFixed(4)}° ${ns}, ${Math.abs(lon).toFixed(4)}° ${ew}`;
-}
-
-/** 시간대 글(UTC+9, UTC−3:30) */
-export function tzText(tz: number): string {
-  const sign = tz < 0 ? '−' : '+';
-  const a = Math.abs(tz);
-  const h = Math.floor(a);
-  const m = Math.round((a - h) * 60);
-  return `UTC${sign}${h}${m ? `:${String(m).padStart(2, '0')}` : ''}`;
-}
-
-/** 그림자 시각(그곳 시각을 UTC 초처럼 적은 값) → "2026-06-21 13:30" */
-export function shadowTimeText(time: number): string {
-  const d = new Date(time * 1000);
-  if (!Number.isFinite(d.getTime())) return '';
-  const p = (n: number): string => String(n).padStart(2, '0');
-  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
-}
 
 /** 패널 탭 목록 */
 export function panelTabs(d: SkpDoc): [PanelTab, string][] {
