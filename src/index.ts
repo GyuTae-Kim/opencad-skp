@@ -899,8 +899,6 @@ function extrasMeta(
 ): SkpMetaExtras {
   const out: SkpMetaExtras = {};
   if (model.units) out.units = model.units;
-  const mb = parts.modelBounds;
-  if (mb) out.modelBounds = { min: [mb.min[0], mb.min[1], mb.min[2]], max: [mb.max[0], mb.max[1], mb.max[2]] };
   const cam = cameraMeta(model.camera, scale);
   if (cam) out.camera = cam;
   if (style) out.style = style;

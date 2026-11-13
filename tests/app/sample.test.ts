@@ -22,18 +22,11 @@ describe('예제 모형', () => {
     expect((s.meta?.tags as string[]).length).toBe(6);
     expect(s.meta?.materials).toBe(11);
     expect((s.meta?.outline as unknown[]).length).toBe(11);
-    // 집 6 m × 4 m를 mm로: 잔디 마당 범위 14.5 m × 11 m, 지붕 마루 4.3 m + 판 두께 — 73차부터 형상만 범위는 meta.modelBounds
-    // (장면 범위에는 보이게 그리는 치수선이 들어 그만큼 넓다)
-    const mb = (s.meta as { modelBounds?: { min: number[]; max: number[] } }).modelBounds!;
-    expect(mb.max[0]! - mb.min[0]!).toBeCloseTo(14_500, 3);
-    expect(mb.max[1]! - mb.min[1]!).toBeCloseTo(11_000, 3);
-    expect(mb.max[2]).toBeGreaterThan(4300);
-    expect(mb.max[2]).toBeLessThan(4700);
-    for (let k = 0; k < 3; k++) {
-      expect(s.bounds!.min[k]).toBeLessThanOrEqual(mb.min[k]!);
-      expect(s.bounds!.max[k]).toBeGreaterThanOrEqual(mb.max[k]!);
-    }
-    expect(s.bounds!.max[0] - s.bounds!.min[0]).toBeGreaterThan(14_500);
+    // 집 6 m × 4 m를 mm로: 잔디 마당 범위 14.5 m × 11 m, 지붕 마루 4.3 m + 판 두께
+    expect(s.bounds!.max[0] - s.bounds!.min[0]).toBeCloseTo(14_500, 3);
+    expect(s.bounds!.max[1] - s.bounds!.min[1]).toBeCloseTo(11_000, 3);
+    expect(s.bounds!.max[2]).toBeGreaterThan(4300);
+    expect(s.bounds!.max[2]).toBeLessThan(4700);
   });
 
   it('화면 언어로 만들면 안의 이름이 그 언어로 들고, 한국어는 예전과 같은 바이트(53차)', async () => {

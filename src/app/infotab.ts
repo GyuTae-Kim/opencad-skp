@@ -3,7 +3,6 @@
  * 문서를 연 뒤 정보 탭을 고를 때만 쓰는 글이라 첫 화면 JS에서 뗐다(47차 속성 사전 칸 attrview.ts처럼 — 파일 글을 번역층에서 빼느라 늘어난
  * 첫 화면 몫을 이것으로 갚는다). 받은 뒤에는 패널이 곧바로 그린다.
  */
-import type { Scene3d } from 'opencad-viewer3d/types';
 import type { SkpAxesMeta } from '../meta';
 import { h, icon } from './dom';
 import { docLabel, latLonText, releaseName, shadowTimeText, tzText, unitLabel, unitSummary, type SkpDoc } from './doc';
@@ -14,17 +13,6 @@ import { chip, hint, keep, row, section } from './panel';
 import { sunForShadow } from './sun';
 import { unitsLabel } from './units';
 import { coreIssueText, warningParts } from './warntext';
-
-/**
- * 모형 통계의 범위: 형상만 범위(meta.modelBounds — 73차부터 장면 범위에 든 치수선·단면 기호 같은 주석 묶음이 그것을 넓혔을 때만 있다),
- * 없으면 장면 범위
- */
-export function modelBox(s: Scene3d): { min: readonly number[]; max: readonly number[] } | null {
-  const m = (s.meta as { modelBounds?: unknown } | undefined)?.modelBounds as { min?: unknown; max?: unknown } | undefined;
-  const ok = (v: unknown): v is number[] => Array.isArray(v) && v.length === 3 && v.every((x) => typeof x === 'number' && Number.isFinite(x));
-  if (m && ok(m.min) && ok(m.max)) return { min: m.min, max: m.max };
-  return s.bounds ?? null;
-}
 
 /** 기본 그리기 축(세계 축) — 장면이 기본 축으로 되돌렸을 때 적는다 */
 const WORLD_AXES: SkpAxesMeta = { origin: [0, 0, 0], x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
@@ -64,7 +52,8 @@ export function infoSections(d: SkpDoc, applyPage: (index: number) => void): HTM
   add('태그', info.tags);
   add('삼각형(펼친 뒤)', info.triangles);
   add('선분(펼친 뒤)', info.segments);
-  const b = modelBox(s);
+  // 범위 크기·최소·최대(73차에 첫 화면 조각 doc.ts의 boundsSize를 여기로 옮김 — 정보 탭만 쓴다)
+  const b = s.bounds;
   if (b) {
     rows.push(row('범위 크기', `${fmtNum(b.max[0] - b.min[0], 1)} × ${fmtNum(b.max[1] - b.min[1], 1)} × ${fmtNum(b.max[2] - b.min[2], 1)} ${u}`));
     rows.push(row('최소', fmtPt(b.min, 1)), row('최대', fmtPt(b.max, 1)));
