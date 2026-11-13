@@ -1323,9 +1323,21 @@ export class MeasureTool {
     return directingPoints(this.modeValue, this.pts.length);
   }
 
-  /** 지금 잠근 방향 추론(없으면 null) */
+  /** 지금 잠근 방향 추론(없으면 null — 축 잠금은 지금 그리기 축 방향, liveLock) */
   get inferenceLock(): Readonly<MeasureLock> | null {
-    return this.lockValue;
+    return this.liveLock();
+  }
+
+  /**
+   * 잠근 방향을 쓸 때의 값(75차): 축 잠금은 축 이름으로 잠근 것이라(SketchUp 화살표 잠금 — 오른쪽 빨강·왼쪽 녹색·위 파랑 그리기 축),
+   * 잠근 뒤 그리기 축이 바뀌면(그리기 축을 기억하는 장면을 고름) 지금 축의 방향을 쓴다 — 각도기 평면 잠금(planeAxisValue)처럼.
+   * 나란히·수직 잠금은 모서리에서 잡은 방향이라 그대로 둔다
+   */
+  private liveLock(): MeasureLock | null {
+    const l = this.lockValue;
+    if (!l || l.kind !== 'axis' || !l.axis) return l;
+    const d = this.axes[l.axis];
+    return d[0] === l.dir[0] && d[1] === l.dir[1] && d[2] === l.dir[2] ? l : { ...l, dir: [d[0], d[1], d[2]] };
   }
 
   /** 지금 잠근 방향 이름(축·나란히·수직·면에 수직, 없으면 null) */
@@ -2546,7 +2558,7 @@ export class MeasureTool {
       guides: this.shownValue ? this.visible().vp : [],
       guideLines: this.shownValue ? this.visible().vl : [],
       parallelRef: this.parallelRef,
-      lock: this.pts.length ? this.lockValue : null,
+      lock: this.pts.length ? this.liveLock() : null,
       tracks: this.trackOn ? this.tracker.view : null,
       // 축·잠근 선이 면을 뚫는 점은 그 자리에서 그물 면만 다시 맞춰 본다(코어 0.20.0 meshesOnly — 면 위 선분·점은 면을 가리지 않고,
       // 숨긴 항목·단면에서 잘린 쪽은 커서 고르기처럼 코어가 거른다)
