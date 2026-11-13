@@ -1237,13 +1237,6 @@ export function selectionParts(d: SkpDoc, sel: Selection | null, pick: Pick3d | 
 /** 고른 것 한 줄 설명의 원문(한국어 — 상태 보내기·시험) */
 export const selectionText = (d: SkpDoc, sel: Selection | null, pick: Pick3d | null = null): string => plainText(selectionParts(d, sel, pick));
 
-/** 범위 크기(x, y, z) */
-export function boundsSize(s: Scene3d): [number, number, number] | null {
-  const b = s.bounds;
-  if (!b) return null;
-  return [b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]];
-}
-
 // 큰 모형 기준(나눠 올리기·놓기 — 해석 워커도 같은 기준으로 법선·무늬 좌표를 줄인다, 28차에 protocol.ts로 옮김)
 export { INCREMENTAL_ITEMS, INCREMENTAL_PRIMS, isBigScene } from './protocol';
 

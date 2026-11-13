@@ -77,9 +77,23 @@ describe('주석 펼치기', () => {
     return model(root, { definitions: new Map([def(50, '자 정의', inner)]), annotationDefaults: { dimColor: [64, 64, 64] } });
   }
 
-  it('글·치수·단면을 세계 좌표 meta로, 선분은 종류·태그마다 묶고 범위에는 넣지 않는다', () => {
+  it('글·치수·단면을 세계 좌표 meta로, 선분은 종류·태그마다 묶고 장면 범위에 넣는다(73차 — 형상만 범위는 modelBounds)', () => {
     const p = buildSceneParts(annotated(), NO_MATS, 1, { outline: true });
-    expect(p.bounds).toEqual({ min: [0, 0, 0], max: [10, 10, 0] });
+    // 73차: 장면 범위 = 형상 + 보이게 그리는 주석 묶음(코어 itemBounds — float32 위치 + 원점)의 합, 형상만 범위는 modelBounds
+    expect(p.modelBounds).toEqual({ min: [0, 0, 0], max: [10, 10, 0] });
+    const lo = [0, 0, 0];
+    const hi = [10, 10, 0];
+    for (const it of [...p.lines.filter((l) => /^skp-(dims|leaders|guides|sections)-/.test(l.id)), ...p.points])
+      for (let i = 0; i < it.positions.length; i += 3)
+        for (let k = 0; k < 3; k++) {
+          const v = it.positions[i + k]! + (it.origin?.[k] ?? 0);
+          lo[k] = Math.min(lo[k]!, v);
+          hi[k] = Math.max(hi[k]!, v);
+        }
+    expect(p.bounds).toEqual({ min: lo, max: hi });
+    // 2배로 놓인 컴포넌트 안 치수(x 100~102)·지시선 글 자리(z 3)·보조점(z 5)·단면 기호까지
+    expect(p.bounds!.max[0]).toBeCloseTo(102, 5);
+    expect(p.bounds!.max[2]).toBeGreaterThanOrEqual(5);
     // 문자: 붙는 점·글 자리(점 + 지시선), 화면 글, 숨긴 글(선은 extras일 때만)
     expect(p.texts!.map((t) => [t.text, t.leaderType, t.hidden, t.node])).toEqual([
       ['모서리', 'pushpin', false, -1],

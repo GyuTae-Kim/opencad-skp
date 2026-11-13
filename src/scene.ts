@@ -1292,7 +1292,10 @@ export interface BuildOptions {
 export interface SceneParts {
   meshes: Mesh3d[];
   lines: LineSet3d[];
+  /** 장면 범위: 보이게 그리는 형상과 주석 묶음(73차부터 주석도 — 숨긴 형상·숨긴 주석 묶음은 뺀다) */
   bounds?: Box3;
+  /** 형상만 범위(73차 — 주석 묶음이 장면 범위를 넓혔을 때만, meta.modelBounds) */
+  modelBounds?: Box3;
   warnings: string[];
   stats: { triangles: number; segments: number; placements: number };
   /** 태그별 통계(모형의 태그 차례, 그릴 것이 없는 태그도 넣는다) */
@@ -3171,8 +3174,11 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   const annItems: SkpAnnotationItems = { dimensions: [], leaders: [], guides: [], sectionPlanes: [] };
   let annotationRuns: Record<string, { start: Uint32Array; node: Int32Array }> | undefined;
   let annotationMarks: Record<string, SkpAnnotationMarks> | undefined;
+  // 주석을 넣기 전 형상만 범위(73차 — 주석이 장면 범위를 넓히면 meta.modelBounds로: 정보 탭의 모형 크기)
+  const geoMin: Vec3 = [min[0], min[1], min[2]];
+  const geoMax: Vec3 = [max[0], max[1], max[2]];
   if (recs.length || guidePoints.length) {
-    // 끝없는 보조선을 자를 범위: 장면 범위(형상이 없으면 주석 범위)
+    // 끝없는 보조선을 자를 범위: 형상 범위(형상이 없으면 주석 범위)
     const useScene = min[0] <= max[0];
     const bmin = useScene ? min : annMin;
     const bmax = useScene ? max : annMax;
@@ -3259,6 +3265,29 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     }
     const annRuns: Record<string, { start: Uint32Array; node: Int32Array }> = {};
     let annNodes = false;
+    /**
+     * 73차: 보이게 그리는 주석 묶음(치수선·지시선·단면 기호·보조선·보조점 — 숨긴 주석 묶음은 빼고)도 장면 범위에 넣는다.
+     * 코어 뷰어는 아무것도 숨기지 않으면 장면 범위로, 하나라도 숨기면 보이는 묶음 범위를 합쳐 화면을 맞추므로(숨긴 형상·부드러운 모서리 묶음은 처음에 숨는다)
+     * 장면 범위가 형상만이면 숨김 여부에 따라 주석이 들고 났다. 셈은 코어 itemBounds와 같다(float32 위치의 범위 + 묶음 원점).
+     * 끝없는 보조선은 위에서 형상 범위(+10%)로 자른 그대로 넣는다(자를 범위는 넣기 전 형상 범위)
+     */
+    const grow = (pos: Float32Array, o: readonly number[] | null): void => {
+      if (pos.length < 3) return;
+      const lo = [Infinity, Infinity, Infinity];
+      const hi = [-Infinity, -Infinity, -Infinity];
+      for (let i = 0; i + 2 < pos.length; i += 3)
+        for (let k = 0; k < 3; k++) {
+          const v = pos[i + k]!;
+          if (v < lo[k]!) lo[k] = v;
+          if (v > hi[k]!) hi[k] = v;
+        }
+      for (let k = 0; k < 3; k++) {
+        const a = lo[k]! + (o ? o[k]! : 0);
+        const b = hi[k]! + (o ? o[k]! : 0);
+        if (a < min[k]!) min[k] = a;
+        if (b > max[k]!) max[k] = b;
+      }
+    };
     for (const sk of sinks.values()) {
       const id = `skp-${ANNOTATION_ID[sk.kind]}-${lines.length}`;
       segmentCurves.push(null);
@@ -3268,6 +3297,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       lines.push(l);
       annItems[sk.kind].push(id);
       if (sk.hidden) hiddenIds.push(id);
+      else grow(l.positions, sk.origin);
       // 화면 크기 표시(끝 표시·연장선 넘침): 이 선분 묶음과 같이 보이고 숨는다
       if (sk.markKind.length) {
         annotationMarks ??= {};
@@ -3300,6 +3330,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
       points.push(ps);
       annItems.guides.push(id);
       if (sk.hidden) hiddenIds.push(id);
+      else grow(ps.positions, sk.origin);
     }
   }
   if (annLimited.texts) warnings.push(`문자가 너무 많아 ${MAX_TEXTS.toLocaleString('en-US')}개까지만 담았습니다`);
@@ -3368,6 +3399,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   if (modelAttrs >= 0) parts.modelAttrs = modelAttrs;
   if (truncated || linesTruncated || placementsStopped) parts.limited = true;
   if (min[0] <= max[0]) parts.bounds = { min, max };
+  if (geoMin[0] <= geoMax[0] && [0, 1, 2].some((k) => min[k] !== geoMin[k] || max[k] !== geoMax[k])) parts.modelBounds = { min: geoMin, max: geoMax };
   if (extras) parts.extras = { soft: softIds, hidden: hiddenIds, softSegments, hiddenFaces, hiddenSegments };
 
   // ── 나무·outline ──

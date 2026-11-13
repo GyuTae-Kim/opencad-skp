@@ -306,6 +306,11 @@ export interface SkpTreeInfo {
  */
 export interface SkpMetaExtras {
   units?: SkpUnitsMeta;
+  /**
+   * 형상만 범위(73차 — 장면 좌표). Scene3d.bounds(장면 범위)는 보이게 그리는 형상과 주석 묶음(치수선·지시선·단면 기호·보조선·보조점)의 범위라
+   * 주석이 그것을 넓혔을 때만 둔다(화면 정보 탭의 모형 크기)
+   */
+  modelBounds?: { min: Vec3; max: Vec3 };
   camera?: SkpCameraMeta;
   pages?: SkpPageMeta[];
   /** 활성 장면(pages 차례) */
