@@ -5,7 +5,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { Mesh3d, Scene3d } from 'opencad-viewer3d/types';
-import { readSkpImages, skpToScene, type SkpImages, type SkpTextureInfo } from '../src/index';
+import { readSkpImages, skpFileToScene, skpToScene, type SkpImages, type SkpTextureInfo } from '../src/index';
+import { bytesSource } from '../src/range';
 import { abgrColor, parseMaterialXml } from '../src/materials';
 import { readModelDat } from '../src/model';
 import { applyFaceUvq, faceUvq, planeAxes } from '../src/projection';
@@ -100,7 +101,7 @@ interface Placed {
   layer?: number;
 }
 
-function fileWith(placed: Placed[], opts: { xml?: [string, string][]; imgs?: { name: string; data: Uint8Array }[] } = {}): Uint8Array {
+function fileWith(placed: Placed[], opts: { xml?: [string, string][]; imgs?: { name: string; data: Uint8Array }[]; mats?: [number, string][] } = {}): Uint8Array {
   const defs = placed.map((p, i) => ({ name: `판${i}`, entities: squareDef(50 + i, p.def) }));
   const comps = placed.map((p, i) => {
     const o: Parameters<typeof instance>[3] = {};
@@ -109,7 +110,7 @@ function fileWith(placed: Placed[], opts: { xml?: [string, string][]; imgs?: { n
     return instance(900 + i, 50 + i, place(p.at, 0, 0, p.scale ?? 1), o);
   });
   const model = modelDat({
-    materials: MATS,
+    materials: opts.mats ?? MATS,
     layers: [
       [1, 'Layer0'],
       [2, '둘째'],
@@ -405,6 +406,114 @@ describe('장면의 무늬 좌표', () => {
     expect(few.meshes.filter((m) => m.uvs).length).toBe(1);
     expect(few.textures!.length).toBe(1);
     expect(few.warnings!.some((w) => w.includes('정점'))).toBe(true);
+  });
+});
+
+describe('다른 재질 폴더의 그림을 함께 쓰는 무늬(77차)', () => {
+  // 실제 2021+ 꾸러미의 꼴: 같은 그림을 쓰는 재질은 그림을 한 폴더(무늬A)에만 두고, 다른 재질의 material.xml은 image path를
+  // 꾸러미 뿌리 꼴(materials/무늬A/a.png)로 적는다. 그 재질 폴더는 비었거나 미리보기(thumbnail.jpg)·PBR 그림만 있다
+  const SHARED: [number, string][] = [
+    [1, '함께'],
+    [2, '무늬A'],
+    [3, '미리보기'],
+    [4, '함께바꾼색'],
+    [5, '없는곳'],
+  ];
+  const root = (xml: string, to: string): string => xml.replace('path="./a.png"', `path="${to}"`);
+  const sharedXmls = (): [string, string][] => [
+    // 그림을 가리키는 재질이 꾸러미 차례로 주인 폴더보다 앞에 온다
+    ['함께', root(materialXml('함께', [120, 100, 80], 1, 0, true, { file: 'a.png', width: 5, height: 5 }), 'materials/무늬A/a.png')],
+    ['무늬A', materialXml('무늬A', [120, 100, 80], 1, 0, true, { file: 'a.png', width: TILE_A.w, height: TILE_A.h })],
+    ['미리보기', root(materialXml('미리보기', [120, 100, 80], 1, 0, true, { file: 'a.png', width: 8, height: 8 }), 'materials/무늬A/a.png')],
+    ['함께바꾼색', root(materialXml('함께바꾼색', [30, 60, 200], 1, 0, true, { file: 'a.png', width: 8, height: 8, colorizeType: 1 }), 'materials/무늬A/a.png')],
+    ['없는곳', root(materialXml('없는곳', [1, 2, 3], 1, 0, true, { file: 'a.png', width: 8, height: 8 }), 'materials/없음/a.png')],
+  ];
+  const thumb = pngRgb(1, 1, () => [9, 9, 9]);
+  const rgh = pngRgb(1, 1, () => [128, 128, 128]);
+  const sharedImgs = (): { name: string; data: Uint8Array }[] => [
+    { name: 'materials/무늬A/a.png', data: png },
+    { name: 'materials/미리보기/thumbnail.jpg', data: thumb },
+    { name: 'materials/미리보기/x_rgh.png', data: rgh },
+  ];
+  const sharedFile = (): Uint8Array =>
+    fileWith(
+      [1, 2, 3, 4, 5].map((material, i) => ({ def: { material }, at: i * 100 })),
+      { xml: sharedXmls(), imgs: sharedImgs(), mats: SHARED },
+    );
+
+  it('material.xml: 꾸러미 뿌리 꼴 image path는 texture.path로(자기 폴더 ./ 꼴은 없음)', () => {
+    const m = parseMaterialXml(sharedXmls()[0]![1])!;
+    expect(m.texture).toEqual({ width: 5, height: 5, file: 'a.png', path: 'materials/무늬A/a.png' });
+    expect(parseMaterialXml(sharedXmls()[1]![1])!.texture!.path).toBeUndefined();
+    expect(parseMaterialXml(root(sharedXmls()[1]![1], 'materials\\무늬A\\a.png'))!.texture!.path).toBe('materials/무늬A/a.png');
+  });
+
+  it('readSkpImages: 가리킨 그림을 한 번만 읽어 같은 바이트로 — 빈 폴더·미리보기 폴더도, 한도는 한 장으로 센다', () => {
+    const bytes = sharedFile();
+    for (const imgs of [readSkpImages(bytes), readSkpImages(bytes, { maxCount: 1 })]) {
+      const by = new Map(imgs.materials.map((m) => [m.folder, m] as const));
+      const a = by.get('무늬A')!;
+      expect(a.path).toBe('materials/무늬A/a.png');
+      for (const f of ['함께', '미리보기', '함께바꾼색']) {
+        expect(by.get(f)!.path).toBe('materials/무늬A/a.png');
+        expect(by.get(f)!.bytes).toBe(a.bytes);
+      }
+      // 가리킨 그림이 꾸러미에 없으면 예전처럼 자기 폴더 그림(여기는 없음)
+      expect(by.has('없는곳')).toBe(false);
+      expect(imgs.skipped).toBe(0);
+      expect(imgs.materials.length).toBe(4);
+    }
+  });
+
+  it('장면: 색 안 바꾼 재질은 무늬 하나를 함께 쓰고(무늬 좌표는 재질마다 한 장 크기로), 색 바꾼 재질은 따로', () => {
+    const bytes = sharedFile();
+    const imgs = readSkpImages(bytes);
+    const s = skpToScene(bytes, { textures: imgs.materials });
+    const tex = (mat: string): string | undefined => meshOf(s, mat).texture;
+    expect(tex('무늬A')).toBe('skp-tex-1');
+    expect(tex('함께')).toBe('skp-tex-1');
+    expect(tex('미리보기')).toBe('skp-tex-1');
+    expect(tex('함께바꾼색')).toBe('skp-tex-4');
+    expect(tex('없는곳')).toBeUndefined();
+    const a = imgs.materials.find((m) => m.folder === '무늬A')!.bytes;
+    expect(s.textures!.map((t) => t.id)).toEqual(['skp-tex-1', 'skp-tex-4']);
+    expect(s.textures!.every((t) => t.data === a)).toBe(true);
+    const infos = s.meta!.textures as SkpTextureInfo[];
+    expect(infos.map((t) => [t.id, t.material, t.path])).toEqual([
+      ['skp-tex-1', '함께', 'materials/무늬A/a.png'],
+      ['skp-tex-4', '함께바꾼색', 'materials/무늬A/a.png'],
+    ]);
+    expect(infos[1]!.colorize).toEqual({ type: 'tint', color: [30, 60, 200] });
+    // 무늬 좌표는 재질마다 제 한 장 크기: 10인치 면에 함께 5인치 → 2장, 무늬A 10×20 → 1 × 0.5장
+    const span = (mat: string): [number, number] => {
+      const c = corners(meshOf(s, mat));
+      const [u0, v0] = uvAt(c, 100 * SHARED.findIndex(([, n]) => n === mat), 0);
+      const [u1, v1] = uvAt(c, 100 * SHARED.findIndex(([, n]) => n === mat) + 10, 10);
+      return [u1 - u0, v1 - v0];
+    };
+    expect(span('함께')[0]).toBeCloseTo(2, 6);
+    expect(span('함께')[1]).toBeCloseTo(2, 6);
+    expect(span('무늬A')[0]).toBeCloseTo(1, 6);
+    expect(span('무늬A')[1]).toBeCloseTo(0.5, 6);
+    const stats = s.meta!.materialStats as { name: string; texture?: string }[];
+    expect(stats.filter((m) => m.texture).map((m) => [m.name, m.texture])).toEqual(
+      expect.arrayContaining([
+        ['함께', 'skp-tex-1'],
+        ['무늬A', 'skp-tex-1'],
+        ['미리보기', 'skp-tex-1'],
+        ['함께바꾼색', 'skp-tex-4'],
+      ]),
+    );
+  });
+
+  it('자리만 읽는 길(skpFileToScene)도 같은 그림·같은 무늬', async () => {
+    const bytes = sharedFile();
+    const r = await skpFileToScene(bytesSource(bytes), {});
+    const by = new Map(r.images!.materials.map((m) => [m.folder, m] as const));
+    expect(by.get('함께')!.bytes).toBe(by.get('무늬A')!.bytes);
+    expect(by.get('미리보기')!.path).toBe('materials/무늬A/a.png');
+    expect(r.scene.textures!.map((t) => t.id)).toEqual(['skp-tex-1', 'skp-tex-4']);
+    expect(meshOf(r.scene, '미리보기').texture).toBe('skp-tex-1');
   });
 });
 

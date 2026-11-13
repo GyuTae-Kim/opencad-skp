@@ -21,6 +21,11 @@ export interface SkpMaterialTexture {
   height: number;
   /** 꾸러미 안 그림 파일 이름(image path 또는 file_name, 재질 폴더 기준). 없으면 폴더의 첫 그림 */
   file?: string;
+  /**
+   * 꾸러미 뿌리 기준 그림 경로 — image path가 `materials/<폴더>/<그림>` 꼴일 때만(77차). 2021+ 꾸러미는 여러 재질이 같은 그림을 쓰면 그림을 한 재질 폴더에만 두고
+   * 다른 재질의 material.xml은 이 꼴로 그 폴더의 그림을 가리킨다(자기 폴더의 그림은 `./<그림>` 꼴 — 이때는 없다)
+   */
+  path?: string;
   /** 원래 그림 평균색(avgColor, 0~255) */
   average?: [number, number, number];
 }
@@ -98,6 +103,12 @@ function imageFile(path: string | undefined): string | undefined {
   const p = path.replace(/\\/g, '/');
   const f = p.startsWith('./') ? p.slice(2) : p.slice(p.lastIndexOf('/') + 1);
   return f || undefined;
+}
+
+/** 무늬 그림 경로가 꾸러미 뿌리 꼴(`materials/<폴더>/<그림>`)이면 그 경로(77차 — 다른 재질 폴더의 그림을 함께 쓰는 재질). 아니면 undefined */
+function packagePath(path: string | undefined): string | undefined {
+  const p = path?.replace(/\\/g, '/');
+  return p && /^materials\/.+\/[^/]+$/.test(p) ? p : undefined;
 }
 
 /** 속성 사전 블록의 요소(이름 공간 앞붙이를 뗀 이름, 글 = CDATA·글을 이은 것) */
@@ -212,6 +223,8 @@ export function parseMaterialXml(xml: string): SkpMaterialInfo | null {
     const img = tagAttrs(xml.slice(at), 'image');
     const file = imageFile(img?.get('path')) ?? imageFile(img?.get('file_name')) ?? imageFile(tex.get('textureFilename'));
     if (file) t.file = file;
+    const root = packagePath(img?.get('path'));
+    if (root) t.path = root;
     const avg = abgrColor(tex.get('avgColor'));
     if (avg) t.average = avg;
     info.texture = t;
