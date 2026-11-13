@@ -653,7 +653,9 @@ const scene = skpToScene(bytes, { textures: images.materials }); // Viewer3d.set
 
 꾸러미 안 그림은 `readSkpImages(bytes, { maxCount, maxBytesEach, maxTotalBytes })`로 꺼냅니다: 모형 미리보기(`meta/model_thumbnail.png`), 재질 폴더별 무늬 그림,
 컴포넌트 미리보기(`thumbnails/`), 장면 미리보기(`scene_thumbnails/`). 꼴은 첫 바이트로 가리고 개수 600·한 장 8 MB·전체 64 MB 한도를 둡니다.
-재질 폴더에 그림이 여럿이면(PBR 그림 등) material.xml이 가리키는 그림을 고릅니다. 색 바꾸기 규칙은 `colorizeRgba(rgba, { type, color, average })`로 씁니다.
+재질 폴더에 그림이 여럿이면(PBR 그림 등) material.xml이 가리키는 그림을 고릅니다. material.xml이 다른 재질 폴더의 그림(`materials/<폴더>/<그림>`)을 가리키면
+그 그림을 그 재질 폴더로도 넣습니다(77차 — 한 번 읽어 같은 바이트, `path`는 그림이 있는 자리). `skpToScene`은 같은 바이트를 쓰는 색 안 바꾼 재질에 무늬 하나를 줍니다.
+색 바꾸기 규칙은 `colorizeRgba(rgba, { type, color, average })`로 씁니다.
 2020 이하 파일은 객체 직렬화 안의 그림 기록(`CDib`: 모형 미리보기·재질 무늬·컴포넌트 미리보기·2020 장면 미리보기)을 꺼냅니다. 같은 바이트로 `skpToScene`을 먼저 불렀으면 그때 모은 자리를 써서 다시 풀지 않습니다.
 
 ## 구조
