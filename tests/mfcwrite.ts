@@ -582,6 +582,8 @@ export interface MfcPageSpec {
   /** (CViewPage 12+) 부호화한 장면 미리보기 */
   thumbnail?: Uint8Array;
   pid?: number;
+  /** 깃발 0x8의 CSketchCS: 원점·x·y·z(f64 12개, 없으면 모형 꼬리 축 MfcSpec.axes와 같게) */
+  axes?: number[];
 }
 
 export interface MfcFontSpec {
@@ -965,10 +967,10 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
     w.i32(o.dark ?? 20);
     if (trail) w.raw([0, 0]);
   };
-  const axes = (): void => {
+  const axes = (v?: number[]): void => {
     pre();
     w.zeros(4 + flagBytes);
-    w.f64(...(spec.axes ?? [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]));
+    w.f64(...(v ?? spec.axes ?? [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]));
     w.u8(0);
   };
   const folderBody = (f: MfcFolderSpec): void => {
@@ -1340,7 +1342,7 @@ export function mfcFile(spec: MfcSpec): Uint8Array {
           else styleObj({ name: `${p.name} 스타일` });
         }
         if (p.flags & 0x4) shadow();
-        if (p.flags & 0x8) axes();
+        if (p.flags & 0x8) axes(p.axes);
         if (p.flags & 0x10) {
           const hidden = p.hidden ?? [];
           w.u32(hidden.length);

@@ -112,15 +112,25 @@ export function readShadowInfo(r: TlvReader, rec: TlvNode): SkpShadowInfo {
 
 /** 그리기 축 4650: 원점·x·y·z(f64×3씩). 칸이 모자라거나 축이 0이면 undefined, 기본 축(원점 0, 단위 축)이면 undefined */
 export function readAxes(r: TlvReader, rec: TlvNode): SkpAxes | undefined {
+  return readAxesValue(r, rec) ?? undefined;
+}
+
+/** 그리기 축 4650(73차 — 장면 714f도): readAxes와 같되 기본 축이면 null(장면이 기억한 기본 축과 기록 없음을 가른다) */
+export function readAxesValue(r: TlvReader, rec: TlvNode): SkpAxes | null | undefined {
   const v = (tag: number): [number, number, number] | undefined => {
     const x = r.vec3(r.firstSafe(rec, tag));
     return x && x.every(Number.isFinite) ? x : undefined;
   };
-  return axesOf(v(TAG.AXES_ORIGIN), v(TAG.AXES_X), v(TAG.AXES_Y), v(TAG.AXES_Z));
+  return axesValue(v(TAG.AXES_ORIGIN), v(TAG.AXES_X), v(TAG.AXES_Y), v(TAG.AXES_Z));
 }
 
 /** 원점·세 축 → 축(단위 벡터로). 모자라거나 축 길이가 0이면, 또는 기본 축이면 undefined */
 export function axesOf(origin?: [number, number, number], x?: [number, number, number], y?: [number, number, number], z?: [number, number, number]): SkpAxes | undefined {
+  return axesValue(origin, x, y, z) ?? undefined;
+}
+
+/** axesOf와 같되 기본 축(원점 0, 단위 축)이면 null */
+export function axesValue(origin?: [number, number, number], x?: [number, number, number], y?: [number, number, number], z?: [number, number, number]): SkpAxes | null | undefined {
   if (!origin || !x || !y || !z) return undefined;
   const unit = (a: [number, number, number]): [number, number, number] | null => {
     const l = Math.hypot(a[0], a[1], a[2]);
@@ -131,7 +141,7 @@ export function axesOf(origin?: [number, number, number], x?: [number, number, n
   const uz = unit(z);
   if (!ux || !uy || !uz) return undefined;
   const near = (a: readonly number[], b: readonly number[]): boolean => Math.abs(a[0]! - b[0]!) + Math.abs(a[1]! - b[1]!) + Math.abs(a[2]! - b[2]!) < 1e-12;
-  if (near(origin, [0, 0, 0]) && near(ux, [1, 0, 0]) && near(uy, [0, 1, 0]) && near(uz, [0, 0, 1])) return undefined;
+  if (near(origin, [0, 0, 0]) && near(ux, [1, 0, 0]) && near(uy, [0, 1, 0]) && near(uz, [0, 0, 1])) return null;
   return { origin, x: ux, y: uy, z: uz };
 }
 
@@ -415,6 +425,13 @@ function readPage(r: TlvReader, n: TlvNode, layers: LayerSet, styles: StyleSet, 
     const holder = r.first(n, TAG.PAGE_SHADOW);
     const rec = holder && r.first(holder, TAG.SHADOW_INFO);
     if (rec) page.shadowInfo = readShadowInfo(r, rec);
+  }
+  // 73차: 이 장면이 기억하는 그리기 축(깃발 0x008 "Axes Location" — 714f → 4650, 기본 축이면 null). 칸이 깨졌으면 모른다(칸 없음)
+  if (page.flags & 0x008) {
+    const holder = r.first(n, TAG.PAGE_AXES);
+    const rec = holder && r.first(holder, TAG.AXES);
+    const axes = rec ? readAxesValue(r, rec) : undefined;
+    if (axes !== undefined) page.axes = axes;
   }
   const thumb = r.first(n, TAG.PAGE_THUMBNAIL);
   const path = thumb && r.first(thumb, TAG.TEXTURE_PATH);

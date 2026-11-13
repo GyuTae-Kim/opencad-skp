@@ -10,7 +10,7 @@
  */
 
 import type { SkpAnnotationDefaults, SkpAxes, SkpCamera, SkpFont, SkpPage, SkpRenderingRaw, SkpShadowInfo, Vec3 } from './model';
-import { axesOf } from './vffroot';
+import { axesValue } from './vffroot';
 import { MfcError, type MfcReadFn } from './mfcstream';
 import { C, type MfcState } from './mfcstate';
 import { arrowName, leaderName, textAlignmentName } from './vffcommon';
@@ -413,7 +413,11 @@ export class MfcView {
       if (raw) page.rendering = raw;
     }
     if (stored & PAGE_SHADOWS) page.shadowInfo = this.shadowInfo();
-    if (stored & PAGE_AXES) this.axes();
+    // 73차: 이 장면이 기억하는 그리기 축(기본 축이면 null — 모형 꼬리 CSketchCS와 같은 꼴)
+    if (stored & PAGE_AXES) {
+      const axes = this.axesRecord();
+      if (axes !== undefined) page.axes = axes;
+    }
     if (stored & PAGE_HIDDEN) {
       const n = s.count(10_000_000, '장면 숨긴 개체');
       for (let i = 0; i < n; i++) {
@@ -498,13 +502,18 @@ export class MfcView {
    * 기본 축이면 undefined
    */
   axes(): SkpAxes | undefined {
+    return this.axesRecord() ?? undefined;
+  }
+
+  /** axes와 같되 기본 축이면 null(73차 — 장면이 기억한 기본 축과 읽지 못함을 가른다) */
+  axesRecord(): SkpAxes | null | undefined {
     this.st.preamble();
     const s = this.st.s;
     s.skip(4 + this.st.drawingFlagBytes);
     const v = s.doubles(12);
     s.skip(1);
     const p = (i: number): [number, number, number] => [v[i]!, v[i + 1]!, v[i + 2]!];
-    return v.every(Number.isFinite) ? axesOf(p(0), p(3), p(6), p(9)) : undefined;
+    return v.every(Number.isFinite) ? axesValue(p(0), p(3), p(6), p(9)) : undefined;
   }
 
   /**

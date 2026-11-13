@@ -120,7 +120,7 @@ import { sceneHasGeometry } from './protocol';
 import { deviceHints, textureLimitsFor, type TextureLimits } from './texlimits';
 import { THEME_CHOICES, applyThemeChoice, readStoredTheme, resolveTheme, storeTheme, systemPrefersDark, themeChoiceOf, type ThemeChoice, type ThemeName } from './theme';
 import { childrenOf, isAncestor, isSplit, nodeBox, nodePath, normalizeRanges, type PickMode } from './tree';
-import { cameraForBox, keepViewOnHeightChange } from './view';
+import { FIT_GROUP, cameraForBox, keepViewOnHeightChange } from './view';
 import { cssHex, isLightBackground, loadFileBackground, safeStorage, skyBackground, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
 import type { BackgroundOptions, Rgba } from 'opencad-viewer3d';
 import { DEFAULT_EDGE_COLOR, LineContrast, edgeLooks, lineColorOverrides } from './linecontrast';
@@ -1278,6 +1278,8 @@ export class SkpViewerApp implements PanelHost {
     this.refreshItemVisibility();
     // 파일에서 숨긴 태그·태그 폴더는 처음부터 숨긴다
     for (const t of d.tags) if (tagHidden(d, t.name)) v.setGroupVisible(t.name, false);
+    // 73차: 화면 맞춤은 숨김 여부와 상관없이 보이는 묶음(형상·주석) 범위로(view.ts FIT_GROUP)
+    v.setGroupVisible(FIT_GROUP, false);
     this.isolatedOn = false;
     this.userMoved = false;
     this.history.reset(null);
@@ -1308,7 +1310,7 @@ export class SkpViewerApp implements PanelHost {
       this.sceneFit = first.fit;
       this.projection = first.camera.projection;
       this.userMoved = true;
-    }
+    } else v.fit(false); // 장면을 올릴 때 코어가 맞춘 것은 장면 범위(형상만)였다 — 보이는 묶음 범위로 다시
     d.page = openingPage(d.scene.meta);
     // 배경: 모형 스타일의 배경 색(장면을 고르면 그 장면 스타일의 색으로 바뀐다)
     this.styleBg = styleBackground(d.style);
@@ -1456,9 +1458,9 @@ export class SkpViewerApp implements PanelHost {
       guideKey: this.guideKey,
       touch: () => !!this.coarseQuery?.matches,
       curveCenter: (id, seg) => this.curveCenter(id, seg),
-      // 모형의 그리기 축을 옮겼으면 줄자·각도기의 축 고정·기본 평면이 그 축을 따른다
+      // 그리기 축을 옮겼으면(모형, 또는 그리기 축을 기억하는 장면을 고른 뒤 그 장면 — 73차) 줄자·각도기의 축 고정·기본 평면·축 성분이 그 축을 따른다
       getAxes: () => {
-        const a = this.doc?.axes;
+        const a = this.doc?.drawAxes;
         return a ? { x: a.x, y: a.y, z: a.z } : null;
       },
       // 측정값 칸: 줄자 진행 중이면 시작점 → 커서 길이, 다 재면 그 거리(모형 단위 글). 각도기는 커서 각도·결과 각도
@@ -1991,7 +1993,7 @@ export class SkpViewerApp implements PanelHost {
   }
 
   /**
-   * 장면(페이지) 적용: 장면이 기억하는 것만 바꾼다(카메라·숨긴 태그·숨긴 개체·단면·스타일).
+   * 장면(페이지) 적용: 장면이 기억하는 것만 바꾼다(카메라·숨긴 태그·숨긴 개체·단면·스타일·그림자·그리기 축).
    * 카메라는 장면 전환 시간(없으면 2초) 동안 부드럽게 옮긴다.
    */
   applyPage(index: number, fromSlideshow = false): number {
@@ -2040,6 +2042,11 @@ export class SkpViewerApp implements PanelHost {
       this.fogOn = plan.style.fog;
     }
     if (page.shadow || typeof plan.style?.fog === 'boolean') this.applyLighting();
+    // 73차: 장면이 기억하는 그리기 축(SketchUp 장면 속성 "Axes Location" — 기억하지 않는 장면은 지금 축 그대로, 파일을 다시 열면 파일의 축)
+    if (plan.axes !== undefined) {
+      d.drawAxes = plan.axes;
+      d.axesPage = index;
+    }
     // 장면 스타일의 배경 색
     const bg = styleBackground(plan.style);
     // 하늘·지면은 장면 스타일이 켜고 끔을 알 때만(모르면 그대로)

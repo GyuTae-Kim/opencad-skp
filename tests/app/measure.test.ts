@@ -94,6 +94,20 @@ const TAPE_START_HINT = '줄자: 잴 시작점을 누르세요 · 모서리를 �
 describe('줄자·각도기 계산', () => {
   it('줄자 결과는 장면 단위 거리와 dx·dy·dz', () => {
     expect(tapeResult([1, 2, 3], [4, 6, 15])).toEqual({ kind: 'tape', a: [1, 2, 3], b: [4, 6, 15], distance: 13, dx: 3, dy: 4, dz: 12 });
+    // 기본 축을 주면 같은 값
+    expect(tapeResult([1, 2, 3], [4, 6, 15], { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] })).toEqual(tapeResult([1, 2, 3], [4, 6, 15]));
+  });
+
+  it('73차: 그리기 축을 주면 dx·dy·dz는 그 축(빨강·초록·파랑) 성분, 거리와 끝점은 그대로', () => {
+    // 실제 2026 표본 장면 축과 같은 꼴: 빨강 = −Y, 초록 = −X(파랑은 Z)
+    const r = tapeResult([1, 2, 3], [4, 6, 15], { x: [0, -1, 0], y: [-1, 0, 0], z: [0, 0, 1] });
+    expect(r).toEqual({ kind: 'tape', a: [1, 2, 3], b: [4, 6, 15], distance: 13, dx: -4, dy: -3, dz: 12 });
+    // z축으로 30° 돌린 축: 성분 제곱 합은 거리 제곱
+    const c = Math.cos(Math.PI / 6), s = Math.sin(Math.PI / 6);
+    const t = tapeResult([0, 0, 0], [10, 0, 0], { x: [c, s, 0], y: [-s, c, 0], z: [0, 0, 1] });
+    expect(t.dx).toBeCloseTo(10 * c, 12);
+    expect(t.dy).toBeCloseTo(-10 * s, 12);
+    expect(Math.hypot(t.dx, t.dy, t.dz)).toBeCloseTo(t.distance, 12);
   });
 
   it('평면에 비친 두 방향 사이 각(0~180°), 법선 방향과 상관없다', () => {
@@ -400,6 +414,24 @@ describe('측정 도구: 줄자', () => {
     r.click(102, 103);
     expect(r.results.at(-1)).toBeNull();
     expect(r.q('.measure-label-length')).toBeNull();
+  });
+
+  it('73차: dx·dy·dz는 잴 때의 그리기 축 성분(장면을 골라 축이 바뀌면 다음 결과부터), 거리·끝점은 그대로', () => {
+    let axes: { x: [number, number, number]; y: [number, number, number]; z: [number, number, number] } | null = null;
+    const r = rig(EDGES(), TOP, DEFAULT_UNITS, { getAxes: () => axes });
+    r.tool.setMode('tape');
+    r.click(102, 103);
+    r.click(198, 101);
+    expect(r.results.at(-1)).toMatchObject({ kind: 'tape', a: [0, 0, 0], b: [100, 0, 0], distance: 100, dx: 100, dy: 0, dz: 0 });
+    // 빨강 = −Y, 초록 = −X인 장면 축(실제 표본 꼴)
+    axes = { x: [0, -1, 0], y: [-1, 0, 0], z: [0, 0, 1] };
+    r.click(102, 103);
+    r.click(198, 101);
+    const res = r.results.at(-1) as { a: number[]; b: number[]; distance: number; dx: number; dy: number; dz: number };
+    expect(res.a).toEqual([0, 0, 0]);
+    expect(res.b).toEqual([100, 0, 0]);
+    expect(res.distance).toBe(100);
+    expect([res.dx, res.dy, res.dz].map((v) => v + 0)).toEqual([0, -100, 0]);
   });
 
   it('인치 장면 + 건축 단위면 라벨도 모형 단위', () => {

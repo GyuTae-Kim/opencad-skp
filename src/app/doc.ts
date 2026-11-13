@@ -28,7 +28,7 @@ import { fileText, joinMixed, mix, nameText, plainText, type Mixed } from './fil
 import { definitionNodes } from './search';
 import { edgeGeometry, faceBox, faceGeometry, faceOfTriangle, readFaceIndex, segmentsBox, triangleCount, type FaceIndex, type PartBox } from './faces';
 import type { MeasureToolResult } from './measure';
-import { readActivePage, readPages, readSectionPlane, readShadow } from './pages';
+import { readActivePage, readAxes, readPages, readSectionPlane, readShadow } from './pages';
 import { formatAngle, formatArea, formatLength, mmPerSceneUnit, readUnits, type UnitsDisplay } from './units';
 import { fmtCount } from './format';
 import type { AttrLong, ParseResult } from './protocol';
@@ -277,6 +277,13 @@ export interface SkpDoc {
   // ── 보기 상태(더한 것) ──
   /** 마지막으로 고른 장면(사용자가 장면 탭을 누른 것, 처음엔 null) */
   page: number | null;
+  /**
+   * 지금 그리기 축(73차 — 줄자·각도기의 축 고정·기본 평면·축 성분, 정보 탭). 처음엔 파일의 축(axes, null = 기본 축)이고,
+   * 그리기 축을 기억하는 장면을 고르면 그 장면의 축으로 바뀐다(기억하지 않는 장면은 그대로 — SketchUp 장면 속성 "Axes Location")
+   */
+  drawAxes: SkpAxesMeta | null;
+  /** drawAxes를 정한 장면(파일의 축이면 null) */
+  axesPage: number | null;
   showTexts: boolean;
   showDimensions: boolean;
   showGuides: boolean;
@@ -774,6 +781,8 @@ export function readMetaExtras(scene: Scene3d): Pick<
   | 'shadow'
   | 'axes'
   | 'page'
+  | 'drawAxes'
+  | 'axesPage'
   | 'showTexts'
   | 'showDimensions'
   | 'showGuides'
@@ -804,6 +813,7 @@ export function readMetaExtras(scene: Scene3d): Pick<
   const annotationMarks = readAnnotationMarks(m.annotationMarks, annotationKind);
   const info = m.treeInfo && typeof m.treeInfo === 'object' ? (m.treeInfo as SkpTreeInfo) : null;
   const infoOk = !!info && !!tree && info.attrs instanceof Int32Array && info.attrs.length === tree.count && info.size instanceof Float32Array && info.size.length === tree.count * 3;
+  const axes = readAxes(m.axes) ?? null;
   return {
     units: readUnits(m.units, str(m.lengthUnit)),
     camera: cam && Array.isArray(cam.eye) && Array.isArray(cam.target) ? cam : null,
@@ -828,8 +838,10 @@ export function readMetaExtras(scene: Scene3d): Pick<
     treeInfo: infoOk ? info : null,
     location: readLocation(m.location),
     shadow: readShadow(m.shadow),
-    axes: readAxes(m.axes),
+    axes,
     page: null,
+    drawAxes: axes,
+    axesPage: null,
     showTexts: style?.texts !== false,
     showDimensions: style?.dimensions !== false,
     showGuides: style?.guides !== false,
@@ -838,8 +850,6 @@ export function readMetaExtras(scene: Scene3d): Pick<
     sectionSkipped: { scope: 0, limit: 0 },
   };
 }
-
-const isVec3 = (v: unknown): v is [number, number, number] => Array.isArray(v) && v.length === 3 && v.every((x) => typeof x === 'number' && Number.isFinite(x));
 
 /** meta.location(꼴이 다르면 null) */
 export function readLocation(v: unknown): SkpLocationMeta | null {
@@ -851,36 +861,8 @@ export function readLocation(v: unknown): SkpLocationMeta | null {
   return out;
 }
 
-/** meta.axes(꼴이 다르면 null) */
-export function readAxes(v: unknown): SkpAxesMeta | null {
-  if (!v || typeof v !== 'object') return null;
-  const o = v as Record<string, unknown>;
-  return isVec3(o.origin) && isVec3(o.x) && isVec3(o.y) && isVec3(o.z) ? { origin: o.origin, x: o.x, y: o.y, z: o.z } : null;
-}
-
-/** 위도·경도 글("37.5665° N, 126.9780° E") */
-export function latLonText(lat: number, lon: number): string {
-  const ns = lat >= 0 ? 'N' : 'S';
-  const ew = lon >= 0 ? 'E' : 'W';
-  return `${Math.abs(lat).toFixed(4)}° ${ns}, ${Math.abs(lon).toFixed(4)}° ${ew}`;
-}
-
-/** 시간대 글(UTC+9, UTC−3:30) */
-export function tzText(tz: number): string {
-  const sign = tz < 0 ? '−' : '+';
-  const a = Math.abs(tz);
-  const h = Math.floor(a);
-  const m = Math.round((a - h) * 60);
-  return `UTC${sign}${h}${m ? `:${String(m).padStart(2, '0')}` : ''}`;
-}
-
-/** 그림자 시각(그곳 시각을 UTC 초처럼 적은 값) → "2026-06-21 13:30" */
-export function shadowTimeText(time: number): string {
-  const d = new Date(time * 1000);
-  if (!Number.isFinite(d.getTime())) return '';
-  const p = (n: number): string => String(n).padStart(2, '0');
-  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
-}
+/** meta.axes(꼴이 다르면 undefined, null이면 null) — 73차에 장면 그리기 축도 읽느라 pages.ts로 옮김 */
+export { readAxes };
 
 /** 패널 탭 목록 */
 export function panelTabs(d: SkpDoc): [PanelTab, string][] {
@@ -1230,13 +1212,6 @@ export function selectionParts(d: SkpDoc, sel: Selection | null, pick: Pick3d | 
 
 /** 고른 것 한 줄 설명의 원문(한국어 — 상태 보내기·시험) */
 export const selectionText = (d: SkpDoc, sel: Selection | null, pick: Pick3d | null = null): string => plainText(selectionParts(d, sel, pick));
-
-/** 범위 크기(x, y, z) */
-export function boundsSize(s: Scene3d): [number, number, number] | null {
-  const b = s.bounds;
-  if (!b) return null;
-  return [b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]];
-}
 
 // 큰 모형 기준(나눠 올리기·놓기 — 해석 워커도 같은 기준으로 법선·무늬 좌표를 줄인다, 28차에 protocol.ts로 옮김)
 export { INCREMENTAL_ITEMS, INCREMENTAL_PRIMS, isBigScene } from './protocol';
