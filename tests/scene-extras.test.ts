@@ -139,6 +139,9 @@ describe('주석 펼치기', () => {
     // 끝없는 보조선은 넓힌 장면 범위(대각선의 10%)에서 자르고 점선, 끝 있는 보조선은 그대로
     const guideSet = byId.get(items.guides.find((id) => id.startsWith('skp-guides-'))!)!;
     expect(guideSet.dashed).toBe(true);
+    // 76차: 보조선·보조점은 화면 맞춤에서 뺀다(fit: false), 다른 주석 선은 표시 없음
+    expect(guideSet.fit).toBe(false);
+    for (const id of [...items.dimensions, ...items.leaders, ...items.sectionPlanes]) expect(byId.get(id)!.fit).toBeUndefined();
     const g = segs(guideSet);
     const pad = Math.hypot(10, 10) * 0.1;
     close(g[0]!, [-pad, 5, 0, 10 + pad, 5, 0], 5);
@@ -147,6 +150,7 @@ describe('주석 펼치기', () => {
     // 보조점은 PointSet3d
     expect(p.points).toHaveLength(1);
     expect([...p.points[0]!.positions]).toEqual([3, 4, 5]);
+    expect(p.points[0]!.fit).toBe(false);
     expect(items.guides).toContain(p.points[0]!.id);
     // 단면 기호: 사각형 넷 + 화살 둘(기둥 + 날개 둘)
     expect(segs(byId.get(items.sectionPlanes[0]!)!)).toHaveLength(4 + 2 * 3);

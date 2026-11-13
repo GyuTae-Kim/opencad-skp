@@ -23,14 +23,6 @@ export function keepViewOnHeightChange(c: CameraState, h0: number, h1: number): 
   };
 }
 
-/**
- * 화면 맞춤 범위(73차): 코어 뷰어는 아무것도 숨기지 않았을 때만 장면 범위(Scene3d.bounds — 해석기가 형상만 넣는다)로, 무엇이든 숨기면 보이는 묶음 범위를 합쳐
- * 화면을 맞춘다. 어떤 묶음도 쓰지 않는 이 그룹을 늘 숨겨 두면 숨김 여부와 상관없이 보이는 묶음(형상·치수선·지시선·단면 기호·보조선·보조점)의 범위로 맞춘다
- * (SketchUp 도움말 Zoom Extents — 모형 전체가 보이게). 장면 범위에 주석을 넣으면 격자 높이·단면 평면 크기·위치 범위까지 바뀌어 이 길을 골랐다.
- * 코어가 맞춤 범위를 따로 받게 되면 걷어 낼 것. setScene이 숨긴 그룹을 비우므로 장면을 올릴 때마다 setGroupVisible(FIT_GROUP, false)를 부른다
- */
-export const FIT_GROUP = '\u0000fit';
-
 /** 범위에 맞춰 보는 카메라(방향은 그대로) */
 export function cameraForBox(c: CameraState, box: Box3, aspect: number): CameraState {
   return fitCamera(c, box, aspect > 0 && Number.isFinite(aspect) ? aspect : 1);
