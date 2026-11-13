@@ -85,6 +85,8 @@ export function imageMime(b: Uint8Array): string | null {
 }
 
 const IMAGE_EXT = /\.(png|jpe?g|gif|bmp|webp|tiff?|tga)$/i;
+/** material.xml이 꾸러미 뿌리 꼴 경로로 그림을 가리키는지(77차 — 다른 재질 폴더의 그림을 함께 쓰는 재질, materials.ts SkpMaterialTexture.path) */
+const SHARED_IMAGE = /\bpath="materials[\\/]/;
 
 function stem(file: string): string {
   return file.replace(/\.[^./]+$/, '');
@@ -207,12 +209,20 @@ export interface SkpPbrReads {
 const overLimit = (w: ImageWant, count: number, total: number, l: ImageLimits): boolean =>
   count >= l.maxCount || w.item.size > l.maxEach || w.item.compressedSize > l.maxEach || total + w.item.size > l.maxTotal || !!w.item.truncated;
 
-/** 미리 읽기 차례 어림(48차): 그림마다 목록의 크기만큼 받는다고 보고 readWants와 같은 한도를 건다 */
+/**
+ * 미리 읽기 차례 어림(48차): 그림마다 목록의 크기만큼 받는다고 보고 readWants와 같은 한도를 건다.
+ * 재질 그림으로 이미 바란 항목을 다른 재질이 또 바라면 readWants처럼 다시 세지 않는다(77차)
+ */
 function planWants(wants: readonly ImageWant[], count: number, total: number, model: boolean, l: ImageLimits): ZipItem[] {
   const list: ZipItem[] = [];
+  const material = new Set<ZipItem>();
   let n = count;
   let sum = total;
   for (const w of wants) {
+    if (w.kind === 'material') {
+      if (material.has(w.item)) continue;
+      material.add(w.item);
+    }
     if ((w.kind === 'preview' && model) || overLimit(w, n, sum, l)) continue;
     list.push(w.item);
     n++;
@@ -222,7 +232,11 @@ function planWants(wants: readonly ImageWant[], count: number, total: number, mo
   return list;
 }
 
-/** 그림을 차례대로 꺼내 out에 넣는다(한도·꼴 거르기). count·total은 앞서 넣은 그림 수·바이트, 넣은 뒤의 값을 돌려준다 */
+/**
+ * 그림을 차례대로 꺼내 out에 넣는다(한도·꼴 거르기). count·total은 앞서 넣은 그림 수·바이트, 넣은 뒤의 값을 돌려준다.
+ * 재질 그림으로 이미 바란 항목을 다른 재질이 또 바라면(77차 — 다른 재질 폴더의 그림을 함께 쓰는 재질) 다시 읽지 않는다: 꺼냈으면 같은 바이트를 그 재질 폴더로 넣고
+ * (수·바이트 한도에 다시 세지 않는다), 건너뛰었으면 그 재질도 그림 없이 둔다(건너뜀 수에 다시 세지 않는다)
+ */
 function* readWants(
   wants: readonly ImageWant[],
   count: number,
@@ -230,12 +244,20 @@ function* readWants(
   l: ImageLimits,
   out: SkpImages,
 ): Generator<ZipItem, { count: number; total: number }, Uint8Array> {
+  /** 재질 그림으로 바란 항목 → 꺼낸 그림(건너뛰었으면 null) */
+  const got = new Map<ZipItem, SkpImage | null>();
   for (const w of wants) {
     if (w.kind === 'preview' && out.model) continue;
+    if (w.kind === 'material' && got.has(w.item)) {
+      const again = got.get(w.item);
+      if (again) out.materials.push({ ...again, name: w.name, folder: w.folder! });
+      continue;
+    }
     // PBR 그림은 건너뛰어도 경고·건너뜀 수에 넣지 않는다(예전 그림·경고가 그대로 — 따로 센다)
     const miss = (): void => {
       if (w.kind === 'pbr') out.pbrSkipped = (out.pbrSkipped ?? 0) + 1;
       else out.skipped++;
+      if (w.kind === 'material') got.set(w.item, null);
     };
     if (overLimit(w, count, total, l)) {
       miss();
@@ -258,7 +280,10 @@ function* readWants(
     const img: SkpImage = { path: w.item.name, name: w.name, mime, bytes: data };
     if (w.kind === 'model' || w.kind === 'preview') out.model = img;
     else if (w.kind === 'pbr') (out.pbr ??= []).push({ ...img, folder: w.folder!, roles: w.roles! });
-    else if (w.kind === 'material') out.materials.push({ ...img, folder: w.folder! });
+    else if (w.kind === 'material') {
+      out.materials.push({ ...img, folder: w.folder! });
+      got.set(w.item, img);
+    }
     else if (w.kind === 'component') out.components.push(img);
     else out.scenes.push(img);
   }
@@ -314,22 +339,30 @@ export function* zipImageReads(
   }
   // 재질 폴더마다 그림 하나: 여럿이면 material.xml의 무늬 그림 이름과 같은 것.
   // 57차: 그림이 하나뿐인 폴더도 material.xml을 읽는다 — 그 그림이 PBR 그림(색 무늬 없는 재질의 법선 그림, 색 무늬와 같은 파일을 쓰는 거칠기 그림 등)일 수 있다
+  // 77차: 그림이 없는 폴더도 읽는다 — 2021+ 꾸러미는 여러 재질이 같은 그림을 쓰면 그림을 한 재질 폴더에만 두고, 다른 재질의 material.xml은
+  // 꾸러미 뿌리 꼴 경로(materials/<폴더>/<그림>)로 그 그림을 가리킨다(그 재질 폴더는 비었거나 미리보기 thumbnail.jpg·PBR 그림만 있음)
   const text = new TextDecoder('utf-8');
-  const pickXml = (f: { images: ZipItem[]; xml?: ZipItem }): ZipItem | undefined => (f.images.length && f.xml && f.xml.size < 1 << 20 ? f.xml : undefined);
+  const pickXml = (f: { images: ZipItem[]; xml?: ZipItem }): ZipItem | undefined => (f.xml && f.xml.size < 1 << 20 ? f.xml : undefined);
   plan?.([...folders.values()].map(pickXml).filter((x): x is ZipItem => !!x));
   const fileOf = (it: ZipItem): string => it.name.slice(it.name.lastIndexOf('/') + 1);
+  /** 재질 폴더의 그림 항목(꾸러미 경로 → 항목) — material.xml이 다른 폴더의 그림을 가리킬 때 */
+  const imageAt = new Map<string, ZipItem>();
+  for (const f of folders.values()) for (const it of f.images) imageAt.set(it.name, it);
   for (const [folder, f] of folders) {
-    if (!f.images.length) continue;
-    let pick: ZipItem | undefined = f.images[0]!;
     const xml = pickXml(f);
+    if (!f.images.length && !xml) continue;
+    let pick: ZipItem | undefined = f.images[0];
     let info: SkpMaterialInfo | null = null;
     if (xml)
       try {
         const s = text.decode(yield xml);
-        // 그림이 하나뿐이면 PBR 그림 파일이 있을 때만 재질 정보를 다 푼다(고를 그림이 하나라 무늬 그림 이름이 필요 없다 — 2025+ 재질은 거의 모두 꺼진 PBR 꼬리표를 둔다)
-        if (f.images.length > 1 || pbrFiles(parseMaterialPbr(s)).length) info = parseMaterialXml(s);
+        // 그림이 하나뿐이면 PBR 그림 파일이 있거나 다른 폴더 그림을 가리킬 때만 재질 정보를 다 푼다(고를 그림이 하나라 무늬 그림 이름이 필요 없다 —
+        // 2025+ 재질은 거의 모두 꺼진 PBR 꼬리표를 둔다). 그림이 없는 폴더는 다른 폴더 그림을 가리킬 때만
+        const shared = SHARED_IMAGE.test(s);
+        if (f.images.length > 1 || shared || (f.images.length === 1 && pbrFiles(parseMaterialPbr(s)).length)) info = parseMaterialXml(s);
         const file = info?.texture?.file;
-        const hit = file ? f.images.find((it) => fileOf(it) === file) : undefined;
+        const at = info?.texture?.path ? imageAt.get(info.texture.path) : undefined;
+        const hit = at ?? (file ? f.images.find((it) => fileOf(it) === file) : undefined);
         if (hit) pick = hit;
         else if (!file && info?.pbr) {
           // 56차: 색 무늬 없는 PBR 재질의 견본은 PBR 그림(법선 그림 등)이 아닌 그림(재질 미리보기)으로.

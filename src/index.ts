@@ -419,11 +419,21 @@ function sceneFrom(read: Package | Scene3d, st: Start, opts: SkpOptions): Scene3
   // 무늬 재질: model.dat 재질 번호 → 무늬 id·한 장 크기
   const sceneTex = new Map<number, SceneTexture>();
   const texByMat = new Map<number, { folder: string; info: SkpMaterialInfo; img: TexImage }>();
+  // 77차: 같은 그림 바이트(그림 꺼내기가 한 번 읽어 함께 준 것 — 다른 재질 폴더의 그림을 가리키는 재질)를 쓰는 색 안 바꾼 재질은 무늬 하나를 함께 쓴다
+  // (코어가 같은 그림을 두 번 풀어 올리지 않게). 한 장 크기는 재질마다 따로라 무늬 좌표는 재질마다 만든다. 색을 바꾼 무늬는 재질 색으로 그림을 바꾸므로 따로 둔다.
+  // 따로 읽은 그림(2020 이하, 폴더마다 든 같은 그림)은 바이트가 달라 예전처럼 재질마다 무늬다
+  const texOfBytes = new Map<Uint8Array, string>();
   for (const [id, folder] of model.materials) {
     const img = texImages.get(folder);
     const info = materials.get(folder);
     if (!img || !info?.texture) continue;
-    sceneTex.set(id, { id: `skp-tex-${id}`, w: info.texture.width, h: info.texture.height });
+    let tid = `skp-tex-${id}`;
+    if (!info.colorize) {
+      const same = texOfBytes.get(img.bytes);
+      if (same) tid = same;
+      else texOfBytes.set(img.bytes, tid);
+    }
+    sceneTex.set(id, { id: tid, w: info.texture.width, h: info.texture.height });
     texByMat.set(id, { folder, info, img });
   }
   // 56차: 색 무늬 없이 PBR 그림만 있는 재질은 그 그림을 받았으면 무늬 좌표만 만든다(그물에 무늬 id는 달지 않는다 — 코어 0.43.0은 무늬 그림이 없어도
@@ -520,8 +530,11 @@ function sceneFrom(read: Package | Scene3d, st: Start, opts: SkpOptions): Scene3
     }
     const textures: Texture3d[] = [];
     const infos: SkpTextureInfo[] = [];
+    // 77차: 무늬 하나를 함께 쓰는 재질(같은 그림 바이트)은 그 무늬를 한 번만 넣는다(정보는 처음 재질의 것)
+    const put = new Set<string>();
     for (const [id, t] of sceneTex) {
-      if (t.uvOnly || !used.has(t.id)) continue;
+      if (t.uvOnly || !used.has(t.id) || put.has(t.id)) continue;
+      put.add(t.id);
       const { folder, info, img } = texByMat.get(id)!;
       const head = imageInfo(img.bytes);
       const tex: Texture3d = { id: t.id, data: img.bytes, mime: img.mime };

@@ -301,7 +301,8 @@ describe('57차 그림이 하나뿐인 재질 폴더의 PBR 그림', () => {
     } finally {
       SourceItems.prototype.plan = orig;
     }
-    expect(plans[0]).toEqual(['materials/법선한장/material.xml', 'materials/같은한장/material.xml', 'materials/값한장/material.xml']);
+    // 77차: 그림이 없는 폴더의 material.xml도 읽는다(다른 재질 폴더의 그림을 가리킬 수 있다 — texture.test.ts)
+    expect(plans[0]).toEqual(['materials/법선한장/material.xml', 'materials/같은한장/material.xml', 'materials/값한장/material.xml', 'materials/빈폴더/material.xml']);
     const img = readSkpImages(bytes);
     expect(r.images!.pbr!.map((p) => [p.folder, p.name, p.roles])).toEqual(img.pbr!.map((p) => [p.folder, p.name, p.roles]));
     expect(r.images!.materials.map((m) => m.folder)).toEqual(img.materials.map((m) => m.folder));
