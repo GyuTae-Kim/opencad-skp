@@ -226,7 +226,7 @@ export interface MeasureToolOptions {
   touch?: () => boolean;
   /** 선분(묶음 id, 선분 번호)이 든 호·원의 중심(세계, 곡선이 아니면 null) — "중심" 추정 */
   curveCenter?: (id: string, seg: number) => V3 | null;
-  /** 모형의 그리기 축(옮겼으면 — 축 고정·각도기 기본 평면이 그 축을 따른다, 없으면 세계 축) */
+  /** 지금 그리기 축(모형·장면이 옮겼으면 — 축 고정·각도기 기본 평면·줄자 결과의 축 성분이 그 축을 따른다, 없으면 세계 축). 쓸 때마다 부른다 */
   getAxes?: () => AxisDirs | null;
   /**
    * 측정값 칸 표시: 줄자는 진행 중이면 시작점 → 커서 길이, 아니면 줄자 결과 거리(장면 단위). 각도기는 기준 방향을 찍은 뒤 커서 각도,
@@ -847,10 +847,15 @@ export function clipToRect(s: readonly [number, number, number, number], x0: num
   return [ax + dx * t0, ay + dy * t0, ax + dx * t1, ay + dy * t1];
 }
 
-/** 줄자 결과(장면 단위) */
-export function tapeResult(a: readonly number[], b: readonly number[]): TapeResult {
-  const dx = b[0]! - a[0]!, dy = b[1]! - a[1]!, dz = b[2]! - a[2]!;
-  return { kind: 'tape', a: [a[0]!, a[1]!, a[2]!], b: [b[0]!, b[1]!, b[2]!], distance: Math.hypot(dx, dy, dz), dx, dy, dz };
+/**
+ * 줄자 결과(장면 단위). axes를 주면 dx·dy·dz는 그 그리기 축(빨강·초록·파랑) 성분이다(73차 — 옮긴 그리기 축·장면 축. 거리는 같다).
+ * 주지 않거나 기본 축이면 세계 성분 그대로(예전과 같은 값)
+ */
+export function tapeResult(a: readonly number[], b: readonly number[], axes?: AxisDirs | null): TapeResult {
+  const ux = b[0]! - a[0]!, uy = b[1]! - a[1]!, uz = b[2]! - a[2]!;
+  const comp = (d: V3): number => ux * d[0] + uy * d[1] + uz * d[2];
+  const [dx, dy, dz] = axes ? [comp(axes.x), comp(axes.y), comp(axes.z)] : [ux, uy, uz];
+  return { kind: 'tape', a: [a[0]!, a[1]!, a[2]!], b: [b[0]!, b[1]!, b[2]!], distance: Math.hypot(ux, uy, uz), dx, dy, dz };
 }
 
 /** 법선 n 평면에 비친 u와 v 사이 각(도, 0~180). 비친 길이가 0이면 0 */
@@ -2200,7 +2205,7 @@ export class MeasureTool {
     this.dropLock();
     this.forgetTracks(false);
     const made = edge ? this.addGuideLine(end, sub(edge[1], edge[0])) : this.addGuidePoint(end);
-    this.setResult(tapeResult(a, end), edge);
+    this.setResult(tapeResult(a, end, this.opts.getAxes?.()), edge);
     this.hoverDirty = true;
     this.refreshHint();
     // 방금 둔 안내를 골라 두어 잘못 두었으면 바로 지울 수 있게
@@ -2616,7 +2621,7 @@ export class MeasureTool {
     return lockOf(snap, this.pts[0] ?? null, this.axes);
   }
 
-  /** 축 고정·각도기 평면의 축(모형의 그리기 축 또는 세계 축) */
+  /** 축 고정·각도기 평면의 축(지금 그리기 축 — 모형·장면이 옮긴 축, 아니면 세계 축) */
   private get axes(): AxisDirs {
     return this.opts.getAxes?.() ?? AXIS_DIRS;
   }
@@ -2937,7 +2942,8 @@ export class MeasureTool {
         this.startEdge = null;
         // 측정을 마치면 끌어온 점을 잊는다(첫 점에서는 남긴다 — 줄 맞춘 자리에 쓴다)
         this.forgetTracks(false);
-        this.setResult(tapeResult(a, end), edge);
+        // dx·dy·dz는 지금 그리기 축 성분(73차 — 옮긴 그리기 축·장면 축)
+        this.setResult(tapeResult(a, end, this.opts.getAxes?.()), edge);
       }
     } else if (this.modeValue === 'protractor') {
       if (!this.pts.length) {

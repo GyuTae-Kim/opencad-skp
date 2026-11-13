@@ -13,7 +13,7 @@
  */
 import type { Box3, RenderMode } from 'opencad-viewer3d';
 import { DEFAULT_FOV, basisFromAngles, cameraBasis, cameraEye, dirToAngles, lerpCamera, type CameraState, type Projection } from 'opencad-viewer3d/camera';
-import type { Rgb, SkpCameraMeta, SkpFaceStyle, SkpPageMeta, SkpSectionPlaneMeta, SkpShadowMeta, SkpStyleMeta, Vec3 } from '../meta';
+import type { Rgb, SkpAxesMeta, SkpCameraMeta, SkpFaceStyle, SkpPageMeta, SkpSectionPlaneMeta, SkpShadowMeta, SkpStyleMeta, Vec3 } from '../meta';
 
 /** SketchUp 기본 틀의 세로 시야각(도) — 원근 카메라에 시야각이 없을 때 */
 export const SKP_DEFAULT_FOV_DEG = 35;
@@ -496,7 +496,21 @@ export function readPage(v: unknown, index: number): SkpPageMeta {
   if (o.includeInAnimation === false) page.includeInAnimation = false;
   const shadow = readShadow(o.shadow);
   if (shadow) page.shadow = shadow;
+  // 73차: 장면이 기억하는 그리기 축(null = 기본 축, 꼴이 다르면 기억하지 않는 장면처럼)
+  if (o.axes === null) page.axes = null;
+  else {
+    const axes = readAxes(o.axes);
+    if (axes) page.axes = axes;
+  }
   return page;
+}
+
+const isVec3 = (v: unknown): v is [number, number, number] => Array.isArray(v) && v.length === 3 && v.every(isNum);
+
+/** meta.axes·장면 axes(꼴이 다르면 null) */
+export function readAxes(v: unknown): SkpAxesMeta | null {
+  const o = obj(v);
+  return o && isVec3(o.origin) && isVec3(o.x) && isVec3(o.y) && isVec3(o.z) ? { origin: o.origin, x: o.x, y: o.y, z: o.z } : null;
 }
 
 /** 그림자 설정(모르는 꼴이어도 안전하게 — 수·참거짓·북쪽 벡터만 남긴다). 객체가 아니면 null */
@@ -770,6 +784,8 @@ export interface PagePlan {
   style: SkpStyleMeta | null;
   /** 스타일의 코어 그리기 방식(모르면 null) */
   renderMode: RenderMode | null;
+  /** 바꿀 그리기 축(73차 — null = 기본 축, undefined = 그대로: 장면이 그리기 축을 기억하지 않음) */
+  axes: SkpAxesMeta | null | undefined;
 }
 
 /**
@@ -779,6 +795,8 @@ export interface PagePlan {
  * - 숨긴 개체 → 숨긴 노드를 그 목록으로(목록은 저장 당시 전체 상태다)
  * - 활성 단면 → 모형 단면 하나(pickSection) 또는 끄기. 장면 스타일이 단면 자르기를 껐으면 끈다.
  * - 스타일 → 그리기 방식
+ * - 그리기 축(73차, 장면 속성 "Axes Location" — 공개 Ruby API Page#axes·use_axes?) → 그 장면의 축. 기억하지 않는 장면은 지금 축을 그대로 둔다
+ *   (다른 속성과 같은 규칙 — 장면은 저장한 속성만 되돌린다)
  */
 export function pagePlan(page: SkpPageMeta, ctx: PageContext = {}): PagePlan {
   const raw = page.camera ? cameraFromSkp(page.camera, ctx.viewerFovY) : null;
@@ -802,6 +820,7 @@ export function pagePlan(page: SkpPageMeta, ctx: PageContext = {}): PagePlan {
     sections,
     style,
     renderMode: renderModeForStyle(style),
+    axes: page.axes,
   };
 }
 

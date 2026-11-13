@@ -159,6 +159,11 @@ export interface SkpPageMeta {
   includeInAnimation?: boolean;
   /** 이 장면이 기억하는 그림자 설정 */
   shadow?: SkpShadowMeta;
+  /**
+   * 이 장면이 기억하는 그리기 축(73차 — 장면 속성 "Axes Location", 원점은 장면 단위). null이면 기본 축(세계 축), 칸이 없으면 기억하지 않음.
+   * 화면은 이 칸이 있는 장면을 고르면 그리기 축(줄자·각도기의 축 고정·기본 평면·축 성분)을 이것으로 바꾸고, 없는 장면은 그대로 둔다
+   */
+  axes?: SkpAxesMeta | null;
 }
 
 /** 태그 폴더 */

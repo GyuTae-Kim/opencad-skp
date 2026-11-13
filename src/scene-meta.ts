@@ -25,6 +25,8 @@ export const PAGE_USE_SECTIONS = 0x040;
 export const PAGE_USE_HIDDEN_GEOMETRY = 0x080;
 export const PAGE_USE_HIDDEN_OBJECTS = 0x100;
 export const PAGE_USE_SHADOW = 0x004;
+/** 그리기 축(SketchUp 장면 속성 "Axes Location" — 공개 Ruby API Page#use_axes?, C API FLAG_USE_AXES) */
+export const PAGE_USE_AXES = 0x008;
 
 /** 위치·그림자 설정 → meta(그대로 옮기고 북쪽은 사본) */
 export function shadowMeta(s: SkpShadowInfo): SkpShadowMeta {
@@ -216,6 +218,8 @@ export function pagesMeta(model: SkpModel, scale: number, ctx: PagesContext = {}
     // 장면 재생(슬라이드 쇼)에서 뺀 장면만 적는다
     if (p.includeInAnimation === false) out.includeInAnimation = false;
     if (flags & PAGE_USE_SHADOW && p.shadowInfo) out.shadow = shadowMeta(p.shadowInfo);
+    // 73차: 장면이 기억하는 그리기 축(원점은 장면 단위, 기본 축이면 null — 화면은 그 장면을 고르면 그리기 축을 이것으로 바꾼다)
+    if (flags & PAGE_USE_AXES && p.axes !== undefined) out.axes = p.axes ? axesMeta(p.axes, scale)! : null;
     pages.push(out);
   }
   const res: { pages: SkpPageMeta[]; activePage?: number } = { pages };

@@ -384,7 +384,7 @@ export interface SkpPage {
   pid?: number;
   name: string;
   description: string;
-  /** use 깃발(0x7149): 0x001 카메라, 0x002 스타일, 0x004 그림자, 0x020 숨긴 태그, 0x040 단면, 0x080 숨긴 형상, 0x100 숨긴 개체 */
+  /** use 깃발(0x7149): 0x001 카메라, 0x002 스타일, 0x004 그림자, 0x008 그리기 축, 0x020 숨긴 태그, 0x040 단면, 0x080 숨긴 형상, 0x100 숨긴 개체 */
   flags: number;
   camera?: SkpCamera;
   /** 숨긴 요소 영구 번호(0x714b, 저장 당시 전체 상태, 겹침 없이) */
@@ -408,6 +408,11 @@ export interface SkpPage {
   thumbnail?: string;
   /** 이 장면이 기억하는 그림자 설정(깃발 0x004) */
   shadowInfo?: SkpShadowInfo;
+  /**
+   * 이 장면이 기억하는 그리기 축(깃발 0x008 "Axes Location" — 공개 Ruby API Page#axes·use_axes?, 2021+ 714f → 4650, 2020 이하 CViewPage 안 CSketchCS).
+   * null이면 기본 축(세계 축), 없으면 기억하지 않음(또는 칸이 깨짐)
+   */
+  axes?: SkpAxes | null;
 }
 
 /** Model Info > Animation(설정 절의 PageOptions·SlideshowOptions) */

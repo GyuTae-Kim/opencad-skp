@@ -3,6 +3,7 @@
  * 문서를 연 뒤 정보 탭을 고를 때만 쓰는 글이라 첫 화면 JS에서 뗐다(47차 속성 사전 칸 attrview.ts처럼 — 파일 글을 번역층에서 빼느라 늘어난
  * 첫 화면 몫을 이것으로 갚는다). 받은 뒤에는 패널이 곧바로 그린다.
  */
+import type { SkpAxesMeta } from '../meta';
 import { h, icon } from './dom';
 import { boundsSize, docLabel, latLonText, releaseName, shadowTimeText, tzText, unitLabel, unitSummary, type SkpDoc } from './doc';
 import { fileText as F, mix } from './filetext';
@@ -12,6 +13,9 @@ import { chip, hint, keep, row, section } from './panel';
 import { sunForShadow } from './sun';
 import { unitsLabel } from './units';
 import { coreIssueText, warningParts } from './warntext';
+
+/** 기본 그리기 축(세계 축) — 장면이 기본 축으로 되돌렸을 때 적는다 */
+const WORLD_AXES: SkpAxesMeta = { origin: [0, 0, 0], x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
 
 /** 정보 탭의 칸들. applyPage: 장면 카드를 누르면 그 장면으로 */
 export function infoSections(d: SkpDoc, applyPage: (index: number) => void): HTMLElement[] {
@@ -72,17 +76,25 @@ export function infoSections(d: SkpDoc, applyPage: (index: number) => void): HTM
   if (sh?.display !== undefined) place.push(row('그림자 보이기', sh.display ? '켬' : '끔'));
   const sun = sunForShadow(sh);
   if (sun) place.push(row('해 고도·방위', `${fmtNum(sun.elevation, 1)}° · ${fmtNum(sun.azimuth, 1)}°`));
-  if (d.axes) {
-    place.push(row('그리기 축 원점', `${fmtPt(d.axes.origin, 1)}${u ? ` ${u}` : ''}`));
-    place.push(row('빨강·초록·파랑 축', [d.axes.x, d.axes.y, d.axes.z].map((a) => fmtPt(a, 3)).join(' · ')));
+  // 지금 그리기 축(73차 — 그리기 축을 기억하는 장면을 고르면 그 장면의 축. 장면이 기본 축으로 되돌렸으면 기본 축도 적는다)
+  const axPage = d.axesPage !== null ? d.pages[d.axesPage] : undefined;
+  const ax = d.drawAxes ?? (axPage ? WORLD_AXES : null);
+  if (ax) {
+    place.push(row('그리기 축 원점', `${fmtPt(ax.origin, 1)}${u ? ` ${u}` : ''}`));
+    place.push(row('빨강·초록·파랑 축', [ax.x, ax.y, ax.z].map((a) => fmtPt(a, 3)).join(' · ')));
   }
-  if (place.length)
+  if (axPage) place.push(row('그리기 축을 정한 장면', axPage.name, true));
+  // 파일과 다른 축을 기억하는 장면이 있거나 장면이 축을 정했으면 장면 규칙을 알린다
+  const key = (a: SkpAxesMeta | null | undefined): string => JSON.stringify(a ?? null);
+  const sceneAxes = !!axPage || d.pages.some((p) => p.axes !== undefined && key(p.axes) !== key(d.axes));
+  if (place.length || sceneAxes)
     out.push(
       section(
         '위치·그림자',
         ...place,
         sun ? hint('보기 설정의 "그림자"로 이 날짜·시각·위치의 해 그림자를 켜고 끕니다.') : null,
-        d.axes ? hint('줄자·각도기의 축 고정과 기본 평면은 옮긴 그리기 축을 따릅니다.') : null,
+        d.drawAxes ? hint('줄자·각도기의 축 고정·기본 평면과 줄자 결과의 dx·dy·dz는 옮긴 그리기 축을 따릅니다.') : null,
+        sceneAxes ? hint('그리기 축을 기억하는 장면을 고르면 그 장면의 축으로 바뀌고, 기억하지 않는 장면은 지금 축을 그대로 둡니다(파일을 다시 열면 파일의 축).') : null,
       ),
     );
   const scenes = d.images?.scenes ?? [];
@@ -103,7 +115,7 @@ export function infoSections(d: SkpDoc, applyPage: (index: number) => void): HTM
       card.addEventListener('click', () => applyPage(i));
       grid.append(card);
     });
-    out.push(section(`장면 ${d.pages.length}개`, hint('누르면 그 장면으로 바꿉니다(카메라·숨긴 태그·숨긴 개체·단면·스타일 중 장면이 기억하는 것). PageUp·PageDown으로도 넘깁니다.'), grid));
+    out.push(section(`장면 ${d.pages.length}개`, hint('누르면 그 장면으로 바꿉니다(카메라·숨긴 태그·숨긴 개체·단면·스타일·그림자·그리기 축 중 장면이 기억하는 것). PageUp·PageDown으로도 넘깁니다.'), grid));
   } else if (scenes.length) {
     const grid = h('div', { class: 'scene-grid' });
     for (const sc of scenes.slice(0, 100))

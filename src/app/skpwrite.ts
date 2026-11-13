@@ -605,6 +605,8 @@ export interface PageOpts {
   transition?: number;
   delay?: number;
   thumbnail?: string;
+  /** 그리기 축 714f → 4650(원점·x·y·z f64 12개 — 실제 파일처럼 그리기 요소 머리 7d0 → 7d3 = 6을 앞에) */
+  axes?: readonly number[];
 }
 
 const pageItem = (p: PageOpts): Uint8Array =>
@@ -616,6 +618,9 @@ const pageItem = (p: PageOpts): Uint8Array =>
     tlv(0x714b, packedIds(p.hidden ?? [])),
     ...(p.style !== undefined ? [tlv(0x714c, uintLE(p.style))] : []),
     ...(p.render ? [tlv(0x714d, p.render)] : []),
+    ...(p.axes
+      ? [tlv(0x714f, tlv(0x4650, tlv(0x07d0, tlv(0x07d3, u8(6))), ...[0, 1, 2, 3].map((k) => tlv(0x4651 + k, f64(...p.axes!.slice(k * 3, k * 3 + 3))))))]
+      : []),
     tlv(0x7150, packedIds(p.tags ?? [])),
     tlv(0x7159, packedIds(p.folders ?? [])),
     tlv(0x7151, packedIds(p.sections ?? [])),
