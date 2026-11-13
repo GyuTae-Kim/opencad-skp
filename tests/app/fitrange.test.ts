@@ -91,6 +91,64 @@ describe('화면 맞춤 범위와 주석', () => {
     expect(JSON.stringify((v as unknown as { grid: unknown }).grid)).toBe(grid0);
   });
 
+  it('코어 0.64.0(같은 값 보이기 호출은 아무것도 하지 않음): 장면을 올릴 때·장면을 고를 때·모두 보이기 뒤에도 FIT_GROUP은 숨은 채이고 맞춤은 보이는 묶음 범위', () => {
+    type Inner = { visVer: number; hiddenGroups: Set<string> };
+    const at = (v: Viewer3d): Inner => v as unknown as Inner;
+    const s = skpToScene(mfcFile(spec()), { outline: true });
+    const inner = [...new Set(metaOf(s).outline!.find((o) => o.name === '판 2')!.ids)];
+    const ids = [...s.meshes, ...s.lines, ...(s.points ?? [])].map((x) => x.id);
+    // 기준: 숨김이 있을 때의 맞춤(보이는 묶음 합 — 안쪽 배치는 범위를 바꾸지 않는다)
+    const ref = view(s);
+    for (const id of inner) ref.setItemVisible(id, false);
+    const want = fitCam(ref);
+    // 앱처럼 상태를 모두 다시 부르기(app.ts applyTagVisibility·refreshItemVisibility — 상태가 같은 항목·묶음도 부른다)
+    const hidden = new Set<string>();
+    const refresh = (v: Viewer3d): void => {
+      for (const g of v.groups()) v.setGroupVisible(g.name, g.visible);
+      for (const id of ids) v.setItemVisible(id, !hidden.has(id));
+    };
+    const v = view(s);
+    // 장면을 올릴 때: 모두 보이는 상태에 보이기는 판을 올리지 않고, FIT_GROUP 숨기기는 바뀐 것이라 판이 하나 오른다
+    const ver0 = at(v).visVer;
+    refresh(v);
+    expect(at(v).visVer).toBe(ver0);
+    keepFitVisible(v);
+    expect(at(v).visVer).toBe(ver0 + 1);
+    expect(at(v).hiddenGroups.has(FIT_GROUP)).toBe(true);
+    close(fitCam(v), want);
+    // 같은 값을 다시(FIT_GROUP 숨기기·모든 항목): 판도 숨김도 그대로
+    const ver1 = at(v).visVer;
+    keepFitVisible(v);
+    refresh(v);
+    expect(at(v).visVer).toBe(ver1);
+    expect(at(v).hiddenGroups.has(FIT_GROUP)).toBe(true);
+    close(fitCam(v), want);
+    // 장면을 고를 때(안쪽 배치를 숨기는 장면): 바뀐 항목만 판을 올린다
+    for (const id of inner) hidden.add(id);
+    refresh(v);
+    expect(at(v).visVer).toBe(ver1 + inner.length);
+    expect(at(v).hiddenGroups.has(FIT_GROUP)).toBe(true);
+    close(fitCam(v), want);
+    // 모두 보이기와 한 번 더
+    hidden.clear();
+    refresh(v);
+    const ver2 = at(v).visVer;
+    expect(ver2).toBe(ver1 + 2 * inner.length);
+    close(fitCam(v), want);
+    refresh(v);
+    expect(at(v).visVer).toBe(ver2);
+    expect(at(v).hiddenGroups.has(FIT_GROUP)).toBe(true);
+    close(fitCam(v), want);
+    // 다시 올리기: setScene이 숨긴 그룹을 비우므로 앱은 올릴 때마다 FIT_GROUP을 다시 숨긴다
+    v.setScene(s);
+    v.setView('seIso', false);
+    expect(at(v).hiddenGroups.has(FIT_GROUP)).toBe(false);
+    refresh(v);
+    keepFitVisible(v);
+    expect(at(v).hiddenGroups.has(FIT_GROUP)).toBe(true);
+    close(fitCam(v), want);
+  });
+
   it('숨긴 묶음은 맞춤에 들지 않는다(숨긴 보조선 y = 500)', () => {
     const s = skpToScene(mfcFile(spec()), { outline: true, extras: true });
     const hidden = metaOf(s).extraItems?.hidden ?? [];
