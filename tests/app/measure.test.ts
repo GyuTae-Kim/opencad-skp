@@ -750,6 +750,35 @@ describe('측정 도구: 추론 잠금(Shift·화살표·단추)과 나란함', 
     expect(res.dz).toBeCloseTo(30, 6);
   });
 
+  it('75차: 화살표 축 잠금은 축 이름 — 잠근 뒤 장면이 그리기 축을 바꾸면 새 축 방향으로 잰다(기본 축으로 돌아오면 다시 세계 축)', () => {
+    let axes: { x: [number, number, number]; y: [number, number, number]; z: [number, number, number] } | null = null;
+    const r = rig({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 10, 0, 0]])] }, TOP, DEFAULT_UNITS, { getAxes: () => axes });
+    r.tool.setMode('tape');
+    r.click(101, 100);
+    expect(r.key('ArrowRight')).toBe(true);
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'x', dir: [1, 0, 0], source: 'key' });
+    // 잠근 채 빨강 = −Y·초록 = −X인 장면을 고름(실제 표본 꼴) — 74차까지는 잠근 때의 빨강(+X)으로 쟀다
+    axes = { x: [0, -1, 0], y: [-1, 0, 0], z: [0, 0, 1] };
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'x', dir: [0, -1, 0], source: 'key' });
+    r.move(140, 140);
+    expect(r.tip()).toBe('빨강 축에 · 잠금 · 40 mm');
+    r.click(140, 140);
+    let res = r.results.at(-1);
+    if (res?.kind !== 'tape') throw new Error('tape');
+    near(res.b, [0, -40, 0]);
+    near([res.dx, res.dy, res.dz], [40, 0, 0]);
+    // 다시 잠그고 기본 축 장면으로 돌아오면 세계 빨강
+    r.click(101, 100);
+    r.key('ArrowRight');
+    expect(r.tool.inferenceLock?.dir).toEqual([0, -1, 0]);
+    axes = null;
+    expect(r.tool.inferenceLock?.dir).toEqual([1, 0, 0]);
+    r.click(140, 140);
+    res = r.results.at(-1);
+    if (res?.kind !== 'tape') throw new Error('tape');
+    near(res.b, [40, 0, 0]);
+  });
+
   it('지나간 모서리와 나란하면 자홍 나란함, ↓로 잠그고 다시 누르면 풀기(커서 밑이 아니어도 지나간 모서리로)', () => {
     const r = rig({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 10, 0, 0]]), lines('d', [[-90, -60, 0, -60, -30, 0]])] });
     r.tool.setMode('tape');
