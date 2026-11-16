@@ -419,10 +419,12 @@ describe('skpToScene', () => {
     }
   });
 
-  it('확인하지 않은 새 판(27 이상)은 경고하고 같은 형식으로 읽는다', () => {
-    const s = skpToScene(skpFile(testModel(0), { version: '27.0.10', materials: MATERIALS }));
+  it('확인하지 않은 새 판(28 이상 — 87차에 27을 표본으로 확인)은 경고하고 같은 형식으로 읽는다', () => {
+    const s = skpToScene(skpFile(testModel(0), { version: '28.0.10', materials: MATERIALS }));
     expect(s.meshes.length).toBe(3);
-    expect(s.warnings![0]).toContain('확인하지 않은 SketchUp 버전 27.0.10');
+    expect(s.warnings![0]).toContain('확인하지 않은 SketchUp 버전 28.0.10');
+    expect(s.warnings![0]).toContain('2021~2027 형식');
+    expect(skpToScene(skpFile(testModel(0), { version: '27.0.10', materials: MATERIALS })).warnings!.some((w) => w.includes('확인하지 않은'))).toBe(false);
   });
 
   it('2020 이하 판은 MFC 해석기로 읽고, 머리만 있는(잘린) 파일은 경고와 빈 장면', () => {

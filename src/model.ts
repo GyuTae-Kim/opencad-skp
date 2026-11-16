@@ -1246,6 +1246,18 @@ const PHASES = ['root', 'materials', 'lineStyles', 'layers', 'fonts', 'options',
 type Phase = (typeof PHASES)[number];
 
 /**
+ * 표본에서 빈 꼴로만 본 뿌리 절(87차 — SketchUp 2027 실제 표본 27.0.277 하나, model.dat가 있는 2021~2026 표본 746개에는 없음): 꼬리표 → 빈 꼴의 내용 바이트.
+ * 0211 → 7D00 → 7D01(길이 0), 0215 → 7D82(길이 0), 0218 → 7E90(길이 0). SketchUp 2027 릴리스 노트·Ruby API가 적은 모형 단위 새 기록
+ * (단면 채우기 해치 패턴 모음 Model#hatch_patterns, 좌표 참조계 Model#crs_location)일 수 있지만 내용이 든 표본이 없어 뜻·꼴을 모른다.
+ * 이 꼴과 다른 내용이면 읽지 않았다고 경고한다(형상 읽기와는 상관없다)
+ */
+const EMPTY_ONLY_SECTIONS: ReadonlyMap<number, readonly number[]> = new Map([
+  [0x0211, [0x00, 0x7d, 0x06, 0x00, 0x00, 0x00, 0x01, 0x7d, 0x00, 0x00, 0x00, 0x00]],
+  [0x0215, [0x82, 0x7d, 0x00, 0x00, 0x00, 0x00]],
+  [0x0218, [0x90, 0x7e, 0x00, 0x00, 0x00, 0x00]],
+]);
+
+/**
  * model.dat 읽기. 한 버퍼로 읽든(readModelDat) 조각으로 받든(src/modelstream.ts) 같은 차례·같은 결과를 낸다.
  * 뿌리 절은 addSection으로 받고, 정의(0x157c)는 beginDefinitions 뒤 definition으로 하나씩 받을 수 있다(정의 읽기에 쓰는
  * 재질·글꼴 절을 먼저 읽는다 — 다 읽은 정의의 바이트는 붙들지 않는다). finish가 나머지 절을 한 버퍼 읽기의 차례로 읽어 모형을 낸다.
@@ -1502,6 +1514,16 @@ export class ModelParse {
       return rec ? readAxes(r, rec) : undefined;
     });
     const classifications = this.section('props', TAG.CLASSIFICATION_SECTION, '분류 체계', (r, n) => readClassifications(r, n));
+    // 표본에서 빈 꼴로만 본 뿌리 절에 내용이 있으면 읽지 않았다고 알린다(87차)
+    const rootCtx = this.phase('root');
+    for (const [tag, empty] of EMPTY_ONLY_SECTIONS) {
+      const s = this.sections.get(tag);
+      if (!s) continue;
+      const { start, end } = s.n;
+      const b = s.r.b;
+      if (end - start === empty.length && empty.every((x, i) => b[start + i] === x)) continue;
+      note(rootCtx, `표본에서 비어 있던 모형 기록(0x${tag.toString(16).padStart(4, '0')})에 내용이 있어 읽지 않았습니다(SketchUp 2027의 단면 해치 패턴 같은 새 설정일 수 있습니다)`);
+    }
 
     // 경고: 묶음을 한 버퍼 읽기의 차례로 합친다
     const all = new Map<string, number>();
