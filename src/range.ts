@@ -71,6 +71,8 @@ const WINDOW_MAX = 64 * 1024;
 /** 지역 머리의 이름 뒤 덧붙임(extra) 길이를 모를 때 더 읽어 두는 바이트 */
 const EXTRA_GUESS = 64;
 const utf8 = new TextEncoder();
+/** 항목 처음 자리(지역 머리 30바이트 + 이름 + 덧붙임 어림 + 내용) 끝까지의 길이 — 이름은 되돌린 이름이면 원래 바이트 수(84차 ZipItem.nameBytes) */
+const headSpan = (item: ZipItem): number => 30 + (item.nameBytes ?? utf8.encode(item.name).length) + EXTRA_GUESS + item.compressedSize;
 
 /** 미리 읽기(plan)로 함께 보내 두는 읽기 수의 위 한도 */
 export const AHEAD_READS = 8;
@@ -159,7 +161,7 @@ export class SourceItems {
     const size = this.src.size;
     const p = item.localOffset;
     const s = clamp(p, size);
-    return [s, Math.max(s, clamp(p + 30 + utf8.encode(item.name).length + EXTRA_GUESS + item.compressedSize, size))];
+    return [s, Math.max(s, clamp(p + headSpan(item), size))];
   }
 
   private send(a: Ahead): void {
@@ -241,7 +243,7 @@ export class SourceItems {
     const p = item.localOffset;
     const rebased: ZipItem = { ...item, localOffset: 0 };
     const [hs, he] = this.headRange(item);
-    let b = (await this.planned(item, hs, he)) ?? (await this.range(p, p + 30 + utf8.encode(item.name).length + EXTRA_GUESS + item.compressedSize));
+    let b = (await this.planned(item, hs, he)) ?? (await this.range(p, p + headSpan(item)));
     let start: number;
     try {
       start = zipLocalDataOffset(b, item);
