@@ -20,7 +20,7 @@ export function unsupportedNotice(scene: Scene3d, name: string): ParseNotice | n
   if (old === null) return null;
   return {
     title: [`아직 읽지 못하는 판입니다: ${releaseName(old)} (${old})`],
-    text: mix`"${fileText(name)}" 파일은 SketchUp 3보다 옛 형식으로 저장되어 있습니다. 이 뷰어는 SketchUp 3~8·2013~2026 파일을 읽습니다. SketchUp 3 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.`,
+    text: mix`"${fileText(name)}" 파일은 SketchUp 3보다 옛 형식으로 저장되어 있습니다. 이 뷰어는 SketchUp 3~8·2013~2027 파일을 읽습니다. SketchUp 3 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.`,
   };
 }
 

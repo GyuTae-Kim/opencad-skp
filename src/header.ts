@@ -19,7 +19,7 @@ export interface SkpHeader {
   container: SkpContainer;
   /** 본문 시작(zip이면 ZIP 첫 지역 머리, mfc면 머리 문자열 바로 뒤) */
   bodyOffset: number;
-  /** zip 판의 VFF 블록 하위 판(u16, 관찰: 21.0→8, 21.1→11, 22·23→13, 25·26→17) */
+  /** zip 판의 VFF 블록 하위 판(u16, 관찰: 21.0→8, 21.1→11, 22·23→13, 24→13·14·16, 25·26→17, 27.0→18) */
   subVersion?: number;
 }
 

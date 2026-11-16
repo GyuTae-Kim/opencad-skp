@@ -2,7 +2,7 @@
  * SketchUp(.skp) 해석기. 형식 지식은 공개 표본 바이트로 추론한 것에 비공개 참조 해석기(SketchUp C API를 비교 기준으로 맞춘 해석기)의
  * 형식 지식을 옮겨 더했다(docs/formats/skp.md).
  *
- * 지원: SketchUp 2021~2026(머리 뒤 "VFF" 블록 + ZIP 꾸러미, 안의 model.dat가 TLV)과
+ * 지원: SketchUp 2021~2027(머리 뒤 "VFF" 블록 + ZIP 꾸러미, 안의 model.dat가 TLV)과
  * SketchUp 3·4·5·6·7·8·2013~2020(머리 뒤 MFC 객체 직렬화, src/mfcmodel.ts). 두 해석기가 같은 중간 모형(SkpModel)을 내서 장면 출력은 하나다.
  * 면(구멍 포함)·모서리·재질 색·그룹/컴포넌트/그림 인스턴스 변환·태그(보임·색·폴더·선 종류)·문자·치수·보조선·단면 평면·속성 사전·
  * 단위·카메라·장면(페이지)·스타일(style.xml 또는 옛 스타일 기록 + 렌더링 설정)을 읽는다. 부드러운 음영(매끈한 모서리)은 smooth 선택으로 낸다.
@@ -57,8 +57,12 @@ export { cameraMeta, pagesMeta, unitsFor } from './scene-meta';
 export const SKP_MIN_SUPPORTED_MAJOR = 4;
 /** 2021+ 형식(VFF + ZIP)이 시작하는 판. 이보다 낮으면 MFC 객체 직렬화다 */
 export const SKP_ZIP_MIN_MAJOR = 21;
-/** 표본으로 확인한 가장 높은 판 */
-export const SKP_MAX_CHECKED_MAJOR = 26;
+/**
+ * 표본으로 확인한 가장 높은 판. 27(SketchUp 2027)은 87차에 실제 표본 하나(27.0.277)를 2026 표본 717개와 기록 단위로 견주어 올렸다:
+ * 2021~2026의 기록·칸 길이가 그대로이고 해석기가 센 형상 수가 TLV 기록 수와 같다. 새로 본 기록(뿌리 0211·0215·0218, 렌더링 7388·738C,
+ * style.xml 7019·7020)은 모두 빈 꼴·기본값이었다 — 뿌리 셋에 내용이 있으면 model.ts가 읽지 않았다고 경고한다(docs/formats/skp.md)
+ */
+export const SKP_MAX_CHECKED_MAJOR = 27;
 /** 꾸러미 style.xml 한 파일 크기 한도 */
 const MAX_STYLE_XML_BYTES = 16 * 1024 * 1024;
 /** 꾸러미의 스타일(styles/<이름>/style.xml)·재질(materials/<폴더>/material.xml) 항목 */
@@ -184,8 +188,8 @@ function startScene(bytes: Uint8Array, opts: SkpOptions): Start | Scene3d {
   const warnings: string[] = [];
   if (header.container !== 'mfc') {
     if (header.major > SKP_MAX_CHECKED_MAJOR)
-      warnings.push(`표본으로 확인하지 않은 SketchUp 버전 ${header.version}입니다. 2021~2026 형식으로 읽어 봅니다.`);
-    else if (!(header.major >= SKP_ZIP_MIN_MAJOR)) warnings.push(`2021 이후 꼴(VFF + ZIP)인데 판이 ${header.version}입니다. 2021~2026 형식으로 읽어 봅니다.`);
+      warnings.push(`표본으로 확인하지 않은 SketchUp 버전 ${header.version}입니다. 2021~2027 형식으로 읽어 봅니다.`);
+    else if (!(header.major >= SKP_ZIP_MIN_MAJOR)) warnings.push(`2021 이후 꼴(VFF + ZIP)인데 판이 ${header.version}입니다. 2021~2027 형식으로 읽어 봅니다.`);
   }
   return { name, header, meta, warnings, progress };
 }
