@@ -890,7 +890,7 @@ export class SkpViewerApp implements PanelHost {
         h(
           'ul',
           { class: 'facts' },
-          h('li', {}, h('b', {}, '지원 형식 '), 'SketchUp 3~8·2013~2026에서 저장한 파일 (확장자 .skp)'),
+          h('li', {}, h('b', {}, '지원 형식 '), 'SketchUp 3~8·2013~2027에서 저장한 파일 (확장자 .skp)'),
           h('li', { class: 'muted' }, h('b', {}, '아직 못 읽음 '), 'SketchUp 1·2에서 저장한 아주 옛 파일(판만 알려 드립니다)'),
           h('li', {}, h('span', { class: 'lock', html: icon('lock', 15) }), h('b', {}, '파일은 이 브라우저 밖으로 나가지 않습니다. '), '서버로 올리지 않고 이 컴퓨터에서 읽습니다.'),
         ),
@@ -3619,7 +3619,7 @@ export class SkpViewerApp implements PanelHost {
     if (!e) return;
     const d = this.doc;
     if (!d) {
-      e.stMain.textContent = '파일을 열면 여기에 모형 정보가 보입니다 · SketchUp 3~2026(.skp)';
+      e.stMain.textContent = '파일을 열면 여기에 모형 정보가 보입니다 · SketchUp 3~2027(.skp)';
       e.stWarn.hidden = true;
       e.stSel.textContent = '';
       return;

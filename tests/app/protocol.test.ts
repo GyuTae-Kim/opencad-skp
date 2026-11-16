@@ -90,7 +90,7 @@ describe('빈 장면 알림', () => {
 
 describe('옛 판 알림(62차 — 화면이 만들던 글을 해석 워커로)', () => {
   it('SketchUp 3보다 옛 판이면 61차 화면 글과 같은 제목·글(파일 이름은 파일 글 자리), 읽는 판이면 null', () => {
-    const TEXT = '" 파일은 SketchUp 3보다 옛 형식으로 저장되어 있습니다. 이 뷰어는 SketchUp 3~8·2013~2026 파일을 읽습니다. SketchUp 3 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.';
+    const TEXT = '" 파일은 SketchUp 3보다 옛 형식으로 저장되어 있습니다. 이 뷰어는 SketchUp 3~8·2013~2027 파일을 읽습니다. SketchUp 3 이상(가능하면 2021 이상)에서 다시 저장한 뒤 열어 주세요.';
     expect(unsupportedNotice(scene({ meta: { version: '2.0.1', container: 'mfc', unsupported: true } }), 'old.skp')).toEqual({
       title: ['아직 읽지 못하는 판입니다: SketchUp 2 (2.0.1)'],
       text: ['"', { file: 'old.skp' }, TEXT],
