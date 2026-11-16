@@ -13,7 +13,7 @@ import { applyFaceUvq, faceUvq, planeAxes } from '../src/projection';
 import { averageRgb, colorizeRgba, rgbToHls } from '../src/colorize';
 import { dropTexture, needsDecode, prepareSceneTextures, usesAlpha } from '../src/worker/textures';
 import { textureLimitsFor } from '../src/app/texlimits';
-import { IDENTITY13, edge, entities, face, instance, materialXml, modelDat, pngRgb, skpFile, type TextureMapOpts, vertex } from './build';
+import { IDENTITY13, edge, entities, face, flagUtf8Names, instance, materialXml, modelDat, pngRgb, skpFile, type TextureMapOpts, vertex } from './build';
 import { faceAt } from '../src/entities';
 
 const TILE_A = { w: 10, h: 20 };
@@ -514,6 +514,37 @@ describe('다른 재질 폴더의 그림을 함께 쓰는 무늬(77차)', () => 
     expect(by.get('미리보기')!.path).toBe('materials/무늬A/a.png');
     expect(r.scene.textures!.map((t) => t.id)).toEqual(['skp-tex-1', 'skp-tex-4']);
     expect(meshOf(r.scene, '미리보기').texture).toBe('skp-tex-1');
+  });
+});
+
+describe('다른 프로그램이 다시 묶으며 두 번 인코딩한 재질 폴더 이름(84차)', () => {
+  // 파이썬 cp437 코덱으로 만든 값(UTF-8 바이트를 CP437로 읽은 글) — 그런 프로그램은 깃발 없는 SketchUp 이름을 CP437로 읽어 UTF-8로 옮기고 비트 11을 단다
+  const MOJI: Record<string, string> = { 무늬A: 'δ¼┤δè¼A', 무늬B: 'δ¼┤δè¼B', 색: '∞âë', 바꾼색: 'δ░öΩ╛╝∞âë', 그림없음: 'Ω╖╕δª╝∞ùå∞¥î' };
+  const placed: Placed[] = [1, 2, 3, 4, 5].map((material, i) => ({ def: { material }, at: i * 100 }));
+  const repacked = (flag: boolean): Uint8Array => {
+    const f = fileWith(placed, {
+      xml: xmls().map(([folder, x]) => [MOJI[folder]!, x] as [string, string]),
+      imgs: images().map((im) => ({ ...im, name: im.name.replace(/^materials\/([^/]+)/, (_, folder: string) => `materials/${MOJI[folder]!}`) })),
+    });
+    return flag ? flagUtf8Names(f) : f;
+  };
+
+  it('깃발 달린 이름을 되돌려 읽어 SketchUp이 저장한 꾸러미와 같은 장면·그림 — 파일 전체·자리만 읽는 길', async () => {
+    const clean = fileWith(placed);
+    const moved = repacked(true);
+    expect(open(moved)).toEqual(open(clean));
+    expect(readSkpImages(moved)).toEqual(readSkpImages(clean));
+    const [a, b] = await Promise.all([skpFileToScene(bytesSource(clean), {}), skpFileToScene(bytesSource(moved), {})]);
+    expect(b.scene).toEqual(a.scene);
+    expect(b.images).toEqual(a.images);
+    expect(meshOf(b.scene, '무늬A').texture).toBe('skp-tex-1');
+    expect(b.scene.textures!.length).toBe(3);
+  });
+
+  it('깃발이 없으면 SketchUp이 쓴 이름으로 보고 그대로 — 재질 폴더가 모형 재질 이름과 맞지 않아 무늬 없이(평균색)', () => {
+    const s = open(repacked(false));
+    expect(meshOf(s, '무늬A').texture).toBeUndefined();
+    expect(s.textures ?? []).toEqual([]);
   });
 });
 

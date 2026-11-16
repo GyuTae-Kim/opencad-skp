@@ -9,8 +9,12 @@
 import { inflateRaw, inflateRawPartial } from './inflate';
 
 export interface ZipItem {
-  /** 꾸러미 안 경로(UTF-8로 읽는다 — SketchUp은 비트 11 없이 UTF-8 이름을 쓴다) */
+  /**
+   * 꾸러미 안 경로(UTF-8로 읽는다 — SketchUp은 비트 11 없이 UTF-8 이름을 쓴다). 다른 프로그램이 다시 묶으며 두 번 인코딩한 이름은 되돌린 글이다(84차 — undoDoubleEncodedNames)
+   */
   name: string;
+  /** 지역 머리의 이름 바이트 수가 UTF-8로 쓴 name과 다르면(되돌린 이름) 그 바이트 수 */
+  nameBytes?: number;
   /** 0 저장, 8 DEFLATE */
   method: number;
   compressedSize: number;
@@ -22,6 +26,63 @@ export interface ZipItem {
 }
 
 const utf8 = new TextDecoder('utf-8');
+const strictUtf8 = new TextDecoder('utf-8', { fatal: true });
+
+/** IBM 코드 페이지 437의 0x80~0xFF 글자(APPNOTE 부록 D — 비트 11이 없는 이름의 글자 표. 0x00~0x7F는 ASCII와 같다. 0xFF는 줄 바꿈 없는 빈칸) */
+const CP437_HIGH =
+  'ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒáíóúñÑªº¿⌐¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αßΓπΣσµτΦΘΩδ∞φε∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■' +
+  String.fromCharCode(0xa0);
+let cp437Byte: Map<number, number> | undefined;
+
+/**
+ * CP437로 읽은 글을 원래 바이트로 되돌려 UTF-8로 읽는다(84차). 모든 글자가 CP437 표 안이고 ASCII가 아닌 글자가 하나 이상이며
+ * 되돌린 바이트가 올바른 UTF-8일 때만 그 글, 아니면 null
+ */
+export function undoCp437(name: string): string | null {
+  const map = (cp437Byte ??= new Map([...CP437_HIGH].map((c, i) => [c.charCodeAt(0), 0x80 + i] as const)));
+  const out = new Uint8Array(name.length);
+  let high = false;
+  for (let i = 0; i < name.length; i++) {
+    const c = name.charCodeAt(i);
+    if (c < 0x80) out[i] = c;
+    else {
+      const b = map.get(c);
+      if (b === undefined) return null;
+      out[i] = b;
+      high = true;
+    }
+  }
+  if (!high) return null;
+  try {
+    return strictUtf8.decode(out);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 두 번 인코딩한 이름 되돌리기(84차): SketchUp은 꾸러미 항목 이름을 비트 11(APPNOTE 4.4.4 — 이름이 UTF-8이라는 깃발) 없이 UTF-8로 쓴다.
+ * APPNOTE 부록 D대로 깃발 없는 이름을 CP437로 읽어 UTF-8로 옮기고 깃발을 다는 프로그램이 꾸러미를 다시 묶으면 한글 폴더 '무늬A'가
+ * 'δ¼┤δè¼A'처럼 되어 model.dat의 재질 이름·미리보기 경로와 맞지 않는다. 깃발 달린 ASCII 밖 이름(flagged — [items 차례, 이름 바이트 수])이 모두 undoCp437로
+ * 되돌려질 때만 되돌리고(하나라도 아니면 깃발대로 UTF-8로 쓴 이름으로 보고 모두 그대로), 깃발 없는 이름은 보지 않는다
+ */
+function undoDoubleEncodedNames(items: ZipItem[], flagged: readonly (readonly [number, number])[]): void {
+  if (!flagged.length) return;
+  const names: string[] = [];
+  for (const [i] of flagged) {
+    const n = undoCp437(items[i]!.name);
+    if (n === null) return;
+    names.push(n);
+  }
+  flagged.forEach(([i, bytes], k) => {
+    const it = items[i]!;
+    it.name = names[k]!;
+    it.nameBytes = bytes;
+  });
+}
+
+/** 비트 11 깃발이 있고 ASCII 밖 글자가 든 이름인지 */
+const flaggedNonAscii = (flags: number, name: string): boolean => !!(flags & 0x800) && /[^\x00-\x7f]/.test(name);
 
 function u16(b: Uint8Array, o: number): number {
   return b[o]! | (b[o + 1]! << 8);
@@ -77,9 +138,11 @@ export function readZipDirectory(b: Uint8Array, at = 0): ZipItem[] | null {
   const { count, base } = end;
   if (end.cdStart < at) throw new Error('ZIP 중앙 목록이 주어진 바이트 밖에 있습니다');
   const items: ZipItem[] = [];
+  const flagged: [number, number][] = [];
   let p = end.cdStart - at;
   for (let i = 0; i < count; i++) {
     if (p + 46 > b.length || u32(b, p) !== 0x02014b50) throw new Error('ZIP 중앙 목록이 깨졌습니다');
+    const flags = u16(b, p + 8);
     const method = u16(b, p + 10);
     const compressedSize = u32(b, p + 20);
     const size = u32(b, p + 24);
@@ -88,9 +151,11 @@ export function readZipDirectory(b: Uint8Array, at = 0): ZipItem[] | null {
     const commentLen = u16(b, p + 32);
     const local = u32(b, p + 42);
     const name = utf8.decode(b.subarray(p + 46, p + 46 + nameLen));
+    if (flaggedNonAscii(flags, name)) flagged.push([items.length, nameLen]);
     items.push({ name, method, compressedSize, size, localOffset: base + local });
     p += 46 + nameLen + extraLen + commentLen;
   }
+  undoDoubleEncodedNames(items, flagged);
   return items;
 }
 
@@ -201,6 +266,7 @@ export function scanZipLocal(b: Uint8Array, start = 0): { items: ZipItem[]; trun
     }
   if (p < 0) return { items, truncated: false };
   let truncated = false;
+  const flagged: [number, number][] = [];
   while (p >= 0) {
     if (p + 30 > b.length) {
       truncated = p < b.length;
@@ -220,20 +286,25 @@ export function scanZipLocal(b: Uint8Array, start = 0): { items: ZipItem[]; trun
     const name = utf8.decode(b.subarray(p + 30, p + 30 + nameLen));
     const data = p + 30 + nameLen + extraLen;
     const item: ZipItem = { name, method, compressedSize, size, localOffset: p };
+    const push = (): void => {
+      if (flaggedNonAscii(flags, name)) flagged.push([items.length, nameLen]);
+      items.push(item);
+    };
     if (flags & 8) {
       // 데이터 서술자: 지역 머리의 크기가 0일 수 있어 다음 항목 위치를 모른다
-      if (compressedSize > 0 && data + compressedSize <= b.length) items.push(item);
+      if (compressedSize > 0 && data + compressedSize <= b.length) push();
       break;
     }
     if (data + compressedSize > b.length) {
       item.truncated = true;
-      items.push(item);
+      push();
       truncated = true;
       break;
     }
-    items.push(item);
+    push();
     p = data + compressedSize;
   }
+  undoDoubleEncodedNames(items, flagged);
   return { items, truncated };
 }
 
