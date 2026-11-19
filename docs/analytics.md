@@ -6,12 +6,13 @@
 [개인 속성 관리](https://analytics.google.com/analytics/web/?authuser=0#/a412270261p559257929/admin)
 
 홈페이지와 DWG/DXF·NC·STEP·SKP 웹앱은 GA4 속성 하나와 웹 데이터 스트림 하나를 공유한다.
-측정 ID와 수집 코드는 OpenCAD 앱이 함께 쓰는 사이트 도구(`opencad-site-kit`의 `analytics/config.ts`·`analytics/analytics.ts`)에 둔다. 3D 뷰어 코어 라이브러리에는 태그를 넣지 않는다.
+측정 ID와 수집 코드는 OpenCAD 앱이 함께 쓰는 사이트 도구(`opencad-site-kit`의 `presets/opencad.mjs` `OPENCAD_ANALYTICS`·`analytics/analytics.ts`)에 둔다. 앱은 `initAnalytics(OPENCAD_ANALYTICS, 'skp')`로 켠다. 3D 뷰어 코어 라이브러리에는 태그를 넣지 않는다.
 GitHub 저장소 방문은 웹앱 통계와 별개이며 저장소의 Insights → Traffic에서 확인한다.
 
 ## 수집 범위
 
 - 배포 호스트 `https://gyutae-kim.github.io`에서만 동작한다. 로컬 개발·미리보기·SSR에서는 Google 태그를 불러오지 않는다.
+- 다른 웹페이지에 넣은 화면(iframe)에서는 동작하지 않는다(동의 상자를 띄우지 않고 그 사이트 방문을 섞지 않는다). 그 화면의 앱 설정 메뉴에는 "방문 통계 설정"을 두지 않는다.
 - 선택 전에는 Google 태그나 이벤트를 보내지 않는다. **허용**하면 GA 쿠키와 유입·기능 이벤트를 사용한다. **거절(기본 방문만)**하면 `analytics_storage=denied`로 쿠키 없는 공개 페이지 방문 신호만 보내며, UTM·참조 페이지와 파일·내보내기·링크 클릭 이벤트를 제외한다. Google 태그의 기본 동의·세션/참여 신호가 함께 전송될 수 있다.
 - **수집 안 함**은 Google 요청을 차단한다. 이전 버전에서 저장한 `denied`도 같은 의미로 보존하며, 새로운 기본 방문 수집으로 자동 전환하지 않는다. DNT/GPC도 전체 수집을 차단한다.
 - 선택 후 우측 하단 UI는 사라진다. 홈페이지 푸터와 앱 설정 메뉴(DWG/DXF는 시작 화면 및 응용프로그램 메뉴)에서 변경한다. 같은 출처의 홈페이지·앱·다른 탭에 선택을 반영하며, 허용을 철회하면 `_ga` 쿠키를 삭제한다. 설정 변경만으로 수동 페이지 조회를 중복 전송하지 않는다.
@@ -58,7 +59,7 @@ GA 기본 측정기준인 **콘텐츠 그룹**으로 소개·가이드·실행 �
 
 1. 개인 홈페이지·OpenCAD용 속성을 정하고 시간대를 서울, 통화를 KRW로 설정한다.
 2. 홈페이지 루트 주소의 웹 스트림을 만들고 **향상된 측정을 전부 끈다**. 페이지 조회와 클릭·파일 사용은 앱에서 직접 보낸다. 자동 페이지 제목·검색어·다운로드 수집이 파일 정보를 수집하지 않도록 하는 설정이다.
-3. 실제 측정 ID를 각 배포 앱의 `GA4_MEASUREMENT_ID`에 같은 값으로 넣는다. ID가 비어 있으면 태그와 설정 UI 모두 비활성화된다.
+3. 실제 측정 ID를 사이트 도구의 `OPENCAD_ANALYTICS.measurementId`에 넣는다(네 앱과 홈페이지가 같은 값을 쓴다). ID가 비어 있으면 태그와 설정 UI 모두 비활성화된다.
 4. 이벤트 범위 맞춤 측정기준을 `tool`, `target_tool`, `input_kind`, `file_format`, `error_code`, `export_format`으로 등록한다.
 5. `duration_ms`는 이벤트 범위 맞춤 측정항목(밀리초)으로 등록한다. `file_open_success`를 주요 이벤트로 지정한다. 예제 성공은 여기에 포함되지 않는다.
 6. 이벤트 데이터 보관은 14개월로 설정했다. 홈페이지 루트의 Search Console 속성 `https://gyutae-kim.github.io/`를 같은 웹 스트림에 연결했다.
