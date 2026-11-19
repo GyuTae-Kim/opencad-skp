@@ -7,6 +7,8 @@ SketchUp(.skp) 파일을 설치 없이 브라우저에서 3D로 여는 뷰어 �
 - 함께 쓰는 저장소: [opencad-viewer3d](https://github.com/GyuTae-Kim/opencad-viewer3d)(3D 뷰어 코어) ·
   [opencad-nc](https://github.com/GyuTae-Kim/opencad-nc) · [opencad-step](https://github.com/GyuTae-Kim/opencad-step) ·
   [OpenCAD 도구 목록](https://gyutae-kim.github.io/opencad)
+- 내 웹사이트에 넣기: 블로그나 제품 소개 페이지에 이 뷰어를 넣을 수 있습니다. 스크립트 한 줄과 `<opencad-viewer src="house.skp">` 요소 하나면 됩니다.
+  파일은 그 페이지와 iframe 안의 앱 사이에서만 오갑니다. 설치 방법은 [opencad-site-kit의 설치 안내](https://github.com/GyuTae-Kim/opencad-site-kit#내-웹사이트에-opencad-설치하기)에 있습니다.
 
 SketchUp 형식은 공개 명세가 없습니다. 처음에는 인터넷에 공개된 표본 파일의 바이트만 보고 구조를 추론했고(SketchUp SDK·다른 SKP 읽기 프로그램의 코드는 보지 않음),
 2026-10에 비공개 참조 해석기(SketchUp C API를 비교 기준으로 맞춘 SKP 해석기)의 형식 지식과 비공개 참조 뷰어의 화면 규칙(단위 표기·부드러운 음영·치수선 그리기·장면 적용)을
@@ -1648,7 +1650,7 @@ SketchUp 3 읽기(39차)도 판별 배치를 모두 해석 워커 조각에 두�
 
 **공용 사이트 도구**: 다섯 언어 페이지·검색 정보·사이트맵·내용 수정일·언어별 앱 정보·서비스 워커 빌드, 공용 번역기, 언어 메뉴, 서비스 워커 등록·새 판 알림,
 방문 통계, 휴대폰 성능 비교 명령은 다른 OpenCAD 앱과 함께 쓰는 [opencad-site-kit](https://github.com/GyuTae-Kim/opencad-site-kit)
-(`github:GyuTae-Kim/opencad-site-kit#v0.1.4`, 잠금 커밋 `a1de400`, 빌드 때만 써서 `devDependencies`)에 있습니다.
+(`github:GyuTae-Kim/opencad-site-kit#v0.2.0`, 잠금 커밋 `33f064e`, 빌드 때만 써서 `devDependencies`)에 있습니다.
 이 앱에만 있는 값은 `tools/site.mjs`(앱 정보 원본, 미리 담을 파일, 서비스 워커 판 이름 짓기)와 `tools/sw-template.js`(서비스 워커 본문 — 주석까지 sw.js에 그대로 들어갑니다)에 둡니다.
 `check:seo`·`check:i18n`·`test:seo`·`update:content-dates`와 휴대폰 검사 워크플로의 성능 명령(`serve-performance`·`performance-summary`·`check-performance-budget`)은 도구의 `opencad-site` 명령입니다
 (워크플로는 기준 빌드 뒤 이 커밋으로 돌아와 `npm ci`를 다시 해 명령을 찾습니다). 도구 판을 올릴 때는 빌드 결과를 견줍니다.
