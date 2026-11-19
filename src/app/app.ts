@@ -26,6 +26,7 @@ import { edgeGeometry } from './faces';
 import { copyText } from './clipboard';
 import { HISTORY_LIMIT, HISTORY_SETTLE_MS, ViewHistory } from './history';
 import { beginOpen, showAnalyticsSettings, trackExport, type OpenAttempt } from 'opencad-site-kit/analytics';
+import { isFramed } from 'opencad-site-kit/embed/app';
 // 측정 도구 자체(measure.ts·snap.ts)는 문서를 열 때 나눠 받는다(core.ts loadMeasure) — 여기서는 형과 작은 글·키 규칙만
 import type { LockName, MeasureTool, MeasureToolResult } from './measure';
 import { guideKeyFor, type GuideKey, type MeasureMode } from './measurehints';
@@ -3195,7 +3196,9 @@ export class SkpViewerApp implements PanelHost {
         icon: c.icon,
         checked: c.choice === cur,
         run: () => this.setThemeChoice(c.choice),
-      })), { label: '키보드 바로 가기', icon: 'keyboard', kbd: '?', sep: true, run: () => this.openShortcuts() }, { label: '방문 통계 설정', icon: 'lock', run: showAnalyticsSettings }],
+      })), { label: '키보드 바로 가기', icon: 'keyboard', kbd: '?', sep: true, run: () => this.openShortcuts() },
+      // 다른 웹페이지에 넣은 화면(iframe)에서는 방문 통계를 켜지 않으므로 그 설정도 두지 않는다
+      ...(isFramed() ? [] : [{ label: '방문 통계 설정', icon: 'lock', run: showAnalyticsSettings }])],
     );
   }
 
