@@ -2242,6 +2242,10 @@ npm run sweep -- --dirs "$HOME/Downloads" --min-mb 25 --mem --jobs 1 --out .runt
 [2dcad-viewer](https://github.com/GyuTae-Kim/opencad-dwgdxf)의 `src/formats/skp/`와 `docs/formats/skp.md`에서 분리했습니다(커밋 `d7c584a` 기준, 처음 들어온 것은 PR #7).
 앱 화면은 그 커밋의 2D 뷰어 안 3D 탭 화면(`src/app/view3d/`의 태그·재질 패널, 워커, 프로토콜)을 바탕으로, 혼자 도는 앱에 맞게 새로 짰습니다.
 
+## 기여
+
+버그 신고, 잘못 읽는 파일 제보, 번역 고침을 반깁니다. 방법은 [CONTRIBUTING.md](CONTRIBUTING.md)(한국어·영어)에 있고, 참여하는 모든 분은 [행동 강령](CODE_OF_CONDUCT.md)을 따릅니다.
+
 ## 라이선스
 
 MIT. 의존성 earcut은 ISC입니다([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
