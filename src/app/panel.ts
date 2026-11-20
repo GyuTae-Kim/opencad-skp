@@ -617,11 +617,11 @@ export class Panel {
     const images = countKind(t, 2);
     const comps = t.count - groups - images;
     const notes: string[] = [`그룹 ${fmtCount(groups)} · 컴포넌트 ${fmtCount(comps)}${images ? ` · 그림 ${fmtCount(images)}` : ''}(모든 단계, ${t.listedDepth}단계까지).`];
-    notes.push('› 단추로 펼치면 3D에서 누를 때도 그 안의 항목을 고릅니다. 누르면 강조, 두 번 누르면 확대합니다.');
+    notes.push('› 버튼으로 펼치면 3D에서 누를 때도 그 안의 항목을 고릅니다. 누르면 강조, 두 번 누르면 확대합니다.');
     if (t.unlisted) notes.push(`노드가 많아 ${t.listedDepth + 1}단계부터는 목록에 넣지 않았습니다(그 안을 누르면 ${t.listedDepth}단계 항목을 고릅니다).`);
-    if (d.outlineSkipped) notes.push(`모형 바로 아래 항목이 ${fmtCount(d.outlineSkipped)}개로 많아 그물을 나누지 않고, 숨기기·강조는 그물 안 구간으로 합니다.`);
+    if (d.outlineSkipped) notes.push(`모형 바로 아래 항목이 ${fmtCount(d.outlineSkipped)}개로 많아 메시를 나누지 않고, 숨기기·강조는 메시 안 구간으로 합니다.`);
     else if (t.splitDepth < t.listedDepth)
-      notes.push(`그리기가 느려지지 않게 ${t.splitDepth}단계까지만 따로 그물을 나누고, 더 깊은 항목은 그물 안 구간으로 숨기고 강조합니다.`);
+      notes.push(`그리기가 느려지지 않게 ${t.splitDepth}단계까지만 따로 메시를 나누고, 더 깊은 항목은 메시 안 구간으로 숨기고 강조합니다.`);
     if (t.runsDropped) notes.push('항목이 너무 많아 3D에서 깊은 단계를 눌러 고르지는 못합니다.');
     // 문장마다 줄을 바꿔 잇는다(번역층이 줄마다 옮긴다 — 빈칸으로 이으면 첫 문장의 틀이 뒤 문장까지 잡아 한국어로 남았다). 줄바꿈은 빈칸으로 보인다
     this.body.append(section(`그룹·컴포넌트 ${fmtCount(t.count)}개`, bar, this.searchBox(d, fill), hint(notes.join('\n')), found, list, cutNote));
@@ -878,7 +878,7 @@ export class Panel {
       if (d.pick) lines.push(h('div', { class: 'dim' }, `점 ${fmtPt(d.pick.point, 1)}${u ? ` ${u}` : ''}`));
       const n = selectedNode(d, d.selection);
       if (d.tree && n !== null && n >= 0 && d.tree.childCount[n]! > 0 && !d.expanded.has(n) && d.pickMode === 'open')
-        lines.push(h('div', { class: 'dim' }, '안쪽 항목을 고르려면 3D에서 두 번 누르거나 목록에서 › 단추로 펼치세요.'));
+        lines.push(h('div', { class: 'dim' }, '안쪽 항목을 고르려면 3D에서 두 번 누르거나 목록에서 › 버튼으로 펼치세요.'));
     }
     // 고른 그룹·컴포넌트: 숨기기·분리해서 보기, 숨긴 것이 있으면 모두 보이기
     const canHide = d.selection?.kind === 'outline' || d.selection?.kind === 'node';
