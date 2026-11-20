@@ -8,7 +8,7 @@ SketchUp(.skp) 파일을 설치 없이 브라우저에서 3D로 여는 뷰어 �
   [opencad-nc](https://github.com/GyuTae-Kim/opencad-nc) · [opencad-step](https://github.com/GyuTae-Kim/opencad-step) ·
   [OpenCAD 도구 목록](https://gyutae-kim.github.io/opencad)
 - 내 웹사이트에 넣기: 블로그나 제품 소개 페이지에 이 뷰어를 넣을 수 있습니다. 스크립트 한 줄과 `<opencad-viewer src="house.skp">` 요소 하나면 됩니다.
-  파일은 그 페이지와 iframe 안의 앱 사이에서만 오갑니다. 설치 방법은 [opencad-site-kit의 설치 안내](https://github.com/GyuTae-Kim/opencad-site-kit#내-웹사이트에-opencad-설치하기)에 있습니다.
+  파일은 그 페이지와 iframe 안의 앱 사이에서만 오갑니다. 설치 방법은 [opencad-site-kit의 설치 안내](https://github.com/GyuTae-Kim/opencad-site-kit#내-웹사이트에-opencad-설치하기)에 있습니다. 영어 안내: [Embed OpenCAD in your web page](https://github.com/GyuTae-Kim/opencad-site-kit/blob/main/docs/EMBED.en.md).
 
 SketchUp 형식은 공개 명세가 없습니다. 처음에는 인터넷에 공개된 표본 파일의 바이트만 보고 구조를 추론했고(SketchUp SDK·다른 SKP 읽기 프로그램의 코드는 보지 않음),
 2026-10에 비공개 참조 해석기(SketchUp C API를 비교 기준으로 맞춘 SKP 해석기)의 형식 지식과 비공개 참조 뷰어의 화면 규칙(단위 표기·부드러운 음영·치수선 그리기·장면 적용)을
