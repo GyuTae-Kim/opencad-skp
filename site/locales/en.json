@@ -1126,7 +1126,7 @@
   "{0}의 잘린 면": "Section cut of {0}",
   "찍기 Enter": "Place point Enter",
   "방향 잠금 Shift": "Lock direction Shift",
-  "붙잡을 점이 없습니다": "No point to snap to",
+  "스냅할 점이 없습니다": "No point to snap to",
   "찍을 점이 없습니다": "No point to place",
   "시작점을 찍었습니다. {0}": "Start point placed. {0}",
   "중심을 찍었습니다. {0}": "Center placed. {0}",
