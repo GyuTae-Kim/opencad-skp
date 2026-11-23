@@ -1021,7 +1021,7 @@ export function joinTip(label: string, value?: string | null): string {
  * 자리 글은 "추정 · 길이·각도: X …, Y …, Z …"(툴팁 글 + 좌표 — 이음 ': '와 좌표 틀은 한글이 없어 사전에 넣지 않는다), 다 잰 결과는 측정 기록 줄(measureLine)
  */
 export const KEY_MEASURE_TEXT = {
-  noSnap: '붙잡을 점이 없습니다',
+  noSnap: '스냅할 점이 없습니다',
   noPoint: '찍을 점이 없습니다',
   start: '시작점을 찍었습니다. {0}',
   center: '중심을 찍었습니다. {0}',

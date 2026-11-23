@@ -4301,7 +4301,7 @@ describe('측정 도구: 키보드 점 찍기(59차 — 가상 커서 자리, ke
     expect(r.results.at(-1)).toMatchObject({ kind: 'tape', a: [0, 0, 0], b: [100, 0, 0], distance: 100 });
     expect(r.tool.pointCount).toBe(0);
     // 빈 곳: 붙잡을 점이 없고 찍지 않는다
-    expect(r.tool.keyHover(30, 170)).toBe('붙잡을 점이 없습니다');
+    expect(r.tool.keyHover(30, 170)).toBe('스냅할 점이 없습니다');
     expect(r.tool.keyPlace(false)).toBe('찍을 점이 없습니다');
     expect(r.tool.pointCount).toBe(0);
   });
@@ -4309,7 +4309,7 @@ describe('측정 도구: 키보드 점 찍기(59차 — 가상 커서 자리, ke
   it('각도기: 중심 → 기준 방향 → 잰 결과(각도), 중심은 빈 곳에 찍지 않는다', () => {
     const r = rig(EDGES());
     r.tool.setMode('protractor');
-    expect(r.tool.keyHover(30, 170)).toBe('붙잡을 점이 없습니다');
+    expect(r.tool.keyHover(30, 170)).toBe('스냅할 점이 없습니다');
     r.tool.keyHover(101, 101);
     expect(r.tool.keyPlace(false)).toBe('중심을 찍었습니다. 끝점: X 0 mm, Y 0 mm, Z 0 mm');
     r.tool.keyHover(197, 102);
