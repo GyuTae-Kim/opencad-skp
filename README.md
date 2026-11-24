@@ -523,7 +523,7 @@ SketchUp 3·4·5·6·7·8·2013~2020에서 저장한 옛 파일도 같은 화면
   `scene.textures`(`skp-pbr-<재질>-<쓰임>`)에, 그 재질 그물에 코어 `normalTexture`·`roughnessTexture`·`metallicTexture`와 배율(`normalScale`·`roughness`·`metallic`,
   `normalMapStyle` 1 = DirectX 꼴 → `normalFlipY`, `roughness_texture_invert` → `roughnessInvert`)을 답니다. 그림 없이 켠 거칠기·금속은 값으로(무늬 없는 재질도),
   그림이 있어야 할 칸에 그림을 받지 못하면 그 칸은 뺍니다. 가림(108차 — 코어 0.102.0): `enable_occlusion`이 1이고 `occlusion_texture` 그림이 있으면 그 그림을 `skp-pbr-<재질>-occlusion`으로,
-  그 재질 그물에 `occlusionTexture`와 1이 아닌 세기만 `occlusionStrength`(`occlusionStrength` — 다른 배율처럼 0~1로 자르고 유한하지 않으면 1)로 답니다. 세기 0은 코어에서 가림이 없는 것과 같아 읽지 않고,
+  그 재질 메시에 `occlusionTexture`와 1이 아닌 세기만 `occlusionStrength`(`occlusionStrength` — 다른 배율처럼 0~1로 자르고 유한하지 않으면 1)로 답니다. 세기 0은 코어에서 가림이 없는 것과 같아 읽지 않고,
   그림을 받지 못하면 세기도 달지 않습니다(가림은 값만으로는 뜻이 없음). 다른 쓰임과 같은 그림(거칠기·금속·가림이 한 장인 ORM 그림)은 한 번만 꺼내 쓰임을 합칩니다(`skp-pbr-<재질>-roughness-metallic-occlusion`).
   가림만 맡는 그림은 모든 법선·거칠기·금속 그림 뒤에 꺼냅니다 — 코어가 가림을 간접광(주변광 몫)에만 곱해 보이는 효과가 법선·거칠기보다 작고, 맨 뒤라 한도가 모자라도 법선·거칠기·금속 그림의 차례·고름은 107차와 같습니다
   (폴더 그림이 가림 그림뿐인 색 무늬 없는 재질은 57차 규칙대로 견본 그림을 두지 않음). PBR 그림은 다른 그림을 다 꺼낸 뒤 남은 그림 한도로만 꺼내고
