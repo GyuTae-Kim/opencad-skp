@@ -364,7 +364,13 @@ describe('파일 글을 앱 글과 섞기(filetext·mixText)', () => {
       new Error('ZIP64 꾸러미는 아직 읽지 못합니다'),
       new Error('TLV 머리가 잘렸습니다(@120)'),
       'SketchUp 파일을 읽지 못했습니다: ZIP 항목이 잘렸습니다: model.dat',
+      // 119차: 그림 저장 실패 알림의 자세한 글이 되는 코어 글(0.114.0 — 문맥을 잃은 동안 toBlob 거절, 캔버스가 그림을 주지 않음)
+      new Error('3D 보기 문맥이 없어 그림을 만들 수 없습니다'),
+      new Error('그림을 만들지 못했습니다'),
     ];
+    // 위 코어 글은 받은 코어가 던지는 글 그대로다(코어가 글을 바꾸면 여기서 걸려 사전 열쇠를 함께 고친다)
+    const coreSource = readFileSync(resolve(__dirname, '../../node_modules/opencad-viewer3d/src/viewer.ts'), 'utf8');
+    for (const e of [dict[0], dict[4], dict[5]] as Error[]) expect(coreSource, e.message).toContain(`'${e.message}'`);
     const fetchFail = new TypeError('Failed to fetch');
     // 사전에 없는 한국어 글: 예전(통째로 번역층)은 나눔 글 조각·틀 머리만 옮겨 한국어와 섞였다 → 원문 그대로(파일 글)
     const BAD = '무늬 · 면 · 이';
