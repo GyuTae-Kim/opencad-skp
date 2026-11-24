@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { IndexRange, Viewer3d } from 'opencad-viewer3d';
+import type { IndexRange, RenderMode, Viewer3d } from 'opencad-viewer3d';
 import { buildBvh } from 'opencad-viewer3d/bvh';
 import { dirToAngles, projectToScreen, screenRay, type CameraState } from 'opencad-viewer3d/camera';
 import { pickScene } from 'opencad-viewer3d/scenepick';
@@ -233,6 +233,9 @@ const FOV = (40 * Math.PI) / 180;
 /** 위에서 본 평행 투영: 화면 1화소 = 세계 1, 화면 (100 + X, 100 − Y) */
 const TOP: CameraState = { target: [0, 0, 0], distance: W / 2 / Math.tan(FOV / 2), yaw: 0, pitch: Math.PI / 2, projection: 'orthographic', fovY: FOV };
 
+/** 불투명 면이 그 뒤 선분·점을 가리는 그리기 방식(코어 shadedMode와 같은 다섯 — 와이어프레임·X-ray는 가리지 않는다) */
+const SHADED_MODES: ReadonlySet<RenderMode> = new Set(['shaded', 'shadedEdges', 'hiddenLine', 'monochrome', 'noTexture']);
+
 const lines = (id: string, segs: number[][]): LineSet3d => ({ id, positions: Float32Array.from(segs.flat()) });
 const quad = (id: string, x0: number, y0: number, x1: number, y1: number, z: number): Mesh3d => ({
   id,
@@ -264,6 +267,11 @@ interface Rig {
   hideRanges(id: string, list: IndexRange[] | null): void;
   /** 단면 바뀜 알림(코어 onSectionChange) */
   sectionChanged(): void;
+  /**
+   * 그리기 방식 바꾸기(112차 — 코어 setRenderMode 꼴: 고르기는 음영 계열에서만 불투명 면이 그 뒤 선분·점을 가린다). 덧그림을 다시 그리지 않는다
+   * (앱은 App.setRenderMode의 라벨 가림 다시 판정이 같은 덧그림 층을 다시 그린다 — 시험은 paintNow)
+   */
+  setRenderMode(m: RenderMode): void;
   ptr(type: string, x: number, y: number, o?: { id?: number; button?: number; buttons?: number; pointerType?: string; shift?: boolean }): void;
   click(x: number, y: number, o?: { pointerType?: string; id?: number; shift?: boolean }): void;
   move(x: number, y: number, o?: { shift?: boolean }): void;
@@ -300,6 +308,8 @@ function rig(scene: Pick<Scene3d, 'meshes' | 'lines' | 'units'>, cam: CameraStat
   const secCbs = new Set<() => void>();
   const shown = (): typeof items => (hidden.size ? { meshes: items.meshes.filter((m) => !hidden.has(m.id)), lines: items.lines.filter((l) => !hidden.has(l.id)), points: [] } : items);
   let meshPicks = 0;
+  // 그리기 방식(112차): 코어 shadedMode처럼 음영 계열에서만 불투명 면이 그 뒤 선분·점을 가린다
+  let mode: RenderMode = 'shaded';
   const viewer: MeasureViewer = {
     canvas,
     // 코어 pick처럼: meshesOnly면 그물 면만(선분·점은 고르지도 않고 면을 가리지도 않는다)
@@ -307,14 +317,20 @@ function rig(scene: Pick<Scene3d, 'meshes' | 'lines' | 'units'>, cam: CameraStat
       const only = typeof o === 'object' && !!o.meshesOnly;
       if (only) meshPicks++;
       const vis = shown();
-      return pickScene(frameFor(camera, W, W), x, y, only ? { ...vis, lines: [] } : vis, { tol: 6, occlude: true, bvh: (kind, pos, idx) => (kind === 'triangle' ? buildBvh(kind, pos, idx) : null) })?.pick ?? null;
+      return (
+        pickScene(frameFor(camera, W, W), x, y, only ? { ...vis, lines: [] } : vis, {
+          tol: 6,
+          occlude: SHADED_MODES.has(mode),
+          bvh: (kind, pos, idx) => (kind === 'triangle' ? buildBvh(kind, pos, idx) : null),
+        })?.pick ?? null
+      );
     },
     getCamera: () => camera,
     onCameraChange: (cb) => {
       camCbs.add(cb);
       return () => camCbs.delete(cb);
     },
-    getRenderMode: () => 'shaded',
+    getRenderMode: () => mode,
     section: null,
     isVisible: (id) => !hidden.has(id) && (items.meshes.some((m) => m.id === id) || items.lines.some((l) => l.id === id)),
     hiddenRanges: (id) => (ranges.get(id) ?? []).map((g) => ({ ...g })),
@@ -376,6 +392,9 @@ function rig(scene: Pick<Scene3d, 'meshes' | 'lines' | 'units'>, cam: CameraStat
     },
     sectionChanged() {
       for (const cb of secCbs) cb();
+    },
+    setRenderMode(m) {
+      mode = m;
     },
     ptr,
     click(x, y, o = {}) {
@@ -2932,6 +2951,17 @@ describe('측정 도구: 지나간 모서리는 그 선분 묶음이 숨거나 �
   });
 });
 
+/** 고르기 수를 센다(다시 구했는지 — 110차·112차) */
+function countPicks(r: Rig): () => number {
+  const pick = r.viewer.pick;
+  let n = 0;
+  r.viewer.pick = (x, y, o) => {
+    n++;
+    return pick(x, y, o);
+  };
+  return () => n;
+}
+
 describe('측정 도구: 장면 길 뒤 커서 자리 추정은 다음 그림에 그 자리에서 다시 구하고, 숨은 개체가 낸 끌어온 점·곡선 중심·본 방향 추론은 버린다(110차 — 코어 0.98.0 꼴)', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -2963,16 +2993,6 @@ describe('측정 도구: 장면 길 뒤 커서 자리 추정은 다음 그림에
     );
     r.tool.setMode('tape');
     return r;
-  };
-  /** 고르기 수를 센다(다시 구했는지) */
-  const countPicks = (r: Rig): (() => number) => {
-    const pick = r.viewer.pick;
-    let n = 0;
-    r.viewer.pick = (x, y, o) => {
-      n++;
-      return pick(x, y, o);
-    };
-    return () => n;
   };
 
   it('커서를 멈춘 채 그 끝점을 낸 묶음을 숨기면 다음 그림에서 그 자리에서 다시 구한다 — 다른 묶음·다른 선분 구간만 숨기면 다시 구하지 않는다', () => {
@@ -3071,6 +3091,105 @@ describe('측정 도구: 장면 길 뒤 커서 자리 추정은 다음 그림에
     expect(r.tip()).not.toBe(SNAP_LABELS.center);
     r.move(100.4, 160.1);
     expect(r.tip()).not.toBe(SNAP_LABELS.center);
+  });
+});
+
+describe('측정 도구: 그리기 방식으로 음영 가림이 바뀌면 커서 자리 추정을 다음 그림에 그 자리에서 다시 구한다(112차 — 코어 0.106.0과 같은 규칙)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // 둘레 고르기 시간 한도가 기계 부하로 갈리지 않게 시계를 멈춘다
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+  });
+
+  // 위에서 봄: 면 f(z 10 — 화면 (120~180, 80~120))가 그 밑 모서리 b(z 0 — 화면 (140, 100)~(160, 100))를 가린다. 모서리 a(z 0 — 화면 (40, 100)~(70, 100))는 드러나 있다.
+  // 커서 (140.3, 100.2): 음영 계열이면 면 위(삼각형 꼭짓점은 추정 반경 밖), 와이어프레임·X-ray면 b의 끝점 (40, 0, 0)
+  const make = (mode: RenderMode): Rig => {
+    const r = rig({ units: 'mm', meshes: [quad('f', 20, -20, 80, 20, 10)], lines: [lines('b', [[40, 0, 0, 60, 0, 0]]), lines('a', [[-60, 0, 0, -30, 0, 0]])] });
+    r.setRenderMode(mode);
+    r.tool.setMode('tape');
+    return r;
+  };
+
+  it('마우스를 멈춘 채 음영 계열과 와이어프레임·X-ray 사이로 바꾸면 다음 그림에서 그 자리에서 다시 구한다 — 그 그리기 방식에서 그 자리로 옮긴 것과 같다', () => {
+    const cases: [RenderMode, RenderMode, string, string][] = [
+      ['shaded', 'wireframe', SNAP_LABELS.onFace, SNAP_LABELS.endpoint],
+      ['shadedEdges', 'xray', SNAP_LABELS.onFace, SNAP_LABELS.endpoint],
+      ['wireframe', 'shaded', SNAP_LABELS.endpoint, SNAP_LABELS.onFace],
+      ['xray', 'hiddenLine', SNAP_LABELS.endpoint, SNAP_LABELS.onFace],
+    ];
+    for (const [from, to, before, after] of cases) {
+      const r = make(from);
+      r.move(140.3, 100.2);
+      expect(r.tip()).toBe(before);
+      const picks = countPicks(r);
+      r.setRenderMode(to);
+      r.overlay.paintNow();
+      expect(picks()).toBeGreaterThan(0);
+      expect(r.tip()).toBe(after);
+      expect(r.q('.measure-snap-endpoint') !== null).toBe(after === SNAP_LABELS.endpoint);
+      r.move(140.4, 100.1);
+      expect(r.tip()).toBe(after);
+    }
+  });
+
+  it('같은 가림 계열 안 바꾸기(음영 ↔ 음영+윤곽·숨은 선·단색·무늬 없음, 와이어프레임 ↔ X-ray)와 커서가 3D 보기 밖일 때는 다시 구하지 않는다', () => {
+    const r = make('shaded');
+    r.move(140.3, 100.2);
+    const picks = countPicks(r);
+    for (const m of ['shadedEdges', 'hiddenLine', 'monochrome', 'noTexture', 'shaded'] as const) {
+      r.setRenderMode(m);
+      r.overlay.paintNow();
+    }
+    expect(picks()).toBe(0);
+    expect(r.tip()).toBe(SNAP_LABELS.onFace);
+    r.ptr('pointerleave', 140.3, 100.2);
+    r.setRenderMode('wireframe');
+    r.overlay.paintNow();
+    expect(picks()).toBe(0);
+    expect(r.tip()).toBeNull();
+    // 돌아오면 그 그리기 방식으로 구한다
+    r.move(140.3, 100.2);
+    expect(r.tip()).toBe(SNAP_LABELS.endpoint);
+    const n = picks();
+    r.setRenderMode('xray');
+    r.overlay.paintNow();
+    expect(picks()).toBe(n);
+    expect(r.tip()).toBe(SNAP_LABELS.endpoint);
+  });
+
+  it('찍은 점·잠금·끌어온 점은 그대로 둔다(그리기 방식은 장면을 바꾸지 않는다 — 110차 단면 바뀜은 끌어온 점을 버린다)', () => {
+    const r = make('shaded');
+    r.click(70.2, 100.3);
+    expect(r.tool.pointCount).toBe(1);
+    r.move(40.3, 100.2);
+    vi.advanceTimersByTime(TRACK_DWELL_MS);
+    expect(r.tool.trackPoints).toEqual([[-60, 0, 0]]);
+    expect(r.key('ArrowRight')).toBe(true);
+    r.move(140.3, 100.2);
+    const picks = countPicks(r);
+    r.setRenderMode('wireframe');
+    r.overlay.paintNow();
+    expect(picks()).toBeGreaterThan(0);
+    expect(r.tool.pointCount).toBe(1);
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'x', source: 'key' });
+    expect(r.tool.trackPoints).toEqual([[-60, 0, 0]]);
+  });
+
+  it('가상 커서(키보드)도: 다음 그림의 표식·툴팁이 새 가림으로 구한 것이고, 그림 전에 Enter로 찍어도 알림 글이 찍은 점과 같다', () => {
+    const r = make('shaded');
+    expect(r.tool.keyHover(140.3, 100.2)).toMatch(/^면에: /);
+    r.setRenderMode('wireframe');
+    r.overlay.paintNow();
+    expect(r.tip()).toBe(SNAP_LABELS.endpoint);
+    const k = make('shaded');
+    k.tool.keyHover(140.3, 100.2);
+    k.setRenderMode('wireframe');
+    expect(k.tool.keyPlace(false)).toBe('시작점을 찍었습니다. 끝점: X 40 mm, Y 0 mm, Z 0 mm');
+    expect(k.tool.pointCount).toBe(1);
   });
 });
 
