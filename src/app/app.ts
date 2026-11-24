@@ -2799,7 +2799,8 @@ export class SkpViewerApp implements PanelHost {
   }
 
   toggleAxes(on = !this.axesOn): void {
-    this.viewer?.setAxesVisible(on);
+    // 왼쪽 아래 축 표시와 격자를 끈 동안의 장면 안 축선을 함께(113차 — annotations.ts showAxes, 코어와 함께 받음: 뷰어가 있으면 늘 있다)
+    annotating?.showAxes(this.viewer, on);
     this.refreshToolbar();
   }
 

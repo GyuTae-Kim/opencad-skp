@@ -159,9 +159,9 @@ describe('장면 그리기 축: 화면', () => {
     expect(d.axes).toBeNull();
     expect(d.drawAxes).toBeNull();
     expect(d.axesPage).toBeNull();
-    // 앱 applyPage의 축 몫(annotations.ts applyScene — 장면이 축을 기억하면 바꾸고 그 장면을 적는다. 107차부터 코어 축선 틀도 — axesframe.test.ts)
+    // 앱 applyPage의 축 몫(annotations.ts applyScene — 장면이 축을 기억하면 바꾸고 그 장면을 적는다. 107차부터 코어 축선 틀도, 113차부터 축선 모양도 — axesframe.test.ts)
     const frames: unknown[] = [];
-    const viewer = { setAxesFrame: (f: unknown): boolean => (frames.push(f), true) };
+    const viewer = { setAxesFrame: (f: unknown): boolean => (frames.push(f), true), setAxesStyle: (): boolean => true, axesVisible: true };
     const pick = (i: number): void => applyScene(d, d.pages[i]!, i, viewer);
     const text = (): string => infoSections(d, () => undefined).map((s) => s.textContent ?? '').join('\n');
     // 열 때: 축 줄 없음, 장면 규칙 안내는 파일과 다른 축을 기억하는 장면이 있어 보인다
