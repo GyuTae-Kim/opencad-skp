@@ -160,12 +160,14 @@ describe('장면 그리기 축: 화면', () => {
     expect(d.drawAxes).toBeNull();
     expect(d.axesPage).toBeNull();
     // 앱 applyPage의 축 몫(annotations.ts applyScene — 장면이 축을 기억하면 바꾸고 그 장면을 적는다. 107차부터 코어 축선 틀도, 113차부터 축선 모양도,
-    // 114차부터 장면 스타일의 축 보이기도 — axesframe.test.ts. 이 파일의 장면은 스타일을 담지 않아 보이기를 부르지 않는다)
+    // 114차부터 장면 스타일의 축 보이기도 — axesframe.test.ts. 이 파일의 장면은 스타일을 담지 않아 보이기를 부르지 않는다.
+    // 117차부터 축선 모양의 hidden은 좌표축 상태의 반대 — 좌표축이 꺼져 있으면 격자가 보여도 축선 없음)
     const frames: unknown[] = [];
     const shown: boolean[] = [];
+    const styles: unknown[] = [];
     const viewer = {
       setAxesFrame: (f: unknown): boolean => (frames.push(f), true),
-      setAxesStyle: (): boolean => true,
+      setAxesStyle: (s: unknown): boolean => (styles.push(s), true),
       setAxesVisible: (on: boolean): void => void shown.push(on),
       axesVisible: true,
     };
@@ -201,6 +203,14 @@ describe('장면 그리기 축: 화면', () => {
     expect(t).not.toContain('옮긴 그리기 축을 따릅니다');
     // 코어에 준 틀: 축을 기억하는 장면 A·D·C만(B·E는 부르지 않음)
     expect(frames).toEqual([d.pages[0]!.axes, d.pages[3]!.axes, null]);
+    expect(shown).toEqual([]);
+    // 축선 모양: 틀을 준 장면마다 한 번 — 좌표축이 켜져 있어 113차 모양(hidden: false — 코어에 주지 않은 것과 같다)
+    const on = { negativeDashed: true, z: true, withoutGrid: true, hidden: false };
+    expect(styles).toEqual([on, on, on]);
+    // 좌표축이 꺼진 동안 틀이 바뀌는 장면: 격자가 보여도 축선 없음(hidden: true), 격자 없는 축선도 없음
+    viewer.axesVisible = false;
+    pick(3);
+    expect(styles.at(-1)).toEqual({ negativeDashed: true, z: true, withoutGrid: false, hidden: true });
     expect(shown).toEqual([]);
   });
 

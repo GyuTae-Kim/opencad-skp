@@ -8,11 +8,14 @@
  * 좌표축 버튼(앱 toggleAxes — showAxes)이 왼쪽 아래 축 표시와 함께 격자 없는 축선(withoutGrid)을 켜고 끈다. 앱 클래스는 DOM·뷰어 전체를 만들어야 해 그 몫은 원문으로 본다.
  * 114차: 스타일의 축 보이기(style.axes — DisplaySketchAxes, 스타일 Modeling Settings의 Model Axes 칸)가 좌표축 상태를 정한다 — 문서를 열 때 문서 스타일(showDocAxes),
  * 장면을 고를 때 그 장면 스타일(applyScene — 스타일을 담지 않았거나 칸이 없는 장면은 그대로). 칸이 없는 파일은 켬.
+ * 117차(코어 0.113.0 축선 모양 칸 hidden): 좌표축이 꺼져 있으면(버튼·스타일·장면) 격자가 보여도 장면 안 축선(X·Y·Z축선·음의 쪽 점선)이 없다 — SketchUp은 축을 숨기면 축선이 없다.
+ * 좌표축이 켜져 있으면 113차 모양 그대로(hidden: false는 코어에 주지 않은 것과 같다).
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Viewer3d, type AxesFrame, type AxesStyle } from 'opencad-viewer3d';
+import { gridLines, gridSpec, type GridLines } from 'opencad-viewer3d/grid';
 import { applyScene, showAxes, showDocAxes, showDrawAxes } from '../../src/app/annotations';
 import { createDoc, type SkpDoc } from '../../src/app/doc';
 import { skpToScene } from '../../src/index';
@@ -209,8 +212,14 @@ describe('그리기 축 자리의 격자 축선(코어 setAxesFrame)', () => {
   });
 });
 
-/** SketchUp 축선 모양(113차): 좌표축이 켜져 있으면 격자를 꺼도 축선만 */
-const SKETCHUP = (withoutGrid: boolean): AxesStyle => ({ negativeDashed: true, z: true, withoutGrid });
+/**
+ * 코어가 가진 SketchUp 축선 모양(getter axesStyle): 좌표축이 켜져 있으면 격자를 꺼도 축선만(113차), 꺼져 있으면 격자가 보여도 축선 없음(117차 — 코어 0.113.0 hidden).
+ * 코어 getter는 hidden을 켰을 때만 그 칸이 있다(켜지 않은 모양은 113차 세 칸 그대로)
+ */
+const SKETCHUP = (on: boolean): AxesStyle =>
+  on ? { negativeDashed: true, z: true, withoutGrid: true } : { negativeDashed: true, z: true, withoutGrid: false, hidden: true };
+/** 앱이 setAxesStyle에 넘기는 모양(117차 — 켬이면 hidden: false, 코어에는 주지 않은 것과 같다) */
+const GIVEN = (on: boolean): AxesStyle => ({ negativeDashed: true, z: true, withoutGrid: on, hidden: !on });
 
 /** 코어 뷰어(가짜 WebGL2) — setAxesStyle에 넘긴 값을 적는다 */
 function styled(): { v: Viewer3d; styles: (AxesStyle | null)[] } {
@@ -234,7 +243,7 @@ describe('그리기 축 자리 축선의 SketchUp 모양(113차 — 코어 0.108
     frameIs(v, moved.drawAxes!);
     expect(v.axesStyle).toEqual(SKETCHUP(true));
     // 문서마다 같은 모양을 다시 준다(코어는 같은 모양이면 격자를 다시 만들지 않는다)
-    expect(styles).toEqual([SKETCHUP(true), SKETCHUP(true)]);
+    expect(styles).toEqual([GIVEN(true), GIVEN(true)]);
   });
 
   it('장면 고르기: 옮긴 축·돌린 축·기본 축 장면 뒤에도 같은 모양', () => {
@@ -347,7 +356,7 @@ describe('스타일·장면의 축 보이기를 좌표축 상태로(114차 — D
     expect(v.axesVisible).toBe(true);
     expect(v.axesStyle).toEqual(SKETCHUP(true));
     // 보이기를 먼저 정하고 틀·모양을 주므로 문서마다 모양은 한 번
-    expect(styles).toEqual([SKETCHUP(false), SKETCHUP(true), SKETCHUP(false), SKETCHUP(true)]);
+    expect(styles).toEqual([GIVEN(false), GIVEN(true), GIVEN(false), GIVEN(true)]);
     // 좌표축 버튼으로 끈 뒤 연 칸 없는 파일도 켬(SketchUp도 파일의 스타일을 따름)
     showAxes(v, false);
     openDoc(v, docOf(styledFile(), '칸 없음 2.skp'));
@@ -403,5 +412,85 @@ describe('스타일·장면의 축 보이기를 좌표축 상태로(114차 — D
     const scene = body.indexOf('annotating?.applyScene(d, page, index, v);');
     expect(scene).toBeGreaterThan(0);
     expect(body.lastIndexOf('this.refreshToolbar();')).toBeGreaterThan(scene);
+  });
+});
+
+/**
+ * 코어가 지금 상태로 그릴 격자 선분 — 뷰어가 격자를 다시 만들 때(rebuildGrid) 부르는 같은 순수 함수에 코어가 가진 틀·모양(getter)을 넘긴다.
+ * 격자 범위는 세계 원점과 돌린 축 장면의 원점(762, 1016 mm)을 함께 담는 상자(세계 축·틀 축 모두 격자 안 — 축선이 있으면 빈 배열이 아니다)
+ */
+const linesOf = (v: Viewer3d): GridLines => gridLines(gridSpec({ min: [-50, -50, 0], max: [1500, 1500, 10] }), null, v.axesFrame, v.axesStyle);
+/** 장면 안 축선이 하나도 없다(X·Y축선 빈 배열, Z축선·음의 쪽 점선 칸 없음) */
+const noAxisLines = (g: GridLines): void => {
+  expect(g.axisX.length).toBe(0);
+  expect(g.axisY.length).toBe(0);
+  expect('axisZ' in g).toBe(false);
+  expect('axisDash' in g).toBe(false);
+};
+/** 113차 SketchUp 축선이 있다(X·Y·Z축선과 음의 쪽 점선) */
+const sketchUpAxisLines = (g: GridLines): void => {
+  expect(g.axisX.length).toBeGreaterThan(0);
+  expect(g.axisY.length).toBeGreaterThan(0);
+  expect(g.axisZ!.length).toBeGreaterThan(0);
+  expect(g.axisDash!.x.length).toBeGreaterThan(0);
+};
+
+describe('좌표축을 끄면 격자가 보여도 장면 안 축선 없음(117차 — 코어 0.113.0 hidden)', () => {
+  it('좌표축 버튼: 격자를 켠 채로 끄면 X·Y·Z축선·음의 쪽 점선이 모두 없고, 켜면 113차 모양 그대로(코어 모양에 hidden 칸 없음)', () => {
+    const { v } = styled();
+    open(v, docOf(file2021()));
+    expect(v.gridVisible).toBe(true);
+    sketchUpAxisLines(linesOf(v));
+    showAxes(v, false);
+    expect(v.gridVisible).toBe(true);
+    expect(v.axesStyle).toEqual(SKETCHUP(false));
+    noAxisLines(linesOf(v));
+    // 격자를 꺼도 축선 없음(격자 없는 축선도 좌표축을 따름 — 113차 그대로)
+    v.setGridVisible(false);
+    noAxisLines(linesOf(v));
+    v.setGridVisible(true);
+    showAxes(v, true);
+    expect(v.axesStyle).toEqual(SKETCHUP(true));
+    expect('hidden' in v.axesStyle!).toBe(false);
+    sketchUpAxisLines(linesOf(v));
+  });
+
+  it('틀을 옮긴 장면·새 문서도 좌표축을 끈 동안은 축선 없음', () => {
+    const { v } = styled();
+    const d = docOf(file2021());
+    open(v, d);
+    showAxes(v, false);
+    // 돌린 축 장면(틀 바꿈 — showDrawAxes 안 showAxesStyle)
+    applyScene(d, d.pages[3]!, 3, v);
+    frameIs(v, TURNED_MM);
+    noAxisLines(linesOf(v));
+    // 같은 틀에서 좌표축을 켜면 틀 자리 축선이 있다(위 빈 축선은 틀이 격자 밖이라서가 아니다)
+    showAxes(v, true);
+    sketchUpAxisLines(linesOf(v));
+    showAxes(v, false);
+    noAxisLines(linesOf(v));
+    // 옮긴 축 파일(문서 열기의 틀 — 문서 스타일 칸이 없는 길은 아래 showDocAxes가 켬)
+    open(v, docOf(mfcFile({ schemas: 'v20', root: squareEntities(), axes: [1, 2, 3, 0, 1, 0, -1, 0, 0, 0, 0, 1] }), '옮긴 축.skp'));
+    expect(v.axesVisible).toBe(false);
+    noAxisLines(linesOf(v));
+  });
+
+  it('스타일이 축을 숨긴 문서·장면(114차 길)도 격자가 보이는 채로 축선 없음, 축을 보인 장면에서 다시 113차 모양', () => {
+    const { v } = styled();
+    const d = docOf(styledFile(false), '축 숨김.skp');
+    openDoc(v, d);
+    expect(v.axesVisible).toBe(false);
+    expect(v.gridVisible).toBe(true);
+    expect(v.axesStyle).toEqual(SKETCHUP(false));
+    noAxisLines(linesOf(v));
+    // A: 장면 스타일 축 켬
+    applyScene(d, d.pages[0]!, 0, v);
+    expect(v.axesStyle).toEqual(SKETCHUP(true));
+    sketchUpAxisLines(linesOf(v));
+    // D: 장면 스타일 축 끔 + 돌린 축
+    applyScene(d, d.pages[3]!, 3, v);
+    expect(v.axesStyle).toEqual(SKETCHUP(false));
+    frameIs(v, TURNED_MM);
+    noAxisLines(linesOf(v));
   });
 });

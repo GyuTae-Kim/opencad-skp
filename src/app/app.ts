@@ -1263,7 +1263,7 @@ export class SkpViewerApp implements PanelHost {
     // 코어가 빼거나 고쳐 그린 깨진 입력(0.50.0 — setScene 안에서 정한다, 멀쩡하면 빈 배열): 정보 탭 경고 칸·상태 줄 경고 수에 잇는다
     d.coreIssues = v.sceneIssues;
     // 107차: 코어 격자 축선을 이 문서의 그리기 축(파일의 축) 자리에 — 기본 축이면 세계 원점·세계 축(코어는 새 장면에도 앞 문서의 틀을 남긴다. annotations.ts — 코어와 함께 받음).
-    // 114차: 그 앞에 좌표축(왼쪽 아래 축 표시·격자를 끈 동안의 축선)을 문서 스타일의 축 보이기로(칸이 없으면 켬 — 도구 막대는 끝의 refreshChrome)
+    // 114차: 그 앞에 좌표축(왼쪽 아래 축 표시·장면 안 축선 — 117차부터 격자가 보여도)을 문서 스타일의 축 보이기로(칸이 없으면 켬 — 도구 막대는 끝의 refreshChrome)
     annotating?.showDocAxes(v, d);
     // 61차: setSource는 해석 워커가 첫 그림 뒤로 미룬 색 바꾸기도 손질해 준다(ContextWatch.fill — 62차부터 워커는 놓기 조각을 받았다고 알린 뒤에만 미룬다)
     if (rel) this.watchContext(rel, v).setSource({ scene: d.scene, textures: held, textureLimit: this.texLimits.limit });
@@ -2801,7 +2801,7 @@ export class SkpViewerApp implements PanelHost {
   }
 
   toggleAxes(on = !this.axesOn): void {
-    // 왼쪽 아래 축 표시와 격자를 끈 동안의 장면 안 축선을 함께(113차 — annotations.ts showAxes, 코어와 함께 받음: 뷰어가 있으면 늘 있다)
+    // 왼쪽 아래 축 표시와 장면 안 축선을 함께(113차 격자를 끈 동안, 117차부터 격자가 보여도 — annotations.ts showAxes, 코어와 함께 받음: 뷰어가 있으면 늘 있다)
     annotating?.showAxes(this.viewer, on);
     this.refreshToolbar();
   }
