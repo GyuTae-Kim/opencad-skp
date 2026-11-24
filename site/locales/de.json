@@ -1177,5 +1177,6 @@
   "깨진 치수를 건너뛰었습니다": "Defekte Abmessung übersprungen",
   "깨진 보조선을 건너뛰었습니다": "Defekte Hilfslinie übersprungen",
   "깨진 보조점을 건너뛰었습니다": "Defekter Hilfspunkt übersprungen",
-  "깨진 단면을 건너뛰었습니다": "Defekter Schnitt übersprungen"
+  "깨진 단면을 건너뛰었습니다": "Defekter Schnitt übersprungen",
+  "3D 보기 문맥이 없어 그림을 만들 수 없습니다": "Es gibt keinen 3D-Ansichtskontext, daher kann das Bild nicht erstellt werden"
 }
