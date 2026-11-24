@@ -159,9 +159,16 @@ describe('장면 그리기 축: 화면', () => {
     expect(d.axes).toBeNull();
     expect(d.drawAxes).toBeNull();
     expect(d.axesPage).toBeNull();
-    // 앱 applyPage의 축 몫(annotations.ts applyScene — 장면이 축을 기억하면 바꾸고 그 장면을 적는다. 107차부터 코어 축선 틀도, 113차부터 축선 모양도 — axesframe.test.ts)
+    // 앱 applyPage의 축 몫(annotations.ts applyScene — 장면이 축을 기억하면 바꾸고 그 장면을 적는다. 107차부터 코어 축선 틀도, 113차부터 축선 모양도,
+    // 114차부터 장면 스타일의 축 보이기도 — axesframe.test.ts. 이 파일의 장면은 스타일을 담지 않아 보이기를 부르지 않는다)
     const frames: unknown[] = [];
-    const viewer = { setAxesFrame: (f: unknown): boolean => (frames.push(f), true), setAxesStyle: (): boolean => true, axesVisible: true };
+    const shown: boolean[] = [];
+    const viewer = {
+      setAxesFrame: (f: unknown): boolean => (frames.push(f), true),
+      setAxesStyle: (): boolean => true,
+      setAxesVisible: (on: boolean): void => void shown.push(on),
+      axesVisible: true,
+    };
     const pick = (i: number): void => applyScene(d, d.pages[i]!, i, viewer);
     const text = (): string => infoSections(d, () => undefined).map((s) => s.textContent ?? '').join('\n');
     // 열 때: 축 줄 없음, 장면 규칙 안내는 파일과 다른 축을 기억하는 장면이 있어 보인다
@@ -194,6 +201,7 @@ describe('장면 그리기 축: 화면', () => {
     expect(t).not.toContain('옮긴 그리기 축을 따릅니다');
     // 코어에 준 틀: 축을 기억하는 장면 A·D·C만(B·E는 부르지 않음)
     expect(frames).toEqual([d.pages[0]!.axes, d.pages[3]!.axes, null]);
+    expect(shown).toEqual([]);
   });
 
   it('모든 장면이 파일과 같은 축을 기억하면 장면 규칙 안내를 띄우지 않는다', () => {
