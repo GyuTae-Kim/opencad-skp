@@ -2932,6 +2932,148 @@ describe('측정 도구: 지나간 모서리는 그 선분 묶음이 숨거나 �
   });
 });
 
+describe('측정 도구: 장면 길 뒤 커서 자리 추정은 다음 그림에 그 자리에서 다시 구하고, 숨은 개체가 낸 끌어온 점·곡선 중심·본 방향 추론은 버린다(110차 — 코어 0.98.0 꼴)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // 둘레 고르기 시간 한도가 기계 부하로 갈리지 않게 시계를 멈춘다
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+  });
+
+  // 106차 장면(면 f: 화면 (120~180, 80~120). 묶음 d: 0번 가로 선분 화면 (10, 40)~(40, 40), 1번 45° 선분 가운데 화면 (25, 145). 묶음 o: 화면 (130, 40)~(160, 40))에
+  // 곡선 c(중심 C — 화면 (100, 160), 선분 하나 화면 (120, 160)~(114.1, 145.9) — 가운데에서 중심까지 18화소라 추정 반경 밖)를 더한다
+  const C: V3 = [0, -60, 0];
+  const make = (): Rig => {
+    const r = rig(
+      {
+        units: 'mm',
+        meshes: [quad('f', 20, -20, 80, 20, -5)],
+        lines: [
+          lines('d', [[-90, 60, 0, -60, 60, 0], [-90, -60, 0, -60, -30, 0]]),
+          lines('o', [[30, 60, 0, 60, 60, 0]]),
+          lines('c', [[20, -60, 0, 20 * Math.SQRT1_2, -60 + 20 * Math.SQRT1_2, 0]]),
+        ],
+      },
+      TOP,
+      DEFAULT_UNITS,
+      { curveCenter: (id) => (id === 'c' ? C : null) },
+    );
+    r.tool.setMode('tape');
+    return r;
+  };
+  /** 고르기 수를 센다(다시 구했는지) */
+  const countPicks = (r: Rig): (() => number) => {
+    const pick = r.viewer.pick;
+    let n = 0;
+    r.viewer.pick = (x, y, o) => {
+      n++;
+      return pick(x, y, o);
+    };
+    return () => n;
+  };
+
+  it('커서를 멈춘 채 그 끝점을 낸 묶음을 숨기면 다음 그림에서 그 자리에서 다시 구한다 — 다른 묶음·다른 선분 구간만 숨기면 다시 구하지 않는다', () => {
+    const r = make();
+    r.move(10.4, 40.3);
+    expect(r.tip()).toBe(SNAP_LABELS.endpoint);
+    const picks = countPicks(r);
+    r.hide('o');
+    r.hideRanges('d', [{ start: 1, count: 1 }]);
+    r.overlay.paintNow();
+    expect(picks()).toBe(0);
+    expect(r.tip()).toBe(SNAP_LABELS.endpoint);
+    r.hide('d');
+    r.overlay.paintNow();
+    expect(picks()).toBeGreaterThan(0);
+    expect(r.q('.measure-snap-endpoint')).toBeNull();
+    expect(r.tip()).not.toBe(SNAP_LABELS.endpoint);
+  });
+
+  it('그 선분이 든 구간을 숨겨도 다시 구한다(가짜 고르기는 구간을 거르지 않아 다시 고른 것만 본다)', () => {
+    const r = make();
+    r.move(10.4, 40.3);
+    const picks = countPicks(r);
+    r.hideRanges('d', [{ start: 0, count: 1 }]);
+    r.overlay.paintNow();
+    expect(picks()).toBeGreaterThan(0);
+  });
+
+  it('단면이 바뀌면 다음 그림에서 그 자리에서 다시 구한다(잘린 쪽 끝점이 남지 않는다)', () => {
+    const r = make();
+    r.move(10.4, 40.3);
+    expect(r.tip()).toBe(SNAP_LABELS.endpoint);
+    // x < 0 쪽을 자르는 단면(가짜 고르기는 단면을 모르고, 추정이 잘린 쪽 후보를 버린다)
+    Object.assign(r.viewer, { section: { normal: [-1, 0, 0], offset: 0 } });
+    r.sectionChanged();
+    r.overlay.paintNow();
+    expect(r.q('.measure-snap-endpoint')).toBeNull();
+    expect(r.tip()).not.toBe(SNAP_LABELS.endpoint);
+  });
+
+  it('마지막으로 본 방향 추론(잠금 단추가 커서 없이 씀)은 그 기준 모서리를 낸 묶음·구간이 숨거나 단면이 바뀌면 버린다 — 다른 묶음만 숨기면 그대로', () => {
+    const along45: [number, number] = [150 + 40 * Math.SQRT1_2, 100 - 40 * Math.SQRT1_2];
+    const lockAfter = (change: (r: Rig) => void): string | null => {
+      const r = make();
+      r.move(25, 145);
+      r.click(150, 100);
+      expect(r.tool.pointCount).toBe(1);
+      r.move(...along45);
+      expect(r.q('.measure-snap-parallel')).not.toBeNull();
+      // 방향 추론이 없는 빈 곳
+      r.move(190.3, 130.2);
+      expect(r.q('.measure-snap-parallel')).toBeNull();
+      change(r);
+      r.tool.setInferenceLock(true);
+      return r.tool.inferenceLock?.kind ?? null;
+    };
+    expect(lockAfter((r) => r.hide('o'))).toBe('parallel');
+    expect(lockAfter((r) => r.hide('d'))).toBeNull();
+    expect(lockAfter((r) => r.hideRanges('d', [{ start: 1, count: 1 }]))).toBeNull();
+    expect(lockAfter((r) => r.sectionChanged())).toBeNull();
+  });
+
+  it('끌어온 점은 그 점을 낸 묶음·구간이 숨으면 다음 그림에서 버리고(다른 점은 남김), 단면이 바뀌면 모두 버린다', () => {
+    const r = make();
+    r.move(10.4, 40.3);
+    vi.advanceTimersByTime(TRACK_DWELL_MS);
+    r.move(130.4, 40.3);
+    vi.advanceTimersByTime(TRACK_DWELL_MS);
+    expect(r.tool.trackPoints).toEqual([[30, 60, 0], [-90, 60, 0]]);
+    r.move(150.2, 100.3);
+    expect(r.qa('.measure-track')).toHaveLength(2);
+    r.hideRanges('d', [{ start: 1, count: 1 }]);
+    r.overlay.paintNow();
+    expect(r.tool.trackPoints).toHaveLength(2);
+    r.hideRanges('d', [{ start: 0, count: 1 }]);
+    r.overlay.paintNow();
+    expect(r.tool.trackPoints).toEqual([[30, 60, 0]]);
+    expect(r.qa('.measure-track')).toHaveLength(1);
+    expect(r.tool.lockHintText(true)).toBe('끌어온 점 1개');
+    r.sectionChanged();
+    r.overlay.paintNow();
+    expect(r.tool.trackPoints).toEqual([]);
+    expect(r.qa('.measure-track')).toHaveLength(0);
+  });
+
+  it('곡선 중심은 그 곡선을 낸 묶음이 숨으면 버린다 — 커서가 중심 위에 멈춰 있으면 다음 그림에서 다시 구하고, 다른 묶음만 숨기면 남는다', () => {
+    const r = make();
+    r.move(117.1, 152.9);
+    r.move(100.3, 160.2);
+    expect(r.tip()).toBe(SNAP_LABELS.center);
+    r.hide('o');
+    r.overlay.paintNow();
+    expect(r.tip()).toBe(SNAP_LABELS.center);
+    r.hide('c');
+    r.overlay.paintNow();
+    expect(r.tip()).not.toBe(SNAP_LABELS.center);
+    r.move(100.4, 160.1);
+    expect(r.tip()).not.toBe(SNAP_LABELS.center);
+  });
+});
+
 describe('측정 도구: 다른 점에서 끌어온 축(점 위에 머물기 — SketchUp "점에서")', () => {
   afterEach(() => {
     vi.useRealTimers();

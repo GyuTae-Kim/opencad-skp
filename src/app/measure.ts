@@ -1112,6 +1112,8 @@ export class MeasureTool {
   private lastHint: string | null = null;
   /** 앞서 커서가 지나간 호·원의 중심(새것이 앞) */
   private centers: V3[] = [];
+  /** 중심마다 그 중심을 낸 곡선 선분(묶음 id·선분 번호 — 숨으면 그 중심을 버린다, 110차) */
+  private centerSrc = new WeakMap<V3, { id: string; prim: number }>();
   /** 측정값 칸으로 찍은 안내점(오래된 것이 앞) */
   private guidePts: V3[] = [];
   /** 측정값 칸으로 둔 안내선(오래된 것이 앞) */
@@ -1131,6 +1133,8 @@ export class MeasureTool {
   private parallelRef: Snap | null = null;
   /** 방향을 잡는 동안 마지막으로 본 방향 추론(커서가 보기를 떠난 뒤 누른 잠금 단추) */
   private lastLockable: InferenceLock | null = null;
+  /** 그 방향의 기준 모서리를 낸 추정(그 묶음·구간이 숨으면 버린다 — 축 방향은 장면에 매이지 않아 null, 110차) */
+  private lastLockSrc: Snap | null = null;
   /** 화살표로 고정한 각도기 평면의 축(중심을 찍기 전) */
   private planeAxisValue: Axis | null = null;
   /** 마지막으로 알린 잠금·평면·끌어온 점 수(onLock) */
@@ -1142,6 +1146,8 @@ export class MeasureTool {
   /** 잠근 선이 모서리·면과 만나는 점에 붙는지 */
   private lockMeetsOn: boolean;
   private readonly tracker = new MeasureTracker();
+  /** 끌어온 점마다(좌표 글) 그 점을 낸 추정(그 묶음·구간이 숨으면 그 점을 버린다, 110차) */
+  private readonly trackSrc = new Map<string, Snap>();
   private dwellTimer: ReturnType<typeof setTimeout> | null = null;
   /** 정밀 조준이 머물기 시작한 자리(떨림을 받는 기준) */
   private aimDwellAt: { x: number; y: number } | null = null;
@@ -1266,9 +1272,17 @@ export class MeasureTool {
         this.setShift(false);
         this.setPlaneLock(false);
       });
-    // 106차: 단면이 바뀌면 지나간 모서리를 버린다(코어 0.99.0 — 단면은 모든 묶음의 보이는 조각을 바꾼다. 장면 탭·파일 단면도 이 알림)
+    // 106차: 단면이 바뀌면 지나간 모서리를 버린다(코어 0.99.0 — 단면은 모든 묶음의 보이는 조각을 바꾼다. 장면 탭·파일 단면도 이 알림).
+    // 110차: 마지막으로 본 방향 추론·끌어온 점·곡선 중심도 모두 버리고, 커서 자리 추정은 다음 그림에 그 자리에서 다시 구한다(코어 0.98.0)
     const offSection = viewer.onSectionChange?.(() => {
       this.parallelRef = null;
+      if (!this.modeValue) return;
+      this.lastLockable = this.lastLockSrc = null;
+      this.centers = [];
+      this.forgetTracks(false);
+      this.rehover(true);
+      this.refreshHint();
+      this.overlay.invalidate();
     });
     if (offSection) this.off.push(offSection);
     this.off.push(
@@ -2186,8 +2200,9 @@ export class MeasureTool {
     return this.cursor && this.cursor.type !== 'touch' && !this.dragging ? this.hover : null;
   }
 
-  /** 지금 표식의 추정(그리기를 기다리지 않고 — 손가락 기기는 탭한 자리 것) */
+  /** 지금 표식의 추정(그리기를 기다리지 않고 — 손가락 기기는 탭한 자리 것). 장면 길 뒤면 먼저 sweep(110차) */
   private freshHover(): Snap | null {
+    if (this.modeValue && this.sweep()) this.overlay.invalidate();
     const f = this.overlay.frame();
     if (this.hoverDirty && f) {
       this.hoverDirty = false;
@@ -2484,7 +2499,7 @@ export class MeasureTool {
   /** 점을 찍거나 취소하면 잠금과 본 방향 추론을 버린다(알림은 뒤따르는 refreshHint가) */
   private dropLock(): void {
     this.lockValue = null;
-    this.lastLockable = null;
+    this.lastLockable = this.lastLockSrc = null;
   }
 
   /**
@@ -2541,8 +2556,9 @@ export class MeasureTool {
     const cc = this.opts.curveCenter;
     const curveCenter = cc
       ? (p: Parameters<NonNullable<Parameters<typeof chooseSnap>[0]['curveCenter']>>[0]): V3 | null => {
-          const c = cc(p.id, p.raw ?? p.index);
-          if (c) this.rememberCenter(c);
+          const seg = p.raw ?? p.index;
+          const c = cc(p.id, seg);
+          if (c) this.rememberCenter(c, p.id, seg);
           return c;
         }
       : null;
@@ -2597,7 +2613,9 @@ export class MeasureTool {
       this.dwellTimer = setTimeout(() => {
         this.dwellTimer = null;
         this.aimDwellAt = null;
-        if (this.disposed || !this.tracker.commit()) return;
+        const q = this.disposed ? null : this.tracker.commit();
+        if (!q) return;
+        if (snap) this.trackSrc.set(String(q), snap);
         this.hoverDirty = true;
         this.refreshHint();
         this.overlay.invalidate();
@@ -2621,6 +2639,7 @@ export class MeasureTool {
   /** 끌어온 점과 머무르기를 잊는다. notify면 다시 추정하고 알린다(부른 쪽이 곧 알리면 false) */
   private forgetTracks(notify = true): void {
     this.cancelDwell();
+    this.trackSrc.clear();
     if (!this.tracker.clear() || !notify) return;
     this.hoverDirty = true;
     this.refreshHint();
@@ -2632,20 +2651,57 @@ export class MeasureTool {
     if (snap.locked) return;
     // 모서리에 수직 추론의 edge는 이미 기준 모서리다. 끌어온 축·시작점 축이 모서리와 만나는 점(축 위 점 가운데 edge가 있는 것)도 그 모서리를 지나간 것이다
     if (snap.edge && (REF_KINDS.has(snap.kind) || snap.kind === 'axis') && !snap.inferred) this.parallelRef = snap;
-    if (this.directing) this.lastLockable = this.lockable(snap) ?? this.lastLockable;
+    const l = this.directing ? this.lockable(snap) : null;
+    if (!l) return;
+    this.lastLockable = l;
+    // 110차: 기준 모서리가 있는 방향(나란함·수직·시작점을 지나는 모서리)은 그 모서리를 낸 추정과 함께 — 추론(묶음 id 없음)이면 지나간 모서리
+    this.lastLockSrc = l.edge ? (snap.id === undefined ? this.parallelRef : snap) : null;
   }
 
   /**
-   * 지나간 모서리(나란함·↓ 잠금의 기준, 없으면 null). 106차(코어 0.99.0과 같은 규칙): 그 모서리를 낸 선분 묶음이 이제 보이지 않거나(묶음·태그 숨김, 빠짐)
-   * 그 선분이 숨긴 구간에 들었으면 버린다 — 다른 묶음·선분만 바뀌었으면 남긴다(안내선은 장면이 아니라 그대로). 장면 탭은 같은 보이기·단면 호출이라 같은 길이다.
+   * 지나간 모서리(나란함·↓ 잠금의 기준, 없으면 null). 106차(코어 0.99.0과 같은 규칙): 그 모서리를 낸 선분 묶음이 이제 보이지 않거나 그 선분이 숨긴 구간에 들었으면(gone) 버린다 —
+   * 다른 묶음·선분만 바뀌었으면 남긴다(안내선은 장면이 아니라 그대로). 장면 탭은 같은 보이기·단면 호출이라 같은 길이다.
    * 코어에 보이기 알림이 없고 앱 보이기 함수는 첫 화면 JS라, 바뀔 때가 아니라 쓰는 곳(추정·잠글 방향·↓)에서 본다. 단면은 onSectionChange가, 새 문서는 clear()가 버린다
    */
   private get edgeRef(): [V3, V3] | null {
-    const s = this.parallelRef;
+    if (this.gone(this.parallelRef)) this.parallelRef = null;
+    return this.parallelRef?.edge ?? null;
+  }
+
+  /** 그 추정(묶음 id·선분 번호)을 낸 선분 묶음·그물이 이제 보이지 않거나(묶음·태그 숨김, 빠짐) 그 선분이 숨긴 구간에 들었는지(106차 — 안내는 장면이 아니라 늘 false) */
+  private gone(s: { id?: string; prim?: number } | null | undefined): boolean {
+    const id = s?.id;
     const p = s?.prim;
     const v = this.viewer;
-    if (s?.id && v.isVisible && (!v.isVisible(s.id) || (p !== undefined && !!v.hiddenRanges?.(s.id).some((g) => p >= g.start && p < g.start + g.count)))) this.parallelRef = null;
-    return this.parallelRef?.edge ?? null;
+    return !!id && !!v.isVisible && (!v.isVisible(id) || (p !== undefined && !!v.hiddenRanges?.(id).some((g) => p >= g.start && p < g.start + g.count)));
+  }
+
+  /**
+   * 110차(106차 edgeRef 꼴): 장면 탭·태그·개체·구간 숨김 뒤 — 코어에 보이기 알림이 없고 앱 보이기 함수는 첫 화면 JS라 쓰는 곳(그리기·지금 추정·찍기)에서 본다.
+   * 숨은 묶음·구간이 낸 지나간 모서리·마지막으로 본 방향 추론·끌어온 점·곡선 중심은 버리고, 그것을 버렸거나 커서 자리 추정이 숨은 것이면 그 자리에서 다시 구한다(코어 0.98.0).
+   * 장면 길이 없으면 아무것도 바꾸지 않는다. 바꿨으면 true
+   */
+  private sweep(): boolean {
+    if (this.gone(this.lastLockSrc)) this.lastLockable = this.lastLockSrc = null;
+    const ref = this.gone(this.parallelRef);
+    if (ref) this.parallelRef = null;
+    const gt = (p: V3): boolean => this.gone(this.trackSrc.get(String(p)));
+    const tv = this.tracker.view;
+    const tracks = tv.some(gt);
+    if (tracks) this.tracker.set(tv.filter((p) => !gt(p)));
+    const gc = (c: V3): boolean => this.gone(this.centerSrc.get(c));
+    const centers = this.centers.some(gc);
+    if (centers) this.centers = this.centers.filter((c) => !gc(c));
+    if (!ref && !tracks && !centers && !this.gone(this.hover)) return false;
+    this.rehover(false);
+    if (tracks) this.refreshHint();
+    return true;
+  }
+
+  /** 커서 자리 추정을 다음 그림에 그 자리에서 다시 구한다(110차). 손가락이 탭한 자리 표식은 all이거나 그 추정이 숨었으면 거둔다(다시 구할 커서가 없다) */
+  private rehover(all: boolean): void {
+    if (this.cursor?.type !== 'touch') this.hoverDirty = true;
+    else if (all || this.gone(this.hover)) this.hover = this.hoverPoint = null;
   }
 
   /** 추정에서 잠글 방향: 방향 추론, 또는 시작점을 지나는 모서리에 붙은 점 추정(그 모서리 방향) */
@@ -2658,10 +2714,11 @@ export class MeasureTool {
     return this.opts.getAxes?.() ?? AXIS_DIRS;
   }
 
-  /** 지나간 곡선 중심 기억(같은 점은 앞으로 옮기고, RECENT_CENTERS개까지) */
-  private rememberCenter(c: V3): void {
+  /** 지나간 곡선 중심 기억(같은 점은 앞으로 옮기고, RECENT_CENTERS개까지) — 그 곡선 선분(묶음 id·선분 번호)과 함께(110차) */
+  private rememberCenter(c: V3, id: string, prim: number): void {
     const same = (a: V3): boolean => Math.abs(a[0] - c[0]) + Math.abs(a[1] - c[1]) + Math.abs(a[2] - c[2]) < 1e-9 * (1 + Math.abs(c[0]) + Math.abs(c[1]) + Math.abs(c[2]));
     this.centers = [c, ...this.centers.filter((x) => !same(x))].slice(0, RECENT_CENTERS);
+    this.centerSrc.set(c, { id, prim });
   }
 
   dispose(): void {
@@ -2923,6 +2980,7 @@ export class MeasureTool {
     this.lastTap = null;
     const f = this.overlay.frame();
     if (!f) return;
+    this.sweep();
     const snap = this.snapAt(x, y, type, f);
     if (!snap) return;
     this.learn(snap);
@@ -3145,6 +3203,8 @@ export class MeasureTool {
   private paint(f: ViewFrame): void {
     this.haloNow = null;
     const mode = this.modeValue;
+    // 110차: 장면 길 뒤 첫 그림이면 숨은 것이 낸 기억을 버리고 커서 자리 추정을 다시 구한다(sweep — 장면 길이 없으면 그대로)
+    if (mode) this.sweep();
     if (mode && this.hoverDirty) {
       this.hoverDirty = false;
       this.updateHover(f);
