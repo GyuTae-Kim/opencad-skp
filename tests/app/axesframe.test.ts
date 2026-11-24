@@ -4,10 +4,14 @@
  * 그 장면의 축, null = 기본 축)이 정해질 때마다 코어에 그 틀을 준다: 문서를 열 때(setDoc — showDrawAxes), 장면을 고를 때(applyPage — applyScene).
  * 기본 축이면 null(세계 원점·세계 축 — 앞 문서의 틀을 거둔다). 축 원점은 해석기가 장면 좌표(형상 정점과 같은 단위·변환)로 넘긴다.
  * 시험은 실제 코어 뷰어를 가짜 DOM·가짜 WebGL2 위에 띄워 코어가 받은 틀(axesFrame)과 부른 수를 본다.
+ * 113차(코어 0.108.0 setAxesStyle): 같은 자리에서 축선 모양도 SketchUp처럼 — 원점 양의 쪽 실선·음의 쪽 점선·파랑 Z축선, 좌표축이 켜져 있으면 격자를 꺼도 축선만.
+ * 좌표축 버튼(앱 toggleAxes — showAxes)이 왼쪽 아래 축 표시와 함께 격자 없는 축선(withoutGrid)을 켜고 끈다. 앱 클래스는 DOM·뷰어 전체를 만들어야 해 그 몫은 원문으로 본다.
  */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Viewer3d, type AxesFrame } from 'opencad-viewer3d';
-import { applyScene, showDrawAxes } from '../../src/app/annotations';
+import { Viewer3d, type AxesFrame, type AxesStyle } from 'opencad-viewer3d';
+import { applyScene, showAxes, showDrawAxes } from '../../src/app/annotations';
 import { createDoc, type SkpDoc } from '../../src/app/doc';
 import { skpToScene } from '../../src/index';
 import type { SkpAxesMeta, SkpMetaExtras } from '../../src/meta';
@@ -193,5 +197,80 @@ describe('그리기 축 자리의 격자 축선(코어 setAxesFrame)', () => {
     // 다시 열 때도 같다
     showDrawAxes(v, { origin: [0, 0, 0], x: [0, 0, 0], y: [0, 1, 0], z: [0, 0, 1] });
     expect(v.axesFrame).toBeNull();
+  });
+});
+
+/** SketchUp 축선 모양(113차): 좌표축이 켜져 있으면 격자를 꺼도 축선만 */
+const SKETCHUP = (withoutGrid: boolean): AxesStyle => ({ negativeDashed: true, z: true, withoutGrid });
+
+/** 코어 뷰어(가짜 WebGL2) — setAxesStyle에 넘긴 값을 적는다 */
+function styled(): { v: Viewer3d; styles: (AxesStyle | null)[] } {
+  const { v } = viewer();
+  const styles: (AxesStyle | null)[] = [];
+  const set = v.setAxesStyle.bind(v);
+  v.setAxesStyle = (s) => (styles.push(s), set(s));
+  return { v, styles };
+}
+
+describe('그리기 축 자리 축선의 SketchUp 모양(113차 — 코어 0.108.0 setAxesStyle)', () => {
+  it('문서 열기: 기본 축(null 틀)에서도, 옮기고 돌린 축에서도 음의 쪽 점선·파랑 Z·격자를 꺼도 축선(좌표축 켬)', () => {
+    const { v, styles } = styled();
+    expect(v.axesStyle).toBeNull();
+    const plain = docOf(file2021(), '기본 축.skp');
+    open(v, plain);
+    expect(v.axesFrame).toBeNull();
+    expect(v.axesStyle).toEqual(SKETCHUP(true));
+    const moved = docOf(mfcFile({ schemas: 'v20', root: squareEntities(), axes: [1, 2, 3, 0, 1, 0, -1, 0, 0, 0, 0, 1] }), '옮긴 축.skp');
+    open(v, moved);
+    frameIs(v, moved.drawAxes!);
+    expect(v.axesStyle).toEqual(SKETCHUP(true));
+    // 문서마다 같은 모양을 다시 준다(코어는 같은 모양이면 격자를 다시 만들지 않는다)
+    expect(styles).toEqual([SKETCHUP(true), SKETCHUP(true)]);
+  });
+
+  it('장면 고르기: 옮긴 축·돌린 축·기본 축 장면 뒤에도 같은 모양', () => {
+    const { v } = styled();
+    const d = docOf(file2021());
+    open(v, d);
+    for (const i of [0, 1, 3, 2, 4]) {
+      applyScene(d, d.pages[i]!, i, v);
+      expect(v.axesStyle, `장면 ${i}`).toEqual(SKETCHUP(true));
+    }
+    expect(v.axesFrame).not.toBeNull();
+  });
+
+  it('좌표축 버튼(showAxes): 끄면 왼쪽 아래 축 표시와 격자 없는 축선을 함께 끄고, 켜면 함께 켠다 — 그 뒤 장면·문서도 그 상태를 따른다', () => {
+    const { v } = styled();
+    const d = docOf(file2021());
+    open(v, d);
+    showAxes(v, false);
+    expect(v.axesVisible).toBe(false);
+    expect(v.axesStyle).toEqual(SKETCHUP(false));
+    // 좌표축을 끈 동안 틀이 바뀌는 장면(돌린 축)·새 문서도 격자 없는 축선은 끈 채로
+    applyScene(d, d.pages[3]!, 3, v);
+    expect(v.axesStyle).toEqual(SKETCHUP(false));
+    open(v, docOf(file2021(), '다른 파일.skp'));
+    expect(v.axesStyle).toEqual(SKETCHUP(false));
+    showAxes(v, true);
+    expect(v.axesVisible).toBe(true);
+    expect(v.axesStyle).toEqual(SKETCHUP(true));
+    // 격자 버튼은 모양을 바꾸지 않는다(격자를 꺼도 좌표축이 켜져 있으면 코어가 축선만 그린다)
+    v.setGridVisible(false);
+    expect(v.axesStyle).toEqual(SKETCHUP(true));
+    // 뷰어가 없으면(문서를 열기 전) 아무것도 하지 않는다
+    expect(() => showAxes(null, false)).not.toThrow();
+  });
+
+  it('앱 원문: 좌표축 버튼은 annotations.ts showAxes로(뷰어와 함께 받는 조각 — 모양 상수를 첫 화면 조각에 두지 않음), 문서 열기는 showDrawAxes', () => {
+    const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
+    const start = app.indexOf('toggleAxes(on = !this.axesOn): void {');
+    expect(start).toBeGreaterThan(0);
+    const body = app.slice(start, app.indexOf('\n  }\n', start));
+    expect(body).toContain('annotating?.showAxes(this.viewer, on);');
+    expect(body).not.toContain('setAxesStyle');
+    expect(app).toContain('annotating?.showDrawAxes(v, d.drawAxes);');
+    // 메뉴 「좌표축」과 도구 막대 버튼 둘 다 toggleAxes
+    expect(app).toContain("tbtn('좌표축', 'axes', '좌표축 보이기', () => this.toggleAxes())");
+    expect(app).toContain("{ label: '좌표축', checked: this.axesOn, toggle: true, run: () => this.toggleAxes() }");
   });
 });

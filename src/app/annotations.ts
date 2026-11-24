@@ -20,6 +20,7 @@
  * 주석 선분(치수선·지시선·단면 기호)의 숨긴 노드 구간(annotationHiddenRanges)과 장면을 고를 때 숨긴 노드 바꾸기(applySceneHidden —
  * 장면이 숨기는 맨 위 주석 묶음)도 여기 둔다(70차 — 코어 입구와 함께 받는 조각이라 첫 화면 조각에 싣지 않는다).
  * 107차: 같은 까닭으로 장면을 고를 때 그리기 축 바꾸기(applyScene)와 코어 격자 축선을 그리기 축 자리에 두기(showDrawAxes — 코어 0.101.0 setAxesFrame)도 여기 둔다.
+ * 113차: 축선의 SketchUp 모양(음의 쪽 점선·파랑 Z·격자 없는 축선 — 코어 0.108.0 setAxesStyle)과 좌표축 버튼 몫(showAxes)도 여기 둔다.
  */
 import type { IndexRange, Viewer3d } from 'opencad-viewer3d';
 import { projectToScreen, worldPerPixel, type ViewFrame } from 'opencad-viewer3d/camera';
@@ -577,17 +578,39 @@ export function applySceneHidden(hidden: Set<number>, page: Pick<SkpPageMeta, 'h
   for (const k of notes ?? []) hidden.add(-2 - k);
 }
 
-/** 그리기 축 틀을 받는 뷰어(코어 0.101.0 setAxesFrame — 시험에서는 가짜를 넘길 수 있다) */
-export type AxesViewer = Pick<Viewer3d, 'setAxesFrame'>;
+/** 축선 모양을 받는 뷰어(코어 0.108.0 setAxesStyle, 좌표축 켬 axesVisible — 시험에서는 가짜를 넘길 수 있다) */
+type AxesStyleViewer = Pick<Viewer3d, 'setAxesStyle' | 'axesVisible'>;
+/** 그리기 축 틀을 받는 뷰어(코어 0.101.0 setAxesFrame, 113차부터 축선 모양도 — 시험에서는 가짜를 넘길 수 있다) */
+export type AxesViewer = Pick<Viewer3d, 'setAxesFrame'> & AxesStyleViewer;
 
 /**
  * 코어 격자의 빨강·초록 축선을 그리기 축 자리에(107차 — 코어 0.101.0 setAxesFrame, SketchUp처럼 옮기거나 돌린 축 자리). 원점은 해석기가 장면 좌표로 넘긴다
- * (scene-meta.ts axesMeta — 형상 정점과 같은 단위 배율, 옮기지 않음). 코어는 파랑을 받지 않는다(빨강 × 초록). 기본 축(null)이면 세계 원점·세계 축이고,
- * 코어가 받지 않는 축(길이 0·나란한 빨강·초록 같은 깨진 축 — 앞 틀이 남는다)도 세계 축으로 둔다. 축선은 격자를 켰을 때만 보인다(격자 버튼 — 코어 setGridVisible).
+ * (scene-meta.ts axesMeta — 형상 정점과 같은 단위 배율, 옮기지 않음). 코어는 파랑을 받지 않는다(Z = 빨강 × 초록). 기본 축(null)이면 세계 원점·세계 축이고,
+ * 코어가 받지 않는 축(길이 0·나란한 빨강·초록 같은 깨진 축 — 앞 틀이 남는다)도 세계 축으로 둔다. 축선 모양은 showAxesStyle(113차 — 기본 축에서도).
  * 문서를 열 때(앱 setDoc)와 장면을 고를 때(applyScene) 부른다 — 뷰어가 있어야 쓰므로 코어와 함께 받는 이 조각에 둔다(첫 화면 조각에 싣지 않는다)
  */
 export function showDrawAxes(v: AxesViewer, axes: SkpAxesMeta | null): void {
   if (!v.setAxesFrame(axes)) v.setAxesFrame(null);
+  showAxesStyle(v);
+}
+
+/**
+ * 축선을 SketchUp 모양으로(113차 — 코어 0.108.0 setAxesStyle): 원점 양의 쪽 실선·음의 쪽 점선, 파랑 Z축선, 좌표축이 켜져 있으면 격자를 꺼도 축선만(withoutGrid).
+ * SketchUp에는 격자가 없고 축은 따로 보이거나 숨는다(축 맥락 메뉴 Hide·스타일 「Model Axes」) — 그래서 격자 없는 축선은 격자 버튼이 아니라 좌표축 버튼을 따른다.
+ * 격자가 보이는 동안 축선은 격자와 함께다(좌표축을 꺼도 — 코어 withoutGrid는 격자를 숨겼을 때만 쓴다). 같은 모양을 다시 주면 코어는 아무것도 하지 않는다
+ */
+function showAxesStyle(v: AxesStyleViewer): void {
+  v.setAxesStyle({ negativeDashed: true, z: true, withoutGrid: v.axesVisible });
+}
+
+/**
+ * 좌표축 버튼(앱 toggleAxes — 도구 막대·휴대폰 보기 설정 메뉴): 왼쪽 아래 축 표시(코어 setAxesVisible)와 함께 격자를 끈 동안의 장면 안 축선도(113차 — showAxesStyle).
+ * 뷰어가 없으면(문서를 열기 전) 아무것도 하지 않는다 — 이 조각은 코어와 함께 받으므로 뷰어가 있으면 늘 있다(모양 상수를 첫 화면 조각에 싣지 않는다)
+ */
+export function showAxes(v: (AxesStyleViewer & Pick<Viewer3d, 'setAxesVisible'>) | null, on: boolean): void {
+  if (!v) return;
+  v.setAxesVisible(on);
+  showAxesStyle(v);
 }
 
 /** 코어에 같은 틀인지(원점·빨강·초록 — 기본 축끼리도 같다) */
