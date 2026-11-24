@@ -46,8 +46,8 @@ export interface SkpImages {
   skipped: number;
   warnings: string[];
   /**
-   * 무늬 재질의 PBR 그림(material.xml <mat:pbrMR>에서 켠 법선·거칠기·금속 그림 — 55차). 2021+ 꾸러미에서 무늬(색 그림)가 있는 재질(56차부터 색 무늬 없이 그림 한 장 크기가 있는 재질도, 57차부터 그림이 하나뿐인 재질 폴더도)만, 다른 그림을 다 넣은 뒤
-   * 남은 한도 안에서. 그림 하나가 여러 쓰임이면 roles가 여럿. 없으면 칸이 없다(앱 워커는 화면에 넘기기 전에 이 칸을 뗀다 — 바이트는 장면 무늬가 든다).
+   * 무늬 재질의 PBR 그림(material.xml <mat:pbrMR>에서 켠 법선·거칠기·금속 그림 — 55차, 가림 그림 — 108차). 2021+ 꾸러미에서 무늬(색 그림)가 있는 재질(56차부터 색 무늬 없이 그림 한 장 크기가 있는 재질도, 57차부터 그림이 하나뿐인 재질 폴더도)만, 다른 그림을 다 넣은 뒤
+   * 남은 한도 안에서(가림만 맡는 그림은 법선·거칠기·금속 그림을 다 넣은 뒤 — 108차). 그림 하나가 여러 쓰임이면 roles가 여럿. 없으면 칸이 없다(앱 워커는 화면에 넘기기 전에 이 칸을 뗀다 — 바이트는 장면 무늬가 든다).
    * skpFileToScene(앱 워커)은 61차부터 모형을 읽은 뒤 모형이 쓰는 재질(면 앞·뒤, 그룹·컴포넌트)의 PBR 그림만 꺼낸다(readSkpImages는 모두)
    */
   pbr?: (SkpImage & { folder: string; roles: SkpPbrRole[] })[];
@@ -374,7 +374,7 @@ export function* zipImageReads(
         /* 첫 그림 */
       }
     if (pick) want.push({ item: pick, kind: 'material', name: fileOf(pick), folder });
-    // 55차: 무늬(색 그림)가 있는 재질의 PBR 그림(법선·거칠기·금속) — 무늬 좌표는 색 무늬와 같다. 56차: 색 무늬 없이 PBR 그림만 있는 재질도
+    // 55차: 무늬(색 그림)가 있는 재질의 PBR 그림(법선·거칠기·금속, 108차부터 가림) — 무늬 좌표는 색 무늬와 같다. 56차: 색 무늬 없이 PBR 그림만 있는 재질도
     // 그림 한 장 크기(<mat:pbrMR xScale yScale> — pbr.tile)가 있으면 넣는다(장면이 그 크기로 무늬 좌표만 만든다). 그림 하나가 여러 쓰임이면 한 번만 읽는다
     if (info?.texture || info?.pbr?.tile) {
       const roles = new Map<ZipItem, SkpPbrRole[]>();
@@ -385,8 +385,13 @@ export function* zipImageReads(
         if (list) list.push(role);
         else roles.set(hit, [role]);
       }
-      // 색 무늬 없는 재질의 PBR 그림이 먼저(rank 0 — 그 재질에는 이 그림이 유일한 결이다), 무늬 재질의 PBR 그림은 그다음
-      for (const [item, r] of roles) want.push({ item, kind: 'pbr', name: fileOf(item), folder, roles: r, rank: info.texture ? 1 : 0 });
+      // 색 무늬 없는 재질의 PBR 그림이 먼저(rank 0 — 그 재질에는 이 그림이 유일한 결이다), 무늬 재질의 PBR 그림은 그다음.
+      // 108차: 가림만 맡는 그림은 모든 법선·거칠기·금속 그림 뒤(rank 2·3 — 같은 차례로 색 무늬 없는 재질이 먼저). 가림은 간접광(주변광 몫)만 어둡게 해
+      // 보이는 효과가 법선·거칠기·금속보다 작고, 맨 뒤라 한도가 모자라도 법선·거칠기·금속 그림의 차례·고름은 그대로다(가림 그림은 남은 한도만 쓴다). 다른 쓰임과 같은 그림은 그 쓰임의 차례
+      for (const [item, r] of roles) {
+        const aoOnly = r.length === 1 && r[0] === 'occlusion';
+        want.push({ item, kind: 'pbr', name: fileOf(item), folder, roles: r, rank: (info.texture ? 1 : 0) + (aoOnly ? 2 : 0) });
+      }
     }
   }
   // 한도 안에서 먼저 넣을 차례: 모형 → 장면 → 재질 → 컴포넌트 → PBR 그림(55차 — 예전 그림을 그대로 넣고 남은 한도만 쓴다)

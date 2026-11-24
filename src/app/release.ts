@@ -101,7 +101,7 @@ export function prepareRelease(d: { scene: Pick<Scene3d, 'textures' | 'meta'>; i
       delete t.data;
     } else {
       held.push({ id: t.id, blob, info, raw: true });
-      // PBR 그림(55차 — 법선·거칠기·금속)은 같은 재질 폴더라도 견본 그림이 아니다
+      // PBR 그림(55차 — 법선·거칠기·금속, 108차 가림)은 같은 재질 폴더라도 견본 그림이 아니다
       if (!info.pbr) swapSwatch(d.images, info.folder, blob);
     }
   }

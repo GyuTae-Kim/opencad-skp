@@ -48,7 +48,7 @@ export interface SkpMaterialInfo {
  * PBR 금속·거칠기 재질(<mat:pbrMR> — 표본으로 본 꼬리표: enable_metalness·enable_roughness·enable_normal·enable_occlusion(0·1),
  * metallic_texture·roughness_texture·normal_texture·occlusion_texture(path="./그림"), metallicFactor·roughnessFactor·normalScale(실수),
  * normalMapStyle(0·1), roughness_texture_invert(0·1), occlusionStrength, baseColorFactor). 켬 깃발이 0인 칸은 SketchUp도 쓰지 않는 기본값이라 뺀다.
- * 가림(occlusion) 그림은 코어가 받지 않아 읽지 않는다
+ * 가림(occlusion) 그림은 108차부터 읽는다(코어 0.102.0 occlusionTexture·occlusionStrength — 간접광에만 곱한다)
  */
 export interface SkpMaterialPbr {
   /** 금속성: 그림이 있으면 그 배율, 없으면 값(0~1)과 재질 폴더 안 그림 파일 이름 */
@@ -58,14 +58,19 @@ export interface SkpMaterialPbr {
   /** 법선 그림(켰고 그림이 있을 때만): 배율, 초록이 아래인 DirectX 꼴인지(normalMapStyle 1 — C API SUMaterialNormalMapStyle 차례 OpenGL·DirectX) */
   normal?: { file: string; scale: number; directX: boolean };
   /**
+   * 가림(AO) 그림(108차 — 켰고 그림이 있고 세기가 0보다 클 때만): 세기(occlusionStrength, 0~1로 자름, 유한하지 않으면 1).
+   * 세기 0은 코어에서 가림 그림을 주지 않은 것과 같아(그림도 올리지 않는다) 그림 한도를 쓰지 않게 뺀다. 그림은 빨강 채널을 쓴다(회색조 그림이면 그대로)
+   */
+  occlusion?: { file: string; strength: number };
+  /**
    * 그림 한 장 크기(인치 — <mat:pbrMR xScale yScale>, 그림 칸이 하나라도 있고 두 값이 양수일 때만). 색 무늬가 없는 재질(56차)의 PBR 그림 무늬 좌표가 쓴다.
    * 이 컴퓨터 표본에서 색 무늬와 PBR 그림이 함께 있는 재질 53개는 모두 색 무늬 크기(texture xScale·yScale)와 같았다
    */
   tile?: { width: number; height: number };
 }
 
-/** PBR 그림 쓰임(재질 폴더의 그림 하나가 맡는 것) */
-export type SkpPbrRole = 'normal' | 'roughness' | 'metallic';
+/** PBR 그림 쓰임(재질 폴더의 그림 하나가 맡는 것 — 가림은 108차) */
+export type SkpPbrRole = 'normal' | 'roughness' | 'metallic' | 'occlusion';
 
 const XML_ENT: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
 
@@ -272,17 +277,22 @@ export function parseMaterialPbr(xml: string): SkpMaterialPbr | undefined {
   const nf = on('enable_normal') ? file('normal_texture') : undefined;
   // normalMapStyle이 없으면 SketchUp이 거의 모든 재질에 적는 기본값(1)으로 본다
   if (nf) out.normal = { file: nf, scale: num('normalScale', 1, 16), directX: text('normalMapStyle') !== '0' };
+  // 108차 가림: 법선처럼 켰고 그림이 있을 때만(그림 없는 세기는 뜻이 없다). 세기 0이면 코어에서 가림이 없는 것과 같아 뺀다
+  const of = on('enable_occlusion') ? file('occlusion_texture') : undefined;
+  const os = of ? num('occlusionStrength', 1, 1) : 0;
+  if (of && os > 0) out.occlusion = { file: of, strength: os };
   const w = Number(el.attrs.get('xScale'));
   const h = Number(el.attrs.get('yScale'));
-  if ((out.normal || out.roughness?.file || out.metallic?.file) && w > 0 && h > 0 && Number.isFinite(w) && Number.isFinite(h)) out.tile = { width: w, height: h };
-  return out.metallic || out.roughness || out.normal ? out : undefined;
+  if ((out.normal || out.roughness?.file || out.metallic?.file || out.occlusion) && w > 0 && h > 0 && Number.isFinite(w) && Number.isFinite(h)) out.tile = { width: w, height: h };
+  return out.metallic || out.roughness || out.normal || out.occlusion ? out : undefined;
 }
 
-/** PBR 재질의 그림 파일(쓰임 → 재질 폴더 안 파일 이름) */
+/** PBR 재질의 그림 파일(쓰임 → 재질 폴더 안 파일 이름 — 법선·거칠기·금속, 맨 뒤에 가림) */
 export function pbrFiles(pbr: SkpMaterialPbr | undefined): [SkpPbrRole, string][] {
   const out: [SkpPbrRole, string][] = [];
   if (pbr?.normal) out.push(['normal', pbr.normal.file]);
   if (pbr?.roughness?.file) out.push(['roughness', pbr.roughness.file]);
   if (pbr?.metallic?.file) out.push(['metallic', pbr.metallic.file]);
+  if (pbr?.occlusion) out.push(['occlusion', pbr.occlusion.file]);
   return out;
 }

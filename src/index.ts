@@ -93,8 +93,8 @@ export interface SkpOptions {
    */
   textures?: SkpImages['materials'];
   /**
-   * PBR 그림(readSkpImages(bytes).pbr — 55차). 주면 무늬를 입힌 재질의 <mat:pbrMR> 법선·거칠기·금속 그림을 scene.textures에 넣고(바이트는 같은 배열)
-   * 그 재질 그물(앞면 무늬 좌표를 단 것)에 normalTexture·roughnessTexture·metallicTexture를 단다. 그림 없이 값만 켠 칸(roughness·metallic)은 주지 않아도 단다
+   * PBR 그림(readSkpImages(bytes).pbr — 55차). 주면 무늬를 입힌 재질의 <mat:pbrMR> 법선·거칠기·금속·가림(108차) 그림을 scene.textures에 넣고(바이트는 같은 배열)
+   * 그 재질 그물(앞면 무늬 좌표를 단 것)에 normalTexture·roughnessTexture·metallicTexture·occlusionTexture를 단다. 그림 없이 값만 켠 칸(roughness·metallic)은 주지 않아도 단다
    */
   pbrTextures?: SkpImages['pbr'];
   /** 무늬를 입힐 재질 수 한도(기본 MAX_SKP_TEXTURES — 넘는 재질은 평균색) */
@@ -151,7 +151,7 @@ export interface SkpTextureInfo {
   /** 색을 바꾼 무늬(재질 type 2): 방식·재질 색(0~255)·원래 평균색 */
   colorize?: { type: 'shift' | 'tint'; color: [number, number, number]; average?: [number, number, number] };
   /**
-   * PBR 그림(55차 — 법선·거칠기·금속, 그림 하나가 여러 쓰임이면 여럿). 있으면 색 무늬가 아니다: 워커가 풀거나 색을 바꾸지 않고(alphaPossible false),
+   * PBR 그림(55차 — 법선·거칠기·금속, 108차 가림, 그림 하나가 여러 쓰임이면 여럿). 있으면 색 무늬가 아니다: 워커가 풀거나 색을 바꾸지 않고(alphaPossible false),
    * 재질 목록 견본도 아니다. 놓기·문맥 복구는 바이트 그대로(raw) 쥐었다 준다
    */
   pbr?: SkpPbrRole[];
@@ -530,7 +530,7 @@ function sceneFrom(read: Package | Scene3d, st: Start, opts: SkpOptions): Scene3
     for (const m of scene.meshes) {
       if (m.texture) used.add(m.texture);
       if (m.backTexture) used.add(m.backTexture);
-      for (const id of [m.normalTexture, m.roughnessTexture, m.metallicTexture]) if (id) used.add(id);
+      for (const id of [m.normalTexture, m.roughnessTexture, m.metallicTexture, m.occlusionTexture]) if (id) used.add(id);
     }
     const textures: Texture3d[] = [];
     const infos: SkpTextureInfo[] = [];
@@ -840,6 +840,7 @@ type PbrImage = NonNullable<SkpImages['pbr']>[number];
  *   그 그림을 받았을 때만: 그림 id와 배율(배율 1·OpenGL 꼴·뒤집지 않음은 코어 기본이라 뺀다).
  *   SketchUp 그림은 거칠기·금속이 따로라 metallicRoughnessTexture가 아니라 roughnessTexture·metallicTexture(코어는 초록·파랑 채널 — 회색조 그림이면 그대로).
  * - 그림이 없는 거칠기·금속 칸은 값(roughness·metallic — 그 재질 그물 모두). 그림이 있어야 할 칸인데 그림을 받지 못했으면(한도·무늬 없는 재질) 그 칸은 뺀다.
+ * - 108차 가림(코어 0.102.0): 그림을 받았을 때만 occlusionTexture, 세기는 1(코어 기본)이 아닐 때만 occlusionStrength. 그림을 받지 못하면 세기도 달지 않는다(가림은 값만으로는 뜻이 없다).
  * 그림 id는 재질 번호와 쓰임(skp-pbr-<번호>-<쓰임들>) — 같은 그림을 여러 쓰임에 쓰면 하나
  */
 function pbrFor(
@@ -899,6 +900,13 @@ function pbrFor(
           maps.metallicTexture = t;
           if (p.metallic.factor !== 1) maps.metallic = p.metallic.factor;
         }
+      }
+    }
+    if (p.occlusion) {
+      const t = mapId('occlusion');
+      if (t) {
+        maps.occlusionTexture = t;
+        if (p.occlusion.strength !== 1) maps.occlusionStrength = p.occlusion.strength;
       }
     }
     const sp: ScenePbr = {};
