@@ -5,6 +5,7 @@
  * 화면은 그 장면을 고르면 그리기 축(줄자·각도기의 축 고정·기본 평면·축 성분, 정보 탭)을 그 축으로 바꾸며 기억하지 않는 장면은 그대로 둔다.
  */
 import { describe, expect, it } from 'vitest';
+import { applyScene } from '../../src/app/annotations';
 import { createDoc } from '../../src/app/doc';
 import { infoSections } from '../../src/app/infotab';
 import { pagePlan, readPage } from '../../src/app/pages';
@@ -158,14 +159,10 @@ describe('장면 그리기 축: 화면', () => {
     expect(d.axes).toBeNull();
     expect(d.drawAxes).toBeNull();
     expect(d.axesPage).toBeNull();
-    // 앱 applyPage의 축 몫(plan.axes가 있으면 바꾸고 그 장면을 적는다)
-    const pick = (i: number): void => {
-      const plan = pagePlan(d.pages[i]!);
-      if (plan.axes !== undefined) {
-        d.drawAxes = plan.axes;
-        d.axesPage = i;
-      }
-    };
+    // 앱 applyPage의 축 몫(annotations.ts applyScene — 장면이 축을 기억하면 바꾸고 그 장면을 적는다. 107차부터 코어 축선 틀도 — axesframe.test.ts)
+    const frames: unknown[] = [];
+    const viewer = { setAxesFrame: (f: unknown): boolean => (frames.push(f), true) };
+    const pick = (i: number): void => applyScene(d, d.pages[i]!, i, viewer);
     const text = (): string => infoSections(d, () => undefined).map((s) => s.textContent ?? '').join('\n');
     // 열 때: 축 줄 없음, 장면 규칙 안내는 파일과 다른 축을 기억하는 장면이 있어 보인다
     expect(text()).not.toContain('그리기 축 원점');
@@ -195,6 +192,8 @@ describe('장면 그리기 축: 화면', () => {
     expect(t).toContain('0, 0, 0');
     expect(t).toContain('그리기 축을 정한 장면');
     expect(t).not.toContain('옮긴 그리기 축을 따릅니다');
+    // 코어에 준 틀: 축을 기억하는 장면 A·D·C만(B·E는 부르지 않음)
+    expect(frames).toEqual([d.pages[0]!.axes, d.pages[3]!.axes, null]);
   });
 
   it('모든 장면이 파일과 같은 축을 기억하면 장면 규칙 안내를 띄우지 않는다', () => {
