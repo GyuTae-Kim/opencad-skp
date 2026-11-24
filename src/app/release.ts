@@ -34,12 +34,19 @@
  *   - 손질 워커: 만들지 못하거나(스크립트를 받지 못함 등) 오류·멈춤으로 끝나면 같은 손질(worker/textures.ts recolorTextures — 같은 한도·견본)을
  *     화면에서 한다(recolorHere — 이 조각에 함께 실어 조각을 받았으면 늘 있다). 문맥 복구 길도 같다. 워커가 손질해 보냈는데 빠진 무늬(그림을 풀지 못함)는
  *     해석 워커가 손질하지 못한 무늬를 빼던 것과 같이 평균색으로 둔다
+ *
+ * 알파를 재는 무늬도 첫 그림 뒤로(103차 — 코어 0.95.0 setTexture): 61차는 알파 칸이 있는 무늬(색 바꾸기·알파 재기)를 해석 워커가 첫 그림 앞에서 손질했다
+ *   (코어가 반투명 차례를 setScene 때 정해 restoreTexture로는 alpha를 줄 수 없었다). 이제 손질할 무늬 모두를 pending으로 장면부터 올리고, 손질 결과를
+ *   setTexture(id, { bitmap, alpha })로 준다 — 잰 alpha가 참이면 코어가 그 그물을 반투명 차례로 옮기고 그림자에서 뺀다(해석 워커가 장면에 적던 alpha와 같은 규칙).
+ *   손질한 그림이 없는 알파 재기만 무늬(투명 화소를 쓰지 않음 — plain)는 쥔 바이트를 alpha 거짓으로 준다(해석 워커가 바이트 그대로 두던 무늬).
+ *   코어가 alpha를 정한 알파 재기만 무늬는 그 뒤 raw다(문맥 복구 때 바이트 그대로 — 41차 길, 코어는 정한 alpha를 지킨다). 색 바꾸기 무늬는 예전처럼 다시 손질한다.
+ *   주는 동안(무늬마다 코어가 풀어 올리기를 기다림) 새 문서로 바뀌면 남은 그림은 닫고 주지 않는다(문서 판 번호 — 같은 무늬 id를 기다리는 새 문서에 앞 문서의 그림이 가지 않게)
  */
-import type { ContextRestoreNeed, TextureSource } from 'opencad-viewer3d';
+import type { ContextRestoreNeed, TextureSource, TextureUpdate } from 'opencad-viewer3d';
 import { TEXTURE_LIMIT } from 'opencad-viewer3d/texture';
 import type { Scene3d } from 'opencad-viewer3d/types';
 import type { SkpTextureInfo } from '../index';
-import { recolorTextures } from '../worker/textures';
+import { needsDecode, recolorTextures } from '../worker/textures';
 import type { DocImages } from './doc';
 import type { DeferredTexture, HeldTexture, RecolorRequest, RecolorResponse, RecolorResult } from './protocol';
 
@@ -69,8 +76,9 @@ export const RESTORE_FAIL_TEXT = '그 무늬 면은 평균색으로 그립니다
  *   (해석기는 그 그림 바이트 배열을 그대로 무늬에 쓴다 — 폴더마다 그림 하나)이면 아직 그리기 전이므로 그 주소를 이 Blob의 주소로 바꾼다(브라우저가 한 벌만 든다).
  *   PBR 그림(55차 — meta.textures의 pbr)도 raw로 쥐지만 견본 주소는 바꾸지 않는다(같은 폴더의 색 그림이 견본이다).
  * Blob은 화면의 형식 배열이 아니라 브라우저가 따로 들고(큰 것은 디스크로 내보낼 수 있다), 손질 워커에 복사 없이 넘어간다.
- * 61차: 해석 워커가 첫 그림 뒤로 미룬 색 바꾸기(pending — 바이트는 deferredData, protocol.ts DeferredTexture)도 색 바꾼 무늬로 쥔다
- *   (코어는 그 무늬를 기다리며 그물 색으로 그리고, ContextWatch.fill이 손질해 준다 — 재질 목록 견본도 그때 바꾼다)
+ * 61차: 해석 워커가 첫 그림 뒤로 미룬 손질(pending — 바이트는 deferredData, protocol.ts DeferredTexture)도 손질할 무늬(raw 아님)로 쥔다
+ *   (코어는 그 무늬를 기다리며 그물 색으로 그리고, ContextWatch.fill이 손질해 준다 — 색 바꾼 무늬의 재질 목록 견본도 그때 바꾼다).
+ *   103차: 알파를 재는 무늬도 미루므로 함께 쥔다. 알파 재기만 무늬의 견본은 원래 그림(같은 바이트)이라 raw처럼 견본 주소를 쥔 Blob으로 바꾼다
  */
 export function prepareRelease(d: { scene: Pick<Scene3d, 'textures' | 'meta'>; images?: DocImages | null }): HeldTexture[] {
   const scene = d.scene;
@@ -79,9 +87,11 @@ export function prepareRelease(d: { scene: Pick<Scene3d, 'textures' | 'meta'>; i
   if (d.images) sceneImages.set(scene, d.images);
   for (const t of (scene.textures ?? []) as DeferredTexture[]) {
     const info = infos.get(t.id);
-    if (t.deferredData && info?.colorize) {
-      held.push({ id: t.id, blob: new Blob([t.deferredData as BlobPart], t.mime ? { type: t.mime } : {}), info });
+    if (t.deferredData && info && needsDecode(info)) {
+      const blob = new Blob([t.deferredData as BlobPart], t.mime ? { type: t.mime } : {});
+      held.push({ id: t.id, blob, info });
       delete t.deferredData;
+      if (!info.colorize && !info.pbr) swapSwatch(d.images, info.folder, blob);
       continue;
     }
     if (!t.data?.length || !info) continue;
@@ -224,14 +234,26 @@ export function recolorJob(make: WorkerFactory, req: Omit<RecolorRequest, 'id' |
   return { done, cancel: () => fail(new Error('cancelled')) };
 }
 
+/** 쓰지 않는 손질한 그림 하나를 닫는다 */
+function closeBitmap(b: ImageBitmap): void {
+  try {
+    b.close();
+  } catch {
+    /* 이미 닫혔다 */
+  }
+}
+
+/**
+ * 103차: 코어가 손질 결과를 받아 alpha를 정한 알파 재기만 무늬는 raw로 — 그 뒤 문맥을 되찾을 때 쥔 바이트를 그대로 준다
+ * (41차에 해석 워커가 알파만 잰 무늬와 같은 길, 코어는 setTexture로 정한 alpha를 지킨다). 색 바꾸기 무늬는 늘 다시 손질한다
+ */
+function settle(h: HeldTexture | undefined): void {
+  if (h && !h.info.colorize && h.info.alphaPossible) h.raw = true;
+}
+
 /** 받은 것을 쓰지 않을 때: 손질한 그림을 닫는다 */
 function dropResult(res: RecolorResult | null): void {
-  for (const t of res?.textures ?? [])
-    try {
-      t.bitmap.close();
-    } catch {
-      /* 이미 닫혔다 */
-    }
+  for (const t of res?.textures ?? []) closeBitmap(t.bitmap);
 }
 
 /** ContextWatch가 쓰는 뷰어(코어 Viewer3d의 일부) */
@@ -244,7 +266,10 @@ export interface WatchViewer {
   onContextRestore(cb: (need: ContextRestoreNeed) => void | Promise<unknown>): () => void;
   /** 코어 0.29.0: 되찾은 뒤 다시 올리기를 다 마쳤을 때(나눠 올리기·앱이 다시 줄 것·무늬 다시 풀기 — 앱이 주지 않은 것이 남으면 오지 않는다) */
   onContextRestoreDone(cb: () => void): () => void;
+  /** 쥔 바이트 그대로 다시 주기(raw — 기다리는 무늬만 받는다, alpha는 장면 값·앞서 정한 값 그대로) */
   restoreTexture(id: string, src: TextureSource): Promise<boolean>;
+  /** 103차(코어 0.95.0): 손질한 그림과 잰 alpha 주기(첫 그림 뒤로 미룬 손질·문맥 복구 뒤 다시 손질 — 코어가 alpha로 반투명 차례·그림자를 다시 정한다) */
+  setTexture(id: string, src: TextureUpdate): Promise<boolean>;
 }
 
 /** 앱 쪽 안내(알림 보이기·우리 알림이 떠 있으면 거두기)와 라벨·치수 끝 표시 가림 판정 다시 하기 */
@@ -298,6 +323,8 @@ export class ContextWatch {
    * 그 손질도 견본을 묻는다(61차는 견본 없이 손질해 견본이 원래 색 그림으로 남았다)
    */
   private owed: ReleaseSource | null = null;
+  /** 103차: 문서 판 번호(setSource마다 하나 오른다) — 손질 결과를 주는 동안 문서가 바뀌면 남은 그림을 주지 않는다(apply) */
+  private gen = 0;
   private readonly offs: (() => void)[];
 
   constructor(
@@ -311,6 +338,7 @@ export class ContextWatch {
 
   /** 새 문서마다: 놓아 올렸으면 그 장면과 쥐어 둔 무늬(아니면 null). 앞 문서의 다시 손질은 거둔다 */
   setSource(src: ReleaseSource | null): void {
+    this.gen++;
     this.job?.cancel();
     this.job = null;
     this.stopRaw();
@@ -326,8 +354,8 @@ export class ContextWatch {
   }
 
   /**
-   * 61차: 처음 열 때 해석 워커가 첫 그림 뒤로 미룬 색 바꾸기(Texture3d.pending — 쥐어 둔 색 바꾼 무늬 가운데 코어가 기다리는 것)를 손질 워커로
-   * 손질해 준다(setSource 바로 뒤). 알림 없이 — 그동안 그 무늬 면은 그물 색(평균색)이다. 62차: 워커로 손질하지 못하면 화면에서 같은 손질을 한다(recolor) —
+   * 61차: 처음 열 때 해석 워커가 첫 그림 뒤로 미룬 손질(Texture3d.pending — 쥐어 둔 손질 무늬 가운데 코어가 기다리는 것, 103차부터 알파를 재는 무늬까지)을 손질 워커로
+   * 손질해 setTexture로 준다(setSource 바로 뒤 — apply). 알림 없이 — 그동안 그 무늬 면은 그물 색(평균색)이다. 62차: 워커로 손질하지 못하면 화면에서 같은 손질을 한다(recolor) —
    * 그래도 못 한 무늬(그림을 풀지 못함)는 평균색이다(해석 워커가 손질하지 못한 무늬를 빼던 것과 같은 모습).
    * 손질한 재질 목록 견본은 swapSwatches로 바꾼다. 그 사이 문맥을 잃으면 문맥 복구 길(start)이 이어받는다(받은 손질은 쥐었다가 되찾을 때 준다)
    */
@@ -477,15 +505,47 @@ export class ContextWatch {
     );
   }
 
+  /**
+   * 손질 결과를 코어에 준다. 103차(코어 0.95.0): setTexture로 같은 id에 — 잰 alpha가 있으면 그림과 함께(코어가 반투명 차례·그림자를 다시 정한다), 없으면 그림만
+   * (색만 바꾸는 무늬 — alpha는 장면 값 그대로, 61·62차의 restoreTexture와 같다). plain(손질한 그림이 없는 알파 재기만 무늬)은 쥔 바이트를 alpha 거짓으로.
+   * 무늬마다 코어가 풀어 올리기를 기다리므로 그 사이 새 문서로 바뀔 수 있다 — 문서 판 번호(gen)가 바뀌었거나 뷰어 장면이 그 문서가 아니면 남은 그림은 닫고 주지 않는다
+   * (같은 무늬 id를 기다리는 새 문서에 앞 문서의 그림이 가지 않게 — 102차까지는 이어서 줬다)
+   */
   private async apply(src: ReleaseSource, res: RecolorResult): Promise<void> {
+    const gen = this.gen;
+    const live = (): boolean => this.gen === gen && this.src === src && this.v.scene === src.scene;
     // 61차: 처음 열 때 미룬 손질의 재질 목록 견본(해석 워커가 하던 견본 바꾸기)
-    if (res.swatches) {
+    if (res.swatches && live()) {
       swapSwatches(sceneImages.get(src.scene), res.swatches);
       if (this.owed === src) this.owed = null;
     }
+    const held = new Map(src.textures.map((h) => [h.id, h] as const));
     let textures = 0;
-    // 코어가 기다리지 않는 무늬면 false(받은 그림은 코어가 닫는다)
-    for (const t of res.textures) if (await this.v.restoreTexture(t.id, t.bitmap)) textures++;
+    // 코어가 받지 않으면 false(받은 그림은 코어가 닫는다)
+    for (const t of res.textures) {
+      if (!live()) {
+        closeBitmap(t.bitmap);
+        continue;
+      }
+      if (await this.v.setTexture(t.id, t.alpha === undefined ? t.bitmap : { bitmap: t.bitmap, alpha: t.alpha })) {
+        textures++;
+        settle(held.get(t.id));
+      }
+    }
+    for (const id of res.plain ?? []) {
+      const h = held.get(id);
+      if (!h || !live()) continue;
+      let data: Uint8Array;
+      try {
+        data = new Uint8Array(await h.blob.arrayBuffer());
+      } catch {
+        continue;
+      }
+      if (live() && (await this.v.setTexture(id, { data, alpha: false }))) {
+        textures++;
+        settle(h);
+      }
+    }
     this.partDone(src, textures);
   }
 

@@ -3,7 +3,7 @@
  * 화면이 그룹·컴포넌트를 여러 단계로 고를 수 있게 outline(나무)을, 부드러운 모서리·숨긴 형상(숨긴 주석 선분 포함)을 켜고 끌 수 있게 extras를,
  * 곡면을 SketchUp처럼 부드럽게 칠하게 smooth(꼭짓점 법선)를 켜고 읽는다.
  * 꾸러미 안 그림(무늬·미리보기)을 먼저 꺼내(개수·크기 한도) 무늬 재질 그림은 해석기에 넘겨 3D 무늬로 입히고(scene.textures),
- * 색을 바꾼 무늬·알파 그림은 여기서 풀어 손질한다(textures.ts). 그림 바이트는 화면이 Blob 주소로 바꾼다(견본·미리보기).
+ * 색을 바꾼 무늬·알파 그림은 여기서 풀어 손질한다(textures.ts — 큰 모형은 첫 그림 뒤로 미뤄 화면의 손질 워커가 한다, 61차·103차). 그림 바이트는 화면이 Blob 주소로 바꾼다(견본·미리보기).
  * 결과의 형식 배열·ImageBitmap은 복사 없이 넘긴다(app/protocol.ts collectTransfers).
  * 파일은 Blob·File로 받아 통째로 읽지 않는다: 2021+ 꾸러미는 목록과 필요한 항목만 읽고 model.dat는 덩이씩 읽으며 푼다(skpFileToScene, src/range.ts).
  * 결과를 보낸 뒤 파일 내용 지문(SHA-256)을 덩이씩 읽으며 구해 따로 보낸다(측정 안내를 파일별로 기억하는 열쇠 — 화면을 기다리게 하지 않는다).
@@ -16,7 +16,7 @@
 import { TEXTURE_LIMIT } from 'opencad-viewer3d/texture';
 import { skpFileToScene, STREAM_MIN_BYTES, type SkpFileResult, type SkpImages } from '../index';
 import { collectTransfers, errorText, isBigScene, sceneHasGeometry, type DeferNotice, type ParseRequest, type ParseResponse, type ParseResult } from '../app/protocol';
-import { deferAllowed, dropPbrMaps, markDeferredRecolor, PBR_MIN_TEXTURE_LIMIT, prepareSceneTextures } from './textures';
+import { deferAllowed, dropPbrMaps, markDeferredTrim, PBR_MIN_TEXTURE_LIMIT, prepareSceneTextures } from './textures';
 import { damageNotice, emptySceneNotice, unsupportedNotice } from './notice';
 import { packBigScene } from './pack';
 import { filePrint } from './print';
@@ -73,10 +73,11 @@ async function open(req: ParseRequest): Promise<ParseResult> {
     const limit = req.textureLimit && req.textureLimit > 0 ? req.textureLimit : TEXTURE_LIMIT;
     // 휴대 기기·작은 메모리(무늬 한도가 작다)는 PBR 그림을 넣지 않는다(값만 준 거칠기·금속은 둔다)
     if (limit < PBR_MIN_TEXTURE_LIMIT) dropPbrMaps(scene);
-    // 61차: 큰 모형(화면이 놓아 올린다)은 알파를 잴 필요 없는 색 바꾸기를 첫 그림 뒤로 미룬다 — pending을 달고 바이트는 그대로 넘기면
-    // 화면이 쥐었다가 손질 워커(recolor.worker.ts)로 손질해 준다(app/release.ts ContextWatch.fill. 165 MB 표본에서 손질 57장 가운데 48장).
+    // 61차: 큰 모형(화면이 놓아 올린다)은 손질을 첫 그림 뒤로 미룬다 — pending을 달고 바이트는 그대로 넘기면
+    // 화면이 쥐었다가 손질 워커(recolor.worker.ts)로 손질해 준다(app/release.ts ContextWatch.fill. 61차는 알파 칸이 없는 색 바꾸기만 —
+    // 165 MB 표본에서 손질 57장 가운데 48장). 103차: 코어 0.95.0 setTexture로 잰 alpha도 장면을 올린 뒤 주므로 알파를 재는 무늬까지 모두(57장).
     // 62차: 화면이 놓기 조각을 받았다고 알린 뒤에만(DeferNotice — 받지 못했으면 예전처럼 여기서 손질한다)
-    const skip = isBigScene({ scene }) && (await deferAllowed(() => deferOk)) ? markDeferredRecolor(scene) : undefined;
+    const skip = isBigScene({ scene }) && (await deferAllowed(() => deferOk)) ? markDeferredTrim(scene) : undefined;
     const prep = await prepareSceneTextures(scene, limit, (d, n) => progress(0.96 + (0.02 * d) / Math.max(1, n), '무늬 그림 손질하는 중'), skip?.size ? { skip } : {});
     // 색을 바꾼 무늬는 재질 목록 견본도 바꾼 색으로
     if (images && prep.swatches.size)

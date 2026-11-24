@@ -37,7 +37,8 @@ export interface DeferNotice {
 /**
  * 쥐어 둔 무늬 하나(29차): 큰 모형을 놓아 올릴 때 쥔 원래 그림 파일 바이트(Blob — 그림 꼴은 type)와 그 무늬의 손질 정보(meta.textures — 색 바꾸기·알파).
  * 문맥을 되찾으면 색 바꾼 무늬는 처음 열 때와 같은 손질(worker/textures.ts)로 다시 그림을 만들고, raw(41차 — 코어가 푸는 무늬·워커가 알파만 잰 무늬)는
- * 바이트를 그대로 코어에 다시 준다
+ * 바이트를 그대로 코어에 다시 준다. 103차: 첫 그림 뒤로 미룬 알파 재기만 무늬는 알파를 재기 전까지 손질 무늬(raw 아님)이고,
+ * 손질 결과를 코어가 받아 alpha를 정하면 raw가 된다(release.ts ContextWatch — 코어는 정한 alpha를 문맥 복구 뒤에도 지킨다)
  */
 export interface HeldTexture {
   id: string;
@@ -47,8 +48,8 @@ export interface HeldTexture {
 }
 
 /**
- * 61차: 해석 워커가 첫 그림 뒤로 미룬 색 바꾸기 무늬(큰 모형 — worker/textures.ts markDeferredRecolor). pending을 달고 그림 바이트는 data 대신
- * deferredData에 둔다 — 화면이 놓기 조각(release.ts prepareRelease)에서 쥐고 손질 워커로 손질해 준다. 62차: 워커는 화면이 그 조각을 받았다고
+ * 61차: 해석 워커가 첫 그림 뒤로 미룬 손질 무늬(큰 모형 — worker/textures.ts markDeferredTrim, 61차는 알파 칸이 없는 색 바꾸기만, 103차부터 알파를 재는 무늬까지).
+ * pending을 달고 그림 바이트는 data 대신 deferredData에 둔다 — 화면이 놓기 조각(release.ts prepareRelease)에서 쥐고 손질 워커로 손질해 준다. 62차: 워커는 화면이 그 조각을 받았다고
  * 알린 뒤에만 미룬다(DeferNotice — 61차는 받지 못하면 코어가 그 무늬를 기다린 채 그물 색(평균색)으로 남겼다)
  */
 export interface DeferredTexture extends Texture3d {
@@ -68,7 +69,13 @@ export interface RecolorRequest {
 
 /** 다시 손질한 무늬(손질한 그림과 크기 — 풀지 못한 무늬는 빠진다) */
 export interface RecolorResult {
-  textures: { id: string; bitmap: ImageBitmap; width: number; height: number }[];
+  /** alpha(103차): 알파 칸이 있는 무늬(info.alphaPossible)면 잰 값 — 화면은 코어 setTexture에 함께 준다(그 밖은 없음 — 장면 값 그대로) */
+  textures: { id: string; bitmap: ImageBitmap; width: number; height: number; alpha?: boolean }[];
+  /**
+   * 103차: 알파를 재 보니 손질한 그림이 없는 알파 재기만 무늬(투명 화소를 쓰지 않음·그림을 풀 수 없는 곳) — 해석 워커가 바이트 그대로 두던 무늬라
+   * 화면이 쥔 바이트를 그대로 준다(alpha 거짓). 그런 무늬가 없으면 이 칸이 없다
+   */
+  plain?: string[];
   /** 다시 손질한 시간(ms) */
   ms: number;
   /** 61차: 색 바꾼 무늬의 재질 목록 견본 PNG(재질 폴더 — swatches를 물었을 때만) */

@@ -13,10 +13,12 @@
 import { localizeCubeFaces } from './i18n';
 
 /**
- * 코어 입구에서 앱이 쓰는 것(Viewer3d 하나 — 60차). 입구 모듈 전체(이름공간)를 넘기면 번들러가 입구가 내보내는 모든 것을 코어 조각에 남기고
- * 첫 화면 조각에 있는 작은 모듈의 함수(코어 0.54.0 viewKeyOf 등)까지 조각 사이로 내보낸다. import().then의 나눈 이름만 남긴다(rollup 동적 가져오기 나무 흔들기)
+ * 코어 입구에서 앱이 쓰는 것(Viewer3d — 60차, 103차부터 끌기 시작 거리 dragStartPx도). 입구 모듈 전체(이름공간)를 넘기면 번들러가 입구가 내보내는 모든 것을 코어 조각에 남기고
+ * 첫 화면 조각에 있는 작은 모듈의 함수(코어 0.54.0 viewKeyOf 등)까지 조각 사이로 내보낸다. import().then의 나눈 이름만 남긴다(rollup 동적 가져오기 나무 흔들기).
+ * 103차: dragStartPx는 코어 pointer 모듈의 함수다. 앱이 첫 화면에서 바로 가져오면 그 모듈(코어 뷰어가 쓰는 고르기 허용 거리 거르기까지)이 첫 화면 조각에 들어가므로
+ * 코어 입구(뷰어 조각이 이미 그 모듈을 싣는다)와 함께 받는다. 앱은 뷰어를 만든 뒤에만 쓴다(3D 보기 끌기 판정)
  */
-type Core = Pick<typeof import('opencad-viewer3d'), 'Viewer3d'>;
+type Core = Pick<typeof import('opencad-viewer3d'), 'Viewer3d' | 'dragStartPx'>;
 type Measure = typeof import('./measure');
 type Release = typeof import('./release');
 type Sections = typeof import('./sections');
@@ -66,7 +68,7 @@ export function onceImport<T>(load: () => Promise<T>): () => Promise<T> {
  */
 export const loadViewerCore: () => Promise<Core> = onceImport(() =>
   Promise.all([
-    import('opencad-viewer3d').then(({ Viewer3d }) => ({ Viewer3d })),
+    import('opencad-viewer3d').then(({ Viewer3d, dragStartPx }) => ({ Viewer3d, dragStartPx })),
     import('opencad-viewer3d/viewcube'),
     import('./sections'),
     import('./keypick'),

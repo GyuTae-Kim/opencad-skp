@@ -6,9 +6,10 @@
  * 41차부터 놓기는 무늬 원본 모두(그림 바이트도): 바이트가 있는 무늬는 모두 Blob으로 쥐고(나머지 무늬는 raw — 견본 주소도 그 Blob으로),
  * 되찾을 때 raw는 손질 워커 없이 바이트를 그대로 코어에 다시 준다(한 번에 넷까지 — 또 잃음·새 문서·멈춤·읽지 못함).
  * 가짜 뷰어(코어 Viewer3d의 일부 — 끝 알림은 코어처럼 되찾음 알림들 뒤, 앱이 다 주고 코어가 풀 무늬가 없을 때)와 가짜 Worker로 차례를 본다.
+ * 103차(코어 0.95.0 setTexture): 미룬 손질은 알파를 재는 무늬까지 — 손질 결과는 setTexture로 같은 id·잰 alpha로, 주는 도중 문서가 바뀌면 남은 것은 닫는다.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ContextRestoreNeed, TextureSource } from 'opencad-viewer3d';
+import type { ContextRestoreNeed, TextureSource, TextureUpdate } from 'opencad-viewer3d';
 import type { Scene3d } from 'opencad-viewer3d/types';
 import type { SkpTextureInfo } from '../../src/index';
 import type { DeferredTexture, HeldTexture, RecolorRequest, RecolorResult } from '../../src/app/protocol';
@@ -96,14 +97,26 @@ class FakeViewer implements WatchViewer {
     this.doneCb = cb;
     return () => (this.doneCb = null);
   }
+  /** 103차: 무늬를 받을 때 한 번 부른다(주는 도중 새 문서를 여는 차례를 흉내 낸다) */
+  onGive: ((id: string) => void) | null = null;
   /** 코어처럼 받은 무늬를 올린 뒤(약속이 풀리기 전) 끝인지 본다 */
   restoreTexture(id: string, src: TextureSource): Promise<boolean> {
     if (!this.missTex.delete(id)) return Promise.resolve(false);
     this.gotTex.push([id, src]);
+    const hook = this.onGive;
+    this.onGive = null;
+    hook?.(id);
     return Promise.resolve().then(() => {
       this.checkDone();
       return true;
     });
+  }
+  /** 0.95.0 setTexture로 받은 것(id, 그림·alpha) */
+  setTex: [string, TextureUpdate][] = [];
+  /** 0.95.0 setTexture: 받은 것을 적고, 이 가짜는 기다리는 무늬만 받는다(앱은 코어가 기다리는 무늬에만 준다) */
+  setTexture(id: string, src: TextureUpdate): Promise<boolean> {
+    this.setTex.push([id, src]);
+    return this.restoreTexture(id, src as TextureSource);
   }
   lose(): void {
     this.pending = true;
@@ -1025,5 +1038,149 @@ describe('61차 처음 열 때 첫 그림 뒤로 미룬 색 바꾸기(pending �
       await expect(bad.done).rejects.toThrow('던짐');
       await expect(hereJob(() => Promise.reject('글'), { textures: [] }).done).rejects.toThrow('글');
     });
+  });
+});
+
+describe('103차 미룬 손질을 setTexture로(코어 0.95.0 — 알파를 재는 무늬까지)', () => {
+  /** 알파 칸이 있는 무늬 정보(색 바꾸기 여부) */
+  const alphaInfo = (id: string, colorize: boolean): SkpTextureInfo => ({ ...info(id, colorize), alphaPossible: true });
+  const alphaHeld = (id: string, colorize: boolean, bytes = [1, 2, 3]): HeldTexture => ({
+    id,
+    blob: new Blob([new Uint8Array(bytes)], { type: 'image/png' }),
+    info: alphaInfo(id, colorize),
+  });
+  const alphaOf = (src: unknown): boolean | undefined => (src && typeof src === 'object' && 'alpha' in src ? (src as { alpha?: boolean }).alpha : undefined);
+
+  it('놓기 준비: 해석 워커가 미룬 무늬는 알파 재기 무늬도 손질 전 무늬로 쥔다(장면에서 빼 코어가 기다린다) — 알파 재기만 무늬의 견본 주소는 쥔 Blob으로(41차 raw와 같은 한 벌)', async () => {
+    const scene: Pick<Scene3d, 'textures' | 'meta'> = {
+      textures: [
+        { id: 'ca', pending: true, deferredData: new Uint8Array([1, 2]), mime: 'image/png', width: 4, height: 2 } as DeferredTexture,
+        { id: 'at', pending: true, deferredData: new Uint8Array([3, 4, 5]), mime: 'image/png', width: 8, height: 8 } as DeferredTexture,
+      ],
+      meta: { textures: [alphaInfo('ca', true), alphaInfo('at', false)] },
+    };
+    const images: DocImages = {
+      model: null,
+      materials: new Map([
+        ['ca', { name: 'ca.png', url: 'blob:old-ca' }],
+        ['at', { name: 'at.png', url: 'blob:old-at' }],
+      ]),
+      components: new Map(),
+      scenes: [],
+      skipped: 0,
+      urls: ['blob:old-ca', 'blob:old-at'],
+    };
+    const got = prepareRelease({ scene, images });
+    expect(got.map((h) => [h.id, h.blob.type, h.blob.size, !!h.raw])).toEqual([
+      ['ca', 'image/png', 2, false],
+      ['at', 'image/png', 3, false],
+    ]);
+    expect(scene.textures!.map((t) => [t.id, !!t.data, !!(t as DeferredTexture).deferredData, !!t.pending, t.width])).toEqual([
+      ['ca', false, false, true, 4],
+      ['at', false, false, true, 8],
+    ]);
+    // 색 바꾸기 무늬의 견본은 손질이 바꾼 색 PNG를 줄 때까지 그대로, 알파 재기만 무늬의 견본(원래 그림 — 같은 바이트)은 쥔 Blob의 주소로
+    expect(images.materials.get('ca')!.url).toBe('blob:old-ca');
+    const at = images.materials.get('at')!.url;
+    expect(at).not.toBe('blob:old-at');
+    const { resolveObjectURL } = await import('node:buffer');
+    expect([...new Uint8Array(await resolveObjectURL(at)!.arrayBuffer())]).toEqual([3, 4, 5]);
+    URL.revokeObjectURL(at);
+  });
+
+  it('setSource가 미룬 무늬를 손질 워커로 손질해 setTexture로 같은 id·잰 alpha로 준다 — plain(투명 화소가 없는 알파 재기 무늬)은 쥔 바이트와 alpha 거짓, 알파를 정한 알파 재기만 무늬는 그 뒤 되찾을 때 바이트 그대로', async () => {
+    const v = new FakeViewer();
+    const ui = new FakeUi();
+    const w = new ContextWatch(v, ui, make, here);
+    const s = sceneOf();
+    v.scene = s;
+    const textures = [held('t1'), alphaHeld('ca', true), alphaHeld('at', false), alphaHeld('ao', false, [7, 7, 7])];
+    for (const t of textures) v.missTex.add(t.id);
+    w.setSource({ scene: s, textures, textureLimit: 1024 });
+    const wk = FakeWorker.all[0]!;
+    expect(wk.posted[0]!.msg.textures.map((t) => t.id)).toEqual(['t1', 'ca', 'at', 'ao']);
+    expect(wk.posted[0]!.msg.swatches).toBe(true);
+    const res: RecolorResult = {
+      textures: [
+        { id: 't1', bitmap: bmp(), width: 2, height: 2 },
+        { id: 'ca', bitmap: bmp(), width: 2, height: 2, alpha: true },
+        { id: 'at', bitmap: bmp(), width: 2, height: 2, alpha: true },
+      ],
+      plain: ['ao'],
+      ms: 1,
+    };
+    wk.emit({ id: 1, type: 'recolored', result: res });
+    await settle();
+    expect(v.setTex.map(([id, src]) => [id, alphaOf(src)])).toEqual([
+      ['t1', undefined],
+      ['ca', true],
+      ['at', true],
+      ['ao', false],
+    ]);
+    // 색만 바꾸는 무늬는 그림 그대로, 잰 alpha가 있으면 그림과 함께, plain은 쥔 바이트
+    expect(v.setTex[0]![1]).toBe(res.textures[0]!.bitmap);
+    expect((v.setTex[1]![1] as { bitmap: ImageBitmap }).bitmap).toBe(res.textures[1]!.bitmap);
+    expect([...(v.setTex[3]![1] as { data: Uint8Array }).data]).toEqual([7, 7, 7]);
+    expect(v.restoreNeed).toBeNull();
+    expect(w.last).toMatchObject({ textures: 4, left: 0 });
+    expect(ui.shown).toEqual([]);
+    expect(w.state).toBe('ok');
+    // 코어가 alpha를 정한 알파 재기만 무늬(at·ao)는 raw가 된다(41차 — 되찾을 때 바이트 그대로, 코어는 정한 alpha를 지킨다). 색 바꾸기는 그대로 손질 무늬
+    expect(textures.map((t) => [t.id, !!t.raw])).toEqual([
+      ['t1', false],
+      ['ca', false],
+      ['at', true],
+      ['ao', true],
+    ]);
+    v.lose();
+    v.restore(['t1', 'ca', 'at', 'ao']);
+    expect(FakeWorker.all[1]!.posted[0]!.msg.textures.map((t) => t.id)).toEqual(['t1', 'ca']);
+    await settle();
+    expect(
+      v.gotTex
+        .slice(4)
+        .map(([id, src]) => [id, src instanceof Uint8Array])
+        .sort(),
+    ).toEqual([
+      ['ao', true],
+      ['at', true],
+    ]);
+  });
+
+  it('주는 도중 새 문서로 바꾸면(같은 무늬 id) 앞 문서의 남은 손질 그림은 닫고 새 문서에 주지 않는다 — 새 문서는 제 손질만 받는다', async () => {
+    const v = new FakeViewer();
+    const ui = new FakeUi();
+    const w = new ContextWatch(v, ui, make, here);
+    const s1 = sceneOf();
+    v.scene = s1;
+    v.missTex = new Set(['t1', 't2']);
+    w.setSource({ scene: s1, textures: [held('t1'), held('t2')], textureLimit: 1024 });
+    const s2 = sceneOf();
+    // 앞 문서의 첫 무늬를 받는 동안 새 문서를 연다(app.ts setDoc 차례: 앞 문서 거두기 → setScene — 같은 id를 기다린다 → setSource)
+    v.onGive = () => {
+      w.setSource(null);
+      v.scene = s2;
+      v.missTex = new Set(['t1', 't2']);
+      w.setSource({ scene: s2, textures: [held('t1'), held('t2')], textureLimit: 1024 });
+    };
+    const old = result('t1', 't2');
+    FakeWorker.all[0]!.emit({ id: 1, type: 'recolored', result: old });
+    await settle();
+    expect(v.gotTex.map(([id, src]) => [id, src === old.textures[0]!.bitmap])).toEqual([['t1', true]]);
+    expect(old.textures[1]!.bitmap.close).toHaveBeenCalled();
+    // 새 문서는 제 손질(새 워커)을 기다리고, 앞 문서 몫은 끝을 알리지 않는다
+    expect(FakeWorker.all).toHaveLength(2);
+    expect(FakeWorker.all[1]!.posted[0]!.msg.textures.map((t) => t.id)).toEqual(['t1', 't2']);
+    expect([...v.missTex].sort()).toEqual(['t1', 't2']);
+    expect(w.last).toBeNull();
+    const mine = result('t1', 't2');
+    FakeWorker.all[1]!.emit({ id: 1, type: 'recolored', result: mine });
+    await settle();
+    expect(v.gotTex.slice(1).map(([id, src]) => [id, src === mine.textures.find((t) => t.id === id)!.bitmap])).toEqual([
+      ['t1', true],
+      ['t2', true],
+    ]);
+    expect(w.last).toMatchObject({ textures: 2, left: 0 });
+    expect(ui.shown).toEqual([]);
   });
 });

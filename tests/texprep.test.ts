@@ -11,7 +11,7 @@ import type { Scene3d } from 'opencad-viewer3d/types';
 import type { SkpTextureInfo } from '../src/index';
 import type { DeferredTexture } from '../src/app/protocol';
 import { colorizeRgba, type ColorizeSpec } from '../src/colorize';
-import { DECODE_AHEAD, decodedPixels, deferAllowed, deferrableRecolor, markDeferredRecolor, prepareSceneTextures, recolorTextures } from '../src/worker/textures';
+import { DECODE_AHEAD, decodedPixels, deferAllowed, markDeferredTrim, prepareSceneTextures, recolorTextures } from '../src/worker/textures';
 
 const SPECS: ColorizeSpec[] = [
   { type: 'shift', color: [64, 64, 66], average: [139, 140, 143] },
@@ -284,61 +284,83 @@ describe('무늬 손질 차례(33차)', () => {
   });
 });
 
-describe('61차 첫 그림 뒤로 미루는 색 바꾸기(큰 모형)', () => {
-  /** scene3에 색 바꾸기 + 알파 가능 무늬 d(채움 60)를 더한 장면 */
+describe('61차·103차 첫 그림 뒤로 미루는 무늬 손질(큰 모형)', () => {
+  /** scene3에 색 바꾸기 + 알파 가능 무늬 d(채움 60 — 투명 화소를 쓴다)와 손질이 필요 없는 무늬 e를 더한 장면 */
   function scene4(): Scene3d {
     const s = scene3();
     s.meshes.push({ id: 'm4', positions: new Float32Array(9), color: [1, 1, 1, 1], texture: 'd', uvs: new Float32Array(6) });
+    s.meshes.push({ id: 'm5', positions: new Float32Array(9), color: [1, 1, 1, 1], texture: 'e', uvs: new Float32Array(6) });
     s.textures!.push({ id: 'd', data: pngHead(20, 20, 60), mime: 'image/png', width: 20, height: 20 });
-    (s.meta!.textures as SkpTextureInfo[]).push(info('d', true, true));
+    s.textures!.push({ id: 'e', data: pngHead(8, 8, 1), mime: 'image/jpeg', width: 8, height: 8 });
+    (s.meta!.textures as SkpTextureInfo[]).push(info('d', true, true), info('e', false));
     return s;
   }
 
-  it('미룰 무늬는 색 바꾸기이면서 알파 칸이 없는 것만(알파를 재야 하는 무늬는 워커가 먼저 손질) — pending을 달고 바이트는 deferredData로 옮긴다', () => {
-    expect(deferrableRecolor(info('x', true))).toBe(true);
-    expect(deferrableRecolor(info('x', true, true))).toBe(false);
-    expect(deferrableRecolor(info('x', false, true))).toBe(false);
-    expect(deferrableRecolor(undefined)).toBe(false);
+  it('103차: 손질할 무늬는 알파를 재는 무늬까지 모두 미룬다(코어 0.95.0 setTexture가 잰 alpha를 장면을 올린 뒤에 받는다) — pending을 달고 바이트는 deferredData로, 크기는 그대로', () => {
     const s = scene4();
     const bytes = s.textures![0]!.data;
-    const ids = markDeferredRecolor(s);
-    expect([...ids]).toEqual(['a', 'c']);
-    // data가 없어야 코어가 그 무늬를 기다린다(놓기 조각이 쥐지 못해도 원래 색 그림을 그리지 않는다)
+    const ids = markDeferredTrim(s);
+    expect([...ids]).toEqual(['a', 'b', 'c', 'd']);
+    // data가 없어야 코어가 그 무늬를 기다린다(놓기 조각이 쥐지 못해도 원래 색 그림을 그리지 않는다). 손질이 필요 없는 무늬(e)는 그대로
     expect(s.textures!.map((t) => [t.id, !!t.pending, !!t.data, !!(t as DeferredTexture).deferredData])).toEqual([
       ['a', true, false, true],
-      ['b', false, true, false],
+      ['b', true, false, true],
       ['c', true, false, true],
-      ['d', false, true, false],
+      ['d', true, false, true],
+      ['e', false, true, false],
+    ]);
+    // 그림 머리의 크기는 그대로 둔다(코어가 한 장 한도·전체 예산을 처음부터 손질한 그림과 같게 나눈다)
+    expect(s.textures!.map((t) => [t.width, t.height])).toEqual([
+      [64, 32],
+      [16, 16],
+      [300, 100],
+      [20, 20],
+      [8, 8],
     ]);
     expect((s.textures![0] as DeferredTexture).deferredData).toBe(bytes);
   });
 
-  it('워커는 미룬 무늬를 손질하지 않고(풀지도 않는다) 나머지만 — 손질 워커의 견본 포함 손질은 워커가 함께 하던 것과 같은 그림·견본', async () => {
+  it('워커는 미룬 무늬를 손질하지 않고(풀지도 않는다) — 손질 워커의 견본 포함 손질은 워커가 함께 하던 것과 같은 그림·alpha·견본, 투명 화소가 없는 알파 재기 무늬는 plain', async () => {
     const log = fakeImages();
     const s = scene4();
-    const skip = markDeferredRecolor(s);
+    const skip = markDeferredTrim(s);
     const r = await prepareSceneTextures(s, 128, undefined, { skip });
-    expect(log.filter((x) => x.startsWith('read'))).toEqual(['read:255', 'read:60']);
-    expect(r).toMatchObject({ decoded: 2, colorized: 1 });
-    expect([...r.swatches.keys()]).toEqual(['f-d']);
-    expect(s.textures!.filter((t) => t.bitmap).map((t) => t.id)).toEqual(['d']);
-    // 손질 워커(recolorTextures, 견본 포함): 쥔 바이트(Blob)로 미룬 무늬를 손질한다 — 함께 손질한 것과 그림 크기·화소·견본이 같다
+    expect(log.filter((x) => x.startsWith('read'))).toEqual([]);
+    expect(r).toMatchObject({ decoded: 0, colorized: 0, alpha: 0, dropped: 0 });
+    expect(r.swatches.size).toBe(0);
+    expect(s.textures!.filter((t) => t.bitmap)).toEqual([]);
+    // 손질 워커(recolorTextures, 견본 포함): 쥔 바이트(Blob)로 미룬 무늬를 손질한다 — 함께 손질한 것과 그림 크기·화소·알파·견본이 같다
     const all = scene4();
     const together = await prepareSceneTextures(all, 128);
     const infos = s.meta!.textures as SkpTextureInfo[];
+    const infoOf = (id: string): SkpTextureInfo => infos.find((i) => i.id === id)!;
     const held = (s.textures! as DeferredTexture[])
       .filter((t) => skip.has(t.id))
-      .map((t) => ({ id: t.id, blob: new Blob([t.deferredData as BlobPart], { type: t.mime! }), info: infos.find((i) => i.id === t.id)! }));
+      .map((t) => ({ id: t.id, blob: new Blob([t.deferredData as BlobPart], { type: t.mime! }), info: infoOf(t.id) }));
     const later = await recolorTextures(held, 128, { swatches: true });
     const px = (b: unknown): number[] => [...(b as FakeBitmap).px.slice(0, 4)];
-    expect(later.textures.map((t) => [t.id, t.width, t.height, px(t.bitmap)])).toEqual(
-      all.textures!.filter((t) => skip.has(t.id)).map((t) => [t.id, t.width, t.height, px(t.bitmap)]),
-    );
-    expect(later.swatches!.map((x) => [x.folder, [...x.png]])).toEqual(['f-a', 'f-c'].map((f) => [f, [...together.swatches.get(f)!]]));
-    // 견본을 묻지 않으면(문맥 복구) 예전처럼 하나씩, 견본 없이
-    const plain = await recolorTextures(held, 128);
-    expect(plain.swatches).toBeUndefined();
-    expect(plain.textures.map((t) => t.id)).toEqual(['a', 'c']);
+    // 잰 alpha는 알파 칸이 있는 무늬에만 단다(그 밖은 장면 값 그대로 — 손질 전과 같다)
+    const want = all.textures!.filter((t) => t.bitmap).map((t) => [t.id, t.width, t.height, px(t.bitmap), infoOf(t.id).alphaPossible ? !!t.alpha : undefined]);
+    expect(want.map((w) => [w[0], w[4]])).toEqual([
+      ['a', undefined],
+      ['c', undefined],
+      ['d', true],
+    ]);
+    expect(later.textures.map((t) => [t.id, t.width, t.height, px(t.bitmap), t.alpha])).toEqual(want);
+    // 함께 손질할 때 바이트 그대로 남던 알파 재기 무늬(b — 투명 화소 없음)는 plain: 화면이 쥔 바이트를 그대로 준다
+    expect(all.textures!.find((t) => t.id === 'b')).toMatchObject({ data: expect.any(Uint8Array) });
+    expect(all.textures!.find((t) => t.id === 'b')!.bitmap).toBeUndefined();
+    expect(later.plain).toEqual(['b']);
+    expect(later.swatches!.map((x) => [x.folder, [...x.png]])).toEqual(['f-a', 'f-c', 'f-d'].map((f) => [f, [...together.swatches.get(f)!]]));
+    // 견본을 묻지 않으면(문맥 복구) 예전처럼 하나씩, 견본 없이 — 같은 alpha·plain
+    const one = await recolorTextures(held, 128);
+    expect(one.swatches).toBeUndefined();
+    expect(one.textures.map((t) => [t.id, t.alpha])).toEqual([
+      ['a', undefined],
+      ['c', undefined],
+      ['d', true],
+    ]);
+    expect(one.plain).toEqual(['b']);
   });
 
   it('62차: 화면이 놓기 조각을 받았다고 알린 뒤에만 미룬다 — 아직이면 한 번 쉬며 그동안 온 알림을 받고, 그래도 없으면(받기 실패) 미루지 않는다', async () => {
@@ -355,7 +377,7 @@ describe('61차 첫 그림 뒤로 미루는 색 바꾸기(큰 모형)', () => {
     expect(await deferAllowed(() => late)).toBe(false);
     // 해석 워커는 큰 모형이면서 이 판정이 참일 때만 미루고, 알림은 'defer' 메시지로만 받는다
     const src = readFileSync(new URL('../src/worker/parse.worker.ts', import.meta.url), 'utf8');
-    expect(src).toContain('const skip = isBigScene({ scene }) && (await deferAllowed(() => deferOk)) ? markDeferredRecolor(scene) : undefined;');
+    expect(src).toContain('const skip = isBigScene({ scene }) && (await deferAllowed(() => deferOk)) ? markDeferredTrim(scene) : undefined;');
     expect(src.match(/deferOk = true/g)).toHaveLength(1);
     expect(src).toMatch(/if \(req\?\.type === 'defer'\) \{\s*deferOk = true;\s*return;\s*\}/);
   });
