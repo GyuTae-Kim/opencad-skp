@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Viewer3d } from 'opencad-viewer3d';
+import type { IndexRange, Viewer3d } from 'opencad-viewer3d';
 import { buildBvh } from 'opencad-viewer3d/bvh';
 import { dirToAngles, projectToScreen, screenRay, type CameraState } from 'opencad-viewer3d/camera';
 import { pickScene } from 'opencad-viewer3d/scenepick';
@@ -258,6 +258,12 @@ interface Rig {
   /** 그물 면만 고르기(코어 0.20.0 pick의 meshesOnly)를 부른 수 */
   meshPicks: () => number;
   setCamera(c: CameraState): void;
+  /** 묶음 숨기기·보이기(코어 setItemVisible·setGroupVisible 꼴 — 숨긴 묶음은 고르지 않고 isVisible이 false) */
+  hide(id: string, on?: boolean): void;
+  /** 묶음 안 구간 숨기기(코어 setHiddenRanges 꼴 — 선분 묶음은 배열 안 선분 번호, null이면 풀기. 가짜 고르기는 구간을 거르지 않는다) */
+  hideRanges(id: string, list: IndexRange[] | null): void;
+  /** 단면 바뀜 알림(코어 onSectionChange) */
+  sectionChanged(): void;
   ptr(type: string, x: number, y: number, o?: { id?: number; button?: number; buttons?: number; pointerType?: string; shift?: boolean }): void;
   click(x: number, y: number, o?: { pointerType?: string; id?: number; shift?: boolean }): void;
   move(x: number, y: number, o?: { shift?: boolean }): void;
@@ -288,6 +294,11 @@ function rig(scene: Pick<Scene3d, 'meshes' | 'lines' | 'units'>, cam: CameraStat
   let camera = cam;
   const camCbs = new Set<(c: CameraState) => void>();
   const items = { meshes: scene.meshes, lines: scene.lines, points: [] };
+  // 숨긴 묶음·구간과 단면 알림(106차 — 코어 isVisible·hiddenRanges·onSectionChange 꼴)
+  const hidden = new Set<string>();
+  const ranges = new Map<string, IndexRange[]>();
+  const secCbs = new Set<() => void>();
+  const shown = (): typeof items => (hidden.size ? { meshes: items.meshes.filter((m) => !hidden.has(m.id)), lines: items.lines.filter((l) => !hidden.has(l.id)), points: [] } : items);
   let meshPicks = 0;
   const viewer: MeasureViewer = {
     canvas,
@@ -295,7 +306,8 @@ function rig(scene: Pick<Scene3d, 'meshes' | 'lines' | 'units'>, cam: CameraStat
     pick: (x, y, o) => {
       const only = typeof o === 'object' && !!o.meshesOnly;
       if (only) meshPicks++;
-      return pickScene(frameFor(camera, W, W), x, y, only ? { ...items, lines: [] } : items, { tol: 6, occlude: true, bvh: (kind, pos, idx) => (kind === 'triangle' ? buildBvh(kind, pos, idx) : null) })?.pick ?? null;
+      const vis = shown();
+      return pickScene(frameFor(camera, W, W), x, y, only ? { ...vis, lines: [] } : vis, { tol: 6, occlude: true, bvh: (kind, pos, idx) => (kind === 'triangle' ? buildBvh(kind, pos, idx) : null) })?.pick ?? null;
     },
     getCamera: () => camera,
     onCameraChange: (cb) => {
@@ -304,6 +316,13 @@ function rig(scene: Pick<Scene3d, 'meshes' | 'lines' | 'units'>, cam: CameraStat
     },
     getRenderMode: () => 'shaded',
     section: null,
+    isVisible: (id) => !hidden.has(id) && (items.meshes.some((m) => m.id === id) || items.lines.some((l) => l.id === id)),
+    hiddenRanges: (id) => (ranges.get(id) ?? []).map((g) => ({ ...g })),
+    onSectionChange: (cb) => {
+      const f = (): void => cb(null, []);
+      secCbs.add(f);
+      return () => secCbs.delete(f);
+    },
   };
   const overlay = new Overlay(host);
   overlay.attach(viewer as unknown as Viewer3d);
@@ -346,6 +365,17 @@ function rig(scene: Pick<Scene3d, 'meshes' | 'lines' | 'units'>, cam: CameraStat
     setCamera(c) {
       camera = c;
       for (const cb of camCbs) cb(c);
+    },
+    hide(id, on = false) {
+      if (on) hidden.delete(id);
+      else hidden.add(id);
+    },
+    hideRanges(id, list) {
+      if (list) ranges.set(id, list);
+      else ranges.delete(id);
+    },
+    sectionChanged() {
+      for (const cb of secCbs) cb();
     },
     ptr,
     click(x, y, o = {}) {
@@ -2829,6 +2859,76 @@ describe('측정 도구: 잠글 방향 고르기(한 손 잠금 — 22차, Sketc
     // 도구를 버리면 줄도 뗀다
     r.tool.dispose();
     expect(menu.isConnected).toBe(false);
+  });
+});
+
+describe('측정 도구: 지나간 모서리는 그 선분 묶음이 숨거나 단면이 바뀌면 버린다(106차 — 코어 0.99.0과 같은 규칙)', () => {
+  // 면(시작점을 찍을 곳 — 모서리가 아니라 기준을 바꾸지 않는다): 화면 (120~180, 80~120). 묶음 d: 0번 가로 선분(화면 y 40), 1번 45° 선분(가운데 화면 (25, 145)).
+  // 묶음 o: 다른 가로 선분(화면 y 40, x 130~160)
+  const scene = (): Pick<Scene3d, 'meshes' | 'lines' | 'units'> => ({
+    units: 'mm',
+    meshes: [quad('f', 20, -20, 80, 20, -5)],
+    lines: [lines('d', [[-90, 60, 0, -60, 60, 0], [-90, -60, 0, -60, -30, 0]]), lines('o', [[30, 60, 0, 60, 60, 0]])],
+  });
+  /** 시작점(화면 150, 100)에서 45°로 40화소 — 45° 모서리와 나란한 자리(면 밖 빈 곳) */
+  const along45: [number, number] = [150 + 40 * Math.SQRT1_2, 100 - 40 * Math.SQRT1_2];
+  /** 45° 모서리를 지나간 뒤(기준) 장면을 바꾸고 면 위에 시작점을 찍는다 */
+  const start = (change: (r: Rig) => void): Rig => {
+    const r = rig(scene());
+    r.tool.setMode('tape');
+    r.move(25, 145);
+    expect(r.tip()).toBe(SNAP_LABELS.midpoint);
+    change(r);
+    r.click(150, 100);
+    expect(r.tool.pointCount).toBe(1);
+    return r;
+  };
+  const dropped = (r: Rig): void => {
+    expect(r.tool.lockChoices).toEqual(['x', 'y', 'z']);
+    expect(r.tool.lockTo('parallel')).toBe(false);
+    expect(r.key('ArrowDown')).toBe(false);
+    expect(r.tool.inferenceLock).toBeNull();
+    r.move(...along45);
+    expect(r.q('.measure-snap-parallel')).toBeNull();
+    expect(r.q('.measure-parallel-ref')).toBeNull();
+  };
+
+  it('다른 묶음을 숨기거나 같은 묶음의 다른 선분 구간을 숨기면 남긴다 — 나란함 추론·↓ 잠금 그대로', () => {
+    const r = start((r) => {
+      r.hide('o');
+      r.hideRanges('d', [{ start: 0, count: 1 }]);
+    });
+    expect(r.tool.lockChoices).toEqual(['x', 'y', 'z', 'parallel']);
+    r.move(...along45);
+    expect(r.q('.measure-snap-parallel')).not.toBeNull();
+    expect(r.q('.measure-parallel-ref')).not.toBeNull();
+    expect(r.key('ArrowDown')).toBe(true);
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'parallel', source: 'key' });
+    r.click(...along45);
+    const res = r.results.at(-1);
+    if (res?.kind !== 'tape') throw new Error('tape');
+    expect(res.distance).toBeCloseTo(40, 6);
+  });
+
+  it('기준을 낸 묶음을 숨기면 버린다 — 나란함 고르기·↓·추론이 없고, 다시 보여도 돌아오지 않으며 다시 지나가면 새 기준', () => {
+    const r = start((r) => r.hide('d'));
+    dropped(r);
+    r.hide('d', true);
+    expect(r.tool.lockChoices).toEqual(['x', 'y', 'z']);
+    r.move(25, 145);
+    expect(r.tool.lockChoices).toEqual(['x', 'y', 'z', 'parallel']);
+  });
+
+  it('기준 선분이 든 구간을 숨기면 버린다(같은 묶음이 보여도)', () => {
+    dropped(start((r) => r.hideRanges('d', [{ start: 1, count: 1 }])));
+  });
+
+  it('단면이 바뀌면 모두 버린다(기준 선분이 남아 보여도 — 코어처럼 어느 선분이 잘렸는지 따지지 않는다)', () => {
+    dropped(start((r) => r.sectionChanged()));
+  });
+
+  it('문서 바꾸기(앱 setDoc의 clear)는 이미 비운다', () => {
+    dropped(start((r) => r.tool.clear()));
   });
 });
 

@@ -625,7 +625,7 @@ export interface GuideMenuItem {
 
 /** 이 도구가 쓰는 뷰어 기능(시험에서 가짜로 바꿀 수 있게) */
 export type MeasureViewer = Pick<Viewer3d, 'canvas' | 'pick' | 'getCamera' | 'onCameraChange' | 'getRenderMode' | 'section'> &
-  Partial<Pick<Viewer3d, 'sections' | 'viewCubeRect' | 'navigation' | 'keyboardCursor'>>;
+  Partial<Pick<Viewer3d, 'sections' | 'viewCubeRect' | 'navigation' | 'keyboardCursor' | 'isVisible' | 'hiddenRanges' | 'onSectionChange'>>;
 /** 이 도구가 쓰는 덧그림 기능 */
 export type MeasureOverlay = Pick<Overlay, 'svg' | 'labels' | 'set' | 'frame' | 'invalidate'>;
 
@@ -1127,8 +1127,8 @@ export class MeasureTool {
   private lockValue: MeasureLock | null = null;
   /** Shift가 눌려 있는지(키와 포인터 이동의 shiftKey로 본다) */
   private shiftDown = false;
-  /** 커서가 앞서 지나간 모서리(나란함·↓ 잠금의 기준) */
-  private parallelRef: [V3, V3] | null = null;
+  /** 커서가 앞서 지나간 모서리에 붙은 추정(그 edge가 나란함·↓ 잠금의 기준 — 읽을 때는 edgeRef, 106차) */
+  private parallelRef: Snap | null = null;
   /** 방향을 잡는 동안 마지막으로 본 방향 추론(커서가 보기를 떠난 뒤 누른 잠금 단추) */
   private lastLockable: InferenceLock | null = null;
   /** 화살표로 고정한 각도기 평면의 축(중심을 찍기 전) */
@@ -1266,6 +1266,11 @@ export class MeasureTool {
         this.setShift(false);
         this.setPlaneLock(false);
       });
+    // 106차: 단면이 바뀌면 지나간 모서리를 버린다(코어 0.99.0 — 단면은 모든 묶음의 보이는 조각을 바꾼다. 장면 탭·파일 단면도 이 알림)
+    const offSection = viewer.onSectionChange?.(() => {
+      this.parallelRef = null;
+    });
+    if (offSection) this.off.push(offSection);
     this.off.push(
       viewer.onCameraChange(() => {
         if (!this.modeValue) return;
@@ -1428,13 +1433,14 @@ export class MeasureTool {
    */
   get lockChoices(): LockChoice[] {
     if (!this.directing) return [];
-    return this.parallelRef ? ['x', 'y', 'z', 'parallel'] : ['x', 'y', 'z'];
+    return this.edgeRef ? ['x', 'y', 'z', 'parallel'] : ['x', 'y', 'z'];
   }
 
   /** 고른 방향으로 잠근다(단추 잠금 — 다시 누르거나 점을 찍고 취소하면 풀린다). 방향을 잡는 중이 아니거나 그 방향이 없으면 false */
   lockTo(choice: LockChoice): boolean {
     if (!this.directing) return false;
-    const l = choice === 'parallel' ? (this.parallelRef ? parallelInferenceLock(this.parallelRef) : null) : axisInferenceLock(choice, this.axes);
+    const r = this.edgeRef;
+    const l = choice === 'parallel' ? (r ? parallelInferenceLock(r) : null) : axisInferenceLock(choice, this.axes);
     if (!l) return false;
     this.setLock({ ...l, source: 'button' });
     return true;
@@ -2449,7 +2455,8 @@ export class MeasureTool {
         return true;
       }
       const h = this.lockable(this.freshHover());
-      const l = h && h.kind !== 'axis' ? h : this.parallelRef ? parallelInferenceLock(this.parallelRef) : null;
+      const r = this.edgeRef;
+      const l = h && h.kind !== 'axis' ? h : r ? parallelInferenceLock(r) : null;
       if (!l) return false;
       this.setLock({ ...l, source: 'key' });
       return true;
@@ -2557,7 +2564,7 @@ export class MeasureTool {
       // 안내 보이기를 끈 동안과 숨긴 안내(25차 Edit › Hide)에는 붙지 않는다 — 안내 번호는 보이는 안내 배열의 차례(guideAt)
       guides: this.shownValue ? this.visible().vp : [],
       guideLines: this.shownValue ? this.visible().vl : [],
-      parallelRef: this.parallelRef,
+      parallelRef: this.edgeRef,
       lock: this.pts.length ? this.liveLock() : null,
       tracks: this.trackOn ? this.tracker.view : null,
       // 축·잠근 선이 면을 뚫는 점은 그 자리에서 그물 면만 다시 맞춰 본다(코어 0.20.0 meshesOnly — 면 위 선분·점은 면을 가리지 않고,
@@ -2624,8 +2631,21 @@ export class MeasureTool {
   private learn(snap: Snap): void {
     if (snap.locked) return;
     // 모서리에 수직 추론의 edge는 이미 기준 모서리다. 끌어온 축·시작점 축이 모서리와 만나는 점(축 위 점 가운데 edge가 있는 것)도 그 모서리를 지나간 것이다
-    if (snap.edge && (REF_KINDS.has(snap.kind) || snap.kind === 'axis') && !snap.inferred) this.parallelRef = [snap.edge[0], snap.edge[1]];
+    if (snap.edge && (REF_KINDS.has(snap.kind) || snap.kind === 'axis') && !snap.inferred) this.parallelRef = snap;
     if (this.directing) this.lastLockable = this.lockable(snap) ?? this.lastLockable;
+  }
+
+  /**
+   * 지나간 모서리(나란함·↓ 잠금의 기준, 없으면 null). 106차(코어 0.99.0과 같은 규칙): 그 모서리를 낸 선분 묶음이 이제 보이지 않거나(묶음·태그 숨김, 빠짐)
+   * 그 선분이 숨긴 구간에 들었으면 버린다 — 다른 묶음·선분만 바뀌었으면 남긴다(안내선은 장면이 아니라 그대로). 장면 탭은 같은 보이기·단면 호출이라 같은 길이다.
+   * 코어에 보이기 알림이 없고 앱 보이기 함수는 첫 화면 JS라, 바뀔 때가 아니라 쓰는 곳(추정·잠글 방향·↓)에서 본다. 단면은 onSectionChange가, 새 문서는 clear()가 버린다
+   */
+  private get edgeRef(): [V3, V3] | null {
+    const s = this.parallelRef;
+    const p = s?.prim;
+    const v = this.viewer;
+    if (s?.id && v.isVisible && (!v.isVisible(s.id) || (p !== undefined && !!v.hiddenRanges?.(s.id).some((g) => p >= g.start && p < g.start + g.count)))) this.parallelRef = null;
+    return this.parallelRef?.edge ?? null;
   }
 
   /** 추정에서 잠글 방향: 방향 추론, 또는 시작점을 지나는 모서리에 붙은 점 추정(그 모서리 방향) */
