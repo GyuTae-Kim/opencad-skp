@@ -1262,8 +1262,9 @@ export class SkpViewerApp implements PanelHost {
     else v.setScene(d.scene);
     // 코어가 빼거나 고쳐 그린 깨진 입력(0.50.0 — setScene 안에서 정한다, 멀쩡하면 빈 배열): 정보 탭 경고 칸·상태 줄 경고 수에 잇는다
     d.coreIssues = v.sceneIssues;
-    // 107차: 코어 격자 축선을 이 문서의 그리기 축(파일의 축) 자리에 — 기본 축이면 세계 원점·세계 축(코어는 새 장면에도 앞 문서의 틀을 남긴다. annotations.ts — 코어와 함께 받음)
-    annotating?.showDrawAxes(v, d.drawAxes);
+    // 107차: 코어 격자 축선을 이 문서의 그리기 축(파일의 축) 자리에 — 기본 축이면 세계 원점·세계 축(코어는 새 장면에도 앞 문서의 틀을 남긴다. annotations.ts — 코어와 함께 받음).
+    // 114차: 그 앞에 좌표축(왼쪽 아래 축 표시·격자를 끈 동안의 축선)을 문서 스타일의 축 보이기로(칸이 없으면 켬 — 도구 막대는 끝의 refreshChrome)
+    annotating?.showDocAxes(v, d);
     // 61차: setSource는 해석 워커가 첫 그림 뒤로 미룬 색 바꾸기도 손질해 준다(ContextWatch.fill — 62차부터 워커는 놓기 조각을 받았다고 알린 뒤에만 미룬다)
     if (rel) this.watchContext(rel, v).setSource({ scene: d.scene, textures: held, textureLimit: this.texLimits.limit });
     // 장면을 올리면 코어가 겉모습(선 색)을 풀었다 — 끝의 applyTheme에서 다시 건다
@@ -2011,7 +2012,8 @@ export class SkpViewerApp implements PanelHost {
     // 장면이 숨긴 태그 폴더(안쪽 태그는 tagHidden이 폴더로 숨긴다 — 목록에 없는 폴더는 보인다)
     if (plan.hiddenFolders) d.hiddenFolders = plan.hiddenFolders;
     // 숨긴 개체(나무 노드)·숨긴 형상(장면이 숨기는 맨 위 문자·치수·단면 기호 묶음 노드 −2 − k)을 기억하는 쪽만 장면 목록으로, 그리기 축(73차 — SketchUp 장면 속성
-    // "Axes Location", 기억하지 않는 장면은 지금 축 그대로, 파일을 다시 열면 파일의 축)을 기억하는 장면이면 그 축과 코어 격자 축선 틀로(107차)
+    // "Axes Location", 기억하지 않는 장면은 지금 축 그대로, 파일을 다시 열면 파일의 축)을 기억하는 장면이면 그 축과 코어 격자 축선 틀로(107차),
+    // 스타일을 담은 장면이면 그 스타일의 축 보이기로 좌표축을(114차 — 도구 막대는 끝의 refreshToolbar)
     // (annotations.ts applyScene — 뷰어가 있으면 받아 둠)
     annotating?.applyScene(d, page, index, v);
     if (plan.hiddenNodes) {

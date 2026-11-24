@@ -21,6 +21,7 @@
  * 장면이 숨기는 맨 위 주석 묶음)도 여기 둔다(70차 — 코어 입구와 함께 받는 조각이라 첫 화면 조각에 싣지 않는다).
  * 107차: 같은 까닭으로 장면을 고를 때 그리기 축 바꾸기(applyScene)와 코어 격자 축선을 그리기 축 자리에 두기(showDrawAxes — 코어 0.101.0 setAxesFrame)도 여기 둔다.
  * 113차: 축선의 SketchUp 모양(음의 쪽 점선·파랑 Z·격자 없는 축선 — 코어 0.108.0 setAxesStyle)과 좌표축 버튼 몫(showAxes)도 여기 둔다.
+ * 114차: 스타일의 축 보이기(style.axes — DisplaySketchAxes)를 좌표축 상태로 — 문서를 열 때 문서 스타일(showDocAxes), 장면을 고를 때 그 장면 스타일(applyScene).
  */
 import type { IndexRange, Viewer3d } from 'opencad-viewer3d';
 import { projectToScreen, worldPerPixel, type ViewFrame } from 'opencad-viewer3d/camera';
@@ -580,18 +581,33 @@ export function applySceneHidden(hidden: Set<number>, page: Pick<SkpPageMeta, 'h
 
 /** 축선 모양을 받는 뷰어(코어 0.108.0 setAxesStyle, 좌표축 켬 axesVisible — 시험에서는 가짜를 넘길 수 있다) */
 type AxesStyleViewer = Pick<Viewer3d, 'setAxesStyle' | 'axesVisible'>;
-/** 그리기 축 틀을 받는 뷰어(코어 0.101.0 setAxesFrame, 113차부터 축선 모양도 — 시험에서는 가짜를 넘길 수 있다) */
-export type AxesViewer = Pick<Viewer3d, 'setAxesFrame'> & AxesStyleViewer;
+/** 좌표축을 켜고 끄는 뷰어(코어 setAxesVisible — 왼쪽 아래 축 표시, 113차부터 격자를 끈 동안의 축선 모양도) */
+type AxesShowViewer = AxesStyleViewer & Pick<Viewer3d, 'setAxesVisible'>;
+/** 그리기 축 틀을 받는 뷰어(코어 0.101.0 setAxesFrame, 113차부터 축선 모양도) */
+type AxesFrameViewer = Pick<Viewer3d, 'setAxesFrame'> & AxesStyleViewer;
+/** 문서 열기·장면 고르기의 축 몫을 받는 뷰어(틀·모양, 114차부터 스타일의 축 보이기도 — 시험에서는 가짜를 넘길 수 있다) */
+export type AxesViewer = AxesFrameViewer & AxesShowViewer;
 
 /**
  * 코어 격자의 빨강·초록 축선을 그리기 축 자리에(107차 — 코어 0.101.0 setAxesFrame, SketchUp처럼 옮기거나 돌린 축 자리). 원점은 해석기가 장면 좌표로 넘긴다
  * (scene-meta.ts axesMeta — 형상 정점과 같은 단위 배율, 옮기지 않음). 코어는 파랑을 받지 않는다(Z = 빨강 × 초록). 기본 축(null)이면 세계 원점·세계 축이고,
  * 코어가 받지 않는 축(길이 0·나란한 빨강·초록 같은 깨진 축 — 앞 틀이 남는다)도 세계 축으로 둔다. 축선 모양은 showAxesStyle(113차 — 기본 축에서도).
- * 문서를 열 때(앱 setDoc)와 장면을 고를 때(applyScene) 부른다 — 뷰어가 있어야 쓰므로 코어와 함께 받는 이 조각에 둔다(첫 화면 조각에 싣지 않는다)
+ * 문서를 열 때(앱 setDoc — 114차부터 showDocAxes 안에서)와 장면을 고를 때(applyScene) 부른다 — 뷰어가 있어야 쓰므로 코어와 함께 받는 이 조각에 둔다(첫 화면 조각에 싣지 않는다)
  */
-export function showDrawAxes(v: AxesViewer, axes: SkpAxesMeta | null): void {
+export function showDrawAxes(v: AxesFrameViewer, axes: SkpAxesMeta | null): void {
   if (!v.setAxesFrame(axes)) v.setAxesFrame(null);
   showAxesStyle(v);
+}
+
+/**
+ * 문서를 열 때(앱 setDoc — setScene 바로 뒤)의 축 몫(114차): 문서 스타일의 축 보이기(style.axes — DisplaySketchAxes, 스타일 Modeling Settings의 「Model Axes」 칸)로
+ * 좌표축(왼쪽 아래 축 표시와 격자를 끈 동안의 축선)을 켜고 끈 뒤 그 문서의 그리기 축 틀과 모양을 준다(showDrawAxes — 보이기를 먼저 정해 모양은 한 번).
+ * 칸이 없으면 켬 — 글·치수·보조선·단면 기호 보이기(doc.ts createDoc의 `!== false`)와 같은 규칙이고, 좌표축 버튼으로 끈 상태는 다음 문서로 넘어가지 않는다
+ * (SketchUp도 파일을 열면 그 파일의 스타일을 따른다)
+ */
+export function showDocAxes(v: AxesViewer, d: Pick<SkpDoc, 'drawAxes' | 'style'>): void {
+  v.setAxesVisible(d.style?.axes !== false);
+  showDrawAxes(v, d.drawAxes);
 }
 
 /**
@@ -607,7 +623,7 @@ function showAxesStyle(v: AxesStyleViewer): void {
  * 좌표축 버튼(앱 toggleAxes — 도구 막대·휴대폰 보기 설정 메뉴): 왼쪽 아래 축 표시(코어 setAxesVisible)와 함께 격자를 끈 동안의 장면 안 축선도(113차 — showAxesStyle).
  * 뷰어가 없으면(문서를 열기 전) 아무것도 하지 않는다 — 이 조각은 코어와 함께 받으므로 뷰어가 있으면 늘 있다(모양 상수를 첫 화면 조각에 싣지 않는다)
  */
-export function showAxes(v: (AxesStyleViewer & Pick<Viewer3d, 'setAxesVisible'>) | null, on: boolean): void {
+export function showAxes(v: AxesShowViewer | null, on: boolean): void {
   if (!v) return;
   v.setAxesVisible(on);
   showAxesStyle(v);
@@ -623,21 +639,25 @@ function sameFrame(a: SkpAxesMeta | null, b: SkpAxesMeta | null): boolean {
 /**
  * 장면을 고를 때(앱 applyPage) 장면이 기억하는 숨긴 노드(applySceneHidden)와 그리기 축을 문서에 넣는다. 그리기 축(73차 — 장면 속성 "Axes Location",
  * null = 기본 축)을 기억하는 장면이면 지금 그리기 축과 그 축을 정한 장면을 바꾸고 코어 축선 틀도 그 축으로(107차 — showDrawAxes), 기억하지 않는 장면은 그대로 둔다
- * (SketchUp 장면 고르기와 같게). 코어에 준 틀과 값이 같으면 다시 부르지 않는다(코어가 격자를 다시 만든다 — 장면 탭을 빨리 넘길 때)
+ * (SketchUp 장면 고르기와 같게). 코어에 준 틀과 값이 같으면 다시 부르지 않는다(코어가 격자를 다시 만든다 — 장면 탭을 빨리 넘길 때).
+ * 114차: 스타일을 담은 장면(use 깃발 0x002 — 도움말 "Creating Scenes"의 Style and Fog)이면 그 스타일의 축 보이기(style.axes)로 좌표축을 켜고 끈다(틀보다 먼저 — 모양은 한 번).
+ * 좌표축 버튼으로 바꾼 뒤에도 장면 스타일이 다시 정한다(앱 applyPage의 글·치수·보조선·단면 기호 보이기와 같은 규칙). 스타일을 담지 않았거나 그 칸이 없는 장면은 그대로 둔다
  */
 export function applyScene(
   d: Pick<SkpDoc, 'hiddenNodes' | 'drawAxes' | 'axesPage'>,
-  page: Pick<SkpPageMeta, 'hiddenNodes' | 'hiddenAnnotations' | 'axes'>,
+  page: Pick<SkpPageMeta, 'hiddenNodes' | 'hiddenAnnotations' | 'axes' | 'style'>,
   index: number,
   v: AxesViewer,
 ): void {
   applySceneHidden(d.hiddenNodes, page);
+  const shown = page.style?.axes;
+  if (typeof shown === 'boolean') v.setAxesVisible(shown);
   const axes = page.axes;
+  if (axes !== undefined && !sameFrame(d.drawAxes, axes)) showDrawAxes(v, axes);
+  else if (typeof shown === 'boolean') showAxesStyle(v);
   if (axes === undefined) return;
-  const same = sameFrame(d.drawAxes, axes);
   d.drawAxes = axes;
   d.axesPage = index;
-  if (!same) showDrawAxes(v, axes);
 }
 
 // ───────────────────────── DOM ─────────────────────────

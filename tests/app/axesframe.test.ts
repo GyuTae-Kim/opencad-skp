@@ -6,16 +6,19 @@
  * 시험은 실제 코어 뷰어를 가짜 DOM·가짜 WebGL2 위에 띄워 코어가 받은 틀(axesFrame)과 부른 수를 본다.
  * 113차(코어 0.108.0 setAxesStyle): 같은 자리에서 축선 모양도 SketchUp처럼 — 원점 양의 쪽 실선·음의 쪽 점선·파랑 Z축선, 좌표축이 켜져 있으면 격자를 꺼도 축선만.
  * 좌표축 버튼(앱 toggleAxes — showAxes)이 왼쪽 아래 축 표시와 함께 격자 없는 축선(withoutGrid)을 켜고 끈다. 앱 클래스는 DOM·뷰어 전체를 만들어야 해 그 몫은 원문으로 본다.
+ * 114차: 스타일의 축 보이기(style.axes — DisplaySketchAxes, 스타일 Modeling Settings의 Model Axes 칸)가 좌표축 상태를 정한다 — 문서를 열 때 문서 스타일(showDocAxes),
+ * 장면을 고를 때 그 장면 스타일(applyScene — 스타일을 담지 않았거나 칸이 없는 장면은 그대로). 칸이 없는 파일은 켬.
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Viewer3d, type AxesFrame, type AxesStyle } from 'opencad-viewer3d';
-import { applyScene, showAxes, showDrawAxes } from '../../src/app/annotations';
+import { applyScene, showAxes, showDocAxes, showDrawAxes } from '../../src/app/annotations';
 import { createDoc, type SkpDoc } from '../../src/app/doc';
 import { skpToScene } from '../../src/index';
 import type { SkpAxesMeta, SkpMetaExtras } from '../../src/meta';
-import { edge, entities, face, modelDat, skpFile, vertex } from '../build';
+import { parseStyleXml, resolveStyle } from '../../src/styles';
+import { edge, entities, face, modelDat, rendering, skpFile, styleXml, u8, vertex } from '../build';
 import { installDom } from '../fakegl/fakedom';
 import { mfcFile, squareEntities } from '../mfcwrite';
 
@@ -87,10 +90,16 @@ function viewer(): { v: Viewer3d; calls: (AxesFrame | null)[] } {
   return { v, calls };
 }
 
-/** 앱 setDoc의 축 몫: 장면을 올린 뒤 그 문서의 그리기 축(파일의 축)을 코어에 준다 */
+/** 장면을 올린 뒤 그 문서의 그리기 축(파일의 축)을 코어에 준다(앱 setDoc의 축 틀 몫 — 114차부터 setDoc은 축 보이기도 정하는 showDocAxes, 아래 openDoc) */
 function open(v: Viewer3d, d: SkpDoc): void {
   v.setScene(d.scene);
   showDrawAxes(v, d.drawAxes);
+}
+
+/** 앱 setDoc의 축 몫(114차): 장면을 올린 뒤 문서 스타일의 축 보이기와 그리기 축 틀을 코어에 준다 */
+function openDoc(v: Viewer3d, d: SkpDoc): void {
+  v.setScene(d.scene);
+  showDocAxes(v, d);
 }
 
 const near = (a: ArrayLike<number>, b: ArrayLike<number>): void => {
@@ -239,14 +248,14 @@ describe('그리기 축 자리 축선의 SketchUp 모양(113차 — 코어 0.108
     expect(v.axesFrame).not.toBeNull();
   });
 
-  it('좌표축 버튼(showAxes): 끄면 왼쪽 아래 축 표시와 격자 없는 축선을 함께 끄고, 켜면 함께 켠다 — 그 뒤 장면·문서도 그 상태를 따른다', () => {
+  it('좌표축 버튼(showAxes): 끄면 왼쪽 아래 축 표시와 격자 없는 축선을 함께 끄고, 켜면 함께 켠다 — 그 뒤 스타일을 담지 않은 장면·틀 바꾸기도 그 상태를 따른다', () => {
     const { v } = styled();
     const d = docOf(file2021());
     open(v, d);
     showAxes(v, false);
     expect(v.axesVisible).toBe(false);
     expect(v.axesStyle).toEqual(SKETCHUP(false));
-    // 좌표축을 끈 동안 틀이 바뀌는 장면(돌린 축)·새 문서도 격자 없는 축선은 끈 채로
+    // 좌표축을 끈 동안 틀이 바뀌는 장면(돌린 축)·새 문서의 틀(showDrawAxes)도 격자 없는 축선은 끈 채로(문서 열기의 축 보이기는 114차부터 문서 스타일 — 아래 showDocAxes)
     applyScene(d, d.pages[3]!, 3, v);
     expect(v.axesStyle).toEqual(SKETCHUP(false));
     open(v, docOf(file2021(), '다른 파일.skp'));
@@ -261,16 +270,138 @@ describe('그리기 축 자리 축선의 SketchUp 모양(113차 — 코어 0.108
     expect(() => showAxes(null, false)).not.toThrow();
   });
 
-  it('앱 원문: 좌표축 버튼은 annotations.ts showAxes로(뷰어와 함께 받는 조각 — 모양 상수를 첫 화면 조각에 두지 않음), 문서 열기는 showDrawAxes', () => {
+  it('앱 원문: 좌표축 버튼은 annotations.ts showAxes로(뷰어와 함께 받는 조각 — 모양 상수를 첫 화면 조각에 두지 않음), 문서 열기는 showDocAxes(114차 — 틀은 그 안 showDrawAxes)', () => {
     const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
     const start = app.indexOf('toggleAxes(on = !this.axesOn): void {');
     expect(start).toBeGreaterThan(0);
     const body = app.slice(start, app.indexOf('\n  }\n', start));
     expect(body).toContain('annotating?.showAxes(this.viewer, on);');
     expect(body).not.toContain('setAxesStyle');
-    expect(app).toContain('annotating?.showDrawAxes(v, d.drawAxes);');
+    expect(app).toContain('annotating?.showDocAxes(v, d);');
     // 메뉴 「좌표축」과 도구 막대 버튼 둘 다 toggleAxes
     expect(app).toContain("tbtn('좌표축', 'axes', '좌표축 보이기', () => this.toggleAxes())");
     expect(app).toContain("{ label: '좌표축', checked: this.axesOn, toggle: true, run: () => this.toggleAxes() }");
+  });
+});
+
+/** 렌더링 레코드 7343(DisplaySketchAxes — 스타일 Modeling Settings의 Model Axes 칸) 하나 */
+const axesRec = (on: boolean): [number, Uint8Array][] => [[0x7343, u8(on ? 1 : 0)]];
+
+/**
+ * 114차 — 스타일의 축 보이기를 담은 2021+ 파일: 모형 렌더링의 축 보이기(docAxes — 주지 않으면 모형 렌더링 레코드 없음 = 칸 없음),
+ * 장면 A(스타일 — 축 켬), B(카메라만 — 스타일을 담지 않음), C(스타일 — 글만 끔, 축 칸 없음), D(스타일 축 끔 + 돌린 축)
+ */
+function styledFile(docAxes?: boolean): Uint8Array {
+  return skpFile(
+    modelDat({
+      root: tri(),
+      lengthUnit: 2,
+      ...(docAxes === undefined ? {} : { rendering: axesRec(docAxes) }),
+      pages: {
+        list: [
+          { id: 60, name: 'A', flags: 0x2, render: rendering(axesRec(true)) },
+          { id: 61, name: 'B', flags: 0x1, camera: { eye: [0, -10, 5], target: [0, 0, 0], up: [0, 0, 1] } },
+          { id: 62, name: 'C', flags: 0x2, render: rendering([[0x7344, u8(0)]]) },
+          { id: 63, name: 'D', flags: 0x2 | 0x8, render: rendering(axesRec(false)), axes: TURNED },
+        ],
+      },
+    }),
+  );
+}
+
+const metaOf = (bytes: Uint8Array): SkpMetaExtras => skpToScene(bytes, { outline: true }).meta as SkpMetaExtras;
+/** 돌린 축 장면 D의 틀(장면 단위 mm) */
+const TURNED_MM: SkpAxesMeta = { origin: [762, 1016, 0], x: [0, -1, 0], y: [-1, 0, 0], z: [0, 0, 1] };
+
+describe('스타일·장면의 축 보이기를 좌표축 상태로(114차 — DisplaySketchAxes)', () => {
+  it('해석기: 모형·장면 렌더링 7343(없으면 style.xml 7008) → style.axes, 칸이 없으면 없음, 스타일을 담지 않은 장면은 스타일 없음', () => {
+    const m = metaOf(styledFile(false));
+    expect(m.style?.axes).toBe(false);
+    const pages = m.pages!;
+    expect(pages.map((p) => p.name)).toEqual(['A', 'B', 'C', 'D']);
+    expect(pages[0]!.style?.axes).toBe(true);
+    expect('style' in pages[1]!).toBe(false);
+    expect(pages[2]!.style?.texts).toBe(false);
+    expect('axes' in pages[2]!.style!).toBe(false);
+    expect(pages[3]!.style?.axes).toBe(false);
+    expect(metaOf(styledFile(true)).style?.axes).toBe(true);
+    expect(metaOf(styledFile()).style?.axes).toBeUndefined();
+    const xml = (v: string): boolean | undefined => resolveStyle({ values: new Map(), styleName: 'S' }, parseStyleXml(styleXml([[7008, 1, v]], 'S'))).axes;
+    expect([xml('0'), xml('1')]).toEqual([false, true]);
+  });
+
+  it('문서 열기: 축을 숨긴 스타일의 파일은 좌표축 꺼짐(왼쪽 아래 축 표시·격자 없는 축선 없음), 칸이 없는 파일·축을 보인 파일은 켬', () => {
+    const { v, styles } = styled();
+    const hidden = docOf(styledFile(false), '축 숨김.skp');
+    expect(hidden.style?.axes).toBe(false);
+    openDoc(v, hidden);
+    expect(v.axesVisible).toBe(false);
+    expect(v.axesStyle).toEqual(SKETCHUP(false));
+    // 칸이 없는 파일: 앞 문서가 끈 좌표축을 켠다(글·치수 보이기처럼 문서마다 — 칸 없음 = 켬)
+    openDoc(v, docOf(styledFile(), '칸 없음.skp'));
+    expect(v.axesVisible).toBe(true);
+    expect(v.axesStyle).toEqual(SKETCHUP(true));
+    openDoc(v, docOf(styledFile(false), '축 숨김 2.skp'));
+    expect(v.axesVisible).toBe(false);
+    openDoc(v, docOf(styledFile(true), '축 보임.skp'));
+    expect(v.axesVisible).toBe(true);
+    expect(v.axesStyle).toEqual(SKETCHUP(true));
+    // 보이기를 먼저 정하고 틀·모양을 주므로 문서마다 모양은 한 번
+    expect(styles).toEqual([SKETCHUP(false), SKETCHUP(true), SKETCHUP(false), SKETCHUP(true)]);
+    // 좌표축 버튼으로 끈 뒤 연 칸 없는 파일도 켬(SketchUp도 파일의 스타일을 따름)
+    showAxes(v, false);
+    openDoc(v, docOf(styledFile(), '칸 없음 2.skp'));
+    expect(v.axesVisible).toBe(true);
+    expect(v.axesStyle).toEqual(SKETCHUP(true));
+  });
+
+  it('장면 탭: 스타일을 담은 장면은 그 스타일의 축 보이기로, 스타일을 담지 않았거나 축 칸이 없는 장면은 그대로 — 좌표축 버튼으로 바꾼 뒤에도 장면 스타일이 다시 정함', () => {
+    const { v } = styled();
+    const d = docOf(styledFile(false));
+    openDoc(v, d);
+    expect(v.axesVisible).toBe(false);
+    const pick = (i: number): void => applyScene(d, d.pages[i]!, i, v);
+    // A: 스타일 — 축 켬(축 틀은 기억하지 않음)
+    pick(0);
+    expect(v.axesVisible).toBe(true);
+    expect(v.axesStyle).toEqual(SKETCHUP(true));
+    expect(v.axesFrame).toBeNull();
+    // B: 스타일을 담지 않음 — 그대로
+    pick(1);
+    expect(v.axesVisible).toBe(true);
+    // D: 스타일 축 끔 + 돌린 축 — 틀과 함께 끔
+    pick(3);
+    expect(v.axesVisible).toBe(false);
+    expect(v.axesStyle).toEqual(SKETCHUP(false));
+    frameIs(v, TURNED_MM);
+    // C: 스타일이지만 축 칸 없음 — 그대로
+    pick(2);
+    expect(v.axesVisible).toBe(false);
+    // 좌표축 버튼으로 켠 뒤: 스타일 없는 B는 그대로, D를 다시 고르면(틀 그대로) 장면 스타일이 다시 끔 — 글·치수 보이기와 같은 규칙
+    showAxes(v, true);
+    pick(1);
+    expect(v.axesVisible).toBe(true);
+    pick(3);
+    expect(v.axesVisible).toBe(false);
+    expect(v.axesStyle).toEqual(SKETCHUP(false));
+    // A: 틀은 그대로(돌린 축), 축 보이기만 켬
+    pick(0);
+    expect(v.axesVisible).toBe(true);
+    expect(v.axesStyle).toEqual(SKETCHUP(true));
+    frameIs(v, TURNED_MM);
+  });
+
+  it('앱 원문: 문서 열기는 showDocAxes 뒤 refreshChrome(도구 막대), 장면 탭은 applyScene 뒤 refreshToolbar — 좌표축 버튼 눌림이 따라오고 휴대폰 메뉴는 열 때 axesOn을 읽음', () => {
+    const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
+    const at = app.indexOf('annotating?.showDocAxes(v, d);');
+    expect(at).toBeGreaterThan(0);
+    expect(app.indexOf('this.refreshChrome();', at)).toBeGreaterThan(at);
+    expect(app).not.toContain('showDrawAxes(v, d.drawAxes)');
+    const page = app.indexOf('applyPage(index: number, fromSlideshow = false): number {');
+    expect(page).toBeGreaterThan(0);
+    const body = app.slice(page, app.indexOf('\n  }\n', page));
+    const scene = body.indexOf('annotating?.applyScene(d, page, index, v);');
+    expect(scene).toBeGreaterThan(0);
+    expect(body.lastIndexOf('this.refreshToolbar();')).toBeGreaterThan(scene);
   });
 });
