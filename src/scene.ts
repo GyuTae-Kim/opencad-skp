@@ -301,10 +301,14 @@ export interface SceneTexture {
 
 /**
  * 재질 하나의 그물 PBR 필드(코어 0.43.0): maps는 그림 id와 그 배율(앞면 무늬 좌표를 단 그물에만 — 그림은 색 무늬와 같은 무늬 좌표를 쓴다),
- * values는 그림 없이 값만 준 칸(그 재질 그물 모두). 그림이 있어야 할 칸에 그림을 받지 못했으면 둘 다에서 뺀다(배율을 값으로 쓰면 다른 재질이 된다)
+ * values는 그림 없이 값만 준 칸(그 재질 그물 모두). 그림이 있어야 할 칸에 그림을 받지 못했으면 둘 다에서 뺀다(배율을 값으로 쓰면 다른 재질이 된다).
+ * 108차: 가림 그림과 세기(코어 0.102.0)도 maps에 — 세기는 그림이 있을 때만
  */
 export interface ScenePbr {
-  maps?: Pick<Mesh3d, 'normalTexture' | 'normalScale' | 'normalFlipY' | 'roughnessTexture' | 'roughness' | 'roughnessInvert' | 'metallicTexture' | 'metallic'>;
+  maps?: Pick<
+    Mesh3d,
+    'normalTexture' | 'normalScale' | 'normalFlipY' | 'roughnessTexture' | 'roughness' | 'roughnessInvert' | 'metallicTexture' | 'metallic' | 'occlusionTexture' | 'occlusionStrength'
+  >;
   values?: Pick<Mesh3d, 'roughness' | 'metallic'>;
 }
 

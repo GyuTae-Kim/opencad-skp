@@ -58,8 +58,8 @@ export interface TexturePrepResult {
  */
 export const PBR_MIN_TEXTURE_LIMIT = 2048;
 
-/** 그물에서 PBR 그림 하나(쓰임)를 떼고 그 그림의 배율·꼴 칸도 뗀다 */
-function unsetPbrMap(m: Mesh3d, field: 'normalTexture' | 'roughnessTexture' | 'metallicTexture'): void {
+/** 그물에서 PBR 그림 하나(쓰임)를 떼고 그 그림의 배율·꼴 칸도 뗀다(108차 가림 그림은 세기 칸) */
+function unsetPbrMap(m: Mesh3d, field: (typeof PBR_FIELDS)[number]): void {
   delete m[field];
   if (field === 'normalTexture') {
     delete m.normalScale;
@@ -67,10 +67,11 @@ function unsetPbrMap(m: Mesh3d, field: 'normalTexture' | 'roughnessTexture' | 'm
   } else if (field === 'roughnessTexture') {
     delete m.roughness;
     delete m.roughnessInvert;
-  } else delete m.metallic;
+  } else if (field === 'occlusionTexture') delete m.occlusionStrength;
+  else delete m.metallic;
 }
 
-const PBR_FIELDS = ['normalTexture', 'roughnessTexture', 'metallicTexture'] as const;
+const PBR_FIELDS = ['normalTexture', 'roughnessTexture', 'metallicTexture', 'occlusionTexture'] as const;
 
 /** 56차: 색 무늬 없이 PBR 그림만 쓰던 그물이 그림을 모두 잃으면 무늬 좌표도 지운다(그 좌표는 PBR 그림만 썼다) */
 function dropBareUvs(m: Mesh3d): void {

@@ -2,6 +2,7 @@
  * PBR 금속·거칠기(55차 — 코어 0.43.0 그물 PBR 필드): material.xml <mat:pbrMR> 읽기(켬 깃발이 1인 칸만), 꾸러미의 PBR 그림 꺼내기
  * (무늬 재질만·다른 그림을 다 넣은 뒤 남은 한도·같은 그림은 한 번), 장면의 PBR 무늬와 그물 필드(그림은 앞면 무늬 좌표를 단 그물만, 값은 그 재질 모두),
  * 워커의 PBR 그림 떼기(휴대 기기·무늬 좌표를 잃은 그물), 놓기의 raw 쥐기(견본 주소는 그대로).
+ * 108차: 가림(AO) 그림(`enable_occlusion`·`occlusion_texture`·`occlusionStrength` → 코어 0.102.0 occlusionTexture·occlusionStrength)도 같은 길로.
  * 꼬리표 이름·값은 이 컴퓨터의 2025+ 표본 material.xml 꼴을 따른다(실제 파일은 저장소에 넣지 않는다).
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -12,7 +13,7 @@ import { readSkpImages, skpFileToScene, skpToScene, skpToSceneAsync, type SkpIma
 import { sceneDigest } from '../scripts/sweep/probe';
 import { bytesSource, SourceItems } from '../src/range';
 import type { ZipItem } from '../src/zip';
-import { parseMaterialPbr, parseMaterialXml } from '../src/materials';
+import { parseMaterialPbr, parseMaterialXml, pbrFiles } from '../src/materials';
 import { dropPbrMaps, dropTexture, needsDecode, PBR_MIN_TEXTURE_LIMIT } from '../src/worker/textures';
 import { prepareRelease } from '../src/app/release';
 import type { DocImages } from '../src/app/doc';
@@ -24,6 +25,8 @@ function pbrBlock(o: {
   metal?: { on: boolean; factor?: number; file?: string };
   rough?: { on: boolean; factor?: number; file?: string; invert?: boolean };
   normal?: { on: boolean; file?: string; scale?: number; style?: 0 | 1 };
+  /** 108차 가림(AO) 그림 — 주지 않으면 표본 기본 꼴(켬 0·세기 1·그림 꼬리표 없음) */
+  occ?: { on: boolean; file?: string; strength?: number | string };
 }): string {
   const tex = (tag: string, file: string | undefined, id: number): string => (file ? `      <mat:${tag} id="${id}" path="./${file}" file_name="C:/x/${file}"/>\n` : '');
   return (
@@ -32,15 +35,16 @@ function pbrBlock(o: {
     `      <mat:enable_roughness>${o.rough?.on ? 1 : 0}</mat:enable_roughness>\n` +
     `      <mat:roughness_texture_invert>${o.rough?.invert ? 1 : 0}</mat:roughness_texture_invert>\n` +
     `      <mat:enable_normal>${o.normal?.on ? 1 : 0}</mat:enable_normal>\n` +
-    '      <mat:enable_occlusion>0</mat:enable_occlusion>\n' +
+    `      <mat:enable_occlusion>${o.occ?.on ? 1 : 0}</mat:enable_occlusion>\n` +
     tex('metallic_texture', o.metal?.file, 2) +
     tex('roughness_texture', o.rough?.file, 3) +
     tex('normal_texture', o.normal?.file, 4) +
+    tex('occlusion_texture', o.occ?.file, 5) +
     `      <mat:metallicFactor>${o.metal?.factor ?? 1}</mat:metallicFactor>\n` +
     `      <mat:roughnessFactor>${o.rough?.factor ?? 1}</mat:roughnessFactor>\n` +
     `      <mat:normalMapStyle>${o.normal?.style ?? 1}</mat:normalMapStyle>\n` +
     `      <mat:normalScale>${o.normal?.scale ?? 1}</mat:normalScale>\n` +
-    '      <mat:occlusionStrength>1</mat:occlusionStrength>\n' +
+    `      <mat:occlusionStrength>${o.occ?.strength ?? 1}</mat:occlusionStrength>\n` +
     '      <mat:baseColorFactor>4294967295</mat:baseColorFactor>\n' +
     '    </mat:pbrMR>\n'
   );
@@ -140,7 +144,18 @@ function pack(mats: [number, string][], xmls: [string, string][], imgs: { name: 
 }
 const file = (): Uint8Array => pack(MATS, XMLS, IMGS);
 const meshOf = (s: Scene3d, mat: string): Mesh3d => s.meshes.find((m) => m.name?.startsWith(`${mat} ·`))!;
-const PBR_KEYS = ['normalTexture', 'normalScale', 'normalFlipY', 'roughnessTexture', 'roughness', 'roughnessInvert', 'metallicTexture', 'metallic'] as const;
+const PBR_KEYS = [
+  'normalTexture',
+  'normalScale',
+  'normalFlipY',
+  'roughnessTexture',
+  'roughness',
+  'roughnessInvert',
+  'metallicTexture',
+  'metallic',
+  'occlusionTexture',
+  'occlusionStrength',
+] as const;
 const pbrOf = (m: Mesh3d): Record<string, unknown> => Object.fromEntries(PBR_KEYS.filter((k) => m[k] !== undefined).map((k) => [k, m[k]]));
 
 describe('material.xml <mat:pbrMR>', () => {
@@ -634,6 +649,220 @@ describe('코어에 올리기(가짜 WebGL2 — 56차 색 무늬 없는 PBR 재�
       v.setScene(only(s));
       v.renderNow();
       expect(v.stats.buffers.uvs).toBe(0);
+    } finally {
+      v.dispose();
+    }
+  });
+});
+
+/**
+ * 108차 가림(AO) 그림(코어 0.102.0 occlusionTexture·occlusionStrength): 1 가림판(무늬 + 법선 그림 + 가림 그림 세기 0.8), 2 가림ORM(거칠기·금속·가림이 한 그림 — 세기 1),
+ * 3 가림꺼짐(켬 0인데 그림 꼬리표·세기는 있음), 4 가림빠짐(켰는데 그림이 꾸러미에 없음), 5 가림만(색 무늬 없이 가림 그림 한 장뿐 — 한 장 20 × 5 인치, 재질 미리보기 그림 없음),
+ * 6 세기0(켰고 그림도 있지만 세기 0 — 코어에서 가림 없음과 같다)
+ */
+const OCC_MATS: [number, string][] = [
+  [1, '가림판'],
+  [2, '가림ORM'],
+  [3, '가림꺼짐'],
+  [4, '가림빠짐'],
+  [5, '가림만'],
+  [6, '세기0'],
+];
+const OCC_XMLS: [string, string][] = [
+  ['가림판', texturedPbr('가림판', 'g1.png', pbrBlock({ normal: { on: true, file: 'gn.png' }, occ: { on: true, file: 'ao.png', strength: 0.8 } }))],
+  ['가림ORM', texturedPbr('가림ORM', 'g2.png', pbrBlock({ rough: { on: true, file: 'orm.png' }, metal: { on: true, file: 'orm.png' }, occ: { on: true, file: 'orm.png' } }))],
+  ['가림꺼짐', texturedPbr('가림꺼짐', 'g3.png', pbrBlock({ occ: { on: false, file: 'off-ao.png', strength: 0.4 } }))],
+  ['가림빠짐', texturedPbr('가림빠짐', 'g4.png', pbrBlock({ occ: { on: true, file: 'gone-ao.png' } }))],
+  ['가림만', plainPbr('가림만', pbrBlock({ occ: { on: true, file: 'only-ao.png', strength: 0.5 } })).replace('xScale="10" yScale="10"', 'xScale="20" yScale="5"')],
+  ['세기0', texturedPbr('세기0', 'g6.png', pbrBlock({ occ: { on: true, file: 'z-ao.png', strength: 0 } }))],
+];
+const OCC_IMGS = [
+  ['가림판/g1.png', 31],
+  ['가림판/gn.png', 32],
+  ['가림판/ao.png', 33],
+  ['가림ORM/g2.png', 34],
+  ['가림ORM/orm.png', 35],
+  ['가림꺼짐/g3.png', 36],
+  ['가림꺼짐/off-ao.png', 37],
+  ['가림빠짐/g4.png', 38],
+  ['가림만/only-ao.png', 39],
+  ['세기0/g6.png', 40],
+  ['세기0/z-ao.png', 41],
+].map(([n, s]) => ({ name: `materials/${n}`, data: png(s as number) }));
+const occFile = (): Uint8Array => pack(OCC_MATS, OCC_XMLS, OCC_IMGS);
+const occXml = (name: string): string => OCC_XMLS.find(([n]) => n === name)![1];
+
+describe('108차 가림(AO) 그림 — material.xml', () => {
+  it('켬 깃발이 1이고 그림이 있을 때만 그림·세기를 읽는다(세기 0이면 뜻이 없어 뺀다), 다른 쓰임과 같은 그림은 쓰임만 하나 더', () => {
+    expect(parseMaterialPbr(occXml('가림판'))).toEqual({
+      normal: { file: 'gn.png', scale: 1, directX: true },
+      occlusion: { file: 'ao.png', strength: 0.8 },
+      tile: { width: 10, height: 10 },
+    });
+    const orm = parseMaterialPbr(occXml('가림ORM'));
+    expect(orm).toEqual({
+      metallic: { factor: 1, file: 'orm.png' },
+      roughness: { factor: 1, file: 'orm.png', invert: false },
+      occlusion: { file: 'orm.png', strength: 1 },
+      tile: { width: 10, height: 10 },
+    });
+    // 쓰임 차례: 법선·거칠기·금속 다음 가림(맨 뒤)
+    expect(pbrFiles(orm)).toEqual([
+      ['roughness', 'orm.png'],
+      ['metallic', 'orm.png'],
+      ['occlusion', 'orm.png'],
+    ]);
+    // 켬 0이면 그림 꼬리표·세기가 있어도 읽지 않는다(다른 칸이 없으면 PBR 칸도 없다)
+    expect(parseMaterialPbr(occXml('가림꺼짐'))).toBeUndefined();
+    expect(parseMaterialXml(occXml('가림꺼짐'))!.pbr).toBeUndefined();
+    // 색 무늬 없이 가림 그림 한 장뿐인 재질도 그림 한 장 크기를 둔다(56차 꼴)
+    expect(parseMaterialPbr(occXml('가림만'))).toEqual({ occlusion: { file: 'only-ao.png', strength: 0.5 }, tile: { width: 20, height: 5 } });
+    expect(parseMaterialXml(occXml('가림만'))!.texture).toBeUndefined();
+    // 꾸러미에 없는 그림도 재질 정보에는 적는다(그림을 받지 못하면 장면이 뺀다 — 55차와 같다)
+    expect(parseMaterialPbr(occXml('가림빠짐'))).toEqual({ occlusion: { file: 'gone-ao.png', strength: 1 }, tile: { width: 10, height: 10 } });
+    expect(parseMaterialPbr(occXml('세기0'))).toBeUndefined();
+  });
+
+  it('꼴이 다르거나 없는 값: 세기는 0~1로 자르고 유한하지 않으면 1, 그림이 없으면 없음, 안에 <mat:image>를 둔 꼴도 읽는다', () => {
+    const odd = (strength: string, tex = '<mat:occlusion_texture path="./ao2.png"/>'): string =>
+      `<mat:pbrMR><mat:enable_occlusion>1</mat:enable_occlusion>${tex}<mat:occlusionStrength>${strength}</mat:occlusionStrength></mat:pbrMR>`;
+    expect(parseMaterialPbr(odd('7'))!.occlusion).toEqual({ file: 'ao2.png', strength: 1 });
+    expect(parseMaterialPbr(odd('abc'))!.occlusion).toEqual({ file: 'ao2.png', strength: 1 });
+    expect(parseMaterialPbr(odd(''))!.occlusion).toEqual({ file: 'ao2.png', strength: 1 });
+    expect(parseMaterialPbr(odd('0.25'))!.occlusion).toEqual({ file: 'ao2.png', strength: 0.25 });
+    expect(parseMaterialPbr(odd('-2'))).toBeUndefined();
+    expect(parseMaterialPbr(odd('0.5', ''))).toBeUndefined();
+    expect(parseMaterialPbr(odd('0.5', '<mat:occlusion_texture><mat:image path="./ao3.png"/></mat:occlusion_texture>'))!.occlusion).toEqual({ file: 'ao3.png', strength: 0.5 });
+  });
+});
+
+describe('108차 가림(AO) 그림 — 꾸러미·장면·워커', () => {
+  it('켠 가림 그림만 꺼낸다: 같은 그림은 쓰임을 합쳐 한 번, 가림만 맡는 그림은 법선·거칠기·금속 그림 뒤(맨 뒤) — 견본·다른 그림은 그대로', () => {
+    const img = readSkpImages(occFile());
+    // 폴더 그림이 가림 그림뿐인 색 무늬 없는 재질은 견본 그림이 없다(57차 규칙 — 가림 그림도 PBR 그림)
+    expect(img.materials.map((m) => [m.folder, m.name])).toEqual([
+      ['가림판', 'g1.png'],
+      ['가림ORM', 'g2.png'],
+      ['가림꺼짐', 'g3.png'],
+      ['가림빠짐', 'g4.png'],
+      ['세기0', 'g6.png'],
+    ]);
+    expect(img.pbr!.map((p) => [p.folder, p.name, p.roles])).toEqual([
+      ['가림판', 'gn.png', ['normal']],
+      ['가림ORM', 'orm.png', ['roughness', 'metallic', 'occlusion']],
+      ['가림만', 'only-ao.png', ['occlusion']],
+      ['가림판', 'ao.png', ['occlusion']],
+    ]);
+    expect(img.skipped).toBe(0);
+    expect(img.warnings).toEqual([]);
+    expect(img.pbrSkipped).toBeUndefined();
+    // 한도가 모자라면 가림만 맡는 그림부터 빠진다(무늬 재질의 것이 먼저 — 색 무늬 없는 재질의 그림은 그 재질의 유일한 결)
+    const two = readSkpImages(occFile(), { maxCount: img.materials.length + 2 });
+    expect(two.pbr!.map((p) => p.name)).toEqual(['gn.png', 'orm.png']);
+    expect(two.pbrSkipped).toBe(2);
+    const three = readSkpImages(occFile(), { maxCount: img.materials.length + 3 });
+    expect(three.pbr!.map((p) => p.name)).toEqual(['gn.png', 'orm.png', 'only-ao.png']);
+    expect(three.pbrSkipped).toBe(1);
+    expect(three.materials.length).toBe(img.materials.length);
+  });
+
+  it('장면: 그림을 받은 재질만 occlusionTexture, 세기는 1이 아닐 때만 — 그림을 받지 못하면 세기도 없다', () => {
+    const bytes = occFile();
+    const img = readSkpImages(bytes);
+    const s = skpToScene(bytes, { textures: img.materials, pbrTextures: img.pbr });
+    expect(pbrOf(meshOf(s, '가림판'))).toEqual({ normalTexture: 'skp-pbr-1-normal', normalFlipY: true, occlusionTexture: 'skp-pbr-1-occlusion', occlusionStrength: 0.8 });
+    const orm = 'skp-pbr-2-roughness-metallic-occlusion';
+    expect(pbrOf(meshOf(s, '가림ORM'))).toEqual({ roughnessTexture: orm, metallicTexture: orm, occlusionTexture: orm });
+    for (const name of ['가림꺼짐', '가림빠짐', '세기0']) expect(pbrOf(meshOf(s, name)), name).toEqual({});
+    // 색 무늬 없는 재질: 가림 그림이 쓸 무늬 좌표만(한 장 20 × 5 인치)
+    const only = meshOf(s, '가림만');
+    expect(only.texture).toBeUndefined();
+    expect(pbrOf(only)).toEqual({ occlusionTexture: 'skp-pbr-5-occlusion', occlusionStrength: 0.5 });
+    const uv = Array.from(only.uvs!);
+    expect(Math.max(...uv.filter((_, i) => i % 2 === 0)) - Math.min(...uv.filter((_, i) => i % 2 === 0))).toBeCloseTo(0.5, 6);
+    expect(Math.max(...uv.filter((_, i) => i % 2 === 1)) - Math.min(...uv.filter((_, i) => i % 2 === 1))).toBeCloseTo(2, 6);
+    expect(s.textures!.map((t) => t.id)).toEqual([
+      'skp-tex-1',
+      'skp-tex-2',
+      'skp-tex-3',
+      'skp-tex-4',
+      'skp-tex-6',
+      'skp-pbr-1-normal',
+      'skp-pbr-1-occlusion',
+      orm,
+      'skp-pbr-5-occlusion',
+    ]);
+    expect(s.textures!.find((t) => t.id === 'skp-pbr-1-occlusion')!.data).toBe(img.pbr!.find((p) => p.name === 'ao.png')!.bytes);
+    expect((s.meta!.textures as SkpTextureInfo[]).find((t) => t.id === 'skp-pbr-5-occlusion')).toEqual({
+      id: 'skp-pbr-5-occlusion',
+      material: '가림만',
+      folder: '가림만',
+      path: 'materials/가림만/only-ao.png',
+      tile: [20, 5],
+      alphaPossible: false,
+      pbr: ['occlusion'],
+    });
+    // 가림 그림을 받지 못하면(한도) 그 칸과 세기를 빼고(세기만으로는 뜻이 없다), 가림 그림뿐인 색 무늬 없는 재질은 무늬 좌표도 없다
+    const noAo = skpToScene(bytes, { textures: img.materials, pbrTextures: img.pbr!.filter((p) => p.name !== 'ao.png' && p.name !== 'only-ao.png') });
+    expect(pbrOf(meshOf(noAo, '가림판'))).toEqual({ normalTexture: 'skp-pbr-1-normal', normalFlipY: true });
+    expect(pbrOf(meshOf(noAo, '가림만'))).toEqual({});
+    expect(meshOf(noAo, '가림만').uvs).toBeUndefined();
+    expect(pbrOf(meshOf(noAo, '가림ORM'))).toEqual({ roughnessTexture: orm, metallicTexture: orm, occlusionTexture: orm });
+    // 색 무늬·그물 배열은 가림 그림과 상관없다
+    const base = skpToScene(bytes, { textures: img.materials });
+    const arrays = (x: Scene3d): unknown[] => x.meshes.filter((m) => !m.name?.startsWith('가림만')).map((m) => [m.id, m.positions, m.uvs, m.texture, m.color]);
+    expect(arrays(s)).toEqual(arrays(base));
+    expect(s.meta!.materialStats).toEqual(base.meta!.materialStats);
+  });
+
+  it('워커: 휴대 기기·풀지 못한 그림은 가림 칸과 세기도 떼고(가림뿐이던 그물은 무늬 좌표도), 놓기는 가림 그림도 raw로 쥔다', () => {
+    const scene = (): Scene3d => {
+      const bytes = occFile();
+      const img = readSkpImages(bytes);
+      return skpToScene(bytes, { textures: img.materials, pbrTextures: img.pbr });
+    };
+    const s = scene();
+    expect(dropPbrMaps(s)).toBe(4);
+    expect(s.meshes.every((m) => m.occlusionTexture === undefined && m.occlusionStrength === undefined)).toBe(true);
+    expect(meshOf(s, '가림만').uvs).toBeUndefined();
+    expect(meshOf(s, '가림판').uvs).toBeDefined();
+    expect(s.textures!.map((t) => t.id)).toEqual(['skp-tex-1', 'skp-tex-2', 'skp-tex-3', 'skp-tex-4', 'skp-tex-6']);
+    const d = scene();
+    dropTexture(d, 'skp-pbr-1-occlusion');
+    expect(pbrOf(meshOf(d, '가림판'))).toEqual({ normalTexture: 'skp-pbr-1-normal', normalFlipY: true });
+    dropTexture(d, 'skp-pbr-5-occlusion');
+    expect(pbrOf(meshOf(d, '가림만'))).toEqual({});
+    expect(meshOf(d, '가림만').uvs).toBeUndefined();
+    dropTexture(d, 'skp-tex-2');
+    expect(pbrOf(meshOf(d, '가림ORM'))).toEqual({});
+    const held = prepareRelease({ scene: scene() });
+    expect(held.filter((h) => h.info.pbr?.includes('occlusion')).map((h) => [h.id, !!h.raw])).toEqual([
+      ['skp-pbr-1-occlusion', true],
+      ['skp-pbr-2-roughness-metallic-occlusion', true],
+      ['skp-pbr-5-occlusion', true],
+    ]);
+  });
+});
+
+describe('108차 코어에 올리기(가짜 WebGL2 — 가림 그림만 단 그물)', () => {
+  let dom: ReturnType<typeof installDom>;
+  beforeAll(() => {
+    dom = installDom();
+  });
+  afterAll(() => dom.restore());
+
+  it('색 무늬 없이 가림 그림만 단 그물도 코어 0.102.0이 무늬 좌표를 GPU에 올린다', () => {
+    const bytes = occFile();
+    const img = readSkpImages(bytes);
+    const s = skpToScene(bytes, { textures: img.materials, pbrTextures: img.pbr });
+    const m = meshOf(s, '가림만');
+    const only: Scene3d = { ...s, meshes: [m], lines: [], textures: (s.textures ?? []).filter((t) => t.id === 'skp-pbr-5-occlusion') };
+    const v = new Viewer3d(dom.host() as unknown as HTMLElement, { animate: false, keyboard: false, viewCube: false, grid: false });
+    try {
+      v.setScene(only);
+      v.renderNow();
+      expect(v.stats.buffers.uvs).toBe(m.uvs!.byteLength);
+      expect(v.stats.buffers.uvs).toBeGreaterThan(0);
     } finally {
       v.dispose();
     }
