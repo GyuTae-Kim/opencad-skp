@@ -19,10 +19,11 @@
  * 규칙은 참조 뷰어의 문자·치수 라벨 코드에서 옮겼다.
  * 주석 선분(치수선·지시선·단면 기호)의 숨긴 노드 구간(annotationHiddenRanges)과 장면을 고를 때 숨긴 노드 바꾸기(applySceneHidden —
  * 장면이 숨기는 맨 위 주석 묶음)도 여기 둔다(70차 — 코어 입구와 함께 받는 조각이라 첫 화면 조각에 싣지 않는다).
+ * 107차: 같은 까닭으로 장면을 고를 때 그리기 축 바꾸기(applyScene)와 코어 격자 축선을 그리기 축 자리에 두기(showDrawAxes — 코어 0.101.0 setAxesFrame)도 여기 둔다.
  */
-import type { IndexRange } from 'opencad-viewer3d';
+import type { IndexRange, Viewer3d } from 'opencad-viewer3d';
 import { projectToScreen, worldPerPixel, type ViewFrame } from 'opencad-viewer3d/camera';
-import type { SkpDimensionMeta, SkpFontMeta, SkpPageMeta, Vec3 } from '../meta';
+import type { SkpAxesMeta, SkpDimensionMeta, SkpFontMeta, SkpPageMeta, Vec3 } from '../meta';
 import { nodeHiddenByUser, type SkpDoc } from './doc';
 import type { Overlay } from './overlay';
 import { DEFAULT_UNITS, formatLength, mmPerSceneUnit, type UnitsDisplay } from './units';
@@ -574,6 +575,46 @@ export function applySceneHidden(hidden: Set<number>, page: Pick<SkpPageMeta, 'h
   const notes = page.hiddenAnnotations;
   for (const n of hidden) if (n < 0 ? notes : page.hiddenNodes) hidden.delete(n);
   for (const k of notes ?? []) hidden.add(-2 - k);
+}
+
+/** 그리기 축 틀을 받는 뷰어(코어 0.101.0 setAxesFrame — 시험에서는 가짜를 넘길 수 있다) */
+export type AxesViewer = Pick<Viewer3d, 'setAxesFrame'>;
+
+/**
+ * 코어 격자의 빨강·초록 축선을 그리기 축 자리에(107차 — 코어 0.101.0 setAxesFrame, SketchUp처럼 옮기거나 돌린 축 자리). 원점은 해석기가 장면 좌표로 넘긴다
+ * (scene-meta.ts axesMeta — 형상 정점과 같은 단위 배율, 옮기지 않음). 코어는 파랑을 받지 않는다(빨강 × 초록). 기본 축(null)이면 세계 원점·세계 축이고,
+ * 코어가 받지 않는 축(길이 0·나란한 빨강·초록 같은 깨진 축 — 앞 틀이 남는다)도 세계 축으로 둔다. 축선은 격자를 켰을 때만 보인다(격자 버튼 — 코어 setGridVisible).
+ * 문서를 열 때(앱 setDoc)와 장면을 고를 때(applyScene) 부른다 — 뷰어가 있어야 쓰므로 코어와 함께 받는 이 조각에 둔다(첫 화면 조각에 싣지 않는다)
+ */
+export function showDrawAxes(v: AxesViewer, axes: SkpAxesMeta | null): void {
+  if (!v.setAxesFrame(axes)) v.setAxesFrame(null);
+}
+
+/** 코어에 같은 틀인지(원점·빨강·초록 — 기본 축끼리도 같다) */
+function sameFrame(a: SkpAxesMeta | null, b: SkpAxesMeta | null): boolean {
+  if (!a || !b) return a === b;
+  for (let i = 0; i < 3; i++) if (a.origin[i] !== b.origin[i] || a.x[i] !== b.x[i] || a.y[i] !== b.y[i]) return false;
+  return true;
+}
+
+/**
+ * 장면을 고를 때(앱 applyPage) 장면이 기억하는 숨긴 노드(applySceneHidden)와 그리기 축을 문서에 넣는다. 그리기 축(73차 — 장면 속성 "Axes Location",
+ * null = 기본 축)을 기억하는 장면이면 지금 그리기 축과 그 축을 정한 장면을 바꾸고 코어 축선 틀도 그 축으로(107차 — showDrawAxes), 기억하지 않는 장면은 그대로 둔다
+ * (SketchUp 장면 고르기와 같게). 코어에 준 틀과 값이 같으면 다시 부르지 않는다(코어가 격자를 다시 만든다 — 장면 탭을 빨리 넘길 때)
+ */
+export function applyScene(
+  d: Pick<SkpDoc, 'hiddenNodes' | 'drawAxes' | 'axesPage'>,
+  page: Pick<SkpPageMeta, 'hiddenNodes' | 'hiddenAnnotations' | 'axes'>,
+  index: number,
+  v: AxesViewer,
+): void {
+  applySceneHidden(d.hiddenNodes, page);
+  const axes = page.axes;
+  if (axes === undefined) return;
+  const same = sameFrame(d.drawAxes, axes);
+  d.drawAxes = axes;
+  d.axesPage = index;
+  if (!same) showDrawAxes(v, axes);
 }
 
 // ───────────────────────── DOM ─────────────────────────
