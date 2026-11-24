@@ -112,6 +112,8 @@ export interface Snap {
   label: string;
   /** 붙은 선분 묶음·그물 id */
   id?: string;
+  /** edge가 선분 묶음의 선분이면 그 배열 안 번호(코어 고르기 raw — 숨긴 구간 번호와 같다. 106차: 지나간 모서리가 숨긴 구간에 들었는지 본다) */
+  prim?: number;
   /** 단면 보기에서 잘린 면(채운 면) 위 */
   section?: boolean;
   /** 방향 추론(축·나란함·모서리에 수직·시작점에서 내린 수직)이면 시작점에서 그 선의 단위 방향(세계) — 잠글 수 있다 */
@@ -620,6 +622,8 @@ interface Cand {
   edge?: [V3, V3];
   other?: [V3, V3];
   id: string;
+  /** edge가 선분 묶음의 선분이면 그 배열 안 번호(Snap.prim) */
+  prim?: number;
   /** 코어가 이미 보이는 것으로 고른 점(가림 판정 생략) */
   trusted: boolean;
   /** 종류 글 대신 쓸 글(안내점) */
@@ -628,10 +632,11 @@ interface Cand {
   guide?: GuideHit;
 }
 
-/** 커서 둘레 선분(교차점·끌어온 축과의 교차를 본다): 세계 선분, 묶음 id, 그 자리 반 화소의 세계 길이, 안내선이면 guide */
+/** 커서 둘레 선분(교차점·끌어온 축과의 교차를 본다): 세계 선분, 묶음 id·배열 안 선분 번호, 그 자리 반 화소의 세계 길이, 안내선이면 guide */
 interface NearSeg {
   seg: [V3, V3];
   id: string;
+  prim?: number;
   tol: number;
   guide?: boolean;
 }
@@ -674,27 +679,28 @@ export function chooseSnap(o: SnapInput): Snap {
   const near: NearSeg[] = [];
   for (const p of [pick, ...(o.probes ?? [])]) {
     if (!p || p.kind !== 'line' || !scene) continue;
-    const key = `${p.id}#${p.raw ?? p.index}`;
+    const prim = p.raw ?? p.index;
+    const key = `${p.id}#${prim}`;
     if (seen.has(key)) continue;
     seen.add(key);
     const seg = segmentOfPick(scene, p);
     if (!seg) continue;
     const [a, b] = seg;
-    push({ kind: 'endpoint', point: a, rank: 0, edge: seg, id: p.id, trusted: false });
-    push({ kind: 'endpoint', point: b, rank: 0, edge: seg, id: p.id, trusted: false });
-    push({ kind: 'midpoint', point: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2], rank: 1, edge: seg, id: p.id, trusted: false });
+    push({ kind: 'endpoint', point: a, rank: 0, edge: seg, id: p.id, prim, trusted: false });
+    push({ kind: 'endpoint', point: b, rank: 0, edge: seg, id: p.id, prim, trusted: false });
+    push({ kind: 'midpoint', point: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2], rank: 1, edge: seg, id: p.id, prim, trusted: false });
     // 시작점에서 이 모서리에 내린 발(선분 안일 때만)
     if (o.from) {
       const foot = footOnLine(o.from, a, b);
-      if (foot && foot.t > 1e-9 && foot.t < 1 - 1e-9) push({ kind: 'perpendicular', point: foot.point, rank: 1.5, edge: seg, id: p.id, trusted: false });
+      if (foot && foot.t > 1e-9 && foot.t < 1 - 1e-9) push({ kind: 'perpendicular', point: foot.point, rank: 1.5, edge: seg, id: p.id, prim, trusted: false });
     }
     // 이 선분이 호·원이면 그 중심
     const c = o.curveCenter?.(p) ?? null;
     if (c) push({ kind: 'center', point: c, rank: 0, id: p.id, trusted: false });
     const center = p === pick;
     const on = center ? ([...p.point] as V3) : rayClosestOnSegment(ray, a, b);
-    push({ kind: 'onEdge', point: on, rank: 2, edge: seg, id: p.id, trusted: center });
-    if (near.length < MAX_INTERSECTION_SEGMENTS) near.push({ seg, id: p.id, tol: 0.5 * worldPerPixel(f, Math.max(viewDepth(f, on), 0)) });
+    push({ kind: 'onEdge', point: on, rank: 2, edge: seg, id: p.id, prim, trusted: center });
+    if (near.length < MAX_INTERSECTION_SEGMENTS) near.push({ seg, id: p.id, prim, tol: 0.5 * worldPerPixel(f, Math.max(viewDepth(f, on), 0)) });
   }
   // 측정값 칸으로 둔 안내선: 커서 광선에 가장 가까운 선 위 점(모서리 위처럼 — 덧그림이라 형상에 가리지 않는다).
   // 끝이 없는 선이라 교차점 계산에는 그 점 둘레(추정 반경의 네 배) 선분으로 넣는다
@@ -735,6 +741,7 @@ export function chooseSnap(o: SnapInput): Snap {
     if (!c.trusted && o.visible && !o.visible(c.point)) continue;
     snap = { kind: c.kind, point: c.point, label: c.label ?? SNAP_LABELS[c.kind], id: c.id };
     if (c.edge) snap.edge = c.edge;
+    if (c.prim !== undefined) snap.prim = c.prim;
     if (c.other) snap.other = c.other;
     if (c.guide) snap.guide = { ...c.guide };
     break;
@@ -948,7 +955,9 @@ function trackPointSnap(o: SnapInput, f: ViewFrame, tracks: readonly (readonly n
   if (t === axe) {
     // 시작점 축이 모서리·안내선과 만나는 점: 그 축 방향이라 잠글 수 있다(lockOf — 모서리 방향이 아니라 그 축)
     const n = axe.seg.near;
-    return { kind: 'axis', point: axe.p, axis: axe.axis, label: `${AXIS_LABELS[axe.axis]} · ${n.guide ? GUIDE_LINE_LABEL : SNAP_LABELS.onEdge}`, dir: axe.direction, edge: [n.seg[0], n.seg[1]], id: n.id };
+    const s: Snap = { kind: 'axis', point: axe.p, axis: axe.axis, label: `${AXIS_LABELS[axe.axis]} · ${n.guide ? GUIDE_LINE_LABEL : SNAP_LABELS.onEdge}`, dir: axe.direction, edge: [n.seg[0], n.seg[1]], id: n.id };
+    if (n.prim !== undefined) s.prim = n.prim;
+    return s;
   }
   if (face && t === face) {
     const fs = face as AxisFaceSnap<FaceHit>;
@@ -979,6 +988,7 @@ function trackPointSnap(o: SnapInput, f: ViewFrame, tracks: readonly (readonly n
     s.label = `${TRACK_AXIS_LABELS[tt.axis]} · ${n.guide ? GUIDE_LINE_LABEL : SNAP_LABELS.onEdge}`;
     s.edge = [n.seg[0], n.seg[1]];
     s.id = n.id;
+    if (n.prim !== undefined) s.prim = n.prim;
   }
   return s;
 }
