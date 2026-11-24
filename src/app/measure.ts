@@ -666,6 +666,11 @@ export function snapRadius(pointerType: string): number {
   return pointerType === 'touch' ? TOUCH_SNAP_RADIUS_PX : pointerType === 'aim' ? AIM_SNAP_RADIUS_PX : SNAP_RADIUS_PX;
 }
 
+/** 불투명 면이 그 뒤 점·선분을 가리는 그리기 방식인지(음영 계열 — 코어 고르기의 shadedMode와 같은 다섯, 와이어프레임·X-ray는 가리지 않는다) */
+function occludes(mode: string): boolean {
+  return mode === 'shaded' || mode === 'shadedEdges' || mode === 'hiddenLine' || mode === 'monochrome' || mode === 'noTexture';
+}
+
 /** 정밀 조준 십자선이 3D 보기 위에 뜬 것에서 떨어지는 거리(화소) — 십자선 가운데 빈 자리(6)와 둘레가 보이게 */
 export const AIM_COVER_GAP_PX = 8;
 
@@ -1103,6 +1108,8 @@ export class MeasureTool {
   /** 지금 커서로 찍힐 점(각도기 둘째·셋째 점은 평면 위) */
   private hoverPoint: V3 | null = null;
   private hoverDirty = false;
+  /** 112차: 커서 자리 추정을 구할 때 본 가림(음영 계열 그리기 방식이면 true — 그 계열이 바뀌면 다음 그림에 다시 구한다). 구한 추정이 없으면 null */
+  private hoverOccludes: boolean | null = null;
   private dragging = false;
   private presses = new Map<number, Press>();
   private cancelTap = false;
@@ -2200,7 +2207,7 @@ export class MeasureTool {
     return this.cursor && this.cursor.type !== 'touch' && !this.dragging ? this.hover : null;
   }
 
-  /** 지금 표식의 추정(그리기를 기다리지 않고 — 손가락 기기는 탭한 자리 것). 장면 길 뒤면 먼저 sweep(110차) */
+  /** 지금 표식의 추정(그리기를 기다리지 않고 — 손가락 기기는 탭한 자리 것). 장면 길(110차)·그리기 방식의 가림 바뀜(112차) 뒤면 먼저 sweep */
   private freshHover(): Snap | null {
     if (this.modeValue && this.sweep()) this.overlay.invalidate();
     const f = this.overlay.frame();
@@ -2537,21 +2544,19 @@ export class MeasureTool {
     // 단면에 잘린 쪽 후보는 버린다: 장면 전체를 자르는 평면들(그룹 안 단면은 그 그룹 항목만 자르므로 후보 점으로는 가리지 않는다)
     const cuts = (v.sections ?? (v.section ? [v.section] : [])).filter((s) => !('items' in s && s.items));
     const kept = cuts.length ? (p: V3): boolean => cuts.every((sec) => dot(sec.normal, p) <= sec.offset + 1e-9 * (Math.abs(sec.offset) + 1)) : null;
-    const mode = v.getRenderMode();
     let checks = 0;
     // 음영 계열 모드에서만 가림을 본다: 후보 점의 화면 자리에서 다시 골라 그보다 앞의 면이 맞으면 가린 것
-    const visible =
-      mode === 'shaded' || mode === 'shadedEdges' || mode === 'hiddenLine' || mode === 'monochrome' || mode === 'noTexture'
-        ? (p: V3): boolean => {
-            if (++checks > VISIBLE_CHECKS) return false;
-            const s = projectToScreen(f, p);
-            if (!s) return false;
-            const k = v.pick(s[0], s[1]);
-            if (!k || k.kind !== 'mesh') return true;
-            const dp = viewDepth(f, p);
-            return viewDepth(f, k.point) >= dp - Math.max(1e-6 * Math.abs(dp), worldPerPixel(f, dp) * 1.5);
-          }
-        : null;
+    const visible = occludes(v.getRenderMode())
+      ? (p: V3): boolean => {
+          if (++checks > VISIBLE_CHECKS) return false;
+          const s = projectToScreen(f, p);
+          if (!s) return false;
+          const k = v.pick(s[0], s[1]);
+          if (!k || k.kind !== 'mesh') return true;
+          const dp = viewDepth(f, p);
+          return viewDepth(f, k.point) >= dp - Math.max(1e-6 * Math.abs(dp), worldPerPixel(f, dp) * 1.5);
+        }
+      : null;
     // 곡선 중심: 커서 둘레 곡선 선분의 중심을 재고 기억한다(가운데로 옮기면 붙게)
     const cc = this.opts.curveCenter;
     const curveCenter = cc
@@ -2679,9 +2684,14 @@ export class MeasureTool {
   /**
    * 110차(106차 edgeRef 꼴): 장면 탭·태그·개체·구간 숨김 뒤 — 코어에 보이기 알림이 없고 앱 보이기 함수는 첫 화면 JS라 쓰는 곳(그리기·지금 추정·찍기)에서 본다.
    * 숨은 묶음·구간이 낸 지나간 모서리·마지막으로 본 방향 추론·끌어온 점·곡선 중심은 버리고, 그것을 버렸거나 커서 자리 추정이 숨은 것이면 그 자리에서 다시 구한다(코어 0.98.0).
-   * 장면 길이 없으면 아무것도 바꾸지 않는다. 바꿨으면 true
+   * 112차(코어 0.106.0과 같은 규칙): 커서 자리 추정을 구한 뒤 그리기 방식이 음영 가림을 바꿨으면(음영 계열 ↔ 와이어프레임·X-ray) 그 자리에서 다시 구한다 —
+   * 같은 계열 안 바꾸기는 고르기·가림이 같아 그대로. 그리기 방식은 장면을 바꾸지 않아 찍은 점·잠금·끌어온 점·기억은 버리지 않는다. 앱 setRenderMode는 측정 도구를 부르지 않지만
+   * 라벨 가림 다시 판정(resetOcclusion)이 같은 덧그림 층을 다시 그려 이 그림에 온다(문서 열기는 clear()가 다시 구한다).
+   * 장면 길·가림 바뀜이 없으면 아무것도 바꾸지 않는다. 바꿨으면 true
    */
   private sweep(): boolean {
+    const occl = this.hover !== null && this.cursor?.type !== 'touch' && this.hoverOccludes !== null && this.hoverOccludes !== occludes(this.viewer.getRenderMode());
+    if (occl) this.hoverOccludes = null;
     if (this.gone(this.lastLockSrc)) this.lastLockable = this.lastLockSrc = null;
     const ref = this.gone(this.parallelRef);
     if (ref) this.parallelRef = null;
@@ -2692,7 +2702,7 @@ export class MeasureTool {
     const gc = (c: V3): boolean => this.gone(this.centerSrc.get(c));
     const centers = this.centers.some(gc);
     if (centers) this.centers = this.centers.filter((c) => !gc(c));
-    if (!ref && !tracks && !centers && !this.gone(this.hover)) return false;
+    if (!occl && !ref && !tracks && !centers && !this.gone(this.hover)) return false;
     this.rehover(false);
     if (tracks) this.refreshHint();
     return true;
@@ -3169,6 +3179,7 @@ export class MeasureTool {
   private updateHover(f: ViewFrame): void {
     const c = this.cursor;
     if (!c || this.dragging || c.type === 'touch') {
+      this.hoverOccludes = null;
       if (!c || c.type !== 'touch') {
         this.hover = null;
         this.hoverPoint = null;
@@ -3177,6 +3188,7 @@ export class MeasureTool {
     }
     const snap = this.snapAt(c.x, c.y, c.type, f);
     this.hover = snap;
+    this.hoverOccludes = snap ? occludes(this.viewer.getRenderMode()) : null;
     this.hoverPoint = null;
     this.dwell(snap, c);
     if (!snap) return;
@@ -3203,7 +3215,8 @@ export class MeasureTool {
   private paint(f: ViewFrame): void {
     this.haloNow = null;
     const mode = this.modeValue;
-    // 110차: 장면 길 뒤 첫 그림이면 숨은 것이 낸 기억을 버리고 커서 자리 추정을 다시 구한다(sweep — 장면 길이 없으면 그대로)
+    // 110차: 장면 길 뒤 첫 그림이면 숨은 것이 낸 기억을 버리고 커서 자리 추정을 다시 구한다(sweep — 장면 길이 없으면 그대로).
+    // 112차: 그리기 방식이 음영 가림을 바꾼 뒤 첫 그림이면 커서 자리 추정만 다시 구한다
     if (mode) this.sweep();
     if (mode && this.hoverDirty) {
       this.hoverDirty = false;
