@@ -117,6 +117,9 @@ describe('코어 나눠 받기', () => {
     expect(core.has('viewcube')).toBe(false);
     // 코어 theme 모듈도 첫 화면 그래프에 없다(66차 — 코어 뷰어가 쓰는 대비 함수까지 첫 화면 조각에 들었다. 앱은 바탕 색 값만 둔다, linecontrast.ts)
     expect(core.has('theme')).toBe(false);
+    // 코어 pointer 모듈도 첫 화면 그래프에 없다(103차 — 앱의 끌기 시작 거리 dragStartPx 하나로 그 모듈이 첫 화면 조각에 들어 코어의 거르기 몫까지 실렸다.
+    // 앱은 코어 입구와 함께 받은 dragStartPx를 쓴다 — loadViewerCore)
+    expect(core.has('pointer')).toBe(false);
     // 측정 도구 조각도 core.ts의 import() 하나로만 받는다
     const measureDyn: string[] = [];
     for (const f of files) if (!f.startsWith(CORE) && dynamicSpecs(readFileSync(f, 'utf8')).includes('./measure')) measureDyn.push(relative(ROOT, f));
@@ -156,10 +159,13 @@ describe('코어 나눠 받기', () => {
     const a = loadViewerCore();
     expect(loadViewerCore()).toBe(a);
     const got = await a;
-    // 60차: 입구 이름공간 대신 앱이 쓰는 Viewer3d만 넘긴다(번들러가 입구의 다른 내보내기를 코어 조각에 남기지 않게)
-    expect(Object.keys(got)).toEqual(['Viewer3d']);
+    // 60차: 입구 이름공간 대신 앱이 쓰는 것만 넘긴다(번들러가 입구의 다른 내보내기를 코어 조각에 남기지 않게).
+    // 103차: 끌기 시작 거리(dragStartPx — 코어 뷰어가 쓰는 pointer 모듈의 같은 함수)도 — 첫 화면이 pointer 모듈을 바로 가져오지 않게
+    expect(Object.keys(got)).toEqual(['Viewer3d', 'dragStartPx']);
     const m = await import('opencad-viewer3d');
     expect(got.Viewer3d).toBe(m.Viewer3d);
+    expect(got.dragStartPx).toBe((await import('opencad-viewer3d/pointer')).dragStartPx);
+    expect(['mouse', 'pen', 'touch', ''].map((t) => got.dragStartPx(t))).toEqual([4, 4, 10, 4]);
     // 앱이 바로 가져온 작은 모듈과 코어가 같은 객체를 쓴다(뷰 이름 번역이 코어 그림에도 닿게, 테마 색이 같게)
     const { VIEW_LABELS } = await import('opencad-viewer3d/camera');
     expect(m.VIEW_LABELS).toBe(VIEW_LABELS);

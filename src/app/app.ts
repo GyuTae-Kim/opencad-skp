@@ -17,7 +17,6 @@ import type { KeyPick } from './keypick';
 import type { PickList } from './picklist';
 // 큰 모형 놓기·문맥 잃음과 되찾음(release.ts)도 문서를 열 때 나눠 받는다 — 여기서는 형만
 import type { ContextWatch, GraphicsState, RestoreRecord } from './release';
-import { dragStartPx } from 'opencad-viewer3d/pointer';
 import { ParseClient } from './client';
 // 글·치수 라벨은 코어 입구와 함께 받는다(core.ts annotating — 57차) — 여기서는 형만
 import type { AnnotationLabels } from './annotations';
@@ -1332,7 +1331,7 @@ export class SkpViewerApp implements PanelHost {
   private async ensureViewer(): Promise<boolean> {
     if (this.viewer) return true;
     try {
-      const { Viewer3d } = await loadViewerCore();
+      const { Viewer3d, dragStartPx } = await loadViewerCore();
       // 기다리는 사이 다른 열기가 먼저 만들었으면 그것을 쓴다
       if (this.viewer) return true;
       const v = new Viewer3d(this.els.viewHost, {
@@ -1363,7 +1362,7 @@ export class SkpViewerApp implements PanelHost {
         this.refreshAnnotations();
       });
       v.onCameraChange((c) => this.onCamera(c));
-      this.watchCanvas(v);
+      this.watchCanvas(v, dragStartPx);
       this.viewer = v;
       this.overlay = new Overlay(this.els.viewHost);
       this.overlay.attach(v);
@@ -1493,8 +1492,11 @@ export class SkpViewerApp implements PanelHost {
 
   // ───────────────────────── 고르기·측정 ─────────────────────────
 
-  /** 3D 보기 입력 엿보기: 사용자가 보기를 직접 움직였는지(Alt·두 번 누르기는 코어의 onPick 두 번째 인자로 받는다) */
-  private watchCanvas(v: Viewer3d): void {
+  /**
+   * 3D 보기 입력 엿보기: 사용자가 보기를 직접 움직였는지(Alt·두 번 누르기는 코어의 onPick 두 번째 인자로 받는다).
+   * dragStartPx는 코어 입구와 함께 받은 코어의 끌기 시작 거리(103차 — 첫 화면이 코어 pointer 모듈을 바로 가져오지 않게, core.ts loadViewerCore)
+   */
+  private watchCanvas(v: Viewer3d, dragStartPx: (pointerType: string) => number): void {
     const cv = v.canvas;
     let down: { x: number; y: number } | null = null;
     cv.addEventListener('pointerdown', (e) => {
