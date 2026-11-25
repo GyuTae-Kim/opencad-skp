@@ -22,6 +22,8 @@
  * Tab 돌리기(124차 — 코어 0.116.0 tabCycle과 같은 규칙, 이 도구는 코어 측정을 쓰지 않아 앱이 한다): 마우스·펜 커서 자리에 겹친 스냅 후보(snapCandidatesAt)가
  *   둘 이상이면 Tab·Shift+Tab이 다음·앞 후보를 미리 보기로 하고(툴팁 이름 뒤에 "2/4"), 4화소 안 누르기는 보인 그 후보를 찍으며, 돌리는 중 Esc는 돌리기만 푼다.
  *   후보가 하나·없거나 가상 커서가 켜졌거나 커서가 3D 보기 밖이면 Tab은 초점 이동이고, Esc로 푼 자리에서는 포인터가 4화소 넘게 움직일 때까지 초점 이동이다(cycleKey).
+ * 가상 커서 Tab 돌리기(125차 — 같은 규칙): 가상 커서가 켜진 동안 keypick.ts가 Tab·Shift+Tab·Esc를 keyCycle로 먼저 넘긴다. 3D 보기가 받은 키이고 커서 자리 후보가 둘 이상이면
+ *   돌리고 알림 글(툴팁 글 — 이름 뒤 "2/4" — 과 좌표)을 돌려주며, 화살표로 옮기면 버리고, Enter는 보인 후보를 찍고, 돌리는 중 Esc는 돌리기만 풀고 그 자리 첫 후보 글을 돌려준다.
  * 정밀 조준(터치): 한 손가락을 끌기 시작 거리 안에서 AIM_HOLD_MS 동안 누르고 있으면 손가락 위 AIM_OFFSET_PX에 십자선을 띄우고,
  *   끌면 궤도 대신 십자선이 따라가며 마우스처럼 추정·고무줄·툴팁을 보인다. 떼면 십자선 자리에 점을 찍는다.
  *   그동안의 움직임은 캔버스 부모의 캡처 단계에서 막아 코어가 돌리지 않게 한다(떼기는 코어에 넘겨 끌기 상태를 끝낸다).
@@ -2325,6 +2327,9 @@ export class MeasureTool {
    */
   keyHover(x: number, y: number): string {
     if (!this.modeValue) return '';
+    // 125차: 옮기면 Tab 돌리기는 버린다(아래 다시 구하기 — 그 자리 첫 후보), Esc로 푼 자리에서 4화소 넘게 옮기면 그 자리 Tab을 다시 받는다(마우스 onMove와 같다)
+    const off = this.cycleOff;
+    if (off && Math.hypot(x - off.x, y - off.y) > tapSlopPx('keyboard')) this.cycleOff = null;
     this.cursor = { x, y, type: 'keyboard' };
     this.hoverDirty = true;
     const snap = this.freshHover();
@@ -2332,13 +2337,27 @@ export class MeasureTool {
     return this.keyText(snap);
   }
 
-  /** 가상 커서를 껐다: keep이 아니면 커서 표식·툴팁을 거둔다(keep — 초점이 측정값 칸 등으로 가 그 칸에 친 길이의 방향으로 쓴다) */
+  /** 가상 커서를 껐다: keep이 아니면 커서 표식·툴팁을 거둔다(keep — 초점이 측정값 칸 등으로 가 그 칸에 친 길이의 방향으로 쓴다). 거두면 Tab 돌리기도 버린다(125차) */
   keyEnd(keep: boolean): void {
     if (keep || this.cursor?.type !== 'keyboard') return;
     this.cursor = null;
+    this.cycle = this.cycleOff = null;
     this.hover = null;
     this.hoverPoint = null;
     this.overlay.invalidate();
+  }
+
+  /**
+   * 125차 가상 커서의 Tab·Shift+Tab·Esc(keypick.ts가 커서가 켜진 동안 먼저 넘긴다 — 124차 마우스 규칙과 같게):
+   * Tab·Shift+Tab은 3D 보기가 받은 키이고 커서 자리에 겹친 스냅 후보가 둘 이상이면 다음·앞 후보를 보이고(cycleKey — 기본 동작을 막는다) 알림 글은 툴팁 글(이름 뒤 차례·수)과 좌표,
+   * 돌리는 중 Esc는 돌리기만 풀고(cycleEsc) 그 자리 첫 후보의 자리 글. 받지 않으면 null(Tab은 초점 이동, Esc는 예전 차례 — 찍은 점 지우기·커서 끄기).
+   * 가상 커서는 툴팁 알림을 감추므로(aria-hidden) 이 글을 알림 칸(kp-live) 한 쪽만 읽는다. 차례·수는 Tab을 누른 때만 생긴다(옮길 때 글은 keyHover — 차례 없음)
+   */
+  keyCycle(e: KeyboardEvent): string | null {
+    if (!this.modeValue || this.cursor?.type !== 'keyboard') return null;
+    if (e.key === 'Tab') return this.cycleKey(e, true) ? this.keyText(this.hover, true) : null;
+    if (e.key !== 'Escape' || e.type !== 'keydown' || e.ctrlKey || e.metaKey || e.altKey || !this.cycleEsc(e)) return null;
+    return this.keyText(this.freshHover());
   }
 
   /** Enter: 가상 커서 자리에 누르기와 같이 점을 찍고(shift = 각도기 평면 고정) 알림 글 — 시작점·중심·기준 방향, 다 쟀으면 결과 줄, 못 찍었으면 그 글 */
@@ -2360,8 +2379,11 @@ export class MeasureTool {
     return tr(t).replace('{0}', () => desc);
   }
 
-  /** 가상 커서 자리 알림 글: 찍을 수 있는 추정이면 툴팁 글(추정 · 길이·각도)과 좌표, 아니면 붙잡을 점이 없다 */
-  private keyText(snap: Snap | null): string {
+  /**
+   * 가상 커서 자리 알림 글: 찍을 수 있는 추정이면 툴팁 글(추정 · 길이·각도)과 좌표, 아니면 붙잡을 점이 없다.
+   * cycled(125차 — Tab으로 돌린 때만): 추정 이름 뒤에 차례·수(tipLabel — 툴팁과 같은 "모서리에 2/3"). 찍기 알림 글에는 넣지 않는다(코어 찍기 알림처럼)
+   */
+  private keyText(snap: Snap | null, cycled = false): string {
     const tr = this.opts.localize ?? ((t: string) => t);
     // 줄자·각도기 중심은 빈 곳(추정 없음)을 찍지 않는다
     if (!snap || (snap.kind === 'free' && (this.modeValue === 'tape' || !this.pts.length))) return tr(KEY_MEASURE_TEXT.noSnap);
@@ -2373,7 +2395,7 @@ export class MeasureTool {
     let value: string | null = null;
     if (this.modeValue === 'tape' && a) value = len(Math.hypot(...sub((this.guideOn && this.startEdge ? edgeFoot(a, this.startEdge, p) : null) ?? p, a)));
     else if (a && base && this.normal) value = formatAngle(planeAngle(sub(base, a), sub(p, a), this.normal), units);
-    const tip = joinTip(snapTipLabel(snap), value);
+    const tip = joinTip(cycled ? this.tipLabel(snap) : snapTipLabel(snap), value);
     const at = `X ${len(p[0])}, Y ${len(p[1])}, Z ${len(p[2])}`;
     return tip ? `${tr(tip)}: ${at}` : at;
   }
@@ -2418,7 +2440,7 @@ export class MeasureTool {
   /**
    * 키(keydown·keyup 모두 넘긴다). 처리했으면 true.
    * Esc: (124차 — Tab으로 돌리는 중이면 돌리기만 풀기) → 진행 중 점 취소(끌어온 점도 잊는다) → 끌어온 점 잊기 → 화살표로 고정한 각도기 평면 풀기 → 결과 지우기 → (지울 것이 없으면) false — 앱이 도구를 끈다.
-   * Tab·Shift+Tab(124차, keydown): 마우스·펜 커서 자리에 겹친 스냅 후보가 둘 이상이면 다음·앞 후보(cycleKey), 아니면 false(초점 이동).
+   * Tab·Shift+Tab(124차, keydown): 마우스·펜 커서 자리에 겹친 스냅 후보가 둘 이상이면 다음·앞 후보(cycleKey), 아니면 false(초점 이동). 가상 커서 자리는 keyCycle(125차).
    * Shift: 누르고 있는 동안 방향을 잡는 중이면 지금 방향 추론 잠금, 각도기 중심을 찍기 전이면 커서 밑 평면 고정.
    * →·←·↑·↓(keydown): 축·나란히 잠금 켜고 끄기, 각도기 중심을 찍기 전에는 →·←·↑로 각도기 평면 고정(앱은 목록·입력 칸의 화살표를 넘기지 않는다).
    * 안내 두기 키(Ctrl, Mac은 Option): 그 키만 눌렀다 떼면(keyup) 안내 두기 켜고 끄기 — 그사이 다른 키·누르기·휠이 있으면 바꾸지 않는다(Ctrl+O 등).
@@ -2450,15 +2472,7 @@ export class MeasureTool {
     if (e.key === 'Escape') {
       if (e.type === 'keyup' || e.ctrlKey || e.metaKey || e.altKey) return false;
       // 124차: 돌리는 중이면 돌리기만 풀고 그 자리 첫 후보로(아무것도 지우지 않는 가장 안쪽 상태 — 코어 0.116.0 tabCycle Esc)
-      const c = this.cycle && this.cursor;
-      if (c) {
-        this.cycle = null;
-        this.cycleOff = { x: c.x, y: c.y };
-        this.hoverDirty = true;
-        e.preventDefault();
-        this.overlay.invalidate();
-        return true;
-      }
+      if (this.cycleEsc(e)) return true;
       if (this.pts.length) {
         this.pts = [];
         this.startEdge = null;
@@ -3267,14 +3281,19 @@ export class MeasureTool {
    * 124차 Tab·Shift+Tab(keydown — handleKey가 넘긴다): 마우스·펜 커서 자리에 겹친 스냅 후보(snapCandidatesAt)의 다음·앞 후보를 미리 보기로 하고(끝에서 처음으로),
    * 기본 동작을 막아 초점이 3D 보기에 머문다(앱 창 capture가 전파도 막아 코어 캔버스 리스너가 누르기 초점 표시를 떼지 않는다). 코어 0.116.0 tabCycle과 같은 규칙으로 받는 때만:
    * Ctrl·Meta·Alt 없음 · 기본 동작이 막히지 않음 · 대상이 3D 보기(또는 없음) · 마우스·펜 커서가 3D 보기 위 · 끌기·누르기·정밀 조준 없음 · 가상 커서 꺼짐(가상 커서가 앞선다) ·
-   * Esc로 푼 자리에서 4화소 넘게 움직였음 · 그 자리 후보가 둘 이상. 아니면 false(브라우저 초점 이동 — 키보드 덫 없음)
+   * Esc로 푼 자리에서 4화소 넘게 움직였음 · 그 자리 후보가 둘 이상. 아니면 false(브라우저 초점 이동 — 키보드 덫 없음).
+   * key(125차 — keyCycle): 가상 커서 자리를 돌린다. 마우스·펜 대신 측정 도구 커서가 가상 커서이고 코어 커서가 켜졌으며, 대상이 3D 보기 그 자체일 때만(없는 대상·합성 키도 받지 않는다 —
+   * keypick.ts Enter 찍기와 같다). 그 밖의 조건은 같다(Esc로 푼 자리는 화살표로 4화소 넘게 옮길 때까지 — keyHover)
    */
-  private cycleKey(e: KeyboardEvent): boolean {
+  private cycleKey(e: KeyboardEvent, key = false): boolean {
     if (e.type !== 'keydown' || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return false;
     const v = this.viewer;
     const c = this.cursor;
-    if ((e.target && e.target !== v.canvas) || !c || (c.type !== 'mouse' && c.type !== 'pen')) return false;
-    if (this.dragging || this.presses.size || this.aimId !== null || v.keyboardCursor) return false;
+    if (!c) return false;
+    const ok = key
+      ? c.type === 'keyboard' && !!v.keyboardCursor && e.target === v.canvas
+      : (!e.target || e.target === v.canvas) && (c.type === 'mouse' || c.type === 'pen') && !v.keyboardCursor;
+    if (!ok || this.dragging || this.presses.size || this.aimId !== null) return false;
     const off = this.cycleOff;
     if (off && Math.hypot(c.x - off.x, c.y - off.y) <= tapSlopPx(c.type)) return false;
     const f = this.overlay.frame();
@@ -3299,6 +3318,21 @@ export class MeasureTool {
     this.hoverDirty = false;
     this.learn(snap);
     this.hoverPlaneAt(f, snap, c);
+    this.overlay.invalidate();
+    return true;
+  }
+
+  /**
+   * 124차 돌리는 중 Esc(keydown — 부르는 쪽이 Ctrl·Meta·Alt를 거른다): 돌리기만 풀고 그 자리 첫 후보로(다음 그림·freshHover가 다시 구한다), 푼 자리는 커서가 4화소 넘게
+   * 옮겨질 때까지 Tab이 초점 이동(cycleOff). 풀었으면 기본 동작을 막고 true. 125차: 가상 커서 Esc(keyCycle)도 이것으로
+   */
+  private cycleEsc(e: KeyboardEvent): boolean {
+    const c = this.cycle && this.cursor;
+    if (!c) return false;
+    this.cycle = null;
+    this.cycleOff = { x: c.x, y: c.y };
+    this.hoverDirty = true;
+    e.preventDefault();
     this.overlay.invalidate();
     return true;
   }
@@ -3589,7 +3623,8 @@ export class MeasureTool {
   /**
    * 툴팁의 추정 이름(snapTipLabel). 124차: Tab으로 돌린 후보면 이름(지금 화면 언어) 뒤에 차례·수("끝점 2/4" — cycleTipLabel).
    * 측정 띠·상태 막대에는 추정 이름이 없어(안내 글·결과뿐) 툴팁에만 붙는다. 툴팁은 마우스 커서면 알림(role=status)이라 Tab으로 바뀐 이 글을 읽는다 —
-   * 가상 커서 알림 칸(keypick.ts)에는 쓰지 않는다(같은 글이 두 번 읽히지 않게, 마우스 이동마다 알리지 않게 — 차례·수는 Tab을 누른 때만 생긴다)
+   * 가상 커서 알림 칸(keypick.ts)에는 쓰지 않는다(같은 글이 두 번 읽히지 않게, 마우스 이동마다 알리지 않게 — 차례·수는 Tab을 누른 때만 생긴다).
+   * 125차 가상 커서는 거꾸로 툴팁 알림을 감추고 keyCycle이 이 이름으로 만든 글(keyText)을 알림 칸이 읽는다
    */
   private tipLabel(s: Snap): string {
     const cy = this.cycle;

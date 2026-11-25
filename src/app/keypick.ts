@@ -4,6 +4,7 @@
  * - 줄자·각도기(59차): 화살표는 방향 잠금(SketchUp)이라 가상 커서는 3D 보기의 Enter로만 켠다. 켠 동안 화살표는 커서 옮기기(방향 잠금은 Shift),
  *   Enter는 커서 자리에 측정 도구의 붙잡기로 점 찍기, Esc는 측정 도구가 지울 것이 먼저이고 없으면 커서 끄기(NC 56·57차와 같은 키).
  *   코어는 측정 모드 없이 고르기 모드(후보 돌리기 없음)로 켜고 알림의 커서 자리만 측정 도구(KeyMeasureHost)에 넘긴다 — 알림 글은 측정 도구가 만든다.
+ *   125차: 켠 동안 Tab·Shift+Tab은 측정 도구가 커서 자리에 겹친 스냅 후보(둘 이상일 때만)를 돌리고(keyCycle — 124차 마우스 Tab과 같은 규칙), 돌리는 중 Esc는 돌리기만 푼다.
  * - 3D 보기에 초점이 있을 때 화살표로 가상 커서를 켜고 옮기며, Tab·Shift+Tab으로 커서 자리에 겹친 면·모서리(앞 면 뒤의 것까지 — 코어 pickCandidates 차례)를 돌리고
  *   Enter로 고른다. 둘째 이후 후보는 onPick의 e.cycle로 오고 앱은 펼친 단계 규칙을 건너뛰어 그것을 그대로 고른다(doc.ts selectionForPick).
  * - 후보 고르기 선택(PICK_CYCLE)은 앱 onPick 선택과 같다(앱은 반투명 너머·면만 고르기를 쓰지 않는다).
@@ -168,6 +169,11 @@ export interface KeyMeasureHost {
   keyEnd(keep: boolean): void;
   /** Enter: 커서 자리에 점을 찍고 알림 글(shift = Shift+Enter — 각도기 평면 고정) */
   keyPlace(shift: boolean): string;
+  /**
+   * 125차 Tab·Shift+Tab·Esc(커서가 켜진 동안 먼저 묻는다): 커서 자리에 겹친 스냅 후보가 둘 이상이면 다음·앞 후보를 보이고, 돌리는 중 Esc는 돌리기만 푼다.
+   * 받았으면 알림 글(기본 동작은 측정 도구가 막는다), 아니면 null(Tab은 초점 이동, Esc는 예전 차례)
+   */
+  keyCycle(e: KeyboardEvent): string | null;
 }
 
 /** 59차 측정 도구를 가진 앱(app.ts App — 측정 도구 조각을 받기 전에는 measureTool null) */
@@ -239,7 +245,8 @@ export class KeyPick {
   /**
    * 측정 도구를 켠 동안의 창 키(app.ts 캡처 단계 — 입력 칸의 키는 받지 않는다): 측정 도구 키와 59차 가상 커서 점 찍기. 다뤘으면 true(앱은 전파를 막는다).
    * - 가상 커서가 켜진 동안: 3D 보기의 Enter는 커서 자리에 점 찍기, 화살표는 코어로 넘겨 커서 옮기기(그동안 방향 잠금은 Shift — 측정 도구 몫),
-   *   Esc는 측정 도구가 지울 것(점·결과)이 먼저, 없으면 커서 끄기
+   *   Tab·Shift+Tab은 측정 도구가 받으면(커서 자리 스냅 후보 둘 이상 — 125차 keyCycle) 후보 돌리기와 그 알림, 아니면 초점 이동,
+   *   Esc는 Tab으로 돌리는 중이면 돌리기만 풀기(125차), 아니면 측정 도구가 지울 것(점·결과)이 먼저, 없으면 커서 끄기
    * - 그 밖: 측정 도구 키(handleKey — SketchUp 화살표 방향 잠금 등). 화살표는 초점이 그것을 스스로 쓰는 곳(LIST_TARGETS — 목록·메뉴·슬라이더)이면 그쪽 것이고,
    *   도구가 다루지 않은 화살표도 코어로 보내지 않는다(커서는 Enter로만 켠다 — NC 56차와 같다)
    */
@@ -256,6 +263,14 @@ export class KeyPick {
         return true;
       }
       if (arrow) return this.v.handleKey(e);
+      // 125차: Tab·Shift+Tab(커서 자리 스냅 후보 돌리기)·돌리는 중 Esc(돌리기만 풀기)는 측정 도구가 먼저 — 받으면 그 글을 알린다(코어는 pickCycle false라 Tab을 넘긴다)
+      if (e.key === 'Tab' || e.key === 'Escape') {
+        const t = h.keyCycle(e);
+        if (t !== null) {
+          this.live.textContent = t;
+          return true;
+        }
+      }
       if (e.key === 'Escape') return h.handleKey(e) || this.v.handleKey(e);
     }
     if (arrow && list) return false;
@@ -298,7 +313,7 @@ export class KeyPick {
         },
       });
     } else {
-      // 줄자·각도기: 코어는 고르기 모드(후보 돌리기 없음 — Tab은 초점 이동), 자리만 받아 측정 도구가 추정한다
+      // 줄자·각도기: 코어는 고르기 모드(후보 돌리기 없음 — 코어는 Tab을 넘긴다), 자리만 받아 측정 도구가 추정한다(Tab 후보 돌리기도 측정 도구 — 125차 handleKey)
       const messages = keyPickMessages();
       const M = keySnapMessages(messages);
       const hint = KEY_MEASURE_HINT.map((t) => uiText(t)).join(M.hintJoin);

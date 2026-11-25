@@ -206,11 +206,12 @@ describe('알림 틀(네 언어 사전 열쇠)', () => {
 describe('59차 줄자·각도기 키보드 점 찍기 열쇠', () => {
   it('키 안내·알림 글·바로 가기 줄 열쇠는 네 언어 사전에 있고 한글이 남지 않으며, 더해도 화면 번역층이 옮기는 다른 글은 바뀌지 않는다', () => {
     const rows = SHORTCUTS.flatMap((g) => g.items).filter((i) => i.label.startsWith('줄자·각도기를 켠 동안 3D') || i.label.startsWith('줄자·각도기의 가상 커서'));
-    expect(rows.map((r) => r.keys.join(' '))).toEqual(['Enter', '← → ↑ ↓', 'Esc']);
+    // 125차: 가상 커서 Tab·Shift+Tab(겹친 스냅 후보 돌리기) 줄
+    expect(rows.map((r) => r.keys.join(' '))).toEqual(['Enter', '← → ↑ ↓', 'Tab Shift+Tab', 'Esc']);
     // 키 안내의 옮기기·끄기는 56차 열쇠 그대로
     expect(KEY_MEASURE_HINT.filter((t) => (Object.values(KEY_PICK_TEXT) as string[]).includes(t))).toEqual(['옮기기 ←→↑↓', '끄기 Esc']);
     const added = [...new Set([...KEY_MEASURE_HINT.filter((t) => !(Object.values(KEY_PICK_TEXT) as string[]).includes(t)), ...Object.values(KEY_MEASURE_TEXT), ...rows.map((r) => r.label)])];
-    expect(added.length).toBe(10);
+    expect(added.length).toBe(11);
     for (const t of added) expect(t.replace(/\{\d+\}/g, ''), t).toMatch(HANGUL);
     for (const code of CODES)
       for (const t of [...KEY_MEASURE_HINT, ...added]) {
@@ -460,7 +461,7 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
     const { v, d, cv, host } = setup();
     let asked = 0;
     const doc = (): typeof d => (asked++, d);
-    const measureTool: KeyMeasureHost = { active: true, handleKey: () => false, keyHover: () => '끝점', keyEnd: () => undefined, keyPlace: () => '' };
+    const measureTool: KeyMeasureHost = { active: true, handleKey: () => false, keyHover: () => '끝점', keyEnd: () => undefined, keyPlace: () => '', keyCycle: () => null };
     const kp = new KeyPick(v, host as unknown as HTMLElement, doc, { measureTool });
     kp.set(true);
     key(cv, 'ArrowLeft');
@@ -590,6 +591,8 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
         calls.push(`place ${shift}`);
         return '시작점을 찍었습니다. 끝점';
       },
+      // 125차: 커서 자리 후보가 하나(받지 않음 — Tab은 초점 이동, Esc는 예전 차례)
+      keyCycle: () => null,
     };
     /** 앱 창 키 처리기가 handleKey에 넘기는 키 사건(대상 = 3D 보기) */
     const ev = (k: string, o: Record<string, unknown> = {}): KeyboardEvent =>
@@ -629,7 +632,7 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
     expect(v.keyboardCursor).toMatchObject({ x: 405, y: 350 });
     expect(kp.text).toBe('끝점: 405,350');
     expect(calls).toEqual(['hover 405,300', 'hover 405,350']);
-    // Tab은 후보 돌리기가 아니다(측정 도구 키 → 앱 → 코어도 받지 않아 초점 이동 — 측정 도구에는 붙잡기 후보 목록이 없다)
+    // Tab: 측정 도구가 받지 않으면(커서 자리 후보 하나 — 125차 keyCycle) 앱 → 코어도 받지 않아 초점 이동
     expect(kp.handleKey(ev('Tab'))).toBe(false);
     expect(v.handleKey(ev('Tab'))).toBe(false);
     // Enter: 커서 자리에 측정 도구로 찍기(코어 고르기 onPick 없이), Shift+Enter는 shift
@@ -665,5 +668,107 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
     expect(kp.enabled).toBe(true);
     expect(v.keyboardSnap!.pickCycle).toEqual({ ...PICK_CYCLE, group: expect.any(Function), facePreview: true, faceRanges: expect.any(Function) });
     expect(kp.handleKey(ev('ArrowRight'))).toBe(false);
+  });
+
+  it('125차 줄자·각도기 가상 커서의 Tab·Shift+Tab·돌리는 중 Esc: 측정 도구 keyCycle이 받으면 그 글을 알림 칸에 넣고 다룬 키, 받지 않으면 예전 길(코어는 pickCycle false 그대로 Tab을 넘긴다)', () => {
+    const { v, cv, d, host: el } = setup();
+    const calls: string[] = [];
+    /** 커서 자리 후보 수와 보인 차례(측정 도구 keyCycle 꼴 — 실제 차례·글은 tests/app/measure.test.ts 125차가 본다) */
+    let n = 3;
+    let i = 0;
+    const host: KeyMeasureHost = {
+      active: true,
+      handleKey: (e) => {
+        calls.push(`key ${e.key}`);
+        return false;
+      },
+      keyHover: (x, y) => {
+        i = 0;
+        return `끝점: ${x},${y}`;
+      },
+      keyEnd: (keep) => void calls.push(`end ${keep}`),
+      keyPlace: () => `찍음 ${i + 1}`,
+      keyCycle: (e) => {
+        calls.push(`cycle ${e.shiftKey ? 'Shift+' : ''}${e.key}`);
+        if (e.key === 'Escape') {
+          if (!i) return null;
+          i = 0;
+          e.preventDefault();
+          return '첫 후보';
+        }
+        if (n < 2) return null;
+        i = (i + (e.shiftKey ? n - 1 : 1)) % n;
+        e.preventDefault();
+        return `후보 ${i + 1}/${n}`;
+      },
+    };
+    let prevented = 0;
+    /** 앱 창 키 처리기가 handleKey에 넘기는 키 사건(대상 = 3D 보기) */
+    const ev = (k: string, o: Record<string, unknown> = {}): KeyboardEvent =>
+      ({
+        key: k,
+        type: 'keydown',
+        target: cv,
+        shiftKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        altKey: false,
+        defaultPrevented: false,
+        preventDefault() {
+          prevented++;
+        },
+        ...o,
+      }) as unknown as KeyboardEvent;
+    const kp = new KeyPick(v, el as unknown as HTMLElement, () => d, { measureTool: host });
+    kp.follow('tape');
+    expect(v.keyboardSnap!.pickCycle).toBe(false);
+    // 커서가 꺼진 동안 Tab은 keyCycle로 가지 않는다(측정 도구 키 — 124차 마우스 Tab 길)
+    expect(kp.handleKey(ev('Tab'))).toBe(false);
+    expect(calls).toEqual(['key Tab']);
+    // Enter로 켠 커서 자리(후보 셋): Tab·Shift+Tab을 keyCycle이 받아 그 글을 알림 칸에 — 다룬 키(앱이 전파를 막는다)
+    key(cv, 'Enter');
+    expect(v.keyboardCursor).toMatchObject({ x: 400, y: 300 });
+    calls.length = 0;
+    expect(kp.handleKey(ev('Tab'))).toBe(true);
+    expect(kp.text).toBe('후보 2/3');
+    expect(kp.handleKey(ev('Tab'))).toBe(true);
+    expect(kp.text).toBe('후보 3/3');
+    expect(kp.handleKey(ev('Tab', { shiftKey: true }))).toBe(true);
+    expect(kp.text).toBe('후보 2/3');
+    expect(calls).toEqual(['cycle Tab', 'cycle Tab', 'cycle Shift+Tab']);
+    expect(prevented).toBe(3);
+    // 코어 커서는 그 자리 그대로(코어 고르기 모드는 후보를 돌리지 않는다)
+    expect(v.keyboardCursor).toMatchObject({ x: 400, y: 300 });
+    // 돌리는 중 Esc: keyCycle이 돌리기만 풀고 그 글(측정 도구 지우기·커서 끄기로 가지 않는다)
+    calls.length = 0;
+    expect(kp.handleKey(ev('Escape'))).toBe(true);
+    expect(kp.text).toBe('첫 후보');
+    expect(calls).toEqual(['cycle Escape']);
+    expect(v.keyboardCursor).not.toBeNull();
+    // 돌리지 않을 때 Esc: keyCycle이 받지 않으면 예전 차례(측정 도구가 지울 것 → 없으면 커서 끄기)
+    cv.focus();
+    expect(kp.handleKey(ev('Escape'))).toBe(true);
+    expect(calls).toEqual(['cycle Escape', 'cycle Escape', 'key Escape', 'end false']);
+    expect(v.keyboardCursor).toBeNull();
+    expect(kp.text).toBe('가상 커서를 껐습니다');
+    // 후보가 하나면 받지 않고 코어도 넘긴다(초점 이동 — 키보드 덫 없음). 켤 때 키 안내는 그대로(후보 Tab은 늘 되는 키가 아니라 넣지 않는다)
+    key(cv, 'Enter');
+    expect(kp.text).toBe('가상 커서를 켰습니다. 끝점: 400,300. 옮기기 ←→↑↓ · 찍기 Enter · 방향 잠금 Shift · 끄기 Esc');
+    n = 1;
+    expect(kp.handleKey(ev('Tab'))).toBe(false);
+    expect(v.handleKey(ev('Tab'))).toBe(false);
+    expect(v.keyboardCursor).not.toBeNull();
+    // 목록·메뉴 안의 Tab은 그쪽 것(keyCycle로 가지 않는다)
+    n = 3;
+    calls.length = 0;
+    expect(kp.handleKey(ev('Tab', { target: { closest: () => ({}) } }))).toBe(false);
+    expect(calls).toEqual(['key Tab']);
+    // 고르기 도구로 돌아오면 Tab은 코어 pickCycle(겹친 면·모서리) 그대로
+    kp.setMode('pick');
+    key(cv, 'ArrowLeft');
+    key(cv, 'Tab');
+    expect(v.keyboardCursor!.index).toBe(1);
+    expect(kp.text).toMatch(/^그룹 Near의 면 2\/3: /);
+    expect(calls.filter((c) => c.startsWith('cycle'))).toEqual([]);
   });
 });
