@@ -19,6 +19,9 @@
  * 코어도 돌리지 않고 누르기로 본다). 터치는 추정 반경을 넓힌다(커서 표식은 탭한 점에 남긴다).
  * 키보드(59차): 3D 보기의 Enter로 켠 코어 가상 커서의 자리를 keypick.ts가 keyHover로 넘기면 마우스처럼 추정하고(머무르기 없이),
  *   Enter는 keyPlace로 그 자리에 누르기와 같이 찍는다. 알림 글(KEY_MEASURE_TEXT·툴팁 글·좌표)은 keypick.ts가 알림 칸에 넣는다.
+ * Tab 돌리기(124차 — 코어 0.116.0 tabCycle과 같은 규칙, 이 도구는 코어 측정을 쓰지 않아 앱이 한다): 마우스·펜 커서 자리에 겹친 스냅 후보(snapCandidatesAt)가
+ *   둘 이상이면 Tab·Shift+Tab이 다음·앞 후보를 미리 보기로 하고(툴팁 이름 뒤에 "2/4"), 4화소 안 누르기는 보인 그 후보를 찍으며, 돌리는 중 Esc는 돌리기만 푼다.
+ *   후보가 하나·없거나 가상 커서가 켜졌거나 커서가 3D 보기 밖이면 Tab은 초점 이동이고, Esc로 푼 자리에서는 포인터가 4화소 넘게 움직일 때까지 초점 이동이다(cycleKey).
  * 정밀 조준(터치): 한 손가락을 끌기 시작 거리 안에서 AIM_HOLD_MS 동안 누르고 있으면 손가락 위 AIM_OFFSET_PX에 십자선을 띄우고,
  *   끌면 궤도 대신 십자선이 따라가며 마우스처럼 추정·고무줄·툴팁을 보인다. 떼면 십자선 자리에 점을 찍는다.
  *   그동안의 움직임은 캔버스 부모의 캡처 단계에서 막아 코어가 돌리지 않게 한다(떼기는 코어에 넘겨 끌기 상태를 끝낸다).
@@ -116,12 +119,14 @@ import {
   parallelInferenceLock,
   probeOffsets,
   rayPlane,
+  snapCandidates,
   type Axis,
   type AxisDirs,
   type GuideLine,
   type InferenceLock,
   type Ray,
   type Snap,
+  type SnapInput,
   type SnapKind,
 } from './snap';
 import type { GuideKey, MeasureMode } from './measurehints';
@@ -1022,6 +1027,16 @@ export function joinTip(label: string, value?: string | null): string {
 }
 
 /**
+ * 124차: Tab으로 돌린 후보의 툴팁 이름 — 이름(tr — 지금 화면 언어) 뒤에 차례·수("끝점 2/4").
+ * 코어 가상 커서 차례 틀(keysnap 'order' — '{0} {1}/{2}')과 같은 꼴이고, 한글이 없는 틀이라 사전에 넣지 않는다(keypick.ts — 사전의 {0} 틀은 모든 화면 글에 맞춰 본다).
+ * 툴팁은 이 글 전체를 다시 옮기지만 옮긴 이름에는 한글이 없어 그대로 둔다. 이름이 없는 후보(빈 곳)는 차례·수만
+ */
+export function cycleTipLabel(name: string, index: number, count: number, tr: (text: string) => string = (t) => t): string {
+  const order = `${index + 1}/${count}`;
+  return name ? `${tr(name)} ${order}` : order;
+}
+
+/**
  * 59차 키보드 점 찍기 알림 글(가상 커서 — keypick.ts가 알림 칸에 넣는다, 네 언어 사전 열쇠 — 자리 밖에 한글).
  * 자리 글은 "추정 · 길이·각도: X …, Y …, Z …"(툴팁 글 + 좌표 — 이음 ': '와 좌표 틀은 한글이 없어 사전에 넣지 않는다), 다 잰 결과는 측정 기록 줄(measureLine)
  */
@@ -1110,6 +1125,13 @@ export class MeasureTool {
   private hoverDirty = false;
   /** 112차: 커서 자리 추정을 구할 때 본 가림(음영 계열 그리기 방식이면 true — 그 계열이 바뀌면 다음 그림에 다시 구한다). 구한 추정이 없으면 null */
   private hoverOccludes: boolean | null = null;
+  /**
+   * 124차 마우스·펜 미리 보기 Tab 돌리기(코어 0.116.0 tabCycle과 같은 규칙): 돌린 자리(캔버스 CSS 좌표)·포인터 종류, 그 자리 후보 목록(snapCandidates 차례 — 둘 이상)과
+   * 지금 보인 차례. 돌리는 동안 커서 자리 추정(hover)은 그 후보다. 포인터가 그 자리에서 4화소 넘게 움직이거나 끌기·떠남·찍기·다시 구하기(updateHover)면 버린다
+   */
+  private cycle: { x: number; y: number; type: string; list: Snap[]; index: number } | null = null;
+  /** 124차: Esc로 돌리기를 푼 자리 — 포인터가 거기서 4화소 넘게 움직일 때까지 그 자리 Tab은 초점 이동(키보드 덫 없음) */
+  private cycleOff: { x: number; y: number } | null = null;
   private dragging = false;
   private presses = new Map<number, Press>();
   private cancelTap = false;
@@ -2395,7 +2417,8 @@ export class MeasureTool {
 
   /**
    * 키(keydown·keyup 모두 넘긴다). 처리했으면 true.
-   * Esc: 진행 중 점 취소(끌어온 점도 잊는다) → 끌어온 점 잊기 → 화살표로 고정한 각도기 평면 풀기 → 결과 지우기 → (지울 것이 없으면) false — 앱이 도구를 끈다.
+   * Esc: (124차 — Tab으로 돌리는 중이면 돌리기만 풀기) → 진행 중 점 취소(끌어온 점도 잊는다) → 끌어온 점 잊기 → 화살표로 고정한 각도기 평면 풀기 → 결과 지우기 → (지울 것이 없으면) false — 앱이 도구를 끈다.
+   * Tab·Shift+Tab(124차, keydown): 마우스·펜 커서 자리에 겹친 스냅 후보가 둘 이상이면 다음·앞 후보(cycleKey), 아니면 false(초점 이동).
    * Shift: 누르고 있는 동안 방향을 잡는 중이면 지금 방향 추론 잠금, 각도기 중심을 찍기 전이면 커서 밑 평면 고정.
    * →·←·↑·↓(keydown): 축·나란히 잠금 켜고 끄기, 각도기 중심을 찍기 전에는 →·←·↑로 각도기 평면 고정(앱은 목록·입력 칸의 화살표를 넘기지 않는다).
    * 안내 두기 키(Ctrl, Mac은 Option): 그 키만 눌렀다 떼면(keyup) 안내 두기 켜고 끄기 — 그사이 다른 키·누르기·휠이 있으면 바꾸지 않는다(Ctrl+O 등).
@@ -2416,6 +2439,8 @@ export class MeasureTool {
       return true;
     }
     if (e.type === 'keydown') this.modTap = false;
+    // 124차: Tab·Shift+Tab — 마우스·펜 커서 자리에 겹친 스냅 후보 돌리기(받지 않으면 브라우저 초점 이동)
+    if (e.key === 'Tab') return this.cycleKey(e);
     // Delete·Backspace: 고른 안내 하나 지우기(SketchUp에서 안내를 고르고 Delete)
     if ((e.key === 'Delete' || e.key === 'Backspace') && e.type === 'keydown' && !e.ctrlKey && !e.metaKey && !e.altKey) {
       if (!this.deleteSelectedGuide()) return false;
@@ -2424,6 +2449,16 @@ export class MeasureTool {
     }
     if (e.key === 'Escape') {
       if (e.type === 'keyup' || e.ctrlKey || e.metaKey || e.altKey) return false;
+      // 124차: 돌리는 중이면 돌리기만 풀고 그 자리 첫 후보로(아무것도 지우지 않는 가장 안쪽 상태 — 코어 0.116.0 tabCycle Esc)
+      const c = this.cycle && this.cursor;
+      if (c) {
+        this.cycle = null;
+        this.cycleOff = { x: c.x, y: c.y };
+        this.hoverDirty = true;
+        e.preventDefault();
+        this.overlay.invalidate();
+        return true;
+      }
       if (this.pts.length) {
         this.pts = [];
         this.startEdge = null;
@@ -2528,8 +2563,19 @@ export class MeasureTool {
    * 프레임이 없으면(보기 크기 0) null.
    */
   snapAt(x: number, y: number, pointerType = 'mouse', frame: ViewFrame | null = this.overlay.frame()): Snap | null {
-    const f = frame;
-    if (!f) return null;
+    return frame ? chooseSnap(this.snapInput(x, y, pointerType, frame)()) : null;
+  }
+
+  /**
+   * 124차: 화면 점에 겹친 스냅 후보 목록(snap.ts snapCandidates — 첫 후보는 snapAt과 같고, 다음은 앞 후보 자리를 뺀 같은 규칙, 16개까지).
+   * 코어 고르기·둘레 고르기는 한 번, 가림 판정·면 다시 맞춰 보기 한도는 후보마다 새로. 프레임이 없으면 빈 목록
+   */
+  snapCandidatesAt(x: number, y: number, pointerType = 'mouse', frame: ViewFrame | null = this.overlay.frame()): Snap[] {
+    return frame ? snapCandidates(this.snapInput(x, y, pointerType, frame)) : [];
+  }
+
+  /** 화면 점의 추정 입력 만들기: 코어 고르기·둘레 고르기를 한 번 하고, 부를 때마다 가림 판정 고르기 한도(VISIBLE_CHECKS)가 새로인 입력을 준다 */
+  private snapInput(x: number, y: number, pointerType: string, f: ViewFrame): () => SnapInput {
     const v = this.viewer;
     const scene = this.opts.getScene();
     const radius = snapRadius(pointerType);
@@ -2544,19 +2590,21 @@ export class MeasureTool {
     // 단면에 잘린 쪽 후보는 버린다: 장면 전체를 자르는 평면들(그룹 안 단면은 그 그룹 항목만 자르므로 후보 점으로는 가리지 않는다)
     const cuts = (v.sections ?? (v.section ? [v.section] : [])).filter((s) => !('items' in s && s.items));
     const kept = cuts.length ? (p: V3): boolean => cuts.every((sec) => dot(sec.normal, p) <= sec.offset + 1e-9 * (Math.abs(sec.offset) + 1)) : null;
-    let checks = 0;
-    // 음영 계열 모드에서만 가림을 본다: 후보 점의 화면 자리에서 다시 골라 그보다 앞의 면이 맞으면 가린 것
-    const visible = occludes(v.getRenderMode())
-      ? (p: V3): boolean => {
-          if (++checks > VISIBLE_CHECKS) return false;
-          const s = projectToScreen(f, p);
-          if (!s) return false;
-          const k = v.pick(s[0], s[1]);
-          if (!k || k.kind !== 'mesh') return true;
-          const dp = viewDepth(f, p);
-          return viewDepth(f, k.point) >= dp - Math.max(1e-6 * Math.abs(dp), worldPerPixel(f, dp) * 1.5);
-        }
-      : null;
+    // 음영 계열 모드에서만 가림을 본다: 후보 점의 화면 자리에서 다시 골라 그보다 앞의 면이 맞으면 가린 것(고르기 한도는 입력마다)
+    const occl = occludes(v.getRenderMode());
+    const visibility = (): ((p: V3) => boolean) | null => {
+      if (!occl) return null;
+      let checks = 0;
+      return (p: V3): boolean => {
+        if (++checks > VISIBLE_CHECKS) return false;
+        const s = projectToScreen(f, p);
+        if (!s) return false;
+        const k = v.pick(s[0], s[1]);
+        if (!k || k.kind !== 'mesh') return true;
+        const dp = viewDepth(f, p);
+        return viewDepth(f, k.point) >= dp - Math.max(1e-6 * Math.abs(dp), worldPerPixel(f, dp) * 1.5);
+      };
+    };
     // 곡선 중심: 커서 둘레 곡선 선분의 중심을 재고 기억한다(가운데로 옮기면 붙게)
     const cc = this.opts.curveCenter;
     const curveCenter = cc
@@ -2567,7 +2615,7 @@ export class MeasureTool {
           return c;
         }
       : null;
-    return chooseSnap({
+    const base: SnapInput = {
       frame: f,
       x,
       y,
@@ -2578,7 +2626,7 @@ export class MeasureTool {
       from: this.pts[0] ?? null,
       anchor: v.getCamera().target,
       kept,
-      visible,
+      visible: null,
       curveCenter,
       centers: this.centers,
       axisDirs: this.opts.getAxes?.() ?? null,
@@ -2593,7 +2641,8 @@ export class MeasureTool {
       axisMeets: this.meetsOn,
       lockMeets: this.lockMeetsOn,
       faceAt: this.meetsOn || this.lockMeetsOn ? (sx: number, sy: number) => v.pick(sx, sy, FACE_PICK) : null,
-    });
+    };
+    return () => ({ ...base, visible: visibility() });
   }
 
   /**
@@ -2785,8 +2834,9 @@ export class MeasureTool {
       if (!pr.moved && Math.hypot(p.x - pr.x, p.y - pr.y) >= tapSlopPx(pr.type)) {
         pr.moved = true;
         this.stopAimTimer();
-        // 궤도·이동 중에는 커서 표식을 숨긴다
+        // 궤도·이동 중에는 커서 표식을 숨긴다(124차 — Tab 돌리기도 버린다)
         this.dragging = true;
+        this.cycle = null;
         this.hover = null;
         this.hoverPoint = null;
         this.overlay.invalidate();
@@ -2801,7 +2851,11 @@ export class MeasureTool {
     this.setShift(!!e.shiftKey);
     this.cursor = { x: p.x, y: p.y, type };
     if (this.modeValue === 'protractor') this.setPlaneLock(!!e.shiftKey);
-    this.hoverDirty = true;
+    // 124차: Esc로 돌리기를 푼 자리에서 4화소 넘게 움직이면 그 자리 Tab을 다시 받는다
+    const off = this.cycleOff;
+    if (off && Math.hypot(p.x - off.x, p.y - off.y) > tapSlopPx(type)) this.cycleOff = null;
+    // 124차: Tab으로 돌린 자리 4화소 안이면 돌린 후보를 둔다(툴팁만 커서를 따른다), 넘으면 버리고 새 자리에서 구한다
+    if (!this.cycleHeld(p.x, p.y, type)) this.hoverDirty = true;
     this.overlay.invalidate();
   }
 
@@ -2832,6 +2886,8 @@ export class MeasureTool {
     if (!this.modeValue || this.presses.size) return;
     if (this.cursor?.type === 'touch' || this.cursor?.type === 'keyboard') return;
     this.cancelDwell();
+    // 124차: 3D 보기를 떠나면 Tab 돌리기도 버린다(그동안 Tab은 초점 이동)
+    this.cycle = this.cycleOff = null;
     this.cursor = null;
     this.hover = null;
     this.hoverPoint = null;
@@ -2990,8 +3046,10 @@ export class MeasureTool {
     this.lastTap = null;
     const f = this.overlay.frame();
     if (!f) return;
-    this.sweep();
-    const snap = this.snapAt(x, y, type, f);
+    // 124차: Tab으로 돌린 자리 4화소 안이면 보인 그 후보를 찍는다(장면 길이 숨긴 것이 있으면 다시 구한다). 찍으면 돌리기는 끝난다
+    const held = !this.sweep() && this.cycleHeld(x, y, type) ? this.cycle!.list[this.cycle!.index]! : null;
+    this.cycle = null;
+    const snap = held ?? this.snapAt(x, y, type, f);
     if (!snap) return;
     this.learn(snap);
     // 방금 누른 점은 커서가 떠날 때까지 머물러도 끌어오지 않는다
@@ -3138,6 +3196,7 @@ export class MeasureTool {
     this.hover = null;
     this.hoverPoint = null;
     this.cursor = null;
+    this.cycle = this.cycleOff = null;
     this.dragging = false;
     this.presses.clear();
     this.cancelTap = false;
@@ -3175,8 +3234,9 @@ export class MeasureTool {
 
   // ───────────────────────── 그리기 ─────────────────────────
 
-  /** 커서 자리에서 추정을 다시 한다(그리기 틀마다 많아야 한 번) */
+  /** 커서 자리에서 추정을 다시 한다(그리기 틀마다 많아야 한 번). 124차: 다시 구하면 Tab 돌리기는 끝난다(그 자리 첫 후보 — 코어 0.116.0과 같다) */
   private updateHover(f: ViewFrame): void {
+    this.cycle = null;
     const c = this.cursor;
     if (!c || this.dragging || c.type === 'touch') {
       this.hoverOccludes = null;
@@ -3193,10 +3253,62 @@ export class MeasureTool {
     this.dwell(snap, c);
     if (!snap) return;
     this.learn(snap);
-    if (this.modeValue === 'protractor') {
-      if (!this.pts.length) this.hoverPlane = this.centerPlane(snap, f);
-      else this.hoverPoint = protractorPoint(screenRay(f, c.x, c.y), snap, this.pts[0]!, this.normal ?? this.axes.z);
+    this.hoverPlaneAt(f, snap, c);
+  }
+
+  /** 각도기: 중심 전에는 커서 밑 평면(Shift 고정에 쓴다), 중심 뒤에는 커서로 찍힐 평면 위 점 */
+  private hoverPlaneAt(f: ViewFrame, snap: Snap, c: Cursor): void {
+    if (this.modeValue !== 'protractor') return;
+    if (!this.pts.length) this.hoverPlane = this.centerPlane(snap, f);
+    else this.hoverPoint = protractorPoint(screenRay(f, c.x, c.y), snap, this.pts[0]!, this.normal ?? this.axes.z);
+  }
+
+  /**
+   * 124차 Tab·Shift+Tab(keydown — handleKey가 넘긴다): 마우스·펜 커서 자리에 겹친 스냅 후보(snapCandidatesAt)의 다음·앞 후보를 미리 보기로 하고(끝에서 처음으로),
+   * 기본 동작을 막아 초점이 3D 보기에 머문다(앱 창 capture가 전파도 막아 코어 캔버스 리스너가 누르기 초점 표시를 떼지 않는다). 코어 0.116.0 tabCycle과 같은 규칙으로 받는 때만:
+   * Ctrl·Meta·Alt 없음 · 기본 동작이 막히지 않음 · 대상이 3D 보기(또는 없음) · 마우스·펜 커서가 3D 보기 위 · 끌기·누르기·정밀 조준 없음 · 가상 커서 꺼짐(가상 커서가 앞선다) ·
+   * Esc로 푼 자리에서 4화소 넘게 움직였음 · 그 자리 후보가 둘 이상. 아니면 false(브라우저 초점 이동 — 키보드 덫 없음)
+   */
+  private cycleKey(e: KeyboardEvent): boolean {
+    if (e.type !== 'keydown' || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return false;
+    const v = this.viewer;
+    const c = this.cursor;
+    if ((e.target && e.target !== v.canvas) || !c || (c.type !== 'mouse' && c.type !== 'pen')) return false;
+    if (this.dragging || this.presses.size || this.aimId !== null || v.keyboardCursor) return false;
+    const off = this.cycleOff;
+    if (off && Math.hypot(c.x - off.x, c.y - off.y) <= tapSlopPx(c.type)) return false;
+    const f = this.overlay.frame();
+    if (!f) return false;
+    let cy = this.cycle;
+    if (!cy) {
+      this.sweep();
+      const list = this.snapCandidatesAt(c.x, c.y, c.type, f);
+      if (list.length < 2) return false;
+      cy = this.cycle = { x: c.x, y: c.y, type: c.type, list, index: 0 };
+      // 돌리는 동안은 머무르지 않는다(첫 후보에서 시작한 머무르기가 끌어온 점을 더해 돌린 미리 보기를 다시 구하지 않게)
+      this.cancelDwell();
     }
+    const n = cy.list.length;
+    cy.index = (cy.index + (e.shiftKey ? n - 1 : 1)) % n;
+    e.preventDefault();
+    // 돌린 후보를 커서 자리 추정으로(다시 구하지 않는다 — 다시 구하면 돌리기가 끝난다)
+    const snap = cy.list[cy.index]!;
+    this.hover = snap;
+    this.hoverOccludes = occludes(v.getRenderMode());
+    this.hoverPoint = null;
+    this.hoverDirty = false;
+    this.learn(snap);
+    this.hoverPlaneAt(f, snap, c);
+    this.overlay.invalidate();
+    return true;
+  }
+
+  /** 124차: 돌린 자리에서 포인터 종류가 같고 4화소 안이면 돌리기를 둔다(누르기 직전 손 떨림 — true). 넘으면 버린다 */
+  private cycleHeld(x: number, y: number, type: string): boolean {
+    const cy = this.cycle;
+    if (cy && cy.type === type && Math.hypot(x - cy.x, y - cy.y) <= tapSlopPx(type)) return true;
+    this.cycle = null;
+    return false;
   }
 
   /**
@@ -3251,7 +3363,7 @@ export class MeasureTool {
     else if (r?.kind === 'protractor') this.drawAngle(f, r.center, r.a, r.b, r.normal, ang(r.angle), true);
 
     const snap = this.dragging ? null : this.hover;
-    let tip: string | null = snap ? snapTipLabel(snap) : null;
+    let tip: string | null = snap ? this.tipLabel(snap) : null;
     // 나란함의 기준 모서리(자홍 점선)·잠근 선으로 옮겨 온 점(가는 점선) — 커서가 있을 때
     const live = snap && this.cursor?.type !== 'touch' ? snap : null;
     // 기준 모서리: 나란히, 지나간 모서리에 수직(추론·잠금)
@@ -3272,7 +3384,7 @@ export class MeasureTool {
             this.guideLineMark(f, { point: foot, dir: unit(sub(edge[1], edge[0])) }, this.halo(), 'is-preview');
             this.rubber(f, a, foot, live);
           } else this.rubber(f, a, live.point, live);
-          tip = joinTip(snapTipLabel(live), len(Math.hypot(...sub(foot ?? live.point, a))));
+          tip = joinTip(this.tipLabel(live), len(Math.hypot(...sub(foot ?? live.point, a))));
         }
       }
     } else {
@@ -3296,7 +3408,7 @@ export class MeasureTool {
               this.guideLineMark(f, { point: c, dir: unit(sub(cur, c)) }, this.halo(), 'is-preview');
             this.drawAngle(f, c, base, cur, n, null, false);
             this.rubber(f, c, cur, snap);
-            tip = joinTip(snap ? snapTipLabel(snap) : '', ang(deg));
+            tip = joinTip(snap ? this.tipLabel(snap) : '', ang(deg));
           }
         }
       }
@@ -3472,6 +3584,17 @@ export class MeasureTool {
       svgEl('path', { d, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5 }),
     );
     this.g.append(g);
+  }
+
+  /**
+   * 툴팁의 추정 이름(snapTipLabel). 124차: Tab으로 돌린 후보면 이름(지금 화면 언어) 뒤에 차례·수("끝점 2/4" — cycleTipLabel).
+   * 측정 띠·상태 막대에는 추정 이름이 없어(안내 글·결과뿐) 툴팁에만 붙는다. 툴팁은 마우스 커서면 알림(role=status)이라 Tab으로 바뀐 이 글을 읽는다 —
+   * 가상 커서 알림 칸(keypick.ts)에는 쓰지 않는다(같은 글이 두 번 읽히지 않게, 마우스 이동마다 알리지 않게 — 차례·수는 Tab을 누른 때만 생긴다)
+   */
+  private tipLabel(s: Snap): string {
+    const cy = this.cycle;
+    const name = snapTipLabel(s);
+    return cy && cy.list[cy.index] === s ? cycleTipLabel(name, cy.index, cy.list.length, this.opts.localize ?? undefined) : name;
   }
 
   private tooltip(f: ViewFrame, text: string | null, covers: () => readonly MeasureLabelRect[]): void {

@@ -48,6 +48,7 @@
  *         시작점 축이면 그 축 방향이라 잠그고, 끌어온 축이면 trackFrom(그 축이 시작점도 지나면 방향도)
  *   모서리가 면의 테두리라 더 구체적이어서 d가 e보다 앞이다. 상자 모서리처럼 축과 수직인 모서리에서는 d가 곧 시작점에서 내린 수직 발이라 수직(점 추정)이 먼저다.
  * - 아무것도 없으면 시작점(없으면 anchor)을 지나 화면과 나란한 평면 위의 빈 점(free).
+ * - 124차 그 자리 후보 목록(snapCandidates — 마우스 미리 보기 Tab 돌리기): 첫 후보는 위 차례로 고른 것, 다음은 앞 후보 자리를 뺀(skip) 같은 차례(코어 0.116.0 tabCycle과 같은 규칙).
  *
  * 고르기 결과(Pick3d)는 코어 viewer.pick이 준다. 숨긴 항목·묶음(isVisible false)·숨긴 구간·단면에서 잘린 쪽은
  * 코어가 이미 거르고, 음영 모드면 불투명 면 뒤의 선도 거른다. 코어는 선을 면보다 앞세우지만 허용 거리가 6화소라
@@ -609,6 +610,40 @@ export interface SnapInput {
    * 커서 밑 점 추정(끝점 등 — 잠근 선에 내린 자리)이 먼저고, 끌어온 축은 tracks가 있어야, 면을 뚫는 점은 faceAt이 있어야 본다
    */
   lockMeets?: boolean;
+  /**
+   * 124차: 뺄 자리(세계 — snapCandidates가 앞서 낸 후보 자리). 그 자리의 점 후보·면에 수직 발과, 그 자리로 오는 끌어온 축·축 고정·잠근 선 위 점은 고르지 않는다
+   * (잠근 선으로 옮겨 온 점은 옮겨 온 자리로 본다). 없거나 비었으면 예전과 같다
+   */
+  skip?: readonly (readonly number[])[] | null;
+}
+
+/** 124차: 그 자리 스냅 후보 수 한도(코어 0.116.0 tabCycle·measureCandidates와 같은 16개) */
+export const MAX_SNAP_CANDIDATES = 16;
+
+/** 같은 자리(세계 — 셈 오차 안) */
+const sameSpot = (a: readonly number[], b: readonly number[]): boolean =>
+  Math.hypot(a[0]! - b[0]!, a[1]! - b[1]!, a[2]! - b[2]!) <= 1e-9 * Math.max(1, Math.hypot(a[0]!, a[1]!, a[2]!));
+
+/** 후보가 차지한 자리: 잠근 선으로 옮겨 온 점이면 옮겨 온 자리(같은 점을 잠근 선에 다시 내리지 않게), 아니면 그 점 */
+const spotOf = (s: Snap): V3 => s.from ?? s.point;
+
+/**
+ * 124차: 커서 자리에 겹친 스냅 후보 목록(마우스 미리 보기 Tab 돌리기 — 코어 0.116.0 tabCycle·measureCandidates와 같은 차례).
+ * 첫 후보는 chooseSnap(그 자리 미리 보기) 그대로이고, 다음은 앞 후보 자리를 뺀(skip) 같은 규칙으로 고른다 — 점 추정이 다하면 모서리 위·축 같은 선 추정,
+ * 그다음 면 위(넣고 끝)다. 빈 곳은 첫 후보가 아니면 넣지 않는다(줄자는 빈 곳을 찍지 않는다). 앞 후보와 같은 자리가 다시 나오면 끝(같은 점은 앞의 것만), max개까지.
+ * input은 부를 때마다 새 입력을 준다(가림·면 다시 맞춰 보기 고르기 한도가 후보마다 새로 — 커서·둘레 고르기는 부른 쪽이 한 번만 한다)
+ */
+export function snapCandidates(input: () => SnapInput, max = MAX_SNAP_CANDIDATES): Snap[] {
+  const out: Snap[] = [];
+  const skip: V3[] = [];
+  while (out.length < max) {
+    const s = chooseSnap(skip.length ? { ...input(), skip } : input());
+    if ((out.length > 0 && s.kind === 'free') || out.some((q) => sameSpot(spotOf(q), spotOf(s)) || sameSpot(q.point, s.point))) break;
+    out.push(s);
+    if (s.kind === 'free' || s.kind === 'onFace') break;
+    skip.push(spotOf(s));
+  }
+  return out;
 }
 
 /** 축이 면을 뚫는 점을 다시 맞춰 보는 고르기 수 한도(한 번 추정에 — 축 직선 최대 12개 × 다시 구하기 AXIS_FACE_STEPS번이지만 커서 둘레 점만 맞춰 본다) */
@@ -664,7 +699,11 @@ export function chooseSnap(o: SnapInput): Snap {
   const ray = screenRay(f, o.x, o.y);
   const pick = o.pick;
   const cands: Cand[] = [];
+  // 124차: snapCandidates가 앞서 낸 후보 자리(없으면 늘 false — 예전과 같다)
+  const skip = o.skip?.length ? o.skip : null;
+  const skipped = (p: readonly number[]): boolean => !!skip && skip.some((q) => sameSpot(p, q));
   const push = (c: Omit<Cand, 'dist'>): void => {
+    if (skipped(c.point)) return;
     if (o.kept && !c.trusted && !o.kept(c.point)) return;
     const s = projectToScreen(f, c.point);
     if (!s) return;
@@ -750,7 +789,7 @@ export function chooseSnap(o: SnapInput): Snap {
   if (!snap && pick && pick.kind === 'mesh' && !pick.section && o.from && pick.normal) {
     const foot = footOnPlane(o.from, pick.point, pick.normal);
     const s = foot ? projectToScreen(f, foot) : null;
-    if (foot && s && Math.hypot(s[0] - o.x, s[1] - o.y) <= R && Math.hypot(...sub(foot, o.from)) > 0 && (!o.visible || o.visible(foot)))
+    if (foot && s && Math.hypot(s[0] - o.x, s[1] - o.y) <= R && Math.hypot(...sub(foot, o.from)) > 0 && !skipped(foot) && (!o.visible || o.visible(foot)))
       snap = { kind: 'perpendicular', point: foot, label: FACE_PERPENDICULAR_LABEL, id: pick.id, normal: [...pick.normal] };
   }
   if (!snap && pick && pick.kind === 'mesh') {
@@ -775,18 +814,24 @@ export function chooseSnap(o: SnapInput): Snap {
         s.fromKind = q.kind;
       }
     }
-    snap = s;
+    // 124차: 뺄 자리면(잠근 선 위 만나는 점·커서에 가까운 자리) 고르지 않는다 — 옮겨 온 점은 뺀 후보가 아니다(push가 이미 뺐다)
+    snap = s && skipped(spotOf(s)) ? null : s;
   } else {
     const open = !snap || snap.kind === 'onFace';
     // 끌어온 점 후보와 축이 모서리·면과 만나는 점 가운데 점인 것: 두 선(선과 면)이 만나는 한 점이라 모서리 위·축 고정보다 먼저
     // (이 둘레에서는 선을 따라 움직여도 이 자리에 붙는다)
     const meets = !!o.axisMeets && (!!o.from || !!tracks);
-    const t = (tracks || meets) && (open || snap!.kind === 'onEdge') ? trackPointSnap(o, f, tracks, near, axes, R, meets) : null;
+    const t0 = (tracks || meets) && (open || snap!.kind === 'onEdge') ? trackPointSnap(o, f, tracks, near, axes, R, meets) : null;
+    // 124차: 뺄 자리로 오는 끌어온 축·축이 만나는 점·방향 추정은 없는 것으로(그 자리는 앞 후보가 이미 보였다)
+    const t = t0 && skipped(t0.point) ? null : t0;
     if (t) snap = t;
-    else if (o.from && open) snap = directionSnap(o, f, o.from, snap, pick, axes);
+    else if (o.from && open) {
+      const d = directionSnap(o, f, o.from, snap, pick, axes);
+      if (!d || d === snap || !skipped(d.point)) snap = d;
+    }
     // 끌어온 점을 지나는 축(시작점 전에도): 시작점을 지나는 선이 아니라 방향(dir)이 없고 잠그지 않는다
     const ta = tracks && (!snap || snap.kind === 'onFace') ? trackAxisSnap(f, tracks, o.x, o.y, R, o.from ?? null, axes) : null;
-    if (ta) snap = { kind: 'axis', point: ta.p, axis: ta.axis, label: TRACK_AXIS_LABELS[ta.axis], trackFrom: ta.from };
+    if (ta && !skipped(ta.p)) snap = { kind: 'axis', point: ta.p, axis: ta.axis, label: TRACK_AXIS_LABELS[ta.axis], trackFrom: ta.from };
   }
   // 시작점에서 내린 수직(모서리·면)도 방향 추론이다(시작점 → 발 쪽으로 잠근다)
   if (snap && snap.kind === 'perpendicular' && o.from && !snap.locked && !snap.inferred) {
