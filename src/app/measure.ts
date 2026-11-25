@@ -28,6 +28,8 @@
  *   그 잠금을 걸기 전 상태(돌리던 차례·목록 포함)로 되돌리고 앞 후보로 돌린다(마우스·가상 커서, 걸기 전 그 자리 후보가 둘 이상일 때만 — unShift). 그 누름은 뗄 때까지 다시 잠그지 않는다.
  * 키 밖의 변화(127차): 가상 커서가 켜진 동안 카메라(휠·보기 키·장면 탭 움직임)·그리기 방식 가림·숨김(sweep)·단면이 커서 자리 추정을 다시 구하게 하면, 그 변화가 KEY_SETTLE_MS 동안
  *   더 오지 않은 뒤 한 번 지금 자리 글을 keypick.ts 알림 칸에 넘긴다(keyWatch — 처음 변화 때 들은 글과 같으면 넘기지 않고, 그사이 키 길이 글을 쓰면 버린다).
+ * 다시 보이기(129차 — 코어 0.121.0 visibilityVersion): 커서 자리 추정을 구할 때 코어 숨김 판을 두고, 그림·지금 추정·찍기 앞(sweep)에서 판이 바뀌었으면
+ *   (다시 보이기·다른 개체 숨김으로 커서 밑이 드러날 수 있다) 그 자리에서 다시 구한다. 판이 없는 뷰어는 0으로 봐 다시 구하지 않는다(코어 0.120.0까지와 같음).
  * 정밀 조준(터치): 한 손가락을 끌기 시작 거리 안에서 AIM_HOLD_MS 동안 누르고 있으면 손가락 위 AIM_OFFSET_PX에 십자선을 띄우고,
  *   끌면 궤도 대신 십자선이 따라가며 마우스처럼 추정·고무줄·툴팁을 보인다. 떼면 십자선 자리에 점을 찍는다.
  *   그동안의 움직임은 캔버스 부모의 캡처 단계에서 막아 코어가 돌리지 않게 한다(떼기는 코어에 넘겨 끌기 상태를 끝낸다).
@@ -636,7 +638,7 @@ export interface GuideMenuItem {
 
 /** 이 도구가 쓰는 뷰어 기능(시험에서 가짜로 바꿀 수 있게) */
 export type MeasureViewer = Pick<Viewer3d, 'canvas' | 'pick' | 'getCamera' | 'onCameraChange' | 'getRenderMode' | 'section'> &
-  Partial<Pick<Viewer3d, 'sections' | 'viewCubeRect' | 'navigation' | 'keyboardCursor' | 'isVisible' | 'hiddenRanges' | 'onSectionChange'>>;
+  Partial<Pick<Viewer3d, 'sections' | 'viewCubeRect' | 'navigation' | 'keyboardCursor' | 'isVisible' | 'hiddenRanges' | 'onSectionChange' | 'visibilityVersion'>>;
 /** 이 도구가 쓰는 덧그림 기능 */
 export type MeasureOverlay = Pick<Overlay, 'svg' | 'labels' | 'set' | 'frame' | 'invalidate'>;
 
@@ -1165,6 +1167,11 @@ export class MeasureTool {
   private hoverDirty = false;
   /** 112차: 커서 자리 추정을 구할 때 본 가림(음영 계열 그리기 방식이면 true — 그 계열이 바뀌면 다음 그림에 다시 구한다). 구한 추정이 없으면 null */
   private hoverOccludes: boolean | null = null;
+  /**
+   * 129차: 커서 자리 추정을 구할 때 본 코어 숨김 판(visibilityVersion — 다르면 다음 그림에 그 자리에서 다시 구한다). Tab 돌리기는 그 목록을 구할 때 판이다.
+   * 커서가 없거나 끄는 중·손가락이라 구하지 않았으면 null
+   */
+  private hoverVis: number | null = null;
   /**
    * 124차 마우스·펜 미리 보기 Tab 돌리기(코어 0.116.0 tabCycle과 같은 규칙): 돌린 자리(캔버스 CSS 좌표)·포인터 종류, 그 자리 후보 목록(snapCandidates 차례 — 둘 이상)과
    * 지금 보인 차례. 돌리는 동안 커서 자리 추정(hover)은 그 후보다. 포인터가 그 자리에서 4화소 넘게 움직이거나 끌기·떠남·찍기·다시 구하기(updateHover)면 버린다
@@ -2917,11 +2924,16 @@ export class MeasureTool {
    * 112차(코어 0.106.0과 같은 규칙): 커서 자리 추정을 구한 뒤 그리기 방식이 음영 가림을 바꿨으면(음영 계열 ↔ 와이어프레임·X-ray) 그 자리에서 다시 구한다 —
    * 같은 계열 안 바꾸기는 고르기·가림이 같아 그대로. 그리기 방식은 장면을 바꾸지 않아 찍은 점·잠금·끌어온 점·기억은 버리지 않는다. 앱 setRenderMode는 측정 도구를 부르지 않지만
    * 라벨 가림 다시 판정(resetOcclusion)이 같은 덧그림 층을 다시 그려 이 그림에 온다(문서 열기는 clear()가 다시 구한다).
+   * 129차(코어 0.121.0): 커서 자리 추정을 구한 뒤 코어 숨김 판이 바뀌었으면(다시 보이기·다른 개체 숨김 — 커서 밑이 새로 드러날 수 있다) 그 자리에서 다시 구한다.
+   * 찍은 점·잠금·기억은 숨은 것만 위처럼 버린다. 손가락 탭 자리 표식은 다시 구할 커서가 없어 그대로다.
    * 장면 길·가림 바뀜이 없으면 아무것도 바꾸지 않는다. 바꿨으면 true
    */
   private sweep(): boolean {
     const occl = this.hover !== null && this.cursor?.type !== 'touch' && this.hoverOccludes !== null && this.hoverOccludes !== occludes(this.viewer.getRenderMode());
     if (occl) this.hoverOccludes = null;
+    const cur = this.cursor;
+    const vis = !!cur && cur.type !== 'touch' && this.hoverVis !== null && this.hoverVis !== this.visNow;
+    if (vis) this.hoverVis = null;
     if (this.gone(this.lastLockSrc)) this.lastLockable = this.lastLockSrc = null;
     const ref = this.gone(this.parallelRef);
     if (ref) this.parallelRef = null;
@@ -2932,12 +2944,17 @@ export class MeasureTool {
     const gc = (c: V3): boolean => this.gone(this.centerSrc.get(c));
     const centers = this.centers.some(gc);
     if (centers) this.centers = this.centers.filter((c) => !gc(c));
-    if (!occl && !ref && !tracks && !centers && !this.gone(this.hover)) return false;
+    if (!occl && !vis && !ref && !tracks && !centers && !this.gone(this.hover)) return false;
     // 127차: 켜진 가상 커서 자리 글은 가라앉은 뒤 한 번(키 길 안의 sweep이면 그 키 길이 버린다)
     this.keyStale();
     this.rehover(false);
     if (tracks) this.refreshHint();
     return true;
+  }
+
+  /** 129차: 지금 코어 숨김 판(visibilityVersion — 코어 0.121.0). 없는 뷰어(코어 0.120.0까지·시험의 가짜 뷰어)는 늘 0이라 다시 구하지 않는다 */
+  private get visNow(): number {
+    return this.viewer.visibilityVersion ?? 0;
   }
 
   /** 커서 자리 추정을 다음 그림에 그 자리에서 다시 구한다(110차). 손가락이 탭한 자리 표식은 all이거나 그 추정이 숨었으면 거둔다(다시 구할 커서가 없다) */
@@ -3428,7 +3445,7 @@ export class MeasureTool {
     this.cycle = null;
     const c = this.cursor;
     if (!c || this.dragging || c.type === 'touch') {
-      this.hoverOccludes = null;
+      this.hoverOccludes = this.hoverVis = null;
       if (!c || c.type !== 'touch') {
         this.hover = null;
         this.hoverPoint = null;
@@ -3438,6 +3455,8 @@ export class MeasureTool {
     const snap = this.snapAt(c.x, c.y, c.type, f);
     this.hover = snap;
     this.hoverOccludes = snap ? occludes(this.viewer.getRenderMode()) : null;
+    // 129차: 빈 곳(추정 없음)이어도 둔다 — 다시 보인 것이 커서 밑에 드러날 수 있다
+    this.hoverVis = this.visNow;
     this.hoverPoint = null;
     this.dwell(snap, c);
     if (!snap) return;
@@ -3488,6 +3507,8 @@ export class MeasureTool {
       this.cycle = cy;
       // 돌리는 동안은 머무르지 않는다(첫 후보에서 시작한 머무르기가 끌어온 점을 더해 돌린 미리 보기를 다시 구하지 않게)
       this.cancelDwell();
+      // 129차: 새로 돌리는 목록은 지금 숨김 판으로 구했다. 돌던 목록을 잇는 Tab은 그 목록의 판 그대로(그 뒤 바뀌었으면 다음 그림이 다시 구해 돌리기가 끝난다)
+      this.hoverVis = this.visNow;
     }
     const n = cy.list.length;
     cy.index = (cy.index + (e.shiftKey ? n - 1 : 1)) % n;
