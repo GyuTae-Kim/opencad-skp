@@ -3005,6 +3005,7 @@ describe('측정 도구: 장면 길 뒤 커서 자리 추정은 다음 그림에
     r.move(10.4, 40.3);
     expect(r.tip()).toBe(SNAP_LABELS.endpoint);
     const picks = countPicks(r);
+    // 숨김 판이 없는 가짜 뷰어(코어 0.121.0 visibilityVersion이 있으면 다른 묶음 숨김도 다시 구한다 — 129차 시험)
     r.hide('o');
     r.hideRanges('d', [{ start: 1, count: 1 }]);
     r.overlay.paintNow();
@@ -5269,7 +5270,7 @@ describe('측정 도구: 키 밖의 변화(카메라·그리기 방식·숨김·
     vi.advanceTimersByTime(SETTLE);
     expect(said).toHaveLength(2);
     expect(said[1]).toMatch(/^면에: /);
-    // 다시 보이면 표식도 앞 추정(110차 남은 한계) — 알림 칸도 표식과 같은 글로 둔다
+    // 다시 보이면 표식도 앞 추정(숨김 판이 없는 가짜 뷰어 — 코어 0.121.0 visibilityVersion이 있으면 129차가 다시 구한다, 아래 129차 시험) — 알림 칸도 표식과 같은 글로 둔다
     r.hide('b', true);
     r.overlay.paintNow();
     vi.advanceTimersByTime(SETTLE);
@@ -5332,5 +5333,193 @@ describe('측정 도구: 키 밖의 변화(카메라·그리기 방식·숨김·
     r.tool.setMode('protractor');
     vi.advanceTimersByTime(SETTLE);
     expect(said).toEqual([]);
+  });
+});
+
+describe('측정 도구: 다시 보이기·다른 개체 숨김 뒤 커서 자리 추정은 숨김 판(코어 0.121.0 visibilityVersion)이 바뀌면 다음 그림에 그 자리에서 다시 구한다(129차 — 110차 남은 한계)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // 둘레 고르기 시간 한도가 기계 부하로 갈리지 않게 시계를 멈춘다(126차 꼴)
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+  });
+  const SETTLE = HISTORY_SETTLE_MS + 30;
+  /**
+   * 가짜 뷰어에 코어 0.121.0 숨김 판을 단다 — 코어처럼 숨김이 실제로 바뀐 호출만 하나 올리고 같은 값 숨김·보이기는 그대로(0.64.0).
+   * 단지 않은 가짜 뷰어는 코어 0.120.0까지처럼 판이 없다
+   */
+  const withVis = (r: Rig): Rig => {
+    let ver = 0;
+    Object.defineProperty(r.viewer, 'visibilityVersion', { get: () => ver, configurable: true });
+    const { hide, hideRanges } = r;
+    const v = r.viewer;
+    r.hide = (id, on = false) => {
+      const was = v.isVisible!(id);
+      hide(id, on);
+      if (v.isVisible!(id) !== was) ver++;
+    };
+    r.hideRanges = (id, list) => {
+      const was = JSON.stringify(v.hiddenRanges!(id));
+      hideRanges(id, list);
+      if (JSON.stringify(v.hiddenRanges!(id)) !== was) ver++;
+    };
+    return r;
+  };
+  // 112차 장면에 먼 묶음 z(화면 (10, 190)~(20, 190) — 커서 자리와 상관없는 다른 개체)를 더한다.
+  // 면 f(z 10 — 화면 (120~180, 80~120))가 그 밑 모서리 b(z 0 — 화면 (140, 100)~(160, 100))를 가린다. 커서 (140.3, 100.2)는 음영 계열이면 면 위, 와이어프레임·X-ray면 b의 끝점 (40, 0, 0)
+  const make = (mode: RenderMode, vis = true): Rig => {
+    const r = rig({
+      units: 'mm',
+      meshes: [quad('f', 20, -20, 80, 20, 10)],
+      lines: [lines('b', [[40, 0, 0, 60, 0, 0]]), lines('a', [[-60, 0, 0, -30, 0, 0]]), lines('z', [[-90, -90, 0, -80, -90, 0]])],
+    });
+    r.setRenderMode(mode);
+    r.tool.setMode('tape');
+    return vis ? withVis(r) : r;
+  };
+  const paint = (r: Rig, change: () => void): void => {
+    change();
+    r.overlay.paintNow();
+  };
+
+  it('마우스: 숨었던 앞 면·뒤 모서리가 다시 보이면 다음 그림에 그 자리에서 다시 구한다 — 같은 값 숨김·보이기(판 그대로)는 다시 구하지 않고, 숨김 판이 없는 뷰어는 지금처럼 앞 추정', () => {
+    // 음영: 앞 면 f를 숨기면(110차 길 — 추정을 낸 면) 그 밑 b의 끝점, 다시 보이면 면 위(b는 다시 가려짐)
+    const r = make('shaded');
+    r.move(140.3, 100.2);
+    expect(r.tip()).toBe(SNAP_LABELS.onFace);
+    paint(r, () => r.hide('f'));
+    expect(r.tip()).toBe(SNAP_LABELS.endpoint);
+    const picks = countPicks(r);
+    paint(r, () => r.hide('f', true));
+    expect(picks()).toBeGreaterThan(0);
+    expect(r.tip()).toBe(SNAP_LABELS.onFace);
+    expect(r.q('.measure-snap-endpoint')).toBeNull();
+    // 같은 값(이미 보임)은 판이 그대로라 다시 고르지 않는다
+    const n = picks();
+    paint(r, () => {
+      r.hide('f', true);
+      r.hide('z', true);
+    });
+    expect(picks()).toBe(n);
+    expect(r.tip()).toBe(SNAP_LABELS.onFace);
+    // 와이어프레임: 뒤 모서리 b를 숨기면 면 위, 다시 보이면 b의 끝점(옮긴 것과 같다)
+    const w = make('wireframe');
+    w.move(140.3, 100.2);
+    expect(w.tip()).toBe(SNAP_LABELS.endpoint);
+    paint(w, () => w.hide('b'));
+    expect(w.tip()).toBe(SNAP_LABELS.onFace);
+    paint(w, () => w.hide('b', true));
+    expect(w.tip()).toBe(SNAP_LABELS.endpoint);
+    expect(w.q('.measure-snap-endpoint')).not.toBeNull();
+    // 숨김 판이 없는 뷰어(?? 0 — 코어 0.120.0까지·가짜 뷰어): 다시 보여도 커서를 옮길 때까지 앞 추정
+    const old = make('wireframe', false);
+    old.move(140.3, 100.2);
+    paint(old, () => old.hide('b'));
+    expect(old.tip()).toBe(SNAP_LABELS.onFace);
+    paint(old, () => old.hide('b', true));
+    expect(old.tip()).toBe(SNAP_LABELS.onFace);
+  });
+
+  it('마우스: 다른 개체를 숨겨 커서 밑이 드러나면 다음 그림에 새 추정(커서 추정을 낸 것이 없는 빈 곳이어도) — 누르면 보인 그 점에서 잰다', () => {
+    // 위에서 봄: 면 g(z 10 — 화면 (155~195, 80~120))가 그 밑 모서리 c(z 0 — 화면 (160, 100)~(190, 100))를 가린다.
+    // 커서 (151.3, 100.2)는 g 밖 빈 곳 — 추정 반경(10화소) 안의 c 끝점 (160, 100)은 g에 가려 고르지 않는다
+    const r = withVis(rig({ units: 'mm', meshes: [quad('g', 55, -20, 95, 20, 10)], lines: [lines('c', [[60, 0, 0, 90, 0, 0]])] }));
+    r.tool.setMode('tape');
+    r.move(151.3, 100.2);
+    expect(r.tip()).not.toBe(SNAP_LABELS.endpoint);
+    expect(r.q('.measure-snap-endpoint')).toBeNull();
+    paint(r, () => r.hide('g'));
+    expect(r.tip()).toBe(SNAP_LABELS.endpoint);
+    expect(r.q('.measure-snap-endpoint')).not.toBeNull();
+    r.click(151.3, 100.2);
+    expect(r.tool.pointCount).toBe(1);
+    // 시작점이 그 끝점 (60, 0, 0)이면 c의 다른 끝점 (90, 0, 0)까지 30
+    r.click(190.3, 100.2);
+    expect(r.results.at(-1)).toMatchObject({ kind: 'tape', distance: 30 });
+  });
+
+  it('Tab으로 돌리는 중 숨김이 바뀌면 다음 그림에 다시 구해 돌리기가 끝난다(124차 규칙 — 「n/m」 없는 첫 후보), 다음 Tab은 새로 돌린다', () => {
+    // 모서리(z 0) 밑에 면(z −1): 커서 (102, 108)은 끝점·모서리 위·면 세 후보(124차 시험 장면)에 먼 묶음 z
+    const r = withVis(rig({ units: 'mm', meshes: [quad('q', -50, -50, 150, 100, -1)], lines: [...EDGES().lines, lines('z', [[-90, -90, 0, -80, -90, 0]])] }));
+    r.tool.setMode('tape');
+    r.move(102, 108);
+    expect(r.tip()).toBe('끝점');
+    paint(r, () => expect(r.key('Tab')).toBe(true));
+    expect(r.tip()).toBe('모서리에 2/3');
+    paint(r, () => r.hide('z'));
+    expect(r.tip()).toBe('끝점');
+    paint(r, () => expect(r.key('Tab')).toBe(true));
+    expect(r.tip()).toBe('모서리에 2/3');
+  });
+
+  it('가상 커서: 다시 보이면 다음 그림의 표식·툴팁이 새 추정이고 가라앉은 뒤 알림 칸에 한 번(127차 길) — 그림 전에 Enter로 찍어도 알린 글이 찍은 점과 같다', () => {
+    const r = make('wireframe');
+    const said: string[] = [];
+    r.tool.keyWatch?.((t) => void said.push(t));
+    const at = (x: number, y: number): string => {
+      (r.viewer as { keyboardCursor?: unknown }).keyboardCursor = { x, y };
+      const t = r.tool.keyHover(x, y);
+      r.overlay.paintNow();
+      return t;
+    };
+    expect(at(140.3, 100.2)).toBe('끝점: X 40 mm, Y 0 mm, Z 0 mm');
+    paint(r, () => r.hide('b'));
+    vi.advanceTimersByTime(SETTLE);
+    expect(said).toHaveLength(1);
+    expect(said[0]).toMatch(/^면에: /);
+    paint(r, () => r.hide('b', true));
+    expect(r.tip()).toBe(SNAP_LABELS.endpoint);
+    expect(said).toHaveLength(1);
+    vi.advanceTimersByTime(SETTLE);
+    expect(said).toEqual([said[0], '끝점: X 40 mm, Y 0 mm, Z 0 mm']);
+    // 같은 값 보이기(판 그대로)는 쓰지 않는다
+    paint(r, () => r.hide('b', true));
+    vi.advanceTimersByTime(SETTLE);
+    expect(said).toHaveLength(2);
+    // 다시 숨겼다 보인 뒤 그림 전에 Enter: 알림 글이 그 자리 새 추정이고 찍은 점도 그것(128차 — 앞 추정 글과 다른 점을 찍을 수 있었다)
+    paint(r, () => r.hide('b'));
+    vi.advanceTimersByTime(SETTLE);
+    expect(r.tip()).toBe(SNAP_LABELS.onFace);
+    r.hide('b', true);
+    expect(r.tool.keyPlace(false)).toBe('시작점을 찍었습니다. 끝점: X 40 mm, Y 0 mm, Z 0 mm');
+    expect(r.tool.pointCount).toBe(1);
+    // Tab으로 돌리는 중 다른 개체 숨김: 가라앉은 뒤 그 자리 첫 후보 글(「n/m」 없음)
+    const k = withVis(rig({ units: 'mm', meshes: [quad('q', -50, -50, 150, 100, -1)], lines: [...EDGES().lines, lines('z', [[-90, -90, 0, -80, -90, 0]])] }));
+    k.tool.setMode('tape');
+    const said2: string[] = [];
+    k.tool.keyWatch?.((t) => void said2.push(t));
+    (k.viewer as { keyboardCursor?: unknown }).keyboardCursor = { x: 102, y: 108 };
+    k.tool.keyHover(102, 108);
+    const e = new KeyboardEvent('keydown', { key: 'Tab', cancelable: true });
+    Object.defineProperty(e, 'target', { value: k.canvas });
+    expect(k.tool.keyCycle(e)).toMatch(/^모서리에 2\/3: /);
+    paint(k, () => k.hide('z'));
+    expect(k.tip()).toBe('끝점');
+    vi.advanceTimersByTime(SETTLE);
+    expect(said2).toEqual(['끝점: X 0 mm, Y 0 mm, Z 0 mm']);
+  });
+
+  it('찍은 점·잠근 방향은 그대로 두고 커서 자리만 다시 구하며, 손가락 탭 자리 표식은 다시 구할 커서가 없어 그대로(110차와 같음)', () => {
+    const r = make('shaded');
+    r.click(70.2, 100.3);
+    expect(r.tool.pointCount).toBe(1);
+    expect(r.key('ArrowRight')).toBe(true);
+    r.move(140.3, 100.2);
+    const picks = countPicks(r);
+    paint(r, () => r.hide('z'));
+    expect(picks()).toBeGreaterThan(0);
+    expect(r.tool.pointCount).toBe(1);
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'x', source: 'key' });
+    const t = make('wireframe');
+    t.click(140.3, 100.2, { pointerType: 'touch' });
+    expect(t.tool.pointCount).toBe(1);
+    expect(t.q('.measure-snap-endpoint')).not.toBeNull();
+    const tp = countPicks(t);
+    paint(t, () => t.hide('z'));
+    expect(tp()).toBe(0);
+    expect(t.q('.measure-snap-endpoint')).not.toBeNull();
   });
 });
