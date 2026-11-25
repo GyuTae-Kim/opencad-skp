@@ -24,6 +24,8 @@
  *   후보가 하나·없거나 가상 커서가 켜졌거나 커서가 3D 보기 밖이면 Tab은 초점 이동이고, Esc로 푼 자리에서는 포인터가 4화소 넘게 움직일 때까지 초점 이동이다(cycleKey).
  * 가상 커서 Tab 돌리기(125차 — 같은 규칙): 가상 커서가 켜진 동안 keypick.ts가 Tab·Shift+Tab·Esc를 keyCycle로 먼저 넘긴다. 3D 보기가 받은 키이고 커서 자리 후보가 둘 이상이면
  *   돌리고 알림 글(툴팁 글 — 이름 뒤 "2/4" — 과 좌표)을 돌려주며, 화살표로 옮기면 버리고, Enter는 보인 후보를 찍고, 돌리는 중 Esc는 돌리기만 풀고 그 자리 첫 후보 글을 돌려준다.
+ * Shift+Tab 앞의 Shift(126차): Shift 누름이 방향·각도기 평면을 잠갔어도 그 같은 누름 동안 다른 키·누르기·4화소 넘는 이동·찍기 없이 Shift+Tab이 오면
+ *   그 잠금을 걸기 전 상태(돌리던 차례·목록 포함)로 되돌리고 앞 후보로 돌린다(마우스·가상 커서, 걸기 전 그 자리 후보가 둘 이상일 때만 — unShift). 그 누름은 뗄 때까지 다시 잠그지 않는다.
  * 정밀 조준(터치): 한 손가락을 끌기 시작 거리 안에서 AIM_HOLD_MS 동안 누르고 있으면 손가락 위 AIM_OFFSET_PX에 십자선을 띄우고,
  *   끌면 궤도 대신 십자선이 따라가며 마우스처럼 추정·고무줄·툴팁을 보인다. 떼면 십자선 자리에 점을 찍는다.
  *   그동안의 움직임은 캔버스 부모의 캡처 단계에서 막아 코어가 돌리지 않게 한다(떼기는 코어에 넘겨 끌기 상태를 끝낸다).
@@ -1109,6 +1111,33 @@ interface Cursor {
   fy?: number;
 }
 
+/** 124차 Tab 돌리기: 돌린 자리(캔버스 CSS 좌표)·포인터 종류, 그 자리 후보 목록(snapCandidates 차례 — 둘 이상)과 지금 보인 차례 */
+interface TabCycle {
+  x: number;
+  y: number;
+  type: string;
+  list: Snap[];
+  index: number;
+}
+
+/**
+ * 126차: Shift 누름(keydown)이 건 잠금과 걸기 전 상태 — 같은 누름의 Shift+Tab이 되돌린다(MeasureTool.unShift).
+ * x·y·type: 되돌릴 자리(누를 때 돌리는 중이었으면 돌린 자리, 아니면 커서)와 포인터 종류. lock·plane: 누른 뒤 방향 잠금·각도기 평면(그대로여야 되돌린다), lock0·plane0: 누르기 전 값.
+ * cycle: 누르기 전 돌리기(없으면 Tab 때 그 자리 후보를 새로). pressed·centers: 누르기 전 방금 누른 점·곡선 중심 기억(잠근 동안 다시 구하기가 바꾼다)
+ */
+interface ShiftUndo {
+  x: number;
+  y: number;
+  type: string;
+  lock: MeasureLock | null;
+  plane: V3 | null;
+  lock0: MeasureLock | null;
+  plane0: V3 | null;
+  cycle: TabCycle | null;
+  pressed: V3 | null;
+  centers: V3[];
+}
+
 export class MeasureTool {
   private modeValue: MeasureMode | null = null;
   /** 찍은 점(줄자: 시작점, 각도기: 중심·기준 방향) */
@@ -1131,9 +1160,16 @@ export class MeasureTool {
    * 124차 마우스·펜 미리 보기 Tab 돌리기(코어 0.116.0 tabCycle과 같은 규칙): 돌린 자리(캔버스 CSS 좌표)·포인터 종류, 그 자리 후보 목록(snapCandidates 차례 — 둘 이상)과
    * 지금 보인 차례. 돌리는 동안 커서 자리 추정(hover)은 그 후보다. 포인터가 그 자리에서 4화소 넘게 움직이거나 끌기·떠남·찍기·다시 구하기(updateHover)면 버린다
    */
-  private cycle: { x: number; y: number; type: string; list: Snap[]; index: number } | null = null;
+  private cycle: TabCycle | null = null;
   /** 124차: Esc로 돌리기를 푼 자리 — 포인터가 거기서 4화소 넘게 움직일 때까지 그 자리 Tab은 초점 이동(키보드 덫 없음) */
   private cycleOff: { x: number; y: number } | null = null;
+  /**
+   * 126차: 이 Shift 누름이 건 잠금과 걸기 전 상태(같은 누름의 첫 Shift+Tab이 되돌린다 — unShift). 같은 누름 동안 다른 키(창 어디든)·누르기·되돌릴 자리에서 4화소 넘는 이동·
+   * 떠남·화살표 커서 이동·찍기·뗌이면 버린다(그 뒤 Shift+Tab은 지금처럼 잠근 채)
+   */
+  private shiftUndo: ShiftUndo | null = null;
+  /** 126차: 이 Shift 누름을 Shift+Tab 되돌리기에 썼다 — 뗄 때까지 같은 누름(키 되풀이·포인터 이동의 shiftKey)으로 다시 잠그지 않는다 */
+  private shiftUsed = false;
   private dragging = false;
   private presses = new Map<number, Press>();
   private cancelTap = false;
@@ -1297,12 +1333,20 @@ export class MeasureTool {
     cv.addEventListener('wheel', wheel, { passive: true });
     this.off.push(() => cv.removeEventListener('wheel', wheel));
     // 창이 초점을 잃으면 Shift를 뗀 것으로 본다(떼기 keyup을 놓치지 않게)
-    if (typeof window !== 'undefined')
+    if (typeof window !== 'undefined') {
       on(window, 'blur', () => {
         this.modTap = false;
         this.setShift(false);
         this.setPlaneLock(false);
       });
+      // 126차: Shift 누름 동안 다른 키를 누르면(창 어디든 — 앱이 측정 도구에 넘기지 않는 측정값 칸 숫자 등도) 그 누름의 Shift+Tab 되돌리기를 버린다.
+      // 앱 창 capture 뒤에 붙어 같은 Tab의 처리(cycleKey) 뒤에 온다
+      this.off.push(
+        capture<KeyboardEvent>(window, 'keydown', (e) => {
+          if (e.key !== 'Shift') this.shiftUndo = null;
+        }),
+      );
+    }
     // 106차: 단면이 바뀌면 지나간 모서리를 버린다(코어 0.99.0 — 단면은 모든 묶음의 보이는 조각을 바꾼다. 장면 탭·파일 단면도 이 알림).
     // 110차: 마지막으로 본 방향 추론·끌어온 점·곡선 중심도 모두 버리고, 커서 자리 추정은 다음 그림에 그 자리에서 다시 구한다(코어 0.98.0)
     const offSection = viewer.onSectionChange?.(() => {
@@ -2330,6 +2374,8 @@ export class MeasureTool {
     // 125차: 옮기면 Tab 돌리기는 버린다(아래 다시 구하기 — 그 자리 첫 후보), Esc로 푼 자리에서 4화소 넘게 옮기면 그 자리 Tab을 다시 받는다(마우스 onMove와 같다)
     const off = this.cycleOff;
     if (off && Math.hypot(x - off.x, y - off.y) > tapSlopPx('keyboard')) this.cycleOff = null;
+    // 126차: 커서를 옮기면(화살표·Shift+화살표) 그 Shift 누름의 Shift+Tab 되돌리기는 버린다(잠근 채)
+    this.shiftUndo = null;
     this.cursor = { x, y, type: 'keyboard' };
     this.hoverDirty = true;
     const snap = this.freshHover();
@@ -2341,7 +2387,7 @@ export class MeasureTool {
   keyEnd(keep: boolean): void {
     if (keep || this.cursor?.type !== 'keyboard') return;
     this.cursor = null;
-    this.cycle = this.cycleOff = null;
+    this.cycle = this.cycleOff = this.shiftUndo = null;
     this.hover = null;
     this.hoverPoint = null;
     this.overlay.invalidate();
@@ -2441,7 +2487,8 @@ export class MeasureTool {
    * 키(keydown·keyup 모두 넘긴다). 처리했으면 true.
    * Esc: (124차 — Tab으로 돌리는 중이면 돌리기만 풀기) → 진행 중 점 취소(끌어온 점도 잊는다) → 끌어온 점 잊기 → 화살표로 고정한 각도기 평면 풀기 → 결과 지우기 → (지울 것이 없으면) false — 앱이 도구를 끈다.
    * Tab·Shift+Tab(124차, keydown): 마우스·펜 커서 자리에 겹친 스냅 후보가 둘 이상이면 다음·앞 후보(cycleKey), 아니면 false(초점 이동). 가상 커서 자리는 keyCycle(125차).
-   * Shift: 누르고 있는 동안 방향을 잡는 중이면 지금 방향 추론 잠금, 각도기 중심을 찍기 전이면 커서 밑 평면 고정.
+   * Shift: 누르고 있는 동안 방향을 잡는 중이면 지금 방향 추론 잠금, 각도기 중심을 찍기 전이면 커서 밑 평면 고정
+   * (126차 — 그 누름의 첫 Shift+Tab이면 걸기 전으로 되돌리고 뗄 때까지 다시 잠그지 않는다, unShift).
    * →·←·↑·↓(keydown): 축·나란히 잠금 켜고 끄기, 각도기 중심을 찍기 전에는 →·←·↑로 각도기 평면 고정(앱은 목록·입력 칸의 화살표를 넘기지 않는다).
    * 안내 두기 키(Ctrl, Mac은 Option): 그 키만 눌렀다 떼면(keyup) 안내 두기 켜고 끄기 — 그사이 다른 키·누르기·휠이 있으면 바꾸지 않는다(Ctrl+O 등).
    */
@@ -2498,8 +2545,13 @@ export class MeasureTool {
     }
     if (e.key === 'Shift') {
       const down = e.type !== 'keyup';
+      // 126차: Shift+Tab 되돌리기에 쓴 누름은 뗄 때까지 다시 잠그지 않는다(키 되풀이)
+      if (down && this.shiftUsed) return true;
+      const u = down && !this.shiftDown ? this.shiftBefore() : null;
       if (this.modeValue === 'protractor') this.setPlaneLock(down);
       this.setShift(down);
+      // 126차: 이 누름이 방향·각도기 평면을 잠갔으면 걸기 전 상태를 둔다(같은 누름의 Shift+Tab이 되돌린다 — cycleKey)
+      if (u && (this.lockValue !== u.lock0 || this.planeLock !== u.plane0)) this.shiftUndo = { ...u, lock: this.lockValue, plane: this.planeLock };
       return true;
     }
     if (e.type === 'keydown' && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.startsWith('Arrow') && this.arrowLock(e.key)) {
@@ -2569,7 +2621,55 @@ export class MeasureTool {
       if (this.lockValue || !this.directing) return;
       const l = this.lockable(this.freshHover());
       if (l) this.setLock({ ...l, source: 'shift' });
-    } else if (this.lockValue?.source === 'shift') this.setLock(null);
+      return;
+    }
+    // 126차: 떼면 그 누름의 Shift+Tab 되돌리기와 「Tab에 씀」도 끝난다(뗀 뒤 새 누름은 지금처럼 잠근다)
+    this.shiftUndo = null;
+    this.shiftUsed = false;
+    if (this.lockValue?.source === 'shift') this.setLock(null);
+  }
+
+  /**
+   * 126차: Shift를 누르는 순간의 걸기 전 상태(handleKey가 잠근 뒤 값을 더해 shiftUndo로 둔다). 방향을 잡는 중이면 setShift처럼 지금 자리 추정을 먼저 맞추고
+   * (그리기를 기다리던 이동 — 다시 구하면 돌리기는 끝난다), 돌리는 중이면 돌린 자리, 아니면 커서 자리가 되돌릴 자리다.
+   * 커서가 없거나 잠글 방향 고르기 줄이 열렸으면 null(되돌리면 그 줄을 다시 열어야 해 되돌리지 않는다)
+   */
+  private shiftBefore(): Omit<ShiftUndo, 'lock' | 'plane'> | null {
+    const c = this.cursor;
+    if (!c || this.lockMenuOpen) return null;
+    if (this.directing && !this.lockValue) this.freshHover();
+    const cy = this.hoverDirty ? null : this.cycle;
+    return { x: cy ? cy.x : c.x, y: cy ? cy.y : c.y, type: c.type, lock0: this.lockValue, plane0: this.planeLock, cycle: cy, pressed: this.pressedPoint, centers: this.centers };
+  }
+
+  /**
+   * 126차 Shift+Tab 되돌리기(cycleKey가 그 누름 뒤 첫 Shift+Tab에 부른다): 그 Shift 누름이 건 방향 잠금·각도기 평면이 그대로이고 커서가 되돌릴 자리 4화소 안(같은 포인터 종류)이며
+   * 걸기 전 상태에서 Tab을 받을 수 있으면(누를 때 돌리는 중이었거나, 잠그지 않은 지금 커서 자리 후보가 둘 이상) 잠금·평면·곡선 중심 기억·방금 누른 점을 누르기 전 값으로 되돌리고
+   * 돌릴 차례(돌리던 것 그대로, 아니면 그 자리 새 목록의 첫 후보)를 준다. 그 누름은 뗄 때까지 다시 잠그지 않는다(shiftUsed).
+   * 아니면 아무것도 바꾸지 않고 null — 잠금 그대로, Tab은 지금처럼 잠근 상태의 길
+   */
+  private unShift(u: ShiftUndo, c: Cursor, f: ViewFrame): TabCycle | null {
+    if (this.lockValue !== u.lock || this.planeLock !== u.plane || c.type !== u.type || Math.hypot(c.x - u.x, c.y - u.y) > tapSlopPx(c.type)) return null;
+    const { lockValue, centers } = this;
+    this.lockValue = u.lock0;
+    this.centers = u.centers;
+    let cy = u.cycle;
+    if (!cy) {
+      this.sweep();
+      const list = this.snapCandidatesAt(c.x, c.y, c.type, f);
+      if (list.length > 1) cy = { x: c.x, y: c.y, type: c.type, list, index: 0 };
+    }
+    if (!cy) {
+      this.lockValue = lockValue;
+      this.centers = centers;
+      return null;
+    }
+    this.planeLock = u.plane0;
+    this.pressedPoint = u.pressed;
+    this.shiftUsed = true;
+    // 잠금 안내(onLock)를 걸기 전으로(잠글 방향 고르기 줄은 누를 때 닫혀 있었다 — shiftBefore)
+    this.refreshHint();
+    return cy;
   }
 
   /**
@@ -2819,8 +2919,9 @@ export class MeasureTool {
 
   private onDown(e: PointerEvent): void {
     if (!this.modeValue) return this.onBoxDown(e);
-    // Ctrl·Option을 누른 채 누르면 안내 두기 키 누르기가 아니다
+    // Ctrl·Option을 누른 채 누르면 안내 두기 키 누르기가 아니다. 누르기는 Shift 누름의 Shift+Tab 되돌리기도 끝낸다(126차)
     this.modTap = false;
+    this.shiftUndo = null;
     // 누르기·끌기는 머무르기가 아니다
     this.cancelDwell();
     const p = this.local(e);
@@ -2864,7 +2965,10 @@ export class MeasureTool {
     // Shift 잠금은 옮기기 전 자리에서 보인 추론으로(키를 못 받은 사이 눌렀거나 뗐어도 이동의 shiftKey로 맞춘다)
     this.setShift(!!e.shiftKey);
     this.cursor = { x: p.x, y: p.y, type };
-    if (this.modeValue === 'protractor') this.setPlaneLock(!!e.shiftKey);
+    // 126차: Shift+Tab 되돌리기에 쓴 누름은 뗄 때까지 평면을 다시 고정하지 않고, 되돌릴 자리에서 4화소 넘게 움직이면 되돌리기를 버린다(잠근 채)
+    if (this.modeValue === 'protractor') this.setPlaneLock(!!e.shiftKey && !this.shiftUsed);
+    const u = this.shiftUndo;
+    if (u && Math.hypot(p.x - u.x, p.y - u.y) > tapSlopPx(type)) this.shiftUndo = null;
     // 124차: Esc로 돌리기를 푼 자리에서 4화소 넘게 움직이면 그 자리 Tab을 다시 받는다
     const off = this.cycleOff;
     if (off && Math.hypot(p.x - off.x, p.y - off.y) > tapSlopPx(type)) this.cycleOff = null;
@@ -2900,8 +3004,8 @@ export class MeasureTool {
     if (!this.modeValue || this.presses.size) return;
     if (this.cursor?.type === 'touch' || this.cursor?.type === 'keyboard') return;
     this.cancelDwell();
-    // 124차: 3D 보기를 떠나면 Tab 돌리기도 버린다(그동안 Tab은 초점 이동)
-    this.cycle = this.cycleOff = null;
+    // 124차: 3D 보기를 떠나면 Tab 돌리기도 버린다(그동안 Tab은 초점 이동). 126차: Shift+Tab 되돌리기도
+    this.cycle = this.cycleOff = this.shiftUndo = null;
     this.cursor = null;
     this.hover = null;
     this.hoverPoint = null;
@@ -3060,9 +3164,9 @@ export class MeasureTool {
     this.lastTap = null;
     const f = this.overlay.frame();
     if (!f) return;
-    // 124차: Tab으로 돌린 자리 4화소 안이면 보인 그 후보를 찍는다(장면 길이 숨긴 것이 있으면 다시 구한다). 찍으면 돌리기는 끝난다
+    // 124차: Tab으로 돌린 자리 4화소 안이면 보인 그 후보를 찍는다(장면 길이 숨긴 것이 있으면 다시 구한다). 찍으면 돌리기는 끝난다(126차 Shift+Tab 되돌리기도)
     const held = !this.sweep() && this.cycleHeld(x, y, type) ? this.cycle!.list[this.cycle!.index]! : null;
-    this.cycle = null;
+    this.cycle = this.shiftUndo = null;
     const snap = held ?? this.snapAt(x, y, type, f);
     if (!snap) return;
     this.learn(snap);
@@ -3210,7 +3314,8 @@ export class MeasureTool {
     this.hover = null;
     this.hoverPoint = null;
     this.cursor = null;
-    this.cycle = this.cycleOff = null;
+    this.cycle = this.cycleOff = this.shiftUndo = null;
+    this.shiftUsed = false;
     this.dragging = false;
     this.presses.clear();
     this.cancelTap = false;
@@ -3286,6 +3391,9 @@ export class MeasureTool {
    * keypick.ts Enter 찍기와 같다). 그 밖의 조건은 같다(Esc로 푼 자리는 화살표로 4화소 넘게 옮길 때까지 — keyHover)
    */
   private cycleKey(e: KeyboardEvent, key = false): boolean {
+    // 126차: 같은 Shift 누름의 되돌리기는 그 누름 뒤 첫 Tab 하나만 본다(받든 받지 않든 — 그 뒤 Tab은 지금처럼)
+    const u = e.shiftKey ? this.shiftUndo : null;
+    this.shiftUndo = null;
     if (e.type !== 'keydown' || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return false;
     const v = this.viewer;
     const c = this.cursor;
@@ -3298,12 +3406,16 @@ export class MeasureTool {
     if (off && Math.hypot(c.x - off.x, c.y - off.y) <= tapSlopPx(c.type)) return false;
     const f = this.overlay.frame();
     if (!f) return false;
-    let cy = this.cycle;
+    // 126차: 같은 Shift 누름이 방금 건 잠금은 걸기 전 상태로 되돌려 그 돌리기(차례·목록)로 — 되돌리지 못하면 지금처럼(잠근 채)
+    let cy = (u && this.unShift(u, c, f)) || this.cycle;
     if (!cy) {
       this.sweep();
       const list = this.snapCandidatesAt(c.x, c.y, c.type, f);
       if (list.length < 2) return false;
-      cy = this.cycle = { x: c.x, y: c.y, type: c.type, list, index: 0 };
+      cy = { x: c.x, y: c.y, type: c.type, list, index: 0 };
+    }
+    if (cy !== this.cycle) {
+      this.cycle = cy;
       // 돌리는 동안은 머무르지 않는다(첫 후보에서 시작한 머무르기가 끌어온 점을 더해 돌린 미리 보기를 다시 구하지 않게)
       this.cancelDwell();
     }
@@ -3893,7 +4005,7 @@ export class MeasureTool {
 }
 
 /** 캡처 단계 듣기(끄는 함수를 돌려준다) */
-function capture(el: EventTarget, type: string, fn: (e: PointerEvent) => void): () => void {
+function capture<E extends Event = PointerEvent>(el: EventTarget, type: string, fn: (e: E) => void): () => void {
   const h = fn as EventListener;
   el.addEventListener(type, h, true);
   return () => el.removeEventListener(type, h, true);

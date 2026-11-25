@@ -4720,6 +4720,10 @@ describe('측정 도구: 키보드 점 찍기(59차 — 가상 커서 자리, ke
 });
 
 describe('측정 도구: 마우스 미리 보기에서 Tab으로 겹친 스냅 후보 돌리기(124차 — 코어 0.116.0 tabCycle과 같은 규칙)', () => {
+  // 126차 시험이 멈춘 시계를 되돌린다
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
   /** 측정 도구에 넘긴 키(앱 창 capture → keypick.ts → handleKey): [받았는지, 기본 동작을 막았는지] */
   const press = (r: Rig, key: string, o: KeyboardEventInit & { target?: EventTarget } = {}): [boolean, boolean] => {
     const { target, ...init } = o;
@@ -4874,9 +4878,103 @@ describe('측정 도구: 마우스 미리 보기에서 Tab으로 겹친 스냅 �
     expect(press(r, 'Escape')).toEqual([true, true]);
     expect(r.tool.result).toBeNull();
   });
+
+  it('126차: Shift+Tab을 누르려고 먼저 누른 Shift가 건 방향 잠금은 같은 누름의 Shift+Tab이 걸기 전으로 되돌리고 앞 후보로(그 누름은 다시 잠그지 않음) — 다른 차례는 그대로', () => {
+    // 둘레 고르기 시간 예산(마우스 6 ms)이 붐비는 기계에서 먼저 끊기면 후보 수가 바뀌므로 시계를 멈춘다(위 afterEach가 되돌린다)
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    r.click(198, 101);
+    // 방향 후보(시작점을 지나는 모서리의 끝점 — 빨강 축 방향) 위, 그 자리 후보 둘
+    r.move(102, 103);
+    expect(r.tip()).toBe('끝점 · 100 mm');
+    expect(press(r, 'Shift')).toEqual([true, false]);
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'x', source: 'shift' });
+    expect(r.locks.at(-1)).toBe('x');
+    // 같은 누름의 Shift+Tab: 잠그기 전으로 되돌리고 그 자리 후보의 앞 후보(끝에서)
+    expect(press(r, 'Tab', { shiftKey: true })).toEqual([true, true]);
+    expect(r.tool.inferenceLock).toBeNull();
+    expect(r.locks.at(-1)).toBeNull();
+    expect(r.tip()).toBe('모서리에 2/2 · 98 mm');
+    // 같은 누름의 키 되풀이·4화소 안 이동(shiftKey)은 다시 잠그지 않는다 — 돌린 후보 그대로, Tab은 계속 돌린다
+    expect(press(r, 'Shift', { repeat: true })).toEqual([true, false]);
+    r.move(104, 103, { shift: true });
+    expect(r.tool.inferenceLock).toBeNull();
+    expect(r.tip()).toBe('모서리에 2/2 · 98 mm');
+    expect(press(r, 'Tab', { shiftKey: true })).toEqual([true, true]);
+    expect(r.tip()).toBe('끝점 1/2 · 100 mm');
+    // 뗀 뒤 새 Shift는 지금처럼 돌린 방향 후보를 잠그고, 같은 누름의 Shift+Tab은 돌리던 차례로 되돌려 앞 후보
+    r.key('Shift', 'keyup');
+    expect(r.tool.inferenceLock).toBeNull();
+    expect(press(r, 'Shift')).toEqual([true, false]);
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'x', source: 'shift' });
+    expect(press(r, 'Tab', { shiftKey: true })).toEqual([true, true]);
+    expect(r.tool.inferenceLock).toBeNull();
+    expect(r.tip()).toBe('모서리에 2/2 · 98 mm');
+    r.key('Shift', 'keyup');
+    // Shift를 누른 채 4화소 넘게 움직였으면 지금처럼 잠근 채(되돌리지 않는다)
+    r.move(110, 103);
+    r.move(102, 103);
+    expect(r.tip()).toBe('끝점 · 100 mm');
+    press(r, 'Shift');
+    r.move(108, 103, { shift: true });
+    r.move(102, 103, { shift: true });
+    press(r, 'Tab', { shiftKey: true });
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'x', source: 'shift' });
+    r.key('Shift', 'keyup');
+    // 그사이 다른 키(창 어디든)가 끼어도 되돌리지 않는다
+    r.move(110, 103);
+    r.move(102, 103);
+    press(r, 'Shift');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'A', shiftKey: true }));
+    press(r, 'Tab', { shiftKey: true });
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'x', source: 'shift' });
+    r.key('Shift', 'keyup');
+    expect(r.tool.inferenceLock).toBeNull();
+    // 그 자리 후보가 하나면 Shift+Tab은 받지 않고(초점 이동) 잠금 그대로
+    const one = rig({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 10, 0, 0]])] });
+    one.tool.setMode('tape');
+    one.click(101, 100);
+    one.move(100, 40);
+    expect(one.tip()).toBe('녹색 축에 · 60 mm');
+    expect(one.tool.snapCandidatesAt(100, 40)).toHaveLength(1);
+    press(one, 'Shift');
+    expect(one.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'y', source: 'shift' });
+    expect(press(one, 'Tab', { shiftKey: true })).toEqual([false, false]);
+    expect(one.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'y', source: 'shift' });
+  });
+
+  it('126차: 각도기 중심 전 Shift 평면 고정도 같은 누름의 Shift+Tab이면 함께 되돌린다(뗀 뒤 새 Shift는 고정)', () => {
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+    const r = rig(UNDER());
+    r.tool.setMode('protractor');
+    const locked = (): boolean => !!r.q('.measure-protractor')?.classList.contains('is-locked');
+    r.move(102, 108);
+    expect(r.tip()).toBe('끝점');
+    press(r, 'Tab');
+    expect(r.tip()).toBe('모서리에 2/3');
+    expect(locked()).toBe(false);
+    press(r, 'Shift');
+    expect(locked()).toBe(true);
+    expect(press(r, 'Tab', { shiftKey: true })).toEqual([true, true]);
+    expect(r.tip()).toBe('끝점 1/3');
+    expect(locked()).toBe(false);
+    // 같은 누름의 키 되풀이·4화소 안 이동(shiftKey)은 다시 고정하지 않는다
+    press(r, 'Shift', { repeat: true });
+    r.move(104, 108, { shift: true });
+    expect(r.tip()).toBe('끝점 1/3');
+    expect(locked()).toBe(false);
+    r.key('Shift', 'keyup');
+    press(r, 'Shift');
+    expect(locked()).toBe(true);
+  });
 });
 
 describe('측정 도구: 가상 커서(키보드)에서 Tab으로 겹친 스냅 후보 돌리기(125차 — 124차 마우스 규칙과 같게, keypick.ts가 keyCycle로 넘긴다)', () => {
+  // 126차 시험이 멈춘 시계를 되돌린다
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
   /** 가상 커서를 켠 동안 keypick.ts가 측정 도구에 넘기는 키(기본 대상 = 3D 보기): [알림 글(받지 않으면 null), 기본 동작을 막았는지] */
   const cyc = (r: Rig, key: string, o: KeyboardEventInit & { target?: EventTarget | null; type?: string } = {}): [string | null, boolean] => {
     const { target = r.canvas, type = 'keydown', ...init } = o;
@@ -5022,5 +5120,35 @@ describe('측정 도구: 가상 커서(키보드)에서 Tab으로 겹친 스냅 
     // 돌리지 않을 때 Esc는 측정 도구 handleKey 차례(찍은 점 지우기)
     expect(r.key('Escape')).toBe(true);
     expect(r.tool.pointCount).toBe(0);
+  });
+
+  it('126차: Shift+Tab을 누르려고 먼저 누른 Shift가 건 방향 잠금은 같은 누름의 Shift+Tab이 걸기 전으로 되돌리고 앞 후보를 알린다 — 뗀 뒤 새 Shift는 잠금, 화살표로 옮겼으면 잠근 채', () => {
+    // 둘레 고르기 시간 예산이 붐비는 기계에서 먼저 끊기지 않게 시계를 멈춘다(위 afterEach가 되돌린다)
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    at(r, 198, 101);
+    r.tool.keyPlace(false);
+    expect(at(r, 102, 103)).toBe('끝점 · 100 mm: X 0 mm, Y 0 mm, Z 0 mm');
+    // keypick.ts는 켠 커서의 Shift를 측정 도구 handleKey로 넘긴다(마우스와 같은 Shift 길)
+    expect(r.key('Shift')).toBe(true);
+    r.overlay.paintNow();
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'x', source: 'shift' });
+    expect(cyc(r, 'Tab', { shiftKey: true })).toEqual(['모서리에 2/2 · 98 mm: X 2 mm, Y 0 mm, Z 0 mm', true]);
+    expect(r.tool.inferenceLock).toBeNull();
+    expect(r.tip()).toBe('모서리에 2/2 · 98 mm');
+    // 같은 누름: Tab은 계속 돌리고, 키 되풀이로 다시 잠그지 않는다
+    expect(cyc(r, 'Tab', { shiftKey: true })[0]).toMatch(/^끝점 1\/2 · 100 mm: /);
+    r.tool.handleKey(new KeyboardEvent('keydown', { key: 'Shift', repeat: true }));
+    expect(r.tool.inferenceLock).toBeNull();
+    // 뗀 뒤 새 Shift는 지금처럼 돌린 후보 방향을 잠근다
+    r.key('Shift', 'keyup');
+    r.key('Shift');
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'x', source: 'shift' });
+    // 그사이 화살표로 커서를 옮겼으면(Shift+화살표 50화소) 되돌리지 않는다(잠근 채)
+    at(r, 152, 103);
+    at(r, 102, 103);
+    cyc(r, 'Tab', { shiftKey: true });
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'x', source: 'shift' });
   });
 });
