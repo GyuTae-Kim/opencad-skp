@@ -771,4 +771,41 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
     expect(kp.text).toMatch(/^그룹 Near의 면 2\/3: /);
     expect(calls.filter((c) => c.startsWith('cycle'))).toEqual([]);
   });
+
+  it('127차 줄자·각도기 방식이면 측정 도구 keyWatch에 알림 칸 쓰기를 주고(코어 커서가 켜졌을 때만 씀 — 때·견주기는 tests/app/measure.test.ts 127차), 고르기 도구·끔이면 거둔다', () => {
+    const { v, cv, d, host: el } = setup();
+    const w: { say: ((text: string) => void) | null; calls: number } = { say: null, calls: 0 };
+    const host: KeyMeasureHost = {
+      active: true,
+      handleKey: () => false,
+      keyHover: (x, y) => `끝점: ${x},${y}`,
+      keyEnd: () => undefined,
+      keyPlace: () => '',
+      keyCycle: () => null,
+      keyWatch: (say) => {
+        w.say = say;
+        w.calls++;
+      },
+    };
+    const kp = new KeyPick(v, el as unknown as HTMLElement, () => d, { measureTool: host });
+    kp.follow('tape');
+    expect(w.say).toEqual(expect.any(Function));
+    // 코어 커서가 꺼진 동안은 쓰지 않는다
+    w.say?.('모서리에: X 1 mm, Y 0 mm, Z 0 mm');
+    expect(kp.text).toBe('');
+    key(cv, 'Enter');
+    expect(kp.text).toBe('가상 커서를 켰습니다. 끝점: 400,300. 옮기기 ←→↑↓ · 찍기 Enter · 방향 잠금 Shift · 끄기 Esc');
+    w.say?.('모서리에: X 1 mm, Y 0 mm, Z 0 mm');
+    expect(kp.text).toBe('모서리에: X 1 mm, Y 0 mm, Z 0 mm');
+    // 각도기로 바꿔도 주고, 고르기 도구·끔이면 거둔다
+    kp.setMode('protractor');
+    expect(w.say).toEqual(expect.any(Function));
+    kp.setMode('pick');
+    expect(w.say).toBeNull();
+    kp.follow('protractor');
+    expect(w.say).toEqual(expect.any(Function));
+    kp.setMode(null);
+    expect(w.say).toBeNull();
+    expect(w.calls).toBe(5);
+  });
 });
