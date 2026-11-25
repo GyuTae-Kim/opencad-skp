@@ -63,7 +63,9 @@ import {
   GUIDE_DELETE_TEXT,
   GUIDE_KIND_NAMES,
   cycleTipLabel,
+  KEY_SETTLE_MS,
 } from '../../src/app/measure';
+import { HISTORY_SETTLE_MS } from '../../src/app/history';
 import { KEY_SNAP_MESSAGES, formatKeySnapMessage } from 'opencad-viewer3d/keysnap';
 import { translate } from '../../site/i18n.mjs';
 import { AXIS_COLORS, AXIS_LABELS, SNAP_COLORS, SNAP_LABELS, TRACK_ALIGN_LABEL, TRACK_AXIS_LABELS, TRACK_PAIR_LABELS } from '../../src/app/snap';
@@ -5150,5 +5152,185 @@ describe('측정 도구: 가상 커서(키보드)에서 Tab으로 겹친 스냅 
     at(r, 102, 103);
     cyc(r, 'Tab', { shiftKey: true });
     expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'x', source: 'shift' });
+  });
+});
+
+describe('측정 도구: 키 밖의 변화(카메라·그리기 방식·숨김·단면) 뒤 가상 커서 자리 글은 가라앉은 뒤 한 번 알린다(127차 — keypick.ts가 keyWatch로 알림 칸을 준다)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // 둘레 고르기 시간 한도가 기계 부하로 갈리지 않게 시계를 멈춘다(126차 꼴)
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+  });
+  /** 가라앉았다고 보는 시간: 앱 보기 기록이 카메라 멈춤을 보는 때와 같다(app.ts onCamera — HISTORY_SETTLE_MS + 30) */
+  const SETTLE = HISTORY_SETTLE_MS + 30;
+  /** 측정 도구에 알림 칸 쓰기를 준다(keypick.ts apply 꼴) — 알린 글 */
+  const watch = (r: Rig): string[] => {
+    const said: string[] = [];
+    r.tool.keyWatch?.((t) => void said.push(t));
+    return said;
+  };
+  /** 코어 가상 커서를 그 자리에 켜거나 옮긴다(코어 keyboardCursor + keypick.ts sayMeasure의 keyHover) — 그 자리 알림 글 */
+  const at = (r: Rig, x: number, y: number): string => {
+    (r.viewer as { keyboardCursor?: unknown }).keyboardCursor = { x, y };
+    const t = r.tool.keyHover(x, y);
+    r.overlay.paintNow();
+    return t;
+  };
+  /** 가상 커서의 Tab(keypick.ts가 keyCycle로 넘긴다 — 대상 3D 보기) — 알림 글(받지 않으면 null) */
+  const tab = (r: Rig): string | null => {
+    const e = new KeyboardEvent('keydown', { key: 'Tab', cancelable: true });
+    Object.defineProperty(e, 'target', { value: r.canvas });
+    const t = r.tool.keyCycle(e);
+    r.overlay.paintNow();
+    return t;
+  };
+  /** 카메라를 옮기고 그 그림을 그린다(코어 onCameraChange 다음 덧그림 — 휠·보기 키 움직임의 한 프레임) */
+  const cam = (r: Rig, target: V3): void => {
+    r.setCamera({ ...TOP, target });
+    r.overlay.paintNow();
+  };
+  /** 코어 커서 끄기(keypick.ts sayMeasure 'end' — keep이면 측정 도구 표식은 그 자리에 남김) */
+  const off = (r: Rig, keep: boolean): void => {
+    (r.viewer as { keyboardCursor?: unknown }).keyboardCursor = null;
+    r.tool.keyEnd(keep);
+  };
+
+  it('카메라가 움직이는 동안은 쓰지 않고(표식·툴팁은 그림마다 그 자리 추정), 멈추고 가라앉은 뒤 한 번 새 자리 글 — 같은 글이면 쓰지 않는다, 줄자·각도기 같음', () => {
+    expect(KEY_SETTLE_MS).toBe(SETTLE);
+    for (const mode of ['tape', 'protractor'] as const) {
+      const r = rig(EDGES());
+      r.tool.setMode(mode);
+      const said = watch(r);
+      expect(at(r, 102, 103)).toBe('끝점: X 0 mm, Y 0 mm, Z 0 mm');
+      // 움직이는 동안(프레임마다 카메라 알림 — 그사이 가라앉는 시간보다 짧게)
+      cam(r, [10, 0, 0]);
+      vi.advanceTimersByTime(SETTLE - 1);
+      cam(r, [30, 0, 0]);
+      expect(r.tip()).toBe('모서리에');
+      vi.advanceTimersByTime(SETTLE - 1);
+      expect(said, mode).toEqual([]);
+      vi.advanceTimersByTime(1);
+      expect(said, mode).toEqual(['모서리에: X 32 mm, Y 0 mm, Z 0 mm']);
+      // 한 번만
+      vi.advanceTimersByTime(SETTLE * 3);
+      expect(said, mode).toHaveLength(1);
+      // 움직였다 제자리로 돌아오면(같은 글)·그 자리 추정이 그대로인 카메라 알림이면 쓰지 않는다
+      cam(r, [0, 0, 0]);
+      cam(r, [30, 0, 0]);
+      vi.advanceTimersByTime(SETTLE);
+      cam(r, [30, 0, 0]);
+      vi.advanceTimersByTime(SETTLE);
+      expect(said, mode).toHaveLength(1);
+    }
+  });
+
+  it('Tab으로 돌리는 중 카메라가 움직여 돌리기가 끝나면 가라앉은 뒤 그 자리 첫 후보 글(「n/m」 없음) — 다음 Tab은 새로 돌린다', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    const said = watch(r);
+    at(r, 102, 103);
+    expect(tab(r)).toBe('모서리에 2/2: X 2 mm, Y 0 mm, Z 0 mm');
+    // 같은 화면 자리 아래가 그대로인 카메라 움직임(휠 꼴): 다음 그림에 다시 구해 돌리기가 끝난다(125차)
+    cam(r, [0, 0, 0]);
+    expect(r.tip()).toBe('끝점');
+    expect(said).toEqual([]);
+    vi.advanceTimersByTime(SETTLE);
+    expect(said).toEqual(['끝점: X 0 mm, Y 0 mm, Z 0 mm']);
+    expect(tab(r)).toBe('모서리에 2/2: X 2 mm, Y 0 mm, Z 0 mm');
+  });
+
+  it('그리기 방식으로 음영 가림이 바뀌거나(112차 길)·그 추정을 낸 묶음이 숨거나(110차 길)·단면이 바뀌면 가라앉은 뒤 새 자리 글 — 같은 계열 안 바꾸기·다른 묶음 숨김은 쓰지 않고, 다시 보이기는 표식도 앞 추정이라 쓰지 않는다', () => {
+    // 112차 장면: 면 f(z 10)가 그 밑 모서리 b를 가린다. 커서 (140.3, 100.2)는 음영 계열이면 면 위, 와이어프레임·X-ray면 b의 끝점 (40, 0, 0)
+    const r = rig({ units: 'mm', meshes: [quad('f', 20, -20, 80, 20, 10)], lines: [lines('b', [[40, 0, 0, 60, 0, 0]]), lines('a', [[-60, 0, 0, -30, 0, 0]])] });
+    r.tool.setMode('tape');
+    const said = watch(r);
+    expect(at(r, 140.3, 100.2)).toMatch(/^면에: /);
+    r.setRenderMode('shadedEdges');
+    r.overlay.paintNow();
+    vi.advanceTimersByTime(SETTLE);
+    expect(said).toEqual([]);
+    r.setRenderMode('wireframe');
+    r.overlay.paintNow();
+    expect(r.tip()).toBe('끝점');
+    expect(said).toEqual([]);
+    vi.advanceTimersByTime(SETTLE);
+    expect(said).toEqual(['끝점: X 40 mm, Y 0 mm, Z 0 mm']);
+    // 다른 묶음 숨김은 그대로, 그 끝점을 낸 묶음을 숨기면 다음 그림에 다시 구해 면 위
+    r.hide('a');
+    r.overlay.paintNow();
+    vi.advanceTimersByTime(SETTLE);
+    expect(said).toHaveLength(1);
+    r.hide('b');
+    r.overlay.paintNow();
+    vi.advanceTimersByTime(SETTLE);
+    expect(said).toHaveLength(2);
+    expect(said[1]).toMatch(/^면에: /);
+    // 다시 보이면 표식도 앞 추정(110차 남은 한계) — 알림 칸도 표식과 같은 글로 둔다
+    r.hide('b', true);
+    r.overlay.paintNow();
+    vi.advanceTimersByTime(SETTLE);
+    expect(r.tip()).toBe('면에');
+    expect(said).toHaveLength(2);
+    // 단면이 바뀌면 그 자리에서 다시 구한다(110차 길)
+    r.sectionChanged();
+    r.overlay.paintNow();
+    expect(r.tip()).toBe('끝점');
+    vi.advanceTimersByTime(SETTLE);
+    expect(said).toEqual(['끝점: X 40 mm, Y 0 mm, Z 0 mm', said[1], '끝점: X 40 mm, Y 0 mm, Z 0 mm']);
+  });
+
+  it('키 길(옮기기·Tab·Enter)은 그대로 — 기다리는 동안 키가 새 글을 쓰면 가라앉은 뒤 다시 쓰지 않는다', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    const said = watch(r);
+    at(r, 102, 103);
+    cam(r, [30, 0, 0]);
+    expect(at(r, 102, 103)).toBe('모서리에: X 32 mm, Y 0 mm, Z 0 mm');
+    vi.advanceTimersByTime(SETTLE);
+    cam(r, [0, 0, 0]);
+    expect(tab(r)).toBe('모서리에 2/2: X 2 mm, Y 0 mm, Z 0 mm');
+    vi.advanceTimersByTime(SETTLE);
+    cam(r, [30, 0, 0]);
+    expect(r.tool.keyPlace(false)).toBe('시작점을 찍었습니다. 모서리에: X 32 mm, Y 0 mm, Z 0 mm');
+    vi.advanceTimersByTime(SETTLE);
+    expect(said).toEqual([]);
+  });
+
+  it('코어 가상 커서가 꺼졌으면(측정값 칸으로 초점 — 표식은 남김)·마우스 커서·알림 칸을 거뒀으면(keyWatch(null))·도구를 바꾸면 쓰지 않는다', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    const said = watch(r);
+    at(r, 102, 103);
+    off(r, true);
+    cam(r, [30, 0, 0]);
+    expect(r.tip()).toBe('모서리에');
+    vi.advanceTimersByTime(SETTLE);
+    // 기다리는 중 꺼져도
+    at(r, 102, 103);
+    cam(r, [0, 0, 0]);
+    off(r, false);
+    vi.advanceTimersByTime(SETTLE);
+    // 마우스 커서(툴팁 알림 그대로 — 이 길 밖)
+    r.move(102, 103);
+    cam(r, [30, 0, 0]);
+    vi.advanceTimersByTime(SETTLE);
+    expect(said).toEqual([]);
+    // 알림 칸을 거두면(고르기 도구·끔 — keypick.ts) 쓰지 않는다
+    at(r, 102, 103);
+    r.tool.keyWatch?.(null);
+    cam(r, [0, 0, 0]);
+    vi.advanceTimersByTime(SETTLE);
+    expect(said).toEqual([]);
+    // 도구를 바꾸면 기다리던 것도 버린다
+    r.tool.keyWatch?.((t) => void said.push(t));
+    at(r, 102, 103);
+    cam(r, [30, 0, 0]);
+    r.tool.setMode('protractor');
+    vi.advanceTimersByTime(SETTLE);
+    expect(said).toEqual([]);
   });
 });

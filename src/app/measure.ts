@@ -26,6 +26,8 @@
  *   돌리고 알림 글(툴팁 글 — 이름 뒤 "2/4" — 과 좌표)을 돌려주며, 화살표로 옮기면 버리고, Enter는 보인 후보를 찍고, 돌리는 중 Esc는 돌리기만 풀고 그 자리 첫 후보 글을 돌려준다.
  * Shift+Tab 앞의 Shift(126차): Shift 누름이 방향·각도기 평면을 잠갔어도 그 같은 누름 동안 다른 키·누르기·4화소 넘는 이동·찍기 없이 Shift+Tab이 오면
  *   그 잠금을 걸기 전 상태(돌리던 차례·목록 포함)로 되돌리고 앞 후보로 돌린다(마우스·가상 커서, 걸기 전 그 자리 후보가 둘 이상일 때만 — unShift). 그 누름은 뗄 때까지 다시 잠그지 않는다.
+ * 키 밖의 변화(127차): 가상 커서가 켜진 동안 카메라(휠·보기 키·장면 탭 움직임)·그리기 방식 가림·숨김(sweep)·단면이 커서 자리 추정을 다시 구하게 하면, 그 변화가 KEY_SETTLE_MS 동안
+ *   더 오지 않은 뒤 한 번 지금 자리 글을 keypick.ts 알림 칸에 넘긴다(keyWatch — 처음 변화 때 들은 글과 같으면 넘기지 않고, 그사이 키 길이 글을 쓰면 버린다).
  * 정밀 조준(터치): 한 손가락을 끌기 시작 거리 안에서 AIM_HOLD_MS 동안 누르고 있으면 손가락 위 AIM_OFFSET_PX에 십자선을 띄우고,
  *   끌면 궤도 대신 십자선이 따라가며 마우스처럼 추정·고무줄·툴팁을 보인다. 떼면 십자선 자리에 점을 찍는다.
  *   그동안의 움직임은 캔버스 부모의 캡처 단계에서 막아 코어가 돌리지 않게 한다(떼기는 코어에 넘겨 끌기 상태를 끝낸다).
@@ -1053,6 +1055,13 @@ export const KEY_MEASURE_TEXT = {
 } as const;
 
 /**
+ * 127차: 키 밖의 변화(카메라 움직임 등)가 가라앉았다고 보는 시간(ms) — 그동안 더 오지 않으면 가상 커서 자리 글을 한 번 알린다(keyWatch).
+ * 코어에 공개 카메라 멈춤 알림이 없어(멈춘 그림의 다시 구하기는 코어 안, onMeasureHoverChange는 코어 측정 모드 몫) 앱 보기 기록이 카메라 멈춤을 보는 미룸
+ * (app.ts onCamera — HISTORY_SETTLE_MS 350 + 30)과 같은 때로 둔다(history.ts는 첫 화면 조각이라 가져오지 않는다 — 시험이 맞춰 본다)
+ */
+export const KEY_SETTLE_MS = 380;
+
+/**
  * 상태 줄 안내. touch면 키 설명 대신 길게 누르기(정밀 조준)를 알린다.
  * edgeStart: 줄자 시작점이 모서리 위(끝점·중간점이 아닌 곳)라 길이를 치면 안내점 대신 나란한 안내선을 둔다.
  * guide: 안내 두기를 켰다(누르기로 안내점·안내선을 둔다)
@@ -1170,6 +1179,13 @@ export class MeasureTool {
   private shiftUndo: ShiftUndo | null = null;
   /** 126차: 이 Shift 누름을 Shift+Tab 되돌리기에 썼다 — 뗄 때까지 같은 누름(키 되풀이·포인터 이동의 shiftKey)으로 다시 잠그지 않는다 */
   private shiftUsed = false;
+  /**
+   * 127차: 키 밖의 변화 뒤 가상 커서 자리 글을 알릴 곳(keypick.ts keyWatch — 알림 칸), 처음 변화 때 그 자리 글(들은 글 — 가라앉은 뒤 글과 견준다)과
+   * 가라앉기를 기다리는 타이머(변화마다 다시 건다)
+   */
+  private keySay: ((text: string) => void) | null = null;
+  private keyBase: string | null = null;
+  private keyTimer: ReturnType<typeof setTimeout> | null = null;
   private dragging = false;
   private presses = new Map<number, Press>();
   private cancelTap = false;
@@ -1352,6 +1368,8 @@ export class MeasureTool {
     const offSection = viewer.onSectionChange?.(() => {
       this.parallelRef = null;
       if (!this.modeValue) return;
+      // 127차: 켜진 가상 커서 자리 글은 가라앉은 뒤 한 번(다시 구하기 전 — 들은 글을 둔다)
+      this.keyStale();
       this.lastLockable = this.lastLockSrc = null;
       this.centers = [];
       this.forgetTracks(false);
@@ -1365,6 +1383,8 @@ export class MeasureTool {
         if (!this.modeValue) return;
         // 휠 확대 등으로 보기가 바뀌면 같은 커서 자리에서 다시 추정한다(끄는 중에는 숨긴다)
         if (this.cursor && this.cursor.type !== 'touch') this.hoverDirty = true;
+        // 127차: 가상 커서 자리 글은 움직이는 동안 쓰지 않고 멈춰 가라앉은 뒤 한 번(카메라 알림마다 미룸을 다시 건다)
+        this.keyStale();
         this.overlay.invalidate();
       }),
     );
@@ -2380,11 +2400,17 @@ export class MeasureTool {
     this.hoverDirty = true;
     const snap = this.freshHover();
     this.overlay.invalidate();
+    // 127차: 키 길이 새 글을 쓴다 — 기다리던 키 밖의 변화 알림은 버린다
+    this.keyQuiet();
     return this.keyText(snap);
   }
 
-  /** 가상 커서를 껐다: keep이 아니면 커서 표식·툴팁을 거둔다(keep — 초점이 측정값 칸 등으로 가 그 칸에 친 길이의 방향으로 쓴다). 거두면 Tab 돌리기도 버린다(125차) */
+  /**
+   * 가상 커서를 껐다: keep이 아니면 커서 표식·툴팁을 거둔다(keep — 초점이 측정값 칸 등으로 가 그 칸에 친 길이의 방향으로 쓴다). 거두면 Tab 돌리기도 버린다(125차).
+   * 127차: 기다리던 키 밖의 변화 알림은 keep이어도 버린다(코어 커서가 꺼짐)
+   */
   keyEnd(keep: boolean): void {
+    this.keyQuiet();
     if (keep || this.cursor?.type !== 'keyboard') return;
     this.cursor = null;
     this.cycle = this.cycleOff = this.shiftUndo = null;
@@ -2401,9 +2427,12 @@ export class MeasureTool {
    */
   keyCycle(e: KeyboardEvent): string | null {
     if (!this.modeValue || this.cursor?.type !== 'keyboard') return null;
-    if (e.key === 'Tab') return this.cycleKey(e, true) ? this.keyText(this.hover, true) : null;
-    if (e.key !== 'Escape' || e.type !== 'keydown' || e.ctrlKey || e.metaKey || e.altKey || !this.cycleEsc(e)) return null;
-    return this.keyText(this.freshHover());
+    let t: string | null = null;
+    if (e.key === 'Tab') t = this.cycleKey(e, true) ? this.keyText(this.hover, true) : null;
+    else if (e.key === 'Escape' && e.type === 'keydown' && !e.ctrlKey && !e.metaKey && !e.altKey && this.cycleEsc(e)) t = this.keyText(this.freshHover());
+    // 127차: 받았으면 키 길이 새 글을 쓴다 — 기다리던 키 밖의 변화 알림은 버린다
+    if (t !== null) this.keyQuiet();
+    return t;
   }
 
   /** Enter: 가상 커서 자리에 누르기와 같이 점을 찍고(shift = 각도기 평면 고정) 알림 글 — 시작점·중심·기준 방향, 다 쟀으면 결과 줄, 못 찍었으면 그 글 */
@@ -2415,6 +2444,8 @@ export class MeasureTool {
     const n = this.pts.length;
     const before = this.resultValue;
     this.place(c.x, c.y, 'keyboard', shift);
+    // 127차: 키 길이 새 글을 쓴다 — 기다리던 키 밖의 변화 알림은 버린다
+    this.keyQuiet();
     const r = this.resultValue;
     if (r && r !== before) {
       const scene = this.opts.getScene();
@@ -2444,6 +2475,42 @@ export class MeasureTool {
     const tip = joinTip(cycled ? this.tipLabel(snap) : snapTipLabel(snap), value);
     const at = `X ${len(p[0])}, Y ${len(p[1])}, Z ${len(p[2])}`;
     return tip ? `${tr(tip)}: ${at}` : at;
+  }
+
+  /**
+   * 127차: 가상 커서 자리 글을 키 밖의 변화 뒤 알릴 곳(keypick.ts가 줄자·각도기 방식으로 켤 때 알림 칸 쓰기를 주고, 고르기·끔이면 null).
+   * 카메라·그리기 방식 가림·숨김(sweep)·단면이 켜진 가상 커서 자리 추정을 다시 구하게 하면, 그 변화가 KEY_SETTLE_MS 동안 더 오지 않은 뒤 한 번
+   * 지금 자리 글(keyText — 돌리기는 다시 구하면 끝나 첫 후보 글)을 넘긴다. 처음 변화 때 자리 글(들은 글)과 같으면 넘기지 않고, 그사이 키 길(옮기기·Tab·Esc·Enter·끄기)이 글을 쓰면 버린다
+   */
+  keyWatch(say: ((text: string) => void) | null): void {
+    this.keySay = say;
+    if (!say) this.keyQuiet();
+  }
+
+  /** 127차: 키 밖의 변화가 켜진 가상 커서 자리 추정을 다시 구하게 한다(다시 구하기 전에 부른다) — 처음이면 지금 자리 글을 두고 가라앉기 타이머를 다시 건다 */
+  private keyStale(): void {
+    if (!this.keySay || this.cursor?.type !== 'keyboard' || !this.viewer.keyboardCursor) return;
+    this.keyBase ??= this.keyText(this.hover, !!this.cycle);
+    if (this.keyTimer !== null) clearTimeout(this.keyTimer);
+    this.keyTimer = setTimeout(() => this.keySettle(), KEY_SETTLE_MS);
+  }
+
+  /** 127차: 가라앉았다 — 지금 자리 글이 처음 변화 때 글과 다르면 한 번 알린다(코어 커서가 꺼졌거나 알림 칸을 거뒀으면 알리지 않는다) */
+  private keySettle(): void {
+    const base = this.keyBase;
+    const say = this.keySay;
+    this.keyTimer = null;
+    let t: string | null = null;
+    if (this.modeValue && say && this.cursor?.type === 'keyboard' && this.viewer.keyboardCursor) t = this.keyText(this.freshHover(), !!this.cycle);
+    // 지금 자리를 맞추며 든 변화(sweep)도 이 글에 담겼다
+    this.keyQuiet();
+    if (t !== null && t !== base) say?.(t);
+  }
+
+  /** 127차: 기다리던 키 밖의 변화 알림을 버린다(키 길이 새 글을 썼다·커서를 껐다·도구를 바꿨다·알림 칸을 거뒀다) */
+  private keyQuiet(): void {
+    if (this.keyTimer !== null) clearTimeout(this.keyTimer);
+    this.keyTimer = this.keyBase = null;
   }
 
   /** 도구 켜기·바꾸기·끄기(null). 진행 중 점과 결과는 지운다 */
@@ -2866,6 +2933,8 @@ export class MeasureTool {
     const centers = this.centers.some(gc);
     if (centers) this.centers = this.centers.filter((c) => !gc(c));
     if (!occl && !ref && !tracks && !centers && !this.gone(this.hover)) return false;
+    // 127차: 켜진 가상 커서 자리 글은 가라앉은 뒤 한 번(키 길 안의 sweep이면 그 키 길이 버린다)
+    this.keyStale();
     this.rehover(false);
     if (tracks) this.refreshHint();
     return true;
@@ -3316,6 +3385,7 @@ export class MeasureTool {
     this.cursor = null;
     this.cycle = this.cycleOff = this.shiftUndo = null;
     this.shiftUsed = false;
+    this.keyQuiet();
     this.dragging = false;
     this.presses.clear();
     this.cancelTap = false;

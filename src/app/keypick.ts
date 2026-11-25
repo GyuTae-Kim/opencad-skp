@@ -5,6 +5,8 @@
  *   Enter는 커서 자리에 측정 도구의 붙잡기로 점 찍기, Esc는 측정 도구가 지울 것이 먼저이고 없으면 커서 끄기(NC 56·57차와 같은 키).
  *   코어는 측정 모드 없이 고르기 모드(후보 돌리기 없음)로 켜고 알림의 커서 자리만 측정 도구(KeyMeasureHost)에 넘긴다 — 알림 글은 측정 도구가 만든다.
  *   125차: 켠 동안 Tab·Shift+Tab은 측정 도구가 커서 자리에 겹친 스냅 후보(둘 이상일 때만)를 돌리고(keyCycle — 124차 마우스 Tab과 같은 규칙), 돌리는 중 Esc는 돌리기만 푼다.
+ *   127차: 키 밖의 변화(카메라·그리기 방식·숨김·단면 — 장면 탭 포함)로 커서 자리 추정이 바뀌면 측정 도구가 그 변화가 가라앉은 뒤 한 번 새 자리 글을 이 알림 칸에 쓴다(keyWatch).
+ *   고르기 도구 가상 커서는 코어 알림 그대로(코어는 카메라 멈춤·장면 길 뒤 알리지 않고 다시 구한다).
  * - 3D 보기에 초점이 있을 때 화살표로 가상 커서를 켜고 옮기며, Tab·Shift+Tab으로 커서 자리에 겹친 면·모서리(앞 면 뒤의 것까지 — 코어 pickCandidates 차례)를 돌리고
  *   Enter로 고른다. 둘째 이후 후보는 onPick의 e.cycle로 오고 앱은 펼친 단계 규칙을 건너뛰어 그것을 그대로 고른다(doc.ts selectionForPick).
  * - 후보 고르기 선택(PICK_CYCLE)은 앱 onPick 선택과 같다(앱은 반투명 너머·면만 고르기를 쓰지 않는다).
@@ -174,6 +176,11 @@ export interface KeyMeasureHost {
    * 받았으면 알림 글(기본 동작은 측정 도구가 막는다), 아니면 null(Tab은 초점 이동, Esc는 예전 차례)
    */
   keyCycle(e: KeyboardEvent): string | null;
+  /**
+   * 127차: 키 밖의 변화(카메라·그리기 방식·숨김·단면) 뒤 가라앉은 커서 자리 글을 넘길 곳(줄자·각도기 방식으로 켤 때 알림 칸 쓰기, 고르기·끔이면 null).
+   * 측정 도구가 정한 때(변화가 가라앉은 뒤 한 번, 들은 글과 다를 때만)에 부른다 — 없는 측정 도구는 키 때만 알린다
+   */
+  keyWatch?(say: ((text: string) => void) | null): void;
 }
 
 /** 59차 측정 도구를 가진 앱(app.ts App — 측정 도구 조각을 받기 전에는 measureTool null) */
@@ -287,6 +294,11 @@ export class KeyPick {
 
   private apply(): void {
     const cv = this.v.canvas;
+    // 127차: 줄자·각도기면 키 밖의 변화 뒤 가라앉은 커서 자리 글을 측정 도구가 이 알림 칸에 쓰게 하고(코어 커서가 켜졌을 때만), 아니면 거둔다
+    const say = (t: string): void => {
+      if (this.v.keyboardCursor) this.live.textContent = t;
+    };
+    this.app.measureTool?.keyWatch?.(this.mode && this.mode !== 'pick' ? say : null);
     if (!this.mode) {
       this.v.setKeyboardSnap(false);
       cv.removeAttribute('aria-keyshortcuts');
