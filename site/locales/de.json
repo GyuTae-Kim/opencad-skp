@@ -1135,6 +1135,7 @@
   "줄자·각도기의 가상 커서를 켠 동안: 커서 옮기기(Shift와 함께면 크게 — 그동안 방향 잠금은 Shift)": "Solange der virtuelle Cursor von Maßband oder Winkelmesser an ist: Cursor bewegen (mit Shift in größeren Schritten — die Richtung sperrt dann Shift)",
   "줄자·각도기의 가상 커서를 켠 동안: 찍은 점·결과를 먼저 지우고, 없으면 커서 끄기": "Solange der virtuelle Cursor von Maßband oder Winkelmesser an ist: zuerst gesetzte Punkte und das Ergebnis löschen, danach den Cursor ausschalten",
   "줄자·각도기 마우스 스냅: 커서 자리에 겹친 스냅 후보가 둘 이상이면 다음·앞 후보(누르면 그 후보를 찍고, Esc는 돌리기만 풀기 — 그 밖에는 초점 이동)": "Maus-Fang von Maßband und Winkelmesser: liegen unter dem Cursor zwei oder mehr Fangkandidaten übereinander, den nächsten bzw. vorherigen Kandidaten zeigen (Klick setzt diesen Kandidaten, Esc beendet nur das Durchschalten — sonst Fokuswechsel)",
+  "줄자·각도기의 가상 커서를 켠 동안: 커서 자리에 겹친 스냅 후보가 둘 이상이면 다음·앞 후보(Enter는 그 후보를 찍고, Esc는 돌리기만 풀기 — 그 밖에는 초점 이동)": "Solange der virtuelle Cursor von Maßband oder Winkelmesser an ist: liegen am Cursor zwei oder mehr Fangkandidaten übereinander, den nächsten bzw. vorherigen Kandidaten zeigen (Enter setzt diesen Kandidaten, Esc beendet nur das Durchschalten — sonst Fokuswechsel)",
   "파일을 끝까지 읽지 못했습니다": "Die Datei konnte nicht bis zum Ende gelesen werden",
   "모서리 번호가 표 밖입니다": "Eine Kantennummer liegt außerhalb der Tabelle",
   "표를 비운 정의를 다시 삼각화하려 했습니다": "Es wurde versucht, eine Definition mit bereits geleerten Tabellen zu triangulieren",
