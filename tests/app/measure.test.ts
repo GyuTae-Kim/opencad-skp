@@ -62,7 +62,10 @@ import {
   GUIDE_DELETE_KEY_HINT,
   GUIDE_DELETE_TEXT,
   GUIDE_KIND_NAMES,
+  cycleTipLabel,
 } from '../../src/app/measure';
+import { KEY_SNAP_MESSAGES, formatKeySnapMessage } from 'opencad-viewer3d/keysnap';
+import { translate } from '../../site/i18n.mjs';
 import { AXIS_COLORS, AXIS_LABELS, SNAP_COLORS, SNAP_LABELS, TRACK_ALIGN_LABEL, TRACK_AXIS_LABELS, TRACK_PAIR_LABELS } from '../../src/app/snap';
 import { contrastRatio } from '../../src/app/linecontrast';
 import { TRACK_DWELL_MS } from 'opencad-viewer3d/track';
@@ -4713,5 +4716,162 @@ describe('측정 도구: 키보드 점 찍기(59차 — 가상 커서 자리, ke
     expect(r.tool.keyPlace(false)).toBe('찍을 점이 없습니다');
     r.tool.setMode(null);
     expect(r.tool.keyHover(102, 103)).toBe('');
+  });
+});
+
+describe('측정 도구: 마우스 미리 보기에서 Tab으로 겹친 스냅 후보 돌리기(124차 — 코어 0.116.0 tabCycle과 같은 규칙)', () => {
+  /** 측정 도구에 넘긴 키(앱 창 capture → keypick.ts → handleKey): [받았는지, 기본 동작을 막았는지] */
+  const press = (r: Rig, key: string, o: KeyboardEventInit & { target?: EventTarget } = {}): [boolean, boolean] => {
+    const { target, ...init } = o;
+    const e = new KeyboardEvent('keydown', { key, cancelable: true, ...init });
+    if (target) Object.defineProperty(e, 'target', { value: target });
+    const took = r.tool.handleKey(e);
+    r.overlay.paintNow();
+    return [took, e.defaultPrevented];
+  };
+  // 모서리(z 0) 밑에 면(z −1): 커서 (102, 108)은 두 선분에서 8화소 넘게 떨어져 커서 고르기는 면, 둘레 고르기가 모서리를 찾는다
+  const UNDER = (): Pick<Scene3d, 'meshes' | 'lines' | 'units'> => ({ ...EDGES(), meshes: [quad('q', -50, -50, 150, 100, -1)] });
+
+  it('차례·수 글은 코어 가상 커서 차례 틀(keysnap order — 한글이 없어 사전에 넣지 않는다)과 같은 꼴: 이름(지금 화면 언어) 뒤에 i+1/n', () => {
+    expect(cycleTipLabel('끝점', 1, 4)).toBe(formatKeySnapMessage(KEY_SNAP_MESSAGES.order, ['끝점', 2, 4]));
+    expect(cycleTipLabel('끝점', 1, 4)).toBe('끝점 2/4');
+    expect(cycleTipLabel('모서리에', 0, 3, (t) => translate(t, 'en'))).toBe('On edge 1/3');
+  });
+
+  it('겹친 자리: Tab·Shift+Tab이 다음·앞 후보(끝에서 처음으로)를 보이고 기본 동작을 막는다 — 툴팁 이름 뒤에 차례·수, 마커도 그 후보', () => {
+    const r = rig(UNDER());
+    r.tool.setMode('tape');
+    r.move(102, 108);
+    expect(r.tip()).toBe('끝점');
+    expect(r.tool.snapCandidatesAt(102, 108).map((s) => s.label)).toEqual(['끝점', '모서리에', '면에']);
+    expect(press(r, 'Tab')).toEqual([true, true]);
+    expect(r.tip()).toBe('모서리에 2/3');
+    expect(r.q('.measure-snap-endpoint')).toBeNull();
+    expect(press(r, 'Tab')).toEqual([true, true]);
+    expect(r.tip()).toBe('면에 3/3');
+    expect(press(r, 'Tab')).toEqual([true, true]);
+    expect(r.tip()).toBe('끝점 1/3');
+    expect(r.q('.measure-snap-endpoint')).not.toBeNull();
+    expect(press(r, 'Tab', { shiftKey: true })).toEqual([true, true]);
+    expect(r.tip()).toBe('면에 3/3');
+    expect(press(r, 'Tab', { shiftKey: true })).toEqual([true, true]);
+    expect(r.tip()).toBe('모서리에 2/3');
+    // 화면 언어 글: 이름은 옮기고 차례·수는 그대로(한글이 남지 않는다)
+    const en = rig(UNDER(), TOP, DEFAULT_UNITS, { localize: (t) => translate(t, 'en') });
+    en.tool.setMode('tape');
+    en.move(102, 108);
+    expect(en.tip()).toBe('Endpoint');
+    expect(press(en, 'Tab')).toEqual([true, true]);
+    expect(en.tip()).toBe('On edge 2/3');
+  });
+
+  it('후보가 하나·없으면, 가상 커서가 켜졌으면, 커서가 3D 보기를 떠났으면, 캔버스가 아닌 대상·Ctrl·막힌 키면 Tab을 받지 않는다(초점 이동 — 키보드 덫 없음)', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    // 모서리 위 한 점(끝점·중간점에서 먼 곳)·빈 곳: 후보 하나
+    r.move(130, 103);
+    expect(r.tool.snapCandidatesAt(130, 103).map((s) => s.label)).toEqual(['모서리에']);
+    expect(press(r, 'Tab')).toEqual([false, false]);
+    expect(r.tip()).toBe('모서리에');
+    r.move(30, 170);
+    expect(r.tool.snapCandidatesAt(30, 170)).toHaveLength(1);
+    expect(press(r, 'Tab')).toEqual([false, false]);
+    // 겹친 자리(끝점·모서리 위)라도
+    r.move(102, 103);
+    expect(r.tool.snapCandidatesAt(102, 103).map((s) => s.label)).toEqual(['끝점', '모서리에']);
+    const v = r.viewer as { keyboardCursor?: unknown };
+    v.keyboardCursor = { x: 102, y: 103 };
+    expect(press(r, 'Tab')).toEqual([false, false]);
+    v.keyboardCursor = null;
+    const btn = document.createElement('button');
+    document.body.append(btn);
+    expect(press(r, 'Tab', { target: btn })).toEqual([false, false]);
+    expect(press(r, 'Tab', { ctrlKey: true })).toEqual([false, false]);
+    const blocked = new KeyboardEvent('keydown', { key: 'Tab', cancelable: true });
+    blocked.preventDefault();
+    expect(r.tool.handleKey(blocked)).toBe(false);
+    expect(r.tip()).toBe('끝점');
+    // 캔버스가 받은 Tab은 받는다
+    expect(press(r, 'Tab', { target: r.canvas })).toEqual([true, true]);
+    expect(r.tip()).toBe('모서리에 2/2');
+    // 떠나면 돌리기도 버리고 Tab은 초점 이동
+    r.ptr('pointerleave', 102, 103);
+    r.overlay.paintNow();
+    expect(r.tip()).toBeNull();
+    expect(press(r, 'Tab')).toEqual([false, false]);
+  });
+
+  it('포인터가 돌린 자리에서 4화소 안이면 돌린 후보를 두고, 넘으면 돌리기를 버린다(새 자리 첫 후보)', () => {
+    const r = rig(UNDER());
+    r.tool.setMode('tape');
+    r.move(102, 108);
+    press(r, 'Tab');
+    expect(r.tip()).toBe('모서리에 2/3');
+    // 3화소: 그 자리 미리 보기라면 끝점이지만 돌린 후보 그대로
+    r.move(105, 108);
+    expect(r.tip()).toBe('모서리에 2/3');
+    // 5화소: 버리고 그 자리 첫 후보(끝점은 추정 반경 밖)
+    r.move(107, 108);
+    expect(r.tip()).toBe('모서리에');
+    r.move(102, 108);
+    expect(r.tip()).toBe('끝점');
+    // 끌기(궤도)도 버린다
+    press(r, 'Tab');
+    expect(r.tip()).toBe('모서리에 2/3');
+    r.ptr('pointerdown', 102, 108, { buttons: 1 });
+    r.ptr('pointermove', 120, 108, { buttons: 1 });
+    r.ptr('pointerup', 120, 108);
+    r.move(102, 108);
+    expect(r.tip()).toBe('끝점');
+  });
+
+  it('누르면 보인 후보를 찍는다(줄자 끝점 — 시작점에서의 길이도 그 후보까지)', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    r.click(198, 101);
+    expect(r.tool.pointCount).toBe(1);
+    r.move(102, 103);
+    expect(r.tip()).toBe('끝점 · 100 mm');
+    expect(press(r, 'Tab')).toEqual([true, true]);
+    expect(r.tip()).toBe('모서리에 2/2 · 98 mm');
+    expect(r.lives.at(-1)).toBeCloseTo(98, 6);
+    r.click(102, 103);
+    const res = r.results.at(-1);
+    expect(res?.kind).toBe('tape');
+    if (res?.kind !== 'tape') return;
+    expect(res.a).toEqual([100, 0, 0]);
+    expect(res.b[0]).toBeCloseTo(2, 6);
+    expect(res.distance).toBeCloseTo(98, 6);
+    // 찍으면 돌리기는 끝난다(그 자리 첫 후보)
+    r.move(102, 103);
+    expect(r.tip()).toBe('끝점');
+  });
+
+  it('Esc: 돌리는 중이면 돌리기만 풀고 첫 후보로(결과 지우기보다 먼저), 푼 자리 Tab은 초점 이동 — 4화소 넘게 움직였다 오면 다시 받는다', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    r.click(102, 103);
+    r.click(198, 101);
+    expect(r.tool.result).not.toBeNull();
+    r.move(102, 103);
+    press(r, 'Tab');
+    expect(r.tip()).toBe('모서리에 2/2');
+    expect(press(r, 'Escape')).toEqual([true, true]);
+    expect(r.tip()).toBe('끝점');
+    expect(r.tool.result).not.toBeNull();
+    // 푼 자리: Tab은 받지 않는다
+    expect(press(r, 'Tab')).toEqual([false, false]);
+    r.move(104, 103);
+    expect(press(r, 'Tab')).toEqual([false, false]);
+    // 4화소 넘게 움직였다 돌아오면 다시 돌린다
+    r.move(107, 103);
+    r.move(102, 103);
+    expect(press(r, 'Tab')).toEqual([true, true]);
+    expect(r.tip()).toBe('모서리에 2/2');
+    // 돌리지 않을 때 Esc는 예전 차례(결과 지우기)
+    expect(press(r, 'Escape')).toEqual([true, true]);
+    expect(r.tool.result).not.toBeNull();
+    expect(press(r, 'Escape')).toEqual([true, true]);
+    expect(r.tool.result).toBeNull();
   });
 });

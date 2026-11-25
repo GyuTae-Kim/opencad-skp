@@ -41,6 +41,8 @@ export const SHORTCUTS: readonly ShortcutGroup[] = [
       { keys: ['Enter'], label: '줄자·각도기를 켠 동안 3D 보기에 초점이 있을 때: 가상 커서 켜기, 켠 동안은 커서 자리에 점 찍기' },
       { keys: ['←', '→', '↑', '↓'], label: '줄자·각도기의 가상 커서를 켠 동안: 커서 옮기기(Shift와 함께면 크게 — 그동안 방향 잠금은 Shift)' },
       { keys: ['Esc'], label: '줄자·각도기의 가상 커서를 켠 동안: 찍은 점·결과를 먼저 지우고, 없으면 커서 끄기' },
+      // 124차: 줄자·각도기 마우스 스냅의 겹친 후보 돌리기(measure.ts cycleKey — 코어 0.116.0 tabCycle과 같은 규칙)
+      { keys: ['Tab', 'Shift+Tab'], label: '줄자·각도기 마우스 스냅: 커서 자리에 겹친 스냅 후보가 둘 이상이면 다음·앞 후보(누르면 그 후보를 찍고, Esc는 돌리기만 풀기 — 그 밖에는 초점 이동)' },
       { keys: ['Ctrl', 'Option'], label: '줄자·각도기: 안내 두기 켜고 끄기(그 키만 눌렀다 떼기, Mac은 Option) — 줄자 둘째·각도기 셋째 누르기로 안내점·안내선' },
       { keys: ['Delete', 'Backspace'], label: '눌러서 고른 안내점·안내선 지우기(여럿이면 함께, 줄자·각도기를 끈 동안에도)' },
       {
