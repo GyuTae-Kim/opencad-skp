@@ -5523,3 +5523,134 @@ describe('측정 도구: 다시 보이기·다른 개체 숨김 뒤 커서 자�
     expect(t.q('.measure-snap-endpoint')).not.toBeNull();
   });
 });
+
+describe('측정 도구: 가상 커서에서 측정 도구가 받은 키(Shift 잠금·풂, Esc 지우기)로 커서 자리 추정이 바뀌면 가라앉은 뒤 알림 칸에 한 번(130차 — 127차 남은 한계, 127차 길)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // 둘레 고르기 시간 한도가 기계 부하로 갈리지 않게 시계를 멈춘다(126차 꼴)
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+  });
+  const SETTLE = HISTORY_SETTLE_MS + 30;
+  /** 측정 도구에 알림 칸 쓰기를 준다(keypick.ts apply 꼴) — 알린 글 */
+  const watch = (r: Rig): string[] => {
+    const said: string[] = [];
+    r.tool.keyWatch?.((t) => void said.push(t));
+    return said;
+  };
+  /** 코어 가상 커서를 그 자리에 켜거나 옮긴다(코어 keyboardCursor + keypick.ts sayMeasure의 keyHover — Shift+화살표 50화소도 이 길) — 그 자리 알림 글 */
+  const at = (r: Rig, x: number, y: number): string => {
+    (r.viewer as { keyboardCursor?: unknown }).keyboardCursor = { x, y };
+    const t = r.tool.keyHover(x, y);
+    r.overlay.paintNow();
+    return t;
+  };
+  /** 가상 커서의 Shift+Tab(keypick.ts가 keyCycle로 넘긴다 — 대상 3D 보기) — 알림 글(받지 않으면 null) */
+  const backTab = (r: Rig): string | null => {
+    const e = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, cancelable: true });
+    Object.defineProperty(e, 'target', { value: r.canvas });
+    const t = r.tool.keyCycle(e);
+    r.overlay.paintNow();
+    return t;
+  };
+
+  it('Shift+화살표로 옮긴 뒤 Shift를 떼어 잠금이 풀리면 표식·툴팁이 그 자리 새 추정이 되고 가라앉은 뒤 알림 칸에 한 번 — 점을 지우는 Esc도 같다', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    const said = watch(r);
+    at(r, 198, 101);
+    r.tool.keyPlace(false);
+    expect(at(r, 102, 103)).toBe('끝점 · 100 mm: X 0 mm, Y 0 mm, Z 0 mm');
+    // Shift(keypick.ts가 측정 도구 handleKey로 넘긴다)가 빨강 축을 잠그고, 곧 Shift+화살표로 옮긴다 — 키 길이 새 글을 써 Shift 누름의 기다림은 버린다
+    expect(r.key('Shift')).toBe(true);
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'x', source: 'shift' });
+    // 잠근 선 위: 커서 둘레 끝점 (0, 50, 0)을 빨강 축에 내린 자리
+    const locked = at(r, 102, 53);
+    expect(locked).not.toMatch(/Y 50 mm/);
+    vi.advanceTimersByTime(SETTLE);
+    expect(said).toEqual([]);
+    // Shift 떼기(앱 창 keyup capture가 측정 도구 handleKey로 바로 넘긴다): 잠금이 풀려 다음 그림의 표식·툴팁은 그 자리 끝점
+    expect(r.key('Shift', 'keyup')).toBe(true);
+    expect(r.tool.inferenceLock).toBeNull();
+    r.overlay.paintNow();
+    expect(r.tip()).toMatch(/^끝점 · /);
+    expect(r.q('.measure-snap-endpoint')).not.toBeNull();
+    vi.advanceTimersByTime(SETTLE - 1);
+    expect(said).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(said).toHaveLength(1);
+    expect(said[0]).toMatch(/^끝점 · [^:]+: X 0 mm, Y 50 mm, Z 0 mm$/);
+    // Esc(돌리는 중이 아니면 keypick.ts가 측정 도구 handleKey로 넘긴다): 시작점을 지워 길이 없는 그 자리 글
+    expect(r.key('Escape')).toBe(true);
+    expect(r.tool.pointCount).toBe(0);
+    r.overlay.paintNow();
+    expect(r.tip()).toBe('끝점');
+    vi.advanceTimersByTime(SETTLE);
+    expect(said).toEqual([said[0], '끝점: X 0 mm, Y 50 mm, Z 0 mm']);
+    // 한 번만
+    vi.advanceTimersByTime(SETTLE * 3);
+    expect(said).toHaveLength(2);
+  });
+
+  it('그대로인 길: Shift 누름 뒤 Shift+Tab(126차 되돌리기)은 그 키 글만, 각도기 중심 전 Shift 평면 고정·풂은 같은 글이라 쓰지 않음, 코어 커서가 꺼졌거나 마우스 커서면 쓰지 않음', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    const said = watch(r);
+    at(r, 198, 101);
+    r.tool.keyPlace(false);
+    at(r, 102, 103);
+    r.key('Shift');
+    r.overlay.paintNow();
+    expect(backTab(r)).toBe('모서리에 2/2 · 98 mm: X 2 mm, Y 0 mm, Z 0 mm');
+    expect(r.tool.inferenceLock).toBeNull();
+    vi.advanceTimersByTime(SETTLE);
+    r.key('Shift', 'keyup');
+    r.overlay.paintNow();
+    vi.advanceTimersByTime(SETTLE);
+    expect(said).toEqual([]);
+    // 각도기 중심 전: Shift는 커서 밑 평면 고정(방향 잠금 없음) — 떼어 풀어도 그 자리 글이 같아 쓰지 않는다
+    const p = rig(EDGES());
+    p.tool.setMode('protractor');
+    const ps = watch(p);
+    expect(at(p, 102, 103)).toBe('끝점: X 0 mm, Y 0 mm, Z 0 mm');
+    p.key('Shift');
+    p.overlay.paintNow();
+    p.key('Shift', 'keyup');
+    p.overlay.paintNow();
+    vi.advanceTimersByTime(SETTLE);
+    expect(ps).toEqual([]);
+    // 코어 커서가 꺼졌으면(측정값 칸으로 초점 — 표식은 남김) 잠금·풂에도 쓰지 않는다
+    const k = rig(EDGES());
+    k.tool.setMode('tape');
+    const ks = watch(k);
+    at(k, 198, 101);
+    k.tool.keyPlace(false);
+    at(k, 102, 103);
+    (k.viewer as { keyboardCursor?: unknown }).keyboardCursor = null;
+    k.tool.keyEnd(true);
+    k.key('Shift');
+    expect(k.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'x', source: 'shift' });
+    k.overlay.paintNow();
+    k.key('Shift', 'keyup');
+    k.overlay.paintNow();
+    vi.advanceTimersByTime(SETTLE);
+    expect(ks).toEqual([]);
+    // 마우스 커서(툴팁 알림 그대로 — 이 길 밖): 잠근 채 옮긴 뒤 떼어도 쓰지 않는다
+    const m = rig(EDGES());
+    m.tool.setMode('tape');
+    const ms = watch(m);
+    m.click(198, 101);
+    m.move(102, 103);
+    m.key('Shift');
+    expect(m.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'x', source: 'shift' });
+    m.move(102, 53, { shift: true });
+    m.key('Shift', 'keyup');
+    m.overlay.paintNow();
+    expect(m.tip()).toMatch(/^끝점 · /);
+    vi.advanceTimersByTime(SETTLE);
+    expect(ms).toEqual([]);
+  });
+});
