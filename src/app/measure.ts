@@ -1277,6 +1277,8 @@ export class MeasureTool {
   private redoBtn: HTMLButtonElement | null = null;
   /** 측정 띠의 잠글 방향 고르기 줄(mountLockMenu로 붙인다 — 22차 한 손 잠금) */
   private lockMenu: HTMLDivElement | null = null;
+  /** 손가락·펜으로 고른 탭의 click을 기다리는 동안(141차 — 그때까지 줄을 닫지 않는다, 1초 뒤 닫기) */
+  private lockTap: ReturnType<typeof setTimeout> | null = null;
   /** 고른 것 카드의 고른 안내 지우기·숨기기 단추(mountGuideDelete로 붙인다 — 23차 고르기 도구로 고른 안내, 숨기기는 25차), 손가락 기기의 모두 고르기(29차) */
   private guideDelBtn: HTMLButtonElement | null = null;
   private guideHideBtn: HTMLButtonElement | null = null;
@@ -1601,18 +1603,31 @@ export class MeasureTool {
       this.lockTo(c);
       this.toggleLockMenu(false);
     };
+    // 141차: 손가락·펜 탭은 뗀 뒤 그 자리 요소에 click이 온다 — 누를 때 줄을 숨기면 그 click이 밑에 펼친 최근 측정 기록(줄 복사·모두 복사·
+    // 기록 지우기)을 누른다. 잠금은 누를 때 그대로 두고, 줄은 그 탭의 click(없으면 취소·1초 뒤)에서 닫는다. 둘째 손가락은 click이 오지 않아 곧 닫는다
+    const release = (): void => {
+      if (this.lockTap === null) return;
+      clearTimeout(this.lockTap);
+      this.lockTap = null;
+      this.toggleLockMenu(false);
+    };
     m.addEventListener('pointerdown', (e) => {
       if (e.pointerType === 'mouse') return;
       const b = (e.target as Element | null)?.closest?.('[data-lock]') ?? null;
       if (!b) return;
       e.preventDefault();
       pressedAt = now();
+      if (e.isPrimary !== false) {
+        if (this.lockTap !== null) clearTimeout(this.lockTap);
+        this.lockTap = setTimeout(release, 1000);
+      }
       pick(b);
     });
     m.addEventListener('click', (e) => {
-      if (now() - pressedAt < 1000) return;
+      if (now() - pressedAt < 1000) return release();
       pick((e.target as Element | null)?.closest?.('[data-lock]') ?? null);
     });
+    m.addEventListener('pointercancel', release);
     this.lockMenu = m;
     host.append(m);
   }
@@ -1631,6 +1646,8 @@ export class MeasureTool {
     if (!m) return false;
     const choices = this.lockChoices;
     const open = (on ?? m.hidden) && choices.length > 0 && !this.lockValue;
+    // 141차: 손가락·펜으로 고른 탭의 click이 오기 전에는 닫지 않는다(줄이 그 click을 받는다)
+    if (!open && this.lockTap !== null) return false;
     if (open) {
       m.replaceChildren(
         ...choices.map((c) => {
@@ -3072,6 +3089,8 @@ export class MeasureTool {
     this.syncPainter();
     this.undoBtn?.remove();
     this.redoBtn?.remove();
+    if (this.lockTap !== null) clearTimeout(this.lockTap);
+    this.lockTap = null;
     this.lockMenu?.remove();
     this.barFit?.disconnect();
     this.barFit = null;
