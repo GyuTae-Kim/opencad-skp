@@ -117,9 +117,11 @@ export function inList(t: EventTarget | null): boolean {
 /**
  * 157차: 키 대상이 메뉴(role=menu — 공용 언어 고르기 메뉴 등) 안이고 그 메뉴가 스스로 쓰는 키(Esc·화살표·Home·End·PageUp·PageDown)인지.
  * 그러면 앱 창 키(app.ts onKey — 캡처)는 손대지 않는다: 언어 메뉴는 앱 목록 판정(inList)에 들지 않아, 걷는 중이면 화살표가 걷기·Esc가 걷기 끝,
- * 줄자·각도기를 켠 동안이면 화살표가 방향 잠금·Esc가 측정 지우기로 먼저 가 메뉴가 움직이지도 닫히지도 않았다. 글자 키·Tab·Enter는 그대로 앱 것
+ * 줄자·각도기를 켠 동안이면 화살표가 방향 잠금·Esc가 측정 지우기로 먼저 가 메뉴가 움직이지도 닫히지도 않았다. 글자 키·Tab·Enter는 그대로 앱 것.
+ * 158차: 대화 상자(role=dialog — 그림 저장 창) 안의 Esc(APG: 닫기)도 그 창 것 — inList는 Esc를 거르지 않아 줄자·각도기를 켠 동안 Esc가 창을 닫지 않고
+ * 잰 결과를 지웠다(걷기 끝·고른 안내 풀기도 같음). 창 안의 이동 키는 메뉴가 아니므로 그대로(크기 radio는 이미 inList)
  */
 export function menuKey(t: EventTarget | null, key: string): boolean {
   const el = t as Element | null;
-  return (key === 'Escape' || LIST_KEYS.has(key)) && !!el && typeof el.closest === 'function' && !!el.closest('[role="menu"]');
+  return !!el && typeof el.closest === 'function' && (key === 'Escape' ? !!el.closest('[role="menu"],[role="dialog"]') : LIST_KEYS.has(key) && !!el.closest('[role="menu"]'));
 }
