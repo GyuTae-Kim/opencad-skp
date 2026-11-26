@@ -48,6 +48,7 @@ export const barShown = (bar: HTMLElement, band: MediaQueryList | null): boolean
 
 /**
  * 알림 상자에 복사 결과를 띄워도 되는지(154차): 비었거나 안내(info)거나 앞 복사 결과(own)일 때만. 알림 상자는 한 칸이라
- * 떠 있는 경고·오류(해석 경고·열기 오류 등 — 다시 열기 전에는 다시 볼 수 없는 글)를 덮어쓰면 잃으므로 두고, 그때 복사 결과는 띄우지 않는다
+ * 떠 있는 경고·오류(해석 경고·열기 오류 등 — 다시 열기 전에는 다시 볼 수 없는 글)를 덮어쓰면 잃으므로 두고, 그때 복사 결과는 띄우지 않는다.
+ * 159차: 앱 showNotice가 모든 가벼운 글(복사 결과·2점 투시 거절·문맥 잃음·되찾는 중 안내)에 이 판정을 쓴다 — own은 「떠 있는 글이 가벼운 글」
  */
 export const noticeFree = (box: HTMLElement, kind: string | undefined, own: boolean): boolean => !!box.hidden || own || kind === 'info';
