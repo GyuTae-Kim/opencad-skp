@@ -1953,6 +1953,8 @@ export class MeasureTool {
    * 안내가 바뀐 뒤: 이 파일 열쇠로 기억하고, 덧그림을 붙이거나 떼고(도구를 끈 동안에도 안내가 보이면 그린다), 되돌리기·다시 하기 단추를 맞추고 앱에 알린다.
    * 134차: 초점이 있던 되돌리기·다시 하기 단추가 숨으면(다 되돌림·다 다시 함 — 누르기·그 단추에서 친 Ctrl·⌘+Z) 앱이 칸 줄을 맞춘 뒤 옆 단추로 옮긴다
    * (숨은 초점은 브라우저가 문서로 옮겨 제자리를 잃는다 — focus fixup). 다 되돌리면 다시 할 것이, 다 다시 하면 되돌릴 것이 있어 옆 단추는 남는다(vcbInBand)
+   * 136차: 초점이 있던 고른 것 카드의 숨기기·지우기가 앱이 카드를 숨겨 함께 숨으면(누르기·그 단추에서 친 Delete·Esc·Ctrl+Z로 고른 안내가 없어짐) 3D 보기로 옮긴다
+   * (카드 ✕와 같은 곳 — 44차. 키보드로 안내를 고르는 곳도 3D 보기: 가상 커서 Enter·Ctrl+A). 카드가 남거나 초점이 단추에 없으면 그대로
    */
   private notifyGuides(): void {
     const a = document.activeElement;
@@ -1964,6 +1966,8 @@ export class MeasureTool {
     this.opts.onGuides?.();
     const o = a === this.undoBtn ? this.redoBtn : a === this.redoBtn ? this.undoBtn : null;
     if (o && (a as HTMLElement).hidden && o.isConnected && !o.closest('[hidden]')) o.focus({ preventScroll: true });
+    const c = this.viewer.canvas;
+    if (a && (a === this.guideHideBtn || a === this.guideDelBtn) && (!a.isConnected || a.closest('[hidden]')) && c.isConnected && !c.closest('[hidden]')) c.focus({ preventScroll: true });
   }
 
   /** 덧그림 붙이기·떼기: 도구를 켰거나, 끈 동안에도 보이는 안내가 있으면 그린다 */

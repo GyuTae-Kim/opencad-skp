@@ -1763,9 +1763,9 @@ describe('고르기 도구로 안내 고르고 지우기(줄자·각도기를 �
     const handled = r.tool.selectKey(e);
     return { handled, prevented: e.defaultPrevented };
   };
-  /** 줄자로 (30, 0)에 안내점, (70, 30)을 지나 X축과 나란한 안내선(모서리 위에서 시작)을 두고 도구를 끈다 */
-  const withGuides = (): Rig => {
-    const r = rig({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 100, 0, 0], [-60, -80, 0, -60, 80, 0]])] });
+  /** 줄자로 (30, 0)에 안내점, (70, 30)을 지나 X축과 나란한 안내선(모서리 위에서 시작)을 두고 도구를 끈다(extra — 측정 도구 옵션, 136차) */
+  const withGuides = (extra: Partial<MeasureToolOptions> = {}): Rig => {
+    const r = rig({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 100, 0, 0], [-60, -80, 0, -60, 80, 0]])] }, TOP, DEFAULT_UNITS, extra);
     r.tool.setMode('tape');
     r.click(102, 101);
     r.move(160, 101);
@@ -1898,6 +1898,66 @@ describe('고르기 도구로 안내 고르고 지우기(줄자·각도기를 �
     expect(acts.querySelectorAll('.sel-del')).toHaveLength(1);
     expect(acts.querySelectorAll('.sel-all')).toHaveLength(1);
     expect([...acts.children]).toEqual([more, all, hide, b, close]);
+  });
+
+  it('136차: 키보드로 누른 고른 것 카드의 숨기기·지우기(그 단추에서 친 Delete·Esc도)로 고른 안내가 없어져 카드가 숨으면 초점을 3D 보기로(문서로 빠지지 않게) — 카드가 남거나 초점이 단추에 없으면 그대로', () => {
+    // 앱 카드 꼴(refreshSelBar): 고른 안내가 있으면 보이고 없으면 숨는다 — 앱은 onGuides(refreshStatus)마다 맞춘다
+    const card = document.createElement('div');
+    const acts = document.createElement('div');
+    acts.append(document.createElement('button'));
+    card.append(acts);
+    card.hidden = true;
+    document.body.append(card);
+    let tool: MeasureTool | null = null;
+    const r = withGuides({ onGuides: () => void (card.hidden = !tool?.guidePickText(false)) });
+    tool = r.tool;
+    // 코어 캔버스처럼 초점을 받는다(코어 뷰어는 tabIndex 0)
+    r.canvas.tabIndex = 0;
+    r.tool.mountGuideDelete(acts);
+    const hide = acts.querySelector<HTMLButtonElement>('.sel-hide')!;
+    const del = acts.querySelector<HTMLButtonElement>('.sel-del')!;
+    // 숨기기: 카드가 숨으면 3D 보기로(jsdom은 focus fixup을 하지 않아 고치기 전에는 숨은 단추에 남는다)
+    expect(r.tool.pickGuide(132.6, 101.9, 'mouse')).toBe('point');
+    expect(card.hidden).toBe(false);
+    hide.focus();
+    hide.click();
+    expect([r.tool.hiddenGuideCount, card.hidden]).toEqual([1, true]);
+    expect(document.activeElement).toBe(r.canvas);
+    // 지우기도 같다
+    expect(r.tool.pickGuide(40.4, 72.2, 'mouse')).toBe('line');
+    expect(card.hidden).toBe(false);
+    del.focus();
+    del.click();
+    expect([r.tool.guideLines.length, card.hidden]).toEqual([0, true]);
+    expect(document.activeElement).toBe(r.canvas);
+    // 그 단추에 초점을 둔 채 친 Delete(단추는 글 칸이 아니라 고르기 도구 키)도 같다
+    expect(r.tool.undo()).toBe(true);
+    expect(r.tool.pickGuide(40.4, 72.2, 'mouse')).toBe('line');
+    del.focus();
+    expect(press(r, 'Delete', del)).toEqual({ handled: true, prevented: true });
+    expect([r.tool.guideLines.length, card.hidden]).toEqual([0, true]);
+    expect(document.activeElement).toBe(r.canvas);
+    // 카드가 남으면(모두 고르기로 고른 것이 늘어남) 그대로
+    expect(r.tool.undo()).toBe(true);
+    expect(r.tool.undo()).toBe(true);
+    expect([r.tool.hiddenGuideCount, r.tool.guideLines.length]).toEqual([0, 1]);
+    expect(r.tool.pickGuide(132.6, 101.9, 'mouse')).toBe('point');
+    hide.focus();
+    expect(r.tool.selectAllGuides()).toBe(true);
+    expect([r.tool.selectedGuideCount, card.hidden]).toEqual([2, false]);
+    expect(document.activeElement).toBe(hide);
+    // 그 단추에서 친 Esc(풀기)로 카드가 숨어도 3D 보기로
+    expect(press(r, 'Escape', hide)).toEqual({ handled: true, prevented: true });
+    expect([r.tool.selectedGuideCount, card.hidden]).toEqual([0, true]);
+    expect(document.activeElement).toBe(r.canvas);
+    // 초점이 단추에 없으면(글 칸) 옮기지 않는다
+    const input = document.createElement('input');
+    document.body.append(input);
+    expect(r.tool.pickGuide(132.6, 101.9, 'mouse')).toBe('point');
+    input.focus();
+    hide.click();
+    expect([r.tool.hiddenGuideCount, card.hidden]).toEqual([1, true]);
+    expect(document.activeElement).toBe(input);
   });
 });
 
