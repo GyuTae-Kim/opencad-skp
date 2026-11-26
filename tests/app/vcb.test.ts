@@ -160,6 +160,59 @@ describe('측정값 칸(Vcb)', () => {
     expect(returnFocus).toHaveBeenCalledTimes(1);
   });
 
+  it('잘못된 값이면 칸이 aria-invalid="true"(빈 글은 ARIA에서 false라 화면 읽기에 전해지지 않음 — 161차), 글을 고치거나 Esc·넣음·종류 바꿈·숨김이면 뺀다', () => {
+    const { vcb, onSubmit } = make(vi.fn((value: number, _kind: VcbKind): string | null => (value === 0 ? '0이 아닌 길이를 치세요' : null)));
+    const msg = vcb.el.querySelector<HTMLElement>('.vcb-msg')!;
+    const invalid = (): string | null => vcb.input.getAttribute('aria-invalid');
+    // 설명은 칸 옆 알림 글(role=status)
+    expect(vcb.input.getAttribute('aria-describedby')).toBe(msg.id);
+    expect(msg.getAttribute('role')).toBe('status');
+    expect(invalid()).toBeNull();
+    // 못 읽는 글
+    vcb.begin('x');
+    vcb.submit();
+    expect(msg.textContent).toBe('길이를 읽지 못했습니다');
+    expect(invalid()).toBe('true');
+    // 글을 고치면 알림과 함께 뺀다
+    vcb.input.dispatchEvent(new Event('input'));
+    expect(invalid()).toBeNull();
+    // 보이던 지금 값 그대로(친 것이 없음)
+    vcb.setLive('100 mm');
+    vcb.input.value = '100 mm';
+    vcb.submit();
+    expect(msg.textContent).toBe('길이를 치세요');
+    expect(invalid()).toBe('true');
+    // Esc는 입력을 그만두고 뺀다
+    key(vcb.input, 'Escape');
+    expect(invalid()).toBeNull();
+    // 읽었지만 넣지 못한 까닭(측정 도구가 돌려준 글)
+    vcb.begin('0');
+    vcb.submit();
+    expect(onSubmit).toHaveBeenLastCalledWith(0, 'length');
+    expect(msg.textContent).toBe('0이 아닌 길이를 치세요');
+    expect(invalid()).toBe('true');
+    // 넣으면 없음
+    vcb.begin('2');
+    vcb.input.value = '250';
+    vcb.submit();
+    expect(onSubmit).toHaveBeenLastCalledWith(250, 'length');
+    expect(invalid()).toBeNull();
+    // 각도기로 바꾸면 뺀다, 각도도 같은 규칙
+    vcb.begin('x');
+    vcb.submit();
+    expect(invalid()).toBe('true');
+    vcb.setKind('angle');
+    expect(invalid()).toBeNull();
+    vcb.begin('x');
+    vcb.submit();
+    expect(msg.textContent).toBe('각도를 읽지 못했습니다');
+    expect(invalid()).toBe('true');
+    // 칸이 숨으면(측정 끝) 뺀다
+    vcb.show(false);
+    expect(invalid()).toBeNull();
+    expect(msg.hidden).toBe(true);
+  });
+
   it('보이던 지금 길이를 그대로 넣으면(칸만 누르고 Enter) 넣지 않고 알린다', () => {
     const { vcb, onSubmit } = make();
     vcb.setLive('~ 3728 mm');

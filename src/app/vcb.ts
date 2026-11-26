@@ -270,6 +270,8 @@ export class Vcb {
   private setMessage(text: string | null): void {
     this.msg.textContent = text ?? '';
     this.msg.hidden = !text;
-    this.input.toggleAttribute('aria-invalid', !!text);
+    // 값이 있어야 한다: 빈 글("")은 ARIA에서 false라 화면 읽기에 잘못된 값으로 전해지지 않았다(161차 — 빨간 테두리는 [aria-invalid] 고르기라 그대로)
+    if (text) this.input.setAttribute('aria-invalid', 'true');
+    else this.input.removeAttribute('aria-invalid');
   }
 }
