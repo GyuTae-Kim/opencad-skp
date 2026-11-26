@@ -718,6 +718,7 @@
   "읽은 시간": "Time spent reading",
   "임의": "Arbitrary",
   "입력 칸에 글을 넣는 동안에는 바로 가기가 듣지 않습니다. 3D 보기: 왼쪽 끌기 돌리기 · 오른쪽 끌기 옮기기 · 휠 확대.": "Shortcuts do not work while you type in an input field. 3D view: left-drag to orbit · right-drag to pan · wheel to zoom.",
+  "입력 칸에 글을 넣는 동안에는 바로 가기가 듣지 않습니다. 3D 보기: 한 손가락 끌기 돌리기 · 두 손가락 옮기기·확대.": "Shortcuts do not work while you type in an input field. 3D view: one-finger drag to rotate · two fingers to pan and zoom.",
   "입체 그룹": "Solid Group",
   "입체 컴포넌트": "Solid Component",
   "있음(지도 위치에 맞춤)": "Yes (placed on a map location)",
