@@ -53,8 +53,11 @@ export { TREE_HIDDEN, TREE_MORE } from './scene';
 export type * from './meta';
 export { cameraMeta, pagesMeta, unitsFor } from './scene-meta';
 
-/** 읽는 가장 낮은 판(SketchUp 4). 3은 MFC 스키마가 달라 읽지 않는다 */
-export const SKP_MIN_SUPPORTED_MAJOR = 4;
+/**
+ * 읽는 가장 낮은 판(SketchUp 3 — #62부터). 해석기는 판 번호가 아니라 MFC 스키마로 가른다(mfcmodel.ts readHead — 3보다 옛 스키마·모르는 스키마는
+ * meta.unsupported), 앱의 "아직 못 읽는 판" 안내(app/edition.ts unsupportedVersion)는 이 판보다 낮은 판 번호를 함께 본다
+ */
+export const SKP_MIN_SUPPORTED_MAJOR = 3;
 /** 2021+ 형식(VFF + ZIP)이 시작하는 판. 이보다 낮으면 MFC 객체 직렬화다 */
 export const SKP_ZIP_MIN_MAJOR = 21;
 /**
