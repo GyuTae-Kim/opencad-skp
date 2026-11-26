@@ -219,6 +219,43 @@ describe('누른 버튼이 막히면 초점 옮기기(148차 — 브라우저 fo
   });
 });
 
+describe('누른 버튼이 숨으면 초점 옮기기(150차 — 148차 막힘에 숨김을 더함, 측정 조각 notifyGuides의 숨김 판정과 같게)', () => {
+  it('초점을 쥔 버튼이 숨거나 숨은 곳 안이면 처음 쓸 수 있는 곳으로(숨은 곳은 건너뜀) — 측정값 칸 안내 수 ✕·휴지통, 측정 띠 「기록 지우기」', () => {
+    const box = html('<div class="log"><button class="clear">기록 지우기</button></div><button class="undo">되돌리기</button><canvas tabindex="0"></canvas><button class="other">다른 것</button>');
+    const log = box.querySelector<HTMLElement>('.log')!;
+    const clear = box.querySelector<HTMLButtonElement>('.clear')!;
+    const undo = box.querySelector<HTMLButtonElement>('.undo')!;
+    const canvas = box.querySelector<HTMLElement>('canvas')!;
+    const other = box.querySelector<HTMLButtonElement>('.other')!;
+    // 버튼 스스로 숨음(안내 수 ✕·휴지통 꼴 — 꺼지지는 않음) → 처음 쓸 수 있는 곳(반대 동작 되돌리기). jsdom은 focus fixup을 하지 않아 숨은 버튼에 초점이 남는다
+    clear.focus();
+    clear.hidden = true;
+    expect(document.activeElement).toBe(clear);
+    leaveDisabled(clear, undo, canvas);
+    expect(document.activeElement).toBe(undo);
+    // 숨은 곳 안(목록째 숨는 「기록 지우기」 꼴), 옮길 곳 하나도 숨었으면 건너뛰고 3D 보기
+    clear.hidden = false;
+    clear.focus();
+    log.hidden = true;
+    undo.hidden = true;
+    leaveDisabled(clear, undo, canvas);
+    expect(document.activeElement).toBe(canvas);
+    // 보이는 버튼이면 그대로, 초점이 다른 곳이면 숨어도 그대로
+    log.hidden = false;
+    clear.focus();
+    leaveDisabled(clear, canvas);
+    expect(document.activeElement).toBe(clear);
+    other.focus();
+    log.hidden = true;
+    leaveDisabled(clear, canvas);
+    expect(document.activeElement).toBe(other);
+    // 앱 원문: 「기록 지우기」는 지운 바로 뒤 3D 보기로(148차 「다시 재기」와 같은 띠), 측정값 칸에는 3D 보기를 넘긴다
+    const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
+    expect(app).toMatch(/this\.clearMeasureLog\(\);\n(?:\s*\/\/[^\n]*\n)*\s*leaveDisabled\(clear, this\.viewer\?\.canvas\);/);
+    expect(app).toMatch(/\n\s*view: \(\) => this\.viewer\?\.canvas,\n/);
+  });
+});
+
 describe('패널 크기 단계(44차 — WCAG 2.5.7 끌기 대신 누르기)', () => {
   it('지금보다 큰 첫 단계로, 가장 크면 가장 작은 단계로', () => {
     const steps = [...PANEL_WIDTH_STEPS];
