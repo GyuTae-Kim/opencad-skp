@@ -99,7 +99,7 @@ import {
 } from './doc';
 import { MAX_FILE_BYTES, SKP_ACCEPT, baseName, fmtCount, formatBytes, formatMs, rgbCss } from './format';
 import type { AnnotationMarks } from './dimmarks';
-import { VIEW_MENU, inList, isEditableTarget, isViewKey, keyAction } from './keys';
+import { VIEW_MENU, inList, isEditableTarget, isViewKey, keyAction, menuKey } from './keys';
 import type { LaunchRequest } from './launch';
 import {
   PANEL_WIDTH_DEFAULT,
@@ -3356,6 +3356,8 @@ export class SkpViewerApp implements PanelHost {
     }
     // 겹친 것 목록(57차)이 열려 있으면 Esc는 목록만 닫고 3D 보기로 돌아간다(고른 것을 지우지 않는다 — 목록에 초점이 가면 코어 가상 커서는 이미 꺼졌다)
     if (this.pickList?.escape(ev)) return;
+    // 157차: 그 밖의 메뉴(공용 언어 고르기 메뉴 — role=menu) 안의 Esc·이동 키는 그 메뉴 것(걷기·방향 잠금·측정 지우기로 가져가 메뉴가 움직이지도 닫히지도 않았다)
+    if (menuKey(ev.target, ev.key)) return;
     const v = this.viewer;
     const tool = this.measureTool;
     // 안내 되돌리기·다시 하기(Ctrl·⌘+Z, Ctrl+Y·Ctrl·⌘+Shift+Z — 도구를 끈 동안에도, 입력 칸은 브라우저 몫)
