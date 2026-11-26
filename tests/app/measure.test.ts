@@ -4693,6 +4693,67 @@ describe('고르기 도구로 안내 모두 고르기·모두 풀기(26차 — S
     }
   });
 
+  it('137차: 키보드로 누른 카드 「모두」·휴대폰 도구 막대 「모두 고르기」가 다 골라 숨거나 막히면 초점을 카드 ✕(모두 풀기)로 — 카드가 숨으면 3D 보기, 초점이 버튼에 없으면 그대로', async () => {
+    // 앱 카드 꼴(refreshSelBar — 136차 시험과 같다): 고른 안내가 있으면 보이고 없으면 숨는다. 맨 끝은 선택 해제 ✕
+    const card = document.createElement('div');
+    const acts = document.createElement('div');
+    const close = document.createElement('button');
+    acts.append(close);
+    card.append(acts);
+    card.hidden = true;
+    document.body.append(card);
+    let tool: MeasureTool | null = null;
+    const { r } = await setup({ onGuides: () => void (card.hidden = !tool?.guidePickText(true)) });
+    tool = r.tool;
+    // 코어 캔버스처럼 초점을 받는다(코어 뷰어는 tabIndex 0)
+    r.canvas.tabIndex = 0;
+    r.tool.mountGuideDelete(acts);
+    const all = acts.querySelector<HTMLButtonElement>('.sel-all')!;
+    // 휴대폰 도구 막대 꼴(보기 설정 단추 뒤 빈자리 앞 — jsdom은 배치가 없어 CSS가 숨기는 곳처럼 자리를 따지지 않고 보인다)
+    const bar = document.createElement('div');
+    const spacer = document.createElement('span');
+    bar.append(document.createElement('button'), spacer);
+    document.body.append(bar);
+    r.tool.mountToolbarSelectAll(spacer);
+    const tb = bar.querySelector<HTMLButtonElement>('.tb-selall')!;
+    expect([tb.hidden, tb.disabled]).toEqual([false, false]);
+    // 카드 「모두」: 다 골라 숨으면 같은 카드의 ✕로(jsdom은 focus fixup을 하지 않아 고치기 전에는 숨은 버튼에 남는다)
+    r.tool.pickGuide(121.3, 81.2, 'touch');
+    expect([r.tool.selectedGuideCount, card.hidden, all.hidden]).toEqual([1, false, false]);
+    all.focus();
+    all.click();
+    expect([r.tool.selectedGuideCount, card.hidden, all.hidden]).toEqual([5, false, true]);
+    expect(document.activeElement).toBe(close);
+    // 그 버튼에서 친 Ctrl+A(버튼은 글 칸이 아니라 고르기 도구 키)도 같다
+    r.tool.selectNone();
+    r.tool.pickGuide(121.3, 81.2, 'touch');
+    all.focus();
+    expect(press(r, { key: 'a', ctrlKey: true }, all)).toEqual([true, true]);
+    expect([r.tool.selectedGuideCount, all.hidden]).toEqual([5, true]);
+    expect(document.activeElement).toBe(close);
+    // 그 버튼에서 친 Esc(풀기)로 카드가 숨으면 3D 보기로(136차 숨기기·지우기와 같다)
+    r.tool.selectNone();
+    r.tool.pickGuide(121.3, 81.2, 'touch');
+    all.focus();
+    expect(press(r, { key: 'Escape' }, all)).toEqual([true, true]);
+    expect([r.tool.selectedGuideCount, card.hidden]).toEqual([0, true]);
+    expect(document.activeElement).toBe(r.canvas);
+    // 도구 막대 「모두 고르기」: 다 골라 막히면 이때 뜬 카드의 ✕로
+    tb.focus();
+    tb.click();
+    expect([r.tool.selectedGuideCount, card.hidden, tb.disabled]).toEqual([5, false, true]);
+    expect(document.activeElement).toBe(close);
+    // 초점이 버튼에 없으면(글 칸) 옮기지 않는다
+    r.tool.selectNone();
+    expect(tb.disabled).toBe(false);
+    const input = document.createElement('input');
+    document.body.append(input);
+    input.focus();
+    tb.click();
+    expect([r.tool.selectedGuideCount, tb.disabled]).toEqual([5, true]);
+    expect(document.activeElement).toBe(input);
+  });
+
   it('toolbarOneRow: 다음 줄로 감싼 자식이 있으면 거짓(높이가 다른 묶음·위로 붙인 단추·크기 없는 자식은 한 줄로 본다)', () => {
     const bar = document.createElement('div');
     const rects: [number, number][] = [];

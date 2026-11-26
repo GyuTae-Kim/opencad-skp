@@ -1955,6 +1955,8 @@ export class MeasureTool {
    * (숨은 초점은 브라우저가 문서로 옮겨 제자리를 잃는다 — focus fixup). 다 되돌리면 다시 할 것이, 다 다시 하면 되돌릴 것이 있어 옆 단추는 남는다(vcbInBand)
    * 136차: 초점이 있던 고른 것 카드의 숨기기·지우기가 앱이 카드를 숨겨 함께 숨으면(누르기·그 단추에서 친 Delete·Esc·Ctrl+Z로 고른 안내가 없어짐) 3D 보기로 옮긴다
    * (카드 ✕와 같은 곳 — 44차. 키보드로 안내를 고르는 곳도 3D 보기: 가상 커서 Enter·Ctrl+A). 카드가 남거나 초점이 단추에 없으면 그대로
+   * 137차: 초점이 있던 카드 「모두」가 다 골라 숨거나 휴대폰 도구 막대 「모두 고르기」가 막히면(누르기·그 단추에서 친 Ctrl+A) 카드가 보이는 동안은 카드 ✕(모두 풀기 — 반대 동작,
+   * 134차 되돌리기·다시 하기 꼴. 누르면 고른 것만 풂)로, 카드가 숨으면(그 단추에서 친 Esc·Delete) 3D 보기로
    */
   private notifyGuides(): void {
     const a = document.activeElement;
@@ -1966,8 +1968,12 @@ export class MeasureTool {
     this.opts.onGuides?.();
     const o = a === this.undoBtn ? this.redoBtn : a === this.redoBtn ? this.undoBtn : null;
     if (o && (a as HTMLElement).hidden && o.isConnected && !o.closest('[hidden]')) o.focus({ preventScroll: true });
+    // 카드 ✕는 지우기 다음(mountGuideDelete가 그 앞에 붙임) — 카드가 숨었으면 ✕도 숨은 곳 안이라 3D 보기
+    const x = this.guideDelBtn?.nextElementSibling as HTMLElement | null | undefined;
     const c = this.viewer.canvas;
-    if (a && (a === this.guideHideBtn || a === this.guideDelBtn) && (!a.isConnected || a.closest('[hidden]')) && c.isConnected && !c.closest('[hidden]')) c.focus({ preventScroll: true });
+    const t = x?.isConnected && !x.closest('[hidden]') ? x : c.isConnected && !c.closest('[hidden]') ? c : null;
+    if (t && a && (a === this.guideAllBtn || a === this.barAllBtn || a === this.guideHideBtn || a === this.guideDelBtn) && (!a.isConnected || a.closest('[hidden]') || (a as HTMLButtonElement).disabled))
+      t.focus({ preventScroll: true });
   }
 
   /** 덧그림 붙이기·떼기: 도구를 켰거나, 끈 동안에도 보이는 안내가 있으면 그린다 */
