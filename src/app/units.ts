@@ -324,11 +324,6 @@ export function parseAngle(text: string, decimalComma = false): number | null {
   return deg !== null && Number.isFinite(deg) && Math.abs(deg) < 1e9 ? sign * deg : null;
 }
 
-/** 측정값 칸이 숫자 자판(소수점만)으로 충분한지: 십진 미터계·인치·피트 소수 꼴. 건축·분수는 ' " / 가 필요하다 */
-export function decimalKeypadFits(d: UnitsDisplay = DEFAULT_UNITS): boolean {
-  return d.lengthFormat === 'decimal' || d.lengthFormat === 'engineering';
-}
-
 /** 이 언어가 소수점으로 쉼표를 쓰는지(독일어 등 — 측정값 칸이 1,5를 1.5로 읽는다) */
 export function usesDecimalComma(lang: string | null | undefined): boolean {
   try {

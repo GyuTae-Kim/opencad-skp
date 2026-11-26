@@ -5,15 +5,16 @@
  *   - 줄자: 시작점을 찍고 커서를 잴 방향(끝점·모서리·축 고정)으로 둔 채 숫자를 치면 이 칸에 들어가고, Enter로 시작점에서 그 길이에 안내점을 찍는다.
  *     시작점이 모서리 위(끝점·중간점이 아닌 곳)면 안내점 대신 그 모서리와 나란한 안내선을 커서 쪽으로 그 거리만큼 띄워 둔다.
  *   - 각도기: 중심과 기준 방향을 찍고 커서를 돌릴 쪽에 둔 채 각도(도, 경사 1:6)를 치면 중심을 지나 기준 방향에서 그만큼 돈 안내선을 둔다.
- *   - 다 잰 뒤 값을 치면 그 결과의 방향으로 넣는다(커서가 없는 손가락 기기는 이쪽 — 칸을 누르면 숫자 자판).
+ *   - 다 잰 뒤 값을 치면 그 결과의 방향으로 넣는다(커서가 없는 손가락 기기는 이쪽 — 반대쪽은 앞의 −로만 친다).
  *   안내는 보기 전용 표시(모형에 넣지 않음)이고 안내점은 끝점처럼, 안내선은 모서리처럼 붙으므로, "이 벽 모서리에서 900 mm 떨어진 곳"에서 다시 잴 수 있다.
  *   안내 수와 모두 지우기(✕), 고른 안내가 있으면 그 하나를 지우는 단추(휴지통 — 키보드는 Delete)도 이 칸에 둔다.
- * 길이는 모형 단위로 읽는다(units.ts parseLength — 단위를 붙여도 되고, 쉼표는 화면 언어를 따른다). 십진·공학 단위는 숫자 자판(inputmode decimal),
- * 건축·분수 인치는 ' " / 가 필요해 글 자판을 띄운다. 각도(parseAngle)는 숫자 자판. 휴대폰 자판이 화면을 확대하지 않게 손가락 기기의 글 크기는 16px(CSS).
+ * 길이는 모형 단위로 읽는다(units.ts parseLength — 단위를 붙여도 되고, 쉼표는 화면 언어를 따른다). 각도는 parseAngle(도·경사 1:6).
+ * 자판은 inputmode를 두지 않아 글 자판이다: 앞의 −(반대쪽)·경사의 :·단위 글자·' " / 를 받는데, 소수 자판(inputmode decimal)은 −를 약속하지 않고 :가 없다.
+ * 휴대폰 자판이 화면을 확대하지 않게 손가락 기기의 글 크기는 16px(CSS).
  * 칸 안의 Esc는 입력만 그만두고(측정 점은 그대로), Enter·Esc 뒤에는 부른 쪽이 정한 곳으로 초점을 돌려준다.
  */
 import { h, icon } from './dom';
-import { DEFAULT_UNITS, decimalKeypadFits, parseAngle, parseLength, usesDecimalComma, type UnitsDisplay } from './units';
+import { DEFAULT_UNITS, parseAngle, parseLength, usesDecimalComma, type UnitsDisplay } from './units';
 
 /** 칸이 받는 값: 줄자 길이 · 각도기 각도 */
 export type VcbKind = 'length' | 'angle';
@@ -63,7 +64,6 @@ export class Vcb {
       id,
       class: 'vcb-input',
       type: 'text',
-      inputmode: 'decimal',
       enterkeyhint: 'done',
       autocomplete: 'off',
       autocapitalize: 'off',
@@ -146,7 +146,7 @@ export class Vcb {
     return this.kindValue;
   }
 
-  /** 받는 값 바꾸기: 라벨·안내·자판을 바꾸고, 입력 중이던 글은 버린다 */
+  /** 받는 값 바꾸기: 라벨·안내를 바꾸고, 입력 중이던 글은 버린다 */
   setKind(kind: VcbKind): void {
     if (kind === this.kindValue) return;
     this.kindValue = kind;
@@ -155,21 +155,14 @@ export class Vcb {
     this.input.title = t.title;
     this.goBtn.title = t.go;
     this.goBtn.setAttribute('aria-label', t.go);
-    this.setKeypad();
     this.live = '';
     this.stopEditing();
     this.setMessage(null);
   }
 
-  /** 모형 단위(숫자 자판으로 충분한지 정한다) */
+  /** 모형 단위(단위 없이 친 길이를 이 단위로 읽는다) */
   setUnits(u: UnitsDisplay): void {
     this.units = u;
-    this.setKeypad();
-  }
-
-  /** 십진·공학 길이와 각도는 숫자 자판, 건축·분수 길이는 ' " / 가 필요해 글 자판 */
-  private setKeypad(): void {
-    this.input.inputMode = this.kindValue === 'angle' || decimalKeypadFits(this.units) ? 'decimal' : 'text';
   }
 
   /** 지금 값 글(입력 중이 아니면 칸에 보인다) */

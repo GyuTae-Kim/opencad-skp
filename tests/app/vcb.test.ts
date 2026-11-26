@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Vcb, vcbStartKey, type VcbKind } from '../../src/app/vcb';
-import { DEFAULT_UNITS, decimalKeypadFits, parseAngle, parseLength, usesDecimalComma, type UnitsDisplay } from '../../src/app/units';
+import { DEFAULT_UNITS, parseAngle, parseLength, usesDecimalComma, type UnitsDisplay } from '../../src/app/units';
 
 const ARCH: UnitsDisplay = { ...DEFAULT_UNITS, lengthUnit: 'inch', lengthFormat: 'architectural', lengthPrecision: 3 };
 const CM: UnitsDisplay = { ...DEFAULT_UNITS, lengthUnit: 'cm' };
@@ -60,12 +60,6 @@ describe('측정값 칸 글 읽기(parseLength → mm)', () => {
   it('못 읽는 글은 null', () => {
     for (const t of ['', ' ', 'abc', '.', '1/0', '12 xyz', '--3', '1..2', '1,500,5', '~']) expect(parseLength(t), t).toBeNull();
   });
-
-  it('숫자 자판(소수점만)으로 충분한 단위인지', () => {
-    expect(decimalKeypadFits(DEFAULT_UNITS)).toBe(true);
-    expect(decimalKeypadFits(ENG)).toBe(true);
-    expect(decimalKeypadFits(ARCH)).toBe(false);
-  });
 });
 
 describe('측정값 칸(Vcb)', () => {
@@ -94,7 +88,7 @@ describe('측정값 칸(Vcb)', () => {
     vcb.setUnits(CM);
     vcb.setLive('60 cm');
     expect(vcb.input.value).toBe('60 cm');
-    expect(vcb.input.inputMode).toBe('decimal');
+    expect(vcb.input.inputMode).toBe('');
     vcb.begin('9');
     expect(document.activeElement).toBe(vcb.input);
     expect(vcb.input.value).toBe('9');
@@ -107,6 +101,39 @@ describe('측정값 칸(Vcb)', () => {
     expect(returnFocus).toHaveBeenCalledTimes(1);
     expect(vcb.editing).toBe(false);
     expect(vcb.input.value).toBe('61 cm');
+  });
+
+  it('단위·종류와 상관없이 글 자판(inputmode 없음): 소수 자판에 없을 수 있는 앞의 −(반대쪽)·경사 1:6·단위 글자를 친다', () => {
+    const { vcb, onSubmit } = make();
+    for (const u of [DEFAULT_UNITS, CM, ENG, ARCH]) {
+      vcb.setUnits(u);
+      for (const kind of ['length', 'angle'] as const) {
+        vcb.setKind(kind);
+        expect(vcb.input.getAttribute('inputmode'), `${u.lengthFormat} ${u.lengthUnit} ${kind}`).toBeNull();
+        expect(vcb.input.inputMode).toBe('');
+      }
+    }
+    // 손가락 기기는 커서가 없어 다 잰 결과의 방향으로 넣으므로, 반대쪽은 앞의 −로만 친다
+    vcb.setUnits(DEFAULT_UNITS);
+    vcb.setKind('length');
+    vcb.begin('-');
+    vcb.input.value = '-300';
+    vcb.submit();
+    expect(onSubmit).toHaveBeenLastCalledWith(-300, 'length');
+    vcb.begin('1');
+    vcb.input.value = '1.2 m';
+    vcb.submit();
+    expect(onSubmit).toHaveBeenLastCalledWith(1200, 'length');
+    vcb.setKind('angle');
+    vcb.begin('-');
+    vcb.input.value = '-1:12';
+    vcb.submit();
+    expect(onSubmit.mock.lastCall?.[0]).toBeCloseTo((-Math.atan2(1, 12) * 180) / Math.PI, 12);
+    expect(onSubmit.mock.lastCall?.[1]).toBe('angle');
+    vcb.begin('1');
+    vcb.input.value = '1:6';
+    vcb.submit();
+    expect(onSubmit.mock.lastCall?.[0]).toBeCloseTo((Math.atan2(1, 6) * 180) / Math.PI, 12);
   });
 
   it('못 읽거나 넣지 못하면 알림(입력은 그대로), Esc는 입력만 그만둔다(창으로 보내지 않음)', () => {
@@ -168,10 +195,10 @@ describe('측정값 칸(Vcb)', () => {
     }
   });
 
-  it('건축·분수 단위는 글 자판, 안내점이 있으면 지우기 단추', () => {
+  it('건축·분수 단위도 같은 글 자판, 안내점이 있으면 지우기 단추', () => {
     const { vcb, onClearGuides } = make();
     vcb.setUnits(ARCH);
-    expect(vcb.input.inputMode).toBe('text');
+    expect(vcb.input.inputMode).toBe('');
     const clear = vcb.el.querySelector<HTMLButtonElement>('.vcb-clear')!;
     expect(clear.hidden).toBe(true);
     vcb.setGuides(3);
@@ -221,17 +248,17 @@ describe('측정값 칸(Vcb)', () => {
     expect(vcb.selectedShown).toBe(false);
   });
 
-  it('각도기: 라벨·안내가 각도로 바뀌고, 도·경사(1:6)를 읽어 넘긴다(숫자 자판은 그대로)', () => {
+  it('각도기: 라벨·안내가 각도로 바뀌고, 도·경사(1:6)를 읽어 넘긴다(글 자판 그대로)', () => {
     const { vcb, onSubmit } = make();
     vcb.setUnits(ARCH);
-    expect(vcb.input.inputMode).toBe('text');
+    expect(vcb.input.inputMode).toBe('');
     vcb.setLive('120 mm');
     vcb.setKind('angle');
     expect(vcb.kind).toBe('angle');
     expect(vcb.el.querySelector('.vcb-label')?.textContent).toBe('각도');
     expect(vcb.el.querySelector('.vcb-btn')?.getAttribute('aria-label')).toBe('각도 넣기');
-    // 건축 단위여도 각도는 숫자 자판, 앞 도구의 길이 글은 지운다
-    expect(vcb.input.inputMode).toBe('decimal');
+    // 각도도 글 자판(경사 1:6의 :·앞의 −), 앞 도구의 길이 글은 지운다
+    expect(vcb.input.inputMode).toBe('');
     expect(vcb.input.value).toBe('');
     vcb.setLive('45.0°');
     vcb.input.dispatchEvent(new Event('focus'));
@@ -248,10 +275,10 @@ describe('측정값 칸(Vcb)', () => {
     vcb.begin('x');
     vcb.submit();
     expect(vcb.el.querySelector<HTMLElement>('.vcb-msg')!.textContent).toBe('각도를 읽지 못했습니다');
-    // 줄자로 돌아오면 길이 칸(건축 단위는 글 자판)
+    // 줄자로 돌아오면 길이 칸(자판은 그대로 글 자판)
     vcb.setKind('length');
     expect(vcb.el.querySelector('.vcb-label')?.textContent).toBe('길이');
-    expect(vcb.input.inputMode).toBe('text');
+    expect(vcb.input.inputMode).toBe('');
     expect(vcb.el.querySelector<HTMLElement>('.vcb-msg')!.hidden).toBe(true);
   });
 });
