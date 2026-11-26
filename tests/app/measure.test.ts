@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IndexRange, RenderMode, Viewer3d } from 'opencad-viewer3d';
 import { buildBvh } from 'opencad-viewer3d/bvh';
@@ -5767,5 +5769,72 @@ describe('측정 도구: 가상 커서에서 안내 되돌리기·다시 하기(
     expect(m.tip()).toBe('모서리에');
     vi.advanceTimersByTime(SETTLE);
     expect(ms).toEqual([]);
+  });
+});
+
+describe('측정값 칸을 측정 띠 안에 보일지(132차 — 좁은 창의 마우스·키보드는 안내 글이 「길이를 치면」·「각도를 치면」을 말하는 동안에도 보여 친 숫자가 칸으로 간다)', () => {
+  beforeEach(() => {
+    // 둘레 고르기의 시간 예산이 느린 CI에서 먼저 끊기지 않게 시계를 멈춘다(터치 시험 꼴 — 이어 누르는 자리는 두 번 누르기 거리 밖)
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+  /** 안내 글이 길이·각도 치기를 말하는지 */
+  const saysType = (h: string | null | undefined): boolean => /(길이|각도)를 치면/.test(h ?? '');
+
+  it('마우스·키보드 기기: 줄자 시작점·각도기 기준 방향을 찍은 뒤(친 숫자가 칸으로 가는 차례)에도 띠 안에 보이고, 결과가 있으면 예전처럼 보인다', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    expect(saysType(r.hints.at(-1))).toBe(false);
+    r.click(102, 103);
+    expect(r.hints.at(-1)).toBe('줄자: 끝점을 누르세요 · 길이를 치면 안내점 · Esc 취소');
+    expect(r.tool.typing).toBe(true);
+    expect(r.tool.vcbInBand).toBe(true);
+    // 진행 중 점을 지우면 예전처럼 숨긴다(결과·안내·되돌릴 것 없음)
+    expect(r.key('Escape')).toBe(true);
+    expect(r.hints.at(-1)).toBe(TAPE_START_HINT);
+    expect([r.tool.typing, r.tool.vcbInBand]).toEqual([false, false]);
+    r.click(198, 101);
+    r.click(102, 103);
+    expect(r.results.at(-1)).toMatchObject({ kind: 'tape', distance: 100 });
+    expect([r.tool.typing, r.tool.vcbInBand, saysType(r.hints.at(-1))]).toEqual([false, true, false]);
+    // 각도기: 도구를 바꾸면 결과를 버린다 → 중심(치기 없음) → 기준 방향(이때부터 각도를 친다) → 결과
+    r.tool.setMode('protractor');
+    expect([r.tool.typing, r.tool.vcbInBand]).toEqual([false, false]);
+    r.click(101, 101);
+    expect(r.hints.at(-1)).toBe('각도기: 기준 방향의 점을 누르세요 · Esc 취소');
+    expect([r.tool.typing, r.tool.vcbInBand]).toEqual([false, false]);
+    r.click(197, 102);
+    expect(r.hints.at(-1)).toBe('각도기: 잴 방향의 점을 누르세요 · 각도를 치면 안내선 · Esc 취소');
+    expect([r.tool.typing, r.tool.vcbInBand]).toEqual([true, true]);
+    r.click(101, 52);
+    expect(r.results.at(-1)).toMatchObject({ kind: 'protractor' });
+    expect([r.tool.typing, r.tool.vcbInBand]).toEqual([false, true]);
+  });
+
+  it('손가락 기기: 시작점만 찍었을 때는 예전처럼 띠를 작게(커서가 없어 친 길이의 방향이 없다 — 안내도 치기를 말하지 않음), 결과·안내가 생기면 보인다', () => {
+    const r = rig(EDGES(), TOP, DEFAULT_UNITS, { touch: () => true });
+    r.tool.setMode('tape');
+    r.click(102, 103, { pointerType: 'touch' });
+    expect(r.tool.pointCount).toBe(1);
+    expect(r.hints.at(-1)).toBe('줄자: 끝점을 누르세요');
+    expect(r.tool.typing).toBe(true);
+    expect(r.tool.vcbInBand).toBe(false);
+    r.click(198, 101, { pointerType: 'touch' });
+    expect(r.hints.at(-1)).toBe('줄자: 다시 누르면 새로 잽니다');
+    expect([r.tool.typing, r.tool.vcbInBand]).toEqual([false, true]);
+    // 결과 쪽으로 친 길이 → 안내점(되돌릴 것도 생김): 새로 재기 시작해도 보인다
+    expect(r.tool.applyLength(-25)).toBe('ok');
+    r.click(102, 103, { pointerType: 'touch' });
+    expect([r.tool.pointCount, r.tool.guides.length, r.tool.canUndo]).toEqual([1, 1, true]);
+    expect([r.tool.typing, r.tool.vcbInBand, saysType(r.hints.at(-1))]).toEqual([true, true, false]);
+  });
+
+  it('앱 측정값 칸 자리(placeVcb)와 창 키(onKey)는 이 판정을 쓴다(첫 화면 조각에 같은 식을 두지 않는다)', () => {
+    const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
+    expect(app).toContain('const show = !!mode && (!band || tool!.vcbInBand);');
+    expect(app).toContain('const typing = tool?.typing;');
+    expect(app).not.toContain('tool.pointCount === 1');
   });
 });
