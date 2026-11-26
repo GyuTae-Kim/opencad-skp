@@ -5654,3 +5654,118 @@ describe('측정 도구: 가상 커서에서 측정 도구가 받은 키(Shift �
     expect(ms).toEqual([]);
   });
 });
+
+describe('측정 도구: 가상 커서에서 안내 되돌리기·다시 하기(Ctrl·⌘+Z·Ctrl+Y)로 커서 자리 추정이 바뀌면 가라앉은 뒤 알림 칸에 한 번(131차 — 130차 남은 한계, 127차 길)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // 둘레 고르기 시간 한도가 기계 부하로 갈리지 않게 시계를 멈춘다(126차 꼴)
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+  });
+  const SETTLE = HISTORY_SETTLE_MS + 30;
+  /** 측정 도구에 알림 칸 쓰기를 준다(keypick.ts apply 꼴) — 알린 글 */
+  const watch = (r: Rig): string[] => {
+    const said: string[] = [];
+    r.tool.keyWatch?.((t) => void said.push(t));
+    return said;
+  };
+  /** 코어 가상 커서를 그 자리에 켜거나 옮긴다(코어 keyboardCursor + keypick.ts sayMeasure의 keyHover) — 그 자리 알림 글 */
+  const at = (r: Rig, x: number, y: number): string => {
+    (r.viewer as { keyboardCursor?: unknown }).keyboardCursor = { x, y };
+    const t = r.tool.keyHover(x, y);
+    r.overlay.paintNow();
+    return t;
+  };
+  /** 3D 보기의 Ctrl+Z(되돌리기)·Ctrl+Y(다시 하기) keydown — app.ts가 keypick.ts보다 먼저 측정 도구 undoKey로 넘긴다. 받았는지 */
+  const undoKey = (r: Rig, key: 'z' | 'y'): boolean => {
+    const e = new KeyboardEvent('keydown', { key, ctrlKey: true, cancelable: true });
+    Object.defineProperty(e, 'target', { value: r.canvas });
+    return r.tool.undoKey(e);
+  };
+  /** 가상 커서로 시작점 (100, 0, 0)을 찍고 (60, 0, 0) 쪽으로 칸에 30을 쳐 안내점 (70, 0, 0)(화면 170, 100)을 둔다 */
+  const guideAt70 = (r: Rig): void => {
+    at(r, 198, 101);
+    r.tool.keyPlace(false);
+    at(r, 160, 101);
+    expect(r.tool.applyValue(30, false)).toBeNull();
+    expect(r.tool.guides).toHaveLength(1);
+    expect(r.tool.pointCount).toBe(0);
+  };
+
+  it('커서 자리 안내점을 Ctrl+Z로 되돌리면 표식·툴팁이 그 자리 모서리 위가 되고 가라앉은 뒤 알림 칸에 한 번 — Ctrl+Y로 다시 하면 안내점 글 한 번', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    const said = watch(r);
+    guideAt70(r);
+    expect(at(r, 170, 101)).toBe('안내점: X 70 mm, Y 0 mm, Z 0 mm');
+    expect(r.tip()).toBe('안내점');
+    // 되돌리기: 안내점이 없어져 다음 그림의 표식·툴팁은 그 자리 모서리 위
+    expect(undoKey(r, 'z')).toBe(true);
+    expect(r.tool.guides).toHaveLength(0);
+    r.overlay.paintNow();
+    expect(r.tip()).toBe('모서리에');
+    vi.advanceTimersByTime(SETTLE - 1);
+    expect(said).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(said).toHaveLength(1);
+    expect(said[0]).toBe('모서리에: X 70 mm, Y 0 mm, Z 0 mm');
+    // 다시 하기: 안내점이 돌아와 그 자리 글
+    expect(undoKey(r, 'y')).toBe(true);
+    expect(r.tool.guides).toHaveLength(1);
+    r.overlay.paintNow();
+    expect(r.tip()).toBe('안내점');
+    vi.advanceTimersByTime(SETTLE);
+    expect(said).toEqual([said[0], '안내점: X 70 mm, Y 0 mm, Z 0 mm']);
+    // 한 번만
+    vi.advanceTimersByTime(SETTLE * 3);
+    expect(said).toHaveLength(2);
+  });
+
+  it('그대로인 길: 커서 자리가 아닌 안내를 되돌리면 같은 글이라 쓰지 않음, 되돌릴 것이 없으면 받지 않음, 코어 커서가 꺼졌거나 마우스 커서면 쓰지 않음', () => {
+    // 커서가 (20, 0, 0) 모서리 위 — 안내점 (70, 0, 0)을 되돌리고 다시 해도 그 자리 글은 같다
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    const said = watch(r);
+    guideAt70(r);
+    expect(at(r, 120, 101)).toBe('모서리에: X 20 mm, Y 0 mm, Z 0 mm');
+    expect(undoKey(r, 'z')).toBe(true);
+    expect(r.tool.guides).toHaveLength(0);
+    r.overlay.paintNow();
+    vi.advanceTimersByTime(SETTLE);
+    // 되돌릴 것이 없다: 받지 않는다(브라우저 몫)
+    expect(undoKey(r, 'z')).toBe(false);
+    expect(undoKey(r, 'y')).toBe(true);
+    r.overlay.paintNow();
+    vi.advanceTimersByTime(SETTLE);
+    expect(said).toEqual([]);
+    // 코어 커서가 꺼졌으면(측정값 칸·측정 띠 단추로 초점 — 표식은 남김) 되돌려도 쓰지 않는다
+    const k = rig(EDGES());
+    k.tool.setMode('tape');
+    const ks = watch(k);
+    guideAt70(k);
+    at(k, 170, 101);
+    (k.viewer as { keyboardCursor?: unknown }).keyboardCursor = null;
+    k.tool.keyEnd(true);
+    expect(undoKey(k, 'z')).toBe(true);
+    k.overlay.paintNow();
+    vi.advanceTimersByTime(SETTLE);
+    expect(ks).toEqual([]);
+    // 마우스 커서(툴팁 알림 그대로 — 이 길 밖): 안내점 위에서 되돌려 툴팁은 바뀌어도 알림 칸에는 쓰지 않는다
+    const m = rig(EDGES());
+    m.tool.setMode('tape');
+    const ms = watch(m);
+    m.click(198, 101);
+    m.move(160, 101);
+    expect(m.tool.applyValue(30, false)).toBeNull();
+    m.move(170, 101);
+    expect(m.tip()).toBe('안내점');
+    expect(undoKey(m, 'z')).toBe(true);
+    m.overlay.paintNow();
+    expect(m.tip()).toBe('모서리에');
+    vi.advanceTimersByTime(SETTLE);
+    expect(ms).toEqual([]);
+  });
+});

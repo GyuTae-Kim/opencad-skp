@@ -28,6 +28,7 @@
  *   그 잠금을 걸기 전 상태(돌리던 차례·목록 포함)로 되돌리고 앞 후보로 돌린다(마우스·가상 커서, 걸기 전 그 자리 후보가 둘 이상일 때만 — unShift). 그 누름은 뗄 때까지 다시 잠그지 않는다.
  * 키 밖의 변화(127차): 가상 커서가 켜진 동안 카메라(휠·보기 키·장면 탭 움직임)·그리기 방식 가림·숨김(sweep)·단면이 커서 자리 추정을 다시 구하게 하면, 그 변화가 KEY_SETTLE_MS 동안
  *   더 오지 않은 뒤 한 번 지금 자리 글을 keypick.ts 알림 칸에 넘긴다(keyWatch — 처음 변화 때 들은 글과 같으면 넘기지 않고, 그사이 키 길이 글을 쓰면 버린다).
+ *   글을 쓰지 않는 측정 도구 키(130차 — Shift·Esc·안내 두기 키)와 안내 되돌리기·다시 하기(131차 — Ctrl·⌘+Z·측정 띠 단추)도 같은 길이다.
  * 다시 보이기(129차 — 코어 0.121.0 visibilityVersion): 커서 자리 추정을 구할 때 코어 숨김 판을 두고, 그림·지금 추정·찍기 앞(sweep)에서 판이 바뀌었으면
  *   (다시 보이기·다른 개체 숨김으로 커서 밑이 드러날 수 있다) 그 자리에서 다시 구한다. 판이 없는 뷰어는 0으로 봐 다시 구하지 않는다(코어 0.120.0까지와 같음).
  * 정밀 조준(터치): 한 손가락을 끌기 시작 거리 안에서 AIM_HOLD_MS 동안 누르고 있으면 손가락 위 AIM_OFFSET_PX에 십자선을 띄우고,
@@ -1759,10 +1760,15 @@ export class MeasureTool {
     return true;
   }
 
-  /** from 목록의 마지막 상태로 돌아가고 지금 상태는 to 목록에 쌓는다 */
+  /**
+   * from 목록의 마지막 상태로 돌아가고 지금 상태는 to 목록에 쌓는다.
+   * 131차: 되돌리기·다시 하기 키(undoKey)·측정 띠 단추는 알림 글을 쓰지 않으므로, 켜진 가상 커서면 130차 handleKey처럼 되돌리기 앞 자리 글을 두고
+   * 127차 길(keyStale)로 가라앉은 뒤 한 번, 그 글과 다를 때만 새 자리 글을 알린다(커서 자리 안내점·안내선이 없어지거나 돌아온 때)
+   */
   private step(from: GuideSnapshot[], to: GuideSnapshot[]): boolean {
     const s = from.pop();
     if (!s || this.disposed) return false;
+    const heard = this.keyHeard();
     to.push({ pts: this.guidePts, lns: this.guideLns, hid: this.hidGuides });
     this.guidePts = s.pts;
     this.guideLns = s.lns;
@@ -1776,6 +1782,7 @@ export class MeasureTool {
       if (!live.length) this.selPlacedStart = false;
     }
     this.hoverDirty = true;
+    if (heard !== null) this.keyStale(heard);
     this.overlay.invalidate();
     this.notifyGuides();
     return true;
@@ -2488,7 +2495,8 @@ export class MeasureTool {
    * 127차: 가상 커서 자리 글을 키 밖의 변화 뒤 알릴 곳(keypick.ts가 줄자·각도기 방식으로 켤 때 알림 칸 쓰기를 주고, 고르기·끔이면 null).
    * 카메라·그리기 방식 가림·숨김(sweep)·단면이 켜진 가상 커서 자리 추정을 다시 구하게 하면, 그 변화가 KEY_SETTLE_MS 동안 더 오지 않은 뒤 한 번
    * 지금 자리 글(keyText — 돌리기는 다시 구하면 끝나 첫 후보 글)을 넘긴다. 처음 변화 때 자리 글(들은 글)과 같으면 넘기지 않고, 그사이 키 길(옮기기·Tab·Esc·Enter·끄기)이 글을 쓰면 버린다.
-   * 130차: 알림 글을 쓰지 않는 키(handleKey — Shift 잠금·풂, Esc 지우기, 안내 두기 키)가 그 자리 추정을 다시 구하게 해도 같은 길이다
+   * 130차: 알림 글을 쓰지 않는 키(handleKey — Shift 잠금·풂, Esc 지우기, 안내 두기 키)가 그 자리 추정을 다시 구하게 해도 같은 길이다.
+   * 131차: 안내 되돌리기·다시 하기(undoKey·측정 띠 단추 — step)도 같다
    */
   keyWatch(say: ((text: string) => void) | null): void {
     this.keySay = say;
@@ -2578,11 +2586,15 @@ export class MeasureTool {
    * 127차 길(keyStale)로 가라앉은 뒤 한 번, 키 앞에 들은 글과 다를 때만 새 자리 글을 알린다(그사이 옮기기·Tab·Enter 같은 키 길이 글을 쓰면 버린다).
    */
   handleKey(e: KeyboardEvent): boolean {
-    // 키 앞 자리 글(들은 글): 그 자리 추정이 맞춰져 있을 때만 둔다
-    const heard = this.modeValue && this.keyLive && !this.hoverDirty ? this.keyText(this.hover, !!this.cycle) : null;
+    const heard = this.keyHeard();
     const done = this.takeKey(e);
     if (heard !== null && this.hoverDirty) this.keyStale(heard);
     return done;
+  }
+
+  /** 130차: 키 앞 자리 글(들은 글) — 켜진 가상 커서이고 그 자리 추정이 맞춰져 있을 때만, 아니면 null(handleKey·131차 안내 되돌리기 step) */
+  private keyHeard(): string | null {
+    return this.modeValue && this.keyLive && !this.hoverDirty ? this.keyText(this.hover, !!this.cycle) : null;
   }
 
   /** handleKey의 키 처리(130차에 알림 칸 몫과 나눔) */
