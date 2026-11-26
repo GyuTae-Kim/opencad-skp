@@ -4,6 +4,9 @@ import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { focusIfLost, focusSpot, leaveDisabled, listKeys, lost, moveIndex, refocus, rove, treeKeys } from '../../src/app/kbd';
 import { PANEL_WIDTH_STEPS, SHEET_STEPS, clampSheetFraction, nextSize } from '../../src/app/layout';
+import type { MeasureToolResult } from '../../src/app/measure';
+import { Panel, type PanelHost } from '../../src/app/panel';
+import { rowDoc } from './rowdoc';
 
 const key = (target: Element, k: string, init: KeyboardEventInit = {}): KeyboardEvent => {
   const e = new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true, ...init });
@@ -253,6 +256,102 @@ describe('누른 버튼이 숨으면 초점 옮기기(150차 — 148차 막힘�
     const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
     expect(app).toMatch(/this\.clearMeasureLog\(\);\n(?:\s*\/\/[^\n]*\n)*\s*leaveDisabled\(clear, this\.viewer\?\.canvas\);/);
     expect(app).toMatch(/\n\s*view: \(\) => this\.viewer\?\.canvas,\n/);
+  });
+});
+
+describe('패널 아래 띠를 통째로 다시 그려도 초점을 같은 열쇠 칸으로(151차 — NC 137차 꼴, 없어진 버튼은 150차 차례)', () => {
+  it('같은 열쇠(태그|data-key ?? aria-label ?? 글 — 다시 그린 바로 뒤 원문)의 첫 칸, 없어졌으면 반대 동작(숨기기 ↔ 모두 보이기) → 3D 보기. 띠 밖 초점은 그대로', () => {
+    const d = rowDoc();
+    d.selection = { kind: 'node', index: 0 };
+    const view = html('<canvas tabindex="0"></canvas>').firstElementChild as HTMLElement;
+    let isolated = false;
+    let log: MeasureToolResult[] = [{ kind: 'tape', a: [0, 0, 0], b: [1, 0, 0], distance: 1, dx: 1, dy: 0, dz: 0 }];
+    const noop = (): void => {};
+    // 앱(app.ts)의 숨기기·분리해서 보기·모두 보이기·기록 지우기와 같은 차례로 패널을 다시 그린다
+    const unhide = (): void => {
+      d.hiddenNodes.clear();
+      isolated = false;
+      panel.refreshVisibility();
+    };
+    const host: PanelHost = {
+      setTagVisible: noop, setAllTagsVisible: noop, setOutlineVisible: noop, setNodeVisible: noop, setExpanded: noop, collapseAll: noop, setPickMode: noop,
+      setShowSoft: noop, setShowHidden: noop, setFolderVisible: noop, setAnnotationVisible: noop, setFileSection: noop, applyPage: noop,
+      hideSelection: () => {
+        d.hiddenNodes.add(0);
+        panel.refreshVisibility();
+        d.selection = null;
+        panel.refreshSelection();
+      },
+      isolateSelection: () => {
+        if (isolated) return unhide();
+        d.hiddenNodes.add(1);
+        isolated = true;
+        panel.refreshVisibility();
+      },
+      unhideAll: unhide,
+      get isolated() {
+        return isolated;
+      },
+      measureHint: null,
+      get measureLogList() {
+        return log;
+      },
+      copyMeasure: noop,
+      clearMeasureLog: () => {
+        log = [];
+        panel.refreshSelection();
+      },
+      select: noop, selectPickedPart: noop, zoomToSelection: noop, closePanel: noop, measuring: false,
+      view,
+    };
+    const panel = new Panel(host);
+    document.body.append(panel.el);
+    panel.el.hidden = false;
+    panel.show(d);
+    const foot = panel.el.querySelector<HTMLElement>('.pfoot')!;
+    const btn = (t: string): HTMLButtonElement | undefined => [...foot.querySelectorAll('button')].find((b) => b.textContent === t);
+    const press = (t: string): void => {
+      const b = btn(t)!;
+      b.focus();
+      b.click();
+    };
+    // 분리해서 보기: 이름이 「분리 풀기」로 바뀌어도 data-key로 같은 버튼(고치기 전: 떼어진 버튼의 초점이 문서로 — jsdom도 지운 요소의 초점은 body로)
+    press('분리해서 보기');
+    expect(document.activeElement).toBe(btn('분리 풀기'));
+    press('분리 풀기');
+    expect(document.activeElement).toBe(btn('분리해서 보기'));
+    // 숨기기: 고른 것이 풀려 버튼이 없어짐 → 반대 동작 「모두 보이기」
+    press('숨기기');
+    expect(btn('숨기기')).toBeUndefined();
+    expect(document.activeElement).toBe(btn('모두 보이기'));
+    // 고른 것 없이 모두 보이기: 버튼 줄째 없어짐 → 3D 보기
+    press('모두 보이기');
+    expect(foot.querySelector('.foot-acts')).toBeNull();
+    expect(document.activeElement).toBe(view);
+    // 띠 밖 초점(3D 보기)은 다시 그려도 그대로
+    d.selection = { kind: 'node', index: 0 };
+    d.hiddenNodes.add(1);
+    panel.refreshSelection();
+    expect(document.activeElement).toBe(view);
+    // 고른 것이 있으면 모두 보이기 → 반대 동작 「숨기기」
+    press('모두 보이기');
+    expect(btn('모두 보이기')).toBeUndefined();
+    expect(document.activeElement).toBe(btn('숨기기'));
+    // 번역층이 글을 옮긴 뒤(다시 그린 바로 뒤 적어 둔 원문 열쇠) 다른 길로 다시 그려도 새 「모두 복사」로
+    const all = btn('모두 복사')!;
+    all.focus();
+    all.textContent = 'Copy all';
+    panel.refreshVisibility();
+    expect(document.activeElement).not.toBe(all);
+    expect(document.activeElement).toBe(btn('모두 복사'));
+    // 기록 지우기: 기록째 없어지고 되살릴 반대 동작이 없음 → 3D 보기(150차 측정 띠 「기록 지우기」와 같은 곳 — 남은 숨기기 등은 기록과 무관)
+    press('기록 지우기');
+    expect(foot.querySelector('.measure-history')).toBeNull();
+    expect(btn('숨기기')).toBeDefined();
+    expect(document.activeElement).toBe(view);
+    // 앱 원문: 패널에 3D 보기 캔버스를 넘긴다
+    const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
+    expect(app).toMatch(/\n\s*get view\(\)[^{\n]*\{\n\s*return this\.viewer\?\.canvas;\n/);
   });
 });
 
