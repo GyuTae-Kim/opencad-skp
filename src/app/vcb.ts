@@ -14,6 +14,7 @@
  * 칸 안의 Esc는 입력만 그만두고(측정 점은 그대로), Enter·Esc 뒤에는 부른 쪽이 정한 곳으로 초점을 돌려준다.
  */
 import { h, icon } from './dom';
+import { leaveDisabled } from './kbd';
 import { DEFAULT_UNITS, parseAngle, parseLength, usesDecimalComma, type UnitsDisplay } from './units';
 
 /** 칸이 받는 값: 줄자 길이 · 각도기 각도 */
@@ -34,6 +35,8 @@ export interface VcbOptions {
   onDeleteGuide?: () => void;
   /** 입력을 마친 뒤(Enter로 넣음·Esc) 초점을 둘 곳 — 없으면 칸에서 초점만 뺀다 */
   returnFocus?: () => void;
+  /** 3D 보기(초점을 쥔 안내 수 ✕·휴지통이 숨을 때 옮길 곳 — 150차) */
+  view?: () => HTMLElement | null | undefined;
 }
 
 /** 측정값 칸에 넣기 시작하는 키(수정 키 없이): 숫자·소수점·쉼표·빼기 */
@@ -177,6 +180,7 @@ export class Vcb {
     const l = Math.max(0, lines | 0);
     const n = p + l;
     this.clearBtn.hidden = !(n > 0);
+    this.leave(this.clearBtn);
     this.guideCount.textContent = !n ? '' : !l ? `안내점 ${p}` : !p ? `안내선 ${l}` : `안내 ${n}`;
     const t = !l ? `안내점 ${p}개 지우기` : !p ? `안내선 ${l}개 지우기` : `안내점 ${p}개와 안내선 ${l}개 지우기`;
     this.clearBtn.title = t;
@@ -186,10 +190,20 @@ export class Vcb {
   /** 고른 안내(안내점·안내선, 없으면 null): 있으면 그 하나를 지우는 단추를 보인다 */
   setSelected(kind: 'point' | 'line' | null): void {
     this.delBtn.hidden = !kind;
+    this.leave(this.delBtn);
     if (!kind) return;
     const t = kind === 'point' ? '고른 안내점 지우기' : '고른 안내선 지우기';
     this.delBtn.title = `${t} (Delete)`;
     this.delBtn.setAttribute('aria-label', t);
+  }
+
+  /**
+   * 초점을 쥔 안내 수 ✕·휴지통이 숨으면(누르기·그 버튼에서 친 키 — 브라우저 focus fixup이 초점을 문서로 보낸다, 150차 — 148차 꼴): 칸이 측정 띠 안이면
+   * 지운 안내를 되살리는 되돌리기(반대 동작 — 134차 되돌리기·다시 하기 꼴, 띠 안에서만 보임)로, 아니면 3D 보기로(returnFocus·136차 고른 것 카드 지우기와 같은 곳 —
+   * 남는 넣기·안내 수 ✕는 반대 동작이 아님)
+   */
+  private leave(b: HTMLButtonElement): void {
+    if (document.activeElement === b) leaveDisabled(b, this.el.closest('.measure-bar') ? this.el.querySelector<HTMLElement>('.vcb-undo') : null, this.opts.view?.());
   }
 
   /** 고른 안내 지우기 단추가 보이는지 */

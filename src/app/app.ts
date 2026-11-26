@@ -754,6 +754,8 @@ export class SkpViewerApp implements PanelHost {
         if (this.coarseQuery?.matches) this.vcb.input.blur();
         else this.viewer?.canvas.focus({ preventScroll: true });
       },
+      // 키보드로 누른 안내 수 ✕·휴지통이 숨을 때 초점을 둘 3D 보기(150차 — 측정 띠 안이면 칸이 먼저 되돌리기로)
+      view: () => this.viewer?.canvas,
     });
     // 장면 탭은 3D 보기 위에 놓이므로 Tab 차례도 3D 보기 앞(WCAG 2.4.3 — 44차)
     const stage = h('div', { class: 'stage' }, sceneTabs, viewHost, measureBar, selBar, camBar, this.vcb.el, this.stick.el, start, notice, busy, updateBar);
@@ -1691,7 +1693,11 @@ export class SkpViewerApp implements PanelHost {
     const all = h('button', { class: 'mini-btn' }, '모두 복사');
     all.addEventListener('click', () => this.copyMeasure('all'));
     const clear = h('button', { class: 'mini-btn' }, '기록 지우기');
-    clear.addEventListener('click', () => this.clearMeasureLog());
+    clear.addEventListener('click', () => {
+      this.clearMeasureLog();
+      // 키보드로 누른 「기록 지우기」는 목록째 숨고 기록 버튼도 꺼지므로 초점을 3D 보기로(150차 — 148차 같은 띠 「다시 재기」와 같은 곳, 되살릴 반대 동작 없음)
+      leaveDisabled(clear, this.viewer?.canvas);
+    });
     el.replaceChildren(h('div', { class: 'ml-head' }, h('b', {}, `최근 측정 ${fmtCount(this.measureLog.length)}개`)), ...rows, h('div', { class: 'pbar ml-acts' }, all, clear));
   }
 

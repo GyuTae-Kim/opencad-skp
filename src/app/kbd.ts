@@ -98,15 +98,18 @@ export function lost(inside?: Element | null): boolean {
   return !a || a === document.body || !a.isConnected || !!a.closest('[hidden]') || !!inside?.contains(a);
 }
 
+/** 쓸 수 있는 곳인지: 문서에 붙어 있고 숨은 곳 밖이며 꺼지지 않음(측정 조각 notifyGuides의 숨김 판정과 같음 — 134·136·137차) */
+const usable = (el: HTMLElement): boolean => el.isConnected && !el.closest('[hidden]') && !(el as HTMLButtonElement).disabled;
+
 /** 초점이 사라졌으면(또는 곧 숨길 inside 안이면) el로 옮긴다(키보드 사용자가 제자리를 잃지 않게 — 스크롤은 그대로) */
 export function focusIfLost(el: HTMLElement | null | undefined, inside?: Element | null): void {
-  if (el?.isConnected && !el.closest('[hidden]') && !(el as HTMLButtonElement).disabled && lost(inside)) el.focus({ preventScroll: true });
+  if (el && usable(el) && lost(inside)) el.focus({ preventScroll: true });
 }
 
 /**
- * 초점을 쥔 버튼 b가 막혔으면 to 가운데 처음 쓸 수 있는 곳으로(148차 — 키보드로 누른 버튼이 그 누름으로 막히면 브라우저 focus fixup이 초점을 문서로 보낸다.
- * 막는 줄 바로 뒤에서 부른다). focusIfLost와 달리 초점이 b에 없으면(문서·다른 곳) 그대로다 — 자주 불리는 갱신 함수가 초점을 끌어오지 않게
+ * 초점을 쥔 버튼 b가 막혔거나 숨었으면(숨은 곳 안·떼어짐 — 150차) to 가운데 처음 쓸 수 있는 곳으로(148차 — 키보드로 누른 버튼이 그 누름으로 막히거나 숨으면
+ * 브라우저 focus fixup이 초점을 문서로 보낸다. 막거나 숨기는 줄 바로 뒤에서 부른다). focusIfLost와 달리 초점이 b에 없으면(문서·다른 곳) 그대로다 — 자주 불리는 갱신 함수가 초점을 끌어오지 않게
  */
 export function leaveDisabled(b: HTMLButtonElement, ...to: (HTMLElement | null | undefined)[]): void {
-  for (const el of to) if (b.disabled && document.activeElement === b) focusIfLost(el, b);
+  for (const el of to) if (document.activeElement === b && !usable(b)) focusIfLost(el, b);
 }

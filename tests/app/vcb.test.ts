@@ -248,6 +248,63 @@ describe('측정값 칸(Vcb)', () => {
     expect(vcb.selectedShown).toBe(false);
   });
 
+  it('키보드로 누른 안내 수 ✕·휴지통이 숨으면 초점을 측정 띠 안은 되돌리기(반대 동작)로, 밖은 3D 보기로(150차 — 문서로 빠지지 않게)', () => {
+    const canvas = document.createElement('canvas');
+    canvas.tabIndex = 0;
+    const onClearGuides = vi.fn();
+    const onDeleteGuide = vi.fn();
+    const vcb = new Vcb({ onSubmit: () => null, onClearGuides, onDeleteGuide, view: () => canvas });
+    // 측정 도구 조각이 붙이는 되돌리기(mountUndo 꼴 — 휴지통 앞, 지운 뒤에는 되돌릴 것이 있어 보임. 띠 밖에서는 CSS로 숨음)
+    const undo = document.createElement('button');
+    undo.className = 'vcb-btn vcb-undo';
+    vcb.el.insertBefore(undo, vcb.el.querySelector('.vcb-del'));
+    const clear = vcb.el.querySelector<HTMLButtonElement>('.vcb-clear')!;
+    const del = vcb.el.querySelector<HTMLButtonElement>('.vcb-del')!;
+    document.body.append(canvas, vcb.el);
+    vcb.show(true);
+    // 넓은 화면(칸이 3D 보기 오른쪽 아래 — 띠 밖): 안내 수 ✕·휴지통 → 3D 보기(jsdom은 focus fixup을 하지 않아 고치기 전에는 숨은 버튼에 초점이 남는다)
+    vcb.setGuides(3);
+    clear.focus();
+    clear.click();
+    expect(onClearGuides).toHaveBeenCalledTimes(1);
+    expect(clear.hidden).toBe(true);
+    expect(document.activeElement).toBe(canvas);
+    vcb.setSelected('point');
+    del.focus();
+    del.click();
+    expect(onDeleteGuide).toHaveBeenCalledTimes(1);
+    expect(del.hidden).toBe(true);
+    expect(document.activeElement).toBe(canvas);
+    // 측정 띠 안(휴대폰·좁은 창): 지운 안내를 되살리는 되돌리기로
+    const bar = document.createElement('div');
+    bar.className = 'measure-bar';
+    document.body.append(bar);
+    bar.append(vcb.el);
+    vcb.setGuides(2, 1);
+    clear.focus();
+    clear.click();
+    expect(document.activeElement).toBe(undo);
+    vcb.setSelected('line');
+    del.focus();
+    del.click();
+    expect(document.activeElement).toBe(undo);
+    // 되돌리기가 숨었으면 3D 보기로(그 버튼에서 친 키로 숨어도 — 숨기는 줄에서 본다)
+    undo.hidden = true;
+    vcb.setSelected('line');
+    del.focus();
+    vcb.setSelected(null);
+    expect(document.activeElement).toBe(canvas);
+    // 초점이 그 버튼에 없으면(입력 칸·문서) 그대로
+    vcb.setGuides(1);
+    vcb.input.focus();
+    vcb.setGuides(0);
+    expect(document.activeElement).toBe(vcb.input);
+    vcb.input.blur();
+    vcb.setSelected('point');
+    vcb.setSelected(null);
+    expect(document.activeElement).toBe(document.body);
+  });
+
   it('각도기: 라벨·안내가 각도로 바뀌고, 도·경사(1:6)를 읽어 넘긴다(글 자판 그대로)', () => {
     const { vcb, onSubmit } = make();
     vcb.setUnits(ARCH);
