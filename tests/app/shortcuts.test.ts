@@ -115,6 +115,47 @@ describe('키보드 바로 가기 안내', () => {
     expect(again).toHaveBeenCalledTimes(1);
   });
 
+  it('열린 동안 뒤 칸(문서 몸의 다른 칸)은 inert, 닫으면 연 곳에 초점을 돌려주기 전에 풀고 이미 inert였던 칸은 그대로 — aria-modal=true의 약속(165차 — 160차는 상자 밖 초점의 키만 막았다)', () => {
+    // #app 꼴 뒤 칸(안에 연 버튼)과 이미 inert인 칸
+    const app = document.body.appendChild(document.createElement('div'));
+    const opener = app.appendChild(document.createElement('button'));
+    const kept = document.body.appendChild(document.createElement('div'));
+    kept.setAttribute('inert', '');
+    opener.focus();
+    // 연 버튼이 초점을 받을 때 inert 조상이 없어야 한다(inert 안은 초점을 받지 않는다 — jsdom은 inert 초점 규칙이 없어 focus 사건 때 본다)
+    const inertAtFocus: (Element | null)[] = [];
+    opener.addEventListener('focus', () => inertAtFocus.push(opener.closest('[inert]')));
+    const onClose = vi.fn();
+    const close = openShortcutsDialog(document.body, onClose);
+    const backdrop = document.querySelector<HTMLElement>('.sc-backdrop')!;
+    expect(app.hasAttribute('inert')).toBe(true);
+    expect(kept.hasAttribute('inert')).toBe(true);
+    expect(backdrop.closest('[inert]')).toBeNull();
+    expect(document.activeElement).toBe(backdrop.querySelector('.sc-box button'));
+    press(document.activeElement!, 'Escape');
+    expect(document.querySelector('[role=dialog]')).toBeNull();
+    expect(app.hasAttribute('inert')).toBe(false);
+    expect(kept.hasAttribute('inert')).toBe(true);
+    expect(inertAtFocus).toEqual([null]);
+    expect(document.activeElement).toBe(opener);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    // 돌려준 닫기 함수를 또 불러도 한 번(이미 inert였던 칸을 풀지 않음)
+    close();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(kept.hasAttribute('inert')).toBe(true);
+    // 닫기 버튼·바깥 누르기(마우스)로 닫아도 푼다
+    openShortcutsDialog(document.body, vi.fn());
+    expect(app.hasAttribute('inert')).toBe(true);
+    document.querySelector<HTMLElement>('.sc-box button')!.click();
+    expect(app.hasAttribute('inert')).toBe(false);
+    openShortcutsDialog(document.body, vi.fn());
+    expect(app.hasAttribute('inert')).toBe(true);
+    pointer(document.querySelector('.sc-backdrop')!, 'pointerdown', 'mouse');
+    expect(document.querySelector('[role=dialog]')).toBeNull();
+    expect(app.hasAttribute('inert')).toBe(false);
+    expect(kept.hasAttribute('inert')).toBe(true);
+  });
+
   it('손가락·펜으로 바깥(어두운 바탕)을 누르면 뗀 뒤 그 탭의 click에서 닫는다 — 누를 때 바탕을 떼면 그 click이 밑의 단추·링크를 누른다(140차)', () => {
     const opener = document.createElement('button');
     document.body.append(opener);

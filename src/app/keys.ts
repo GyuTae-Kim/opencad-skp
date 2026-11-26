@@ -137,7 +137,8 @@ export function menuKey(t: EventTarget | null, key: string, mod = false): boolea
 /**
  * 160차: 키 대상이 모달 대화 상자(aria-modal="true" — 바로 가기 안내) 안인지. 모달이 열린 동안 앱 창 키(app.ts onKey)는 상자 안의 키를 상자 몫으로 두고
  * (Esc 닫기·Tab 가두기·본문 굴리기), 상자 밖의 키는 뒤 3D 보기·위젯으로 보내지 않는다 — 상자가 뒤 문서를 inert로 만들지 않아(showModal 아님) 주소 막대에서 Tab으로
- * 들어오면 초점이 뒤 버튼·3D 보기 캔버스에 갈 수 있다. 그림 저장 창은 aria-modal=false(모달 아님 — 3D 보기를 그대로 쓰며 저장)라 들지 않는다
+ * 들어오면 초점이 뒤 버튼·3D 보기 캔버스에 갈 수 있다. 그림 저장 창은 aria-modal=false(모달 아님 — 3D 보기를 그대로 쓰며 저장)라 들지 않는다.
+ * 165차부터 상자가 열린 동안 뒤 문서를 inert로 두어(shortcuts.ts), 상자 밖 초점은 문서 몸(상자 제목을 누름)과 inert를 모르는 브라우저뿐이다
  */
 export function inModal(t: EventTarget | null): boolean {
   const el = t as Element | null;

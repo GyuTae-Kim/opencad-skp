@@ -115,7 +115,7 @@ describe('메뉴 안의 Esc·이동 키(157차)와 글자·숫자 키(164차)는
       expect(trigger.getAttribute('aria-expanded')).toBe('false');
       expect(document.activeElement).toBe(trigger);
       expect(taken).toEqual(['z']);
-      // 메뉴 밖(돌아온 언어 단추)의 글자 키는 지금처럼 앱 것
+      // 메뉴 밖(돌아온 언어 버튼)의 글자 키는 지금처럼 앱 것
       press('w');
       expect(taken).toEqual(['z', 'w']);
     } finally {

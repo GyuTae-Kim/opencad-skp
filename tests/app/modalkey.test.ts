@@ -8,6 +8,7 @@
  * F·1~7 보기, 화살표·Enter 가상 커서 고르기, 걷기)와 뒤 위젯 키(나무·탭·가르개·메뉴)가 그대로 들었다. 상자 제목을 눌러 초점이 문서 몸으로 풀리면 Esc가 상자에 닿지 않아 닫히지도 않았다.
  * 160차: keys.ts inModal로 상자 안·밖을 가르고, 상자 밖 키는 전파를 막으며 Esc는 상자를 닫는다(APG dialog). 앱 클래스는 시험에서 만들지 않으므로(153차 꼴)
  * 판정 함수 + 실제 바로 가기 안내 + 창 캡처 리스너 + 앱 원문으로 본다.
+ * 165차: 상자가 열린 동안 문서 몸의 다른 칸(#app 등)을 inert로 둔다(shortcuts.test) — 여기 키 규칙은 문서 몸 초점과 inert를 모르는 브라우저 몫으로 남는다.
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -44,7 +45,7 @@ describe('모달 대화 상자가 열린 동안 상자 밖 키는 뒤 3D 보기�
     document.body.innerHTML = '';
   });
 
-  it('바로 가기 안내(aria-modal=true) 안은 상자 것, 뒤 문서·문서 몸·그림 저장 창(aria-modal=false — 모달 아님)은 밖 — 상자가 뒤를 inert로 만들지 않아 뒤 캔버스에 초점이 갈 수 있다', () => {
+  it('바로 가기 안내(aria-modal=true) 안은 상자 것, 뒤 문서·문서 몸·그림 저장 창(aria-modal=false — 모달 아님)은 밖 — 열린 동안 뒤 문서는 inert(165차)', () => {
     expect(typeof inModal).toBe('function');
     const { canvas, tab } = backDoc();
     const exportBtn = exportButton();
@@ -57,7 +58,11 @@ describe('모달 대화 상자가 열린 동안 상자 밖 키는 뒤 3D 보기�
     for (const t of [box, closeBtn, box.querySelector('.sc-body'), box.querySelector('h2')]) expect(inModal(t)).toBe(true);
     expect(exportBtn.closest('[role="dialog"]')!.getAttribute('aria-modal')).toBe('false');
     for (const t of [canvas, tab, exportBtn, document.body, null, window]) expect(inModal(t)).toBe(false);
-    // 주소 막대에서 Tab으로 들어온 꼴: 상자가 열린 채 뒤 캔버스가 초점을 받는다(inert 아님 — 상자의 Tab 가두기는 초점이 상자 안일 때만 듣는다)
+    // 165차: 열린 동안 뒤 문서(#app)·그림 저장 창 칸은 inert라 실제 브라우저에서는 주소 막대에서 Tab으로 들어와도 뒤 캔버스가 초점을 받지 않는다(160차에는 받았다).
+    // jsdom은 inert 초점 규칙이 없어 아래처럼 옮겨진다 — 뒤로 빠진 초점(inert를 모르는 브라우저)의 키는 아래 160차 시험이 본다
+    expect(document.getElementById('app')!.hasAttribute('inert')).toBe(true);
+    expect(exportBtn.closest('[inert]')).not.toBeNull();
+    expect(box.closest('[inert]')).toBeNull();
     canvas.focus();
     expect(document.activeElement).toBe(canvas);
     expect(document.querySelector('.sc-box')).not.toBeNull();
@@ -103,7 +108,7 @@ describe('모달 대화 상자가 열린 동안 상자 밖 키는 뒤 3D 보기�
       press('f');
       press('Tab');
       expect(document.activeElement).toBe(box.querySelector('.sc-body'));
-      // 뒤로 빠진 초점(주소 막대에서 Tab으로 들어온 꼴): 보기·가상 커서·걷기·장면 키와 장면 탭 화살표를 아무도 듣지 않고 상자는 열린 채
+      // 뒤로 빠진 초점(주소 막대에서 Tab으로 들어온 꼴 — 165차 뒤로는 inert를 모르는 브라우저):보기·가상 커서·걷기·장면 키와 장면 탭 화살표를 아무도 듣지 않고 상자는 열린 채
       canvas.focus();
       for (const key of ['1', 'f', 'ArrowLeft', 'Enter', 'w', 'PageDown']) press(key);
       tab.focus();

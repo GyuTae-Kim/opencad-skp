@@ -133,11 +133,18 @@ export function openShortcutsDialog(parent: HTMLElement, onClose: () => void): (
   );
   const box = h('div', { class: 'sc-box', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId }, h('div', { class: 'sc-head' }, h('h2', { id: titleId }, '키보드 바로 가기'), closeBtn), body);
   const backdrop = h('div', { class: 'sc-backdrop' }, box);
+  // 165차: 열린 동안 parent의 다른 칸(앱 화면·공용 띠)은 inert — aria-modal=true의 약속(WAI-ARIA aria-modal: 모달 밖은 쓸 수 없음, HTML showModal 꼴).
+  // 160차는 상자 밖 초점의 키만 막아, 주소 막대에서 Tab으로 들어오면 초점이 뒤 버튼·3D 보기로 가 Tab이 뒤 문서를 돌고 화면 읽기도 뒤를 읽었다.
+  // 이미 inert인 칸은 건드리지 않는다
+  const back = [...parent.children].filter((el) => !el.hasAttribute('inert'));
+  for (const el of back) el.setAttribute('inert', '');
   let closed = false;
   const close = (): void => {
     if (closed) return;
     closed = true;
     backdrop.remove();
+    // 연 곳에 초점을 돌려주기 전에 푼다(inert 안은 초점을 받지 않는다)
+    for (const el of back) el.removeAttribute('inert');
     if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus();
     onClose();
   };
