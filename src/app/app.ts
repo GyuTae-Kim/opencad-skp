@@ -124,7 +124,7 @@ import { cameraForBox, keepViewOnHeightChange } from './view';
 import { cssHex, isLightBackground, loadFileBackground, safeStorage, skyBackground, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
 import type { BackgroundOptions, Rgba } from 'opencad-viewer3d';
 import { DEFAULT_EDGE_COLOR, LineContrast, edgeLooks, lineColorOverrides } from './linecontrast';
-import { disclose, focusIfLost, focusSpot, leaveDisabled, listKeys, refocus, setRange } from './kbd';
+import { disclose, focusIfLost, focusSpot, leaveDisabled, listKeys, listRows, refocus, setRange } from './kbd';
 import type { Rgb, SkpEdgeColorMode, SkpShadowMeta, SkpStyleMeta } from '../meta';
 import { WalkStick } from './joystick';
 import { Vcb, vcbStartKey, type VcbKind } from './vcb';
@@ -1711,7 +1711,8 @@ export class SkpViewerApp implements PanelHost {
       // 키보드로 누른 「기록 지우기」는 목록째 숨고 기록 버튼도 꺼지므로 초점을 3D 보기로(150차 — 148차 같은 띠 「다시 재기」와 같은 곳, 되살릴 반대 동작 없음)
       leaveDisabled(clear, this.viewer?.canvas);
     });
-    el.replaceChildren(h('div', { class: 'ml-head' }, h('b', {}, `최근 측정 ${fmtCount(this.measureLog.length)}개`)), ...rows, h('div', { class: 'pbar ml-acts' }, all, clear));
+    // 줄은 목록으로 묶는다(156차 — 화면 읽기 프로그램이 줄 수·차례를 읽게, 머리·버튼 줄은 목록 밖)
+    el.replaceChildren(h('div', { class: 'ml-head' }, h('b', {}, `최근 측정 ${fmtCount(this.measureLog.length)}개`)), listRows(rows), h('div', { class: 'pbar ml-acts' }, all, clear));
   }
 
   /** 목록에서 고르기(PanelHost) */

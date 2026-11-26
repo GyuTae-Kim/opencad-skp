@@ -131,3 +131,19 @@ export function setRange(el: HTMLInputElement, value: number, text: string): voi
   el.value = String(value);
   el.setAttribute('aria-valuetext', text);
 }
+
+/**
+ * 줄 목록(156차 — WAI-ARIA list·listitem): 줄을 하나씩 listitem 칸에 담아 list로 묶는다 — 화면 읽기 프로그램이 줄 수·차례를 읽고, 줄 안 버튼은 그 줄 글과 한 칸이다.
+ * ul·li는 기본 들여쓰기·점을 지우는 스타일시트가 들어 div에 role을 둔다(감싼 칸은 블록이라 줄 모양은 그대로 — 최근 측정 두 목록의 스타일은 줄 클래스에만 걸림)
+ */
+export function listRows(rows: readonly HTMLElement[]): HTMLDivElement {
+  const list = document.createElement('div');
+  list.setAttribute('role', 'list');
+  for (const r of rows) {
+    const item = document.createElement('div');
+    item.setAttribute('role', 'listitem');
+    item.append(r);
+    list.append(item);
+  }
+  return list;
+}
