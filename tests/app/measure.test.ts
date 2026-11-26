@@ -4754,6 +4754,112 @@ describe('고르기 도구로 안내 모두 고르기·모두 풀기(26차 — S
     expect(document.activeElement).toBe(input);
   });
 
+  it('138차: 초점을 둔 휴대폰 도구 막대 「모두 고르기」·고른 것 카드·카메라 띠·겹친 것 목록이 줄자·각도기를 켜는 차례(T 키 등)에 숨거나 빠지면 초점을 3D 보기로 — 보이는 곳·앱이 옮긴 곳·끄는 차례는 그대로', async () => {
+    // 앱 카드 꼴(refreshSelBar — 137차 시험과 같다): 측정 중이 아니고 고른 안내가 있으면 보인다. 맨 끝은 선택 해제 ✕
+    const card = document.createElement('div');
+    const acts = document.createElement('div');
+    const close = document.createElement('button');
+    acts.append(close);
+    card.append(acts);
+    card.hidden = true;
+    document.body.append(card);
+    let tool: MeasureTool | null = null;
+    const sync = (): void => void (card.hidden = !!tool?.mode || !tool?.guidePickText(true));
+    const { r } = await setup({ onGuides: sync });
+    tool = r.tool;
+    // 코어 캔버스처럼 초점을 받는다(코어 뷰어는 tabIndex 0)
+    r.canvas.tabIndex = 0;
+    r.tool.mountGuideDelete(acts);
+    const all = acts.querySelector<HTMLButtonElement>('.sel-all')!;
+    // 휴대폰 도구 막대 꼴(보기 설정 단추 뒤 빈자리 앞 — jsdom은 배치가 없어 CSS가 숨기는 곳처럼 자리를 따지지 않고 보인다)
+    const bar = document.createElement('div');
+    const more = document.createElement('button');
+    const spacer = document.createElement('span');
+    bar.append(more, spacer);
+    document.body.append(bar);
+    r.tool.mountToolbarSelectAll(spacer);
+    const tb = bar.querySelector<HTMLButtonElement>('.tb-selall')!;
+    // 카메라 띠 꼴(좁은 창의 걷기 단추)
+    const cam = document.createElement('div');
+    const walk = document.createElement('button');
+    cam.append(walk);
+    document.body.append(cam);
+    // 앱 setMeasureMode 꼴: 측정 띠 화면이면 카메라 띠를 먼저 닫고(closeCamBar) 도구를 켠 뒤 같은 차례에 카드를 맞춘다(refreshStatus — 측정 중에는 숨김)
+    const turnOn = (mode: 'tape' | 'protractor', band = false): void => {
+      if (band) cam.hidden = true;
+      r.tool.setMode(mode);
+      sync();
+    };
+    // ① 도구 막대 「모두 고르기」에 초점을 둔 채 T(줄자 켜기): 버튼이 숨으면 앱이 맞춘 뒤 3D 보기로(jsdom은 focus fixup을 하지 않아 고치기 전에는 숨은 버튼에 남는다)
+    expect([tb.hidden, tb.disabled, card.hidden]).toEqual([false, false, true]);
+    tb.focus();
+    turnOn('tape');
+    expect(tb.hidden).toBe(true);
+    await flush();
+    expect(document.activeElement).toBe(r.canvas);
+    // ② 안내를 고른 카드의 「모두」에 초점을 둔 채 각도기를 켜면 카드째 숨어(측정 중) 3D 보기로
+    r.tool.setMode(null);
+    sync();
+    expect([tb.hidden, tb.disabled]).toEqual([false, false]);
+    r.tool.pickGuide(121.3, 81.2, 'touch');
+    expect([r.tool.selectedGuideCount, card.hidden, all.hidden]).toEqual([1, false, false]);
+    all.focus();
+    turnOn('protractor');
+    expect(card.hidden).toBe(true);
+    await flush();
+    expect(document.activeElement).toBe(r.canvas);
+    // 카드의 ✕(앱 단추)도 같다
+    r.tool.setMode(null);
+    sync();
+    r.tool.pickGuide(121.3, 81.2, 'touch');
+    expect(card.hidden).toBe(false);
+    close.focus();
+    turnOn('tape');
+    await flush();
+    expect(document.activeElement).toBe(r.canvas);
+    // ③ 좁은 창의 카메라 띠: 걷기 단추에 초점을 둔 채 줄자를 켜면 앱이 띠를 먼저 닫아도 3D 보기로
+    r.tool.setMode(null);
+    sync();
+    walk.focus();
+    turnOn('tape', true);
+    await flush();
+    expect(document.activeElement).toBe(r.canvas);
+    // ④ 고르기 도구의 겹친 것 목록(열린 채 T): 앱이 목록을 떼어도(pickList.set(false)) 3D 보기로
+    r.tool.setMode(null);
+    const list = document.createElement('div');
+    const row = document.createElement('button');
+    list.append(row);
+    document.body.append(list);
+    row.focus();
+    turnOn('tape');
+    list.remove();
+    await flush();
+    expect(document.activeElement).toBe(r.canvas);
+    // 그대로: 초점이 그대로 보이는 곳(도구 막대의 다른 단추)이면 옮기지 않는다
+    r.tool.setMode(null);
+    more.focus();
+    turnOn('protractor');
+    await flush();
+    expect(document.activeElement).toBe(more);
+    // 앱이 같은 차례에 다른 곳으로 옮겼으면 그대로
+    r.tool.setMode(null);
+    tb.focus();
+    turnOn('tape');
+    more.focus();
+    await flush();
+    expect(document.activeElement).toBe(more);
+    // 끄는 차례(측정 띠가 숨음)는 3D 보기로 옮기지 않는다(측정 띠 ✕는 앱이 그 도구 단추로 옮긴다 — 44차)
+    const band = document.createElement('div');
+    const x = document.createElement('button');
+    band.append(x);
+    document.body.append(band);
+    x.focus();
+    r.tool.setMode(null);
+    band.hidden = true;
+    await flush();
+    expect(document.activeElement).not.toBe(r.canvas);
+  });
+
   it('toolbarOneRow: 다음 줄로 감싼 자식이 있으면 거짓(높이가 다른 묶음·위로 붙인 단추·크기 없는 자식은 한 줄로 본다)', () => {
     const bar = document.createElement('div');
     const rects: [number, number][] = [];

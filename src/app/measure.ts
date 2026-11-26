@@ -2569,9 +2569,17 @@ export class MeasureTool {
     this.keyTimer = this.keyBase = null;
   }
 
-  /** 도구 켜기·바꾸기·끄기(null). 진행 중 점과 결과는 지운다 */
+  /**
+   * 도구 켜기·바꾸기·끄기(null). 진행 중 점과 결과는 지운다.
+   * 138차: 켜거나 바꾸는 차례(T 키·도구 단추·조각을 받은 뒤 켜기)에 초점이 있던 곳이 그 차례로 숨거나 문서에서 빠지거나 꺼지면 앱이 맞춘 뒤 3D 보기로 옮긴다
+   * (휴대폰 도구 막대 「모두 고르기」 — 아래 fitToolbarSelectAll, 앱이 측정 중 숨기는 고른 것 카드, 좁은 창에서 먼저 닫는 카메라 띠, 고르기 도구의 겹친 것 목록 — refocusOn).
+   * 3D 보기는 측정을 시작하는 곳이고(Enter로 가상 커서 점 찍기) 카드가 숨을 때의 자리다(136·137차). 끄는 차례는 그대로(측정 띠 ✕는 앱이 도구 단추로 — 44차)
+   */
   setMode(mode: MeasureMode | null): void {
     if (this.disposed) return;
+    const a = document.activeElement as HTMLElement | null;
+    // 앱(setMeasureMode)은 이 뒤 같은 차례에 카드·도구 막대·목록을 맞추므로 그 뒤(마이크로태스크)에 본다
+    if (mode && a && a !== document.body) queueMicrotask(() => this.refocusOn(a));
     const same = mode === this.modeValue;
     if (!same) this.reset();
     this.modeValue = mode;
@@ -2586,6 +2594,18 @@ export class MeasureTool {
     this.refreshHint();
     // 휴대폰 도구 막대의 모두 고르기는 줄자·각도기를 끈 동안만(32차)
     this.fitToolbarSelectAll();
+  }
+
+  /**
+   * 138차(setMode): 도구를 켠 차례 앞의 초점 a가 숨은 곳 안이거나 문서에서 빠졌거나 꺼졌으면 3D 보기로(브라우저가 먼저 문서로 옮겼어도).
+   * 도구를 다시 껐거나, 앱이 다른 곳으로 옮겼거나(지금 초점이 a도 문서도 아님), a가 그대로 보이면 그대로
+   */
+  private refocusOn(a: HTMLElement): void {
+    const now = document.activeElement;
+    const c = this.viewer.canvas;
+    if (this.disposed || !this.modeValue || (now && now !== a && now !== document.body)) return;
+    if (a.isConnected && !a.closest('[hidden]') && !(a as HTMLButtonElement).disabled) return;
+    if (c.isConnected && !c.closest('[hidden]')) c.focus({ preventScroll: true });
   }
 
   /** 진행 중 점과 결과 지우기(도구는 켜 둔다 — 고른 안내도 푼다) */
