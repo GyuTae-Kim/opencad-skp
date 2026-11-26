@@ -2937,9 +2937,15 @@ describe('측정 도구: 결과 글이 십자선·툴팁·측정 띠를 비켜 �
 });
 
 describe('측정 도구: 잠글 방향 고르기(한 손 잠금 — 22차, SketchUp for iPad 줄자의 Lock X·Y·Z·Lock Parallel 도구 모드처럼)', () => {
-  const press = (el: Element | null, pointerType: string): void => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // isPrimary: 정밀 조준 중 둘째 손가락이면 false(141차)
+  const press = (el: Element | null, pointerType: string, isPrimary = true): void => {
     const e = new MouseEvent('pointerdown', { bubbles: true, cancelable: true });
     Object.defineProperty(e, 'pointerType', { value: pointerType });
+    Object.defineProperty(e, 'isPrimary', { value: isPrimary });
     el!.dispatchEvent(e);
   };
 
@@ -2991,10 +2997,12 @@ describe('측정 도구: 잠글 방향 고르기(한 손 잠금 — 22차, Sketc
     expect(r.tool.toggleLockMenu(true)).toBe(true);
     press(menu.querySelector('[data-lock="x"]'), 'touch');
     expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'x', source: 'button' });
-    expect(r.tool.lockMenuOpen).toBe(false);
-    // 뒤따르는 click(같은 누르기)은 넘긴다 — 풀리거나 다시 잠그지 않는다
+    // 141차: 줄은 그 탭의 click이 올 때까지 남는다(누를 때 숨기면 그 click이 밑에 펼친 측정 기록을 누른다)
+    expect(r.tool.lockMenuOpen).toBe(true);
+    // 뒤따르는 click(같은 누르기)은 고르지 않고 줄만 닫는다 — 풀리거나 다시 잠그지 않는다
     (menu.querySelector('[data-lock="x"]') as HTMLElement | null)?.click();
     expect(r.tool.inferenceLock?.axis).toBe('x');
+    expect(r.tool.lockMenuOpen).toBe(false);
     // 같은 엄지로 다른 곳을 탭하면 잠근 선 위(시작점에서 빨강 축)
     tap(140, 60);
     const res = r.results.at(-1);
@@ -3018,6 +3026,67 @@ describe('측정 도구: 잠글 방향 고르기(한 손 잠금 — 22차, Sketc
     // 도구를 버리면 줄도 뗀다
     r.tool.dispose();
     expect(menu.isConnected).toBe(false);
+  });
+
+  it('141차: 손가락·펜으로 고르면 잠금은 누르는 순간, 줄은 그 탭의 click에서 닫는다 — 누를 때 숨기면 그 click이 밑에 펼친 측정 기록(줄 복사·모두 복사·기록 지우기)을 누른다', () => {
+    vi.useFakeTimers();
+    const r = rig({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 10, 0, 0]]), lines('h', [[50, -50, 0, 80, -50, 0]])] });
+    const band = document.createElement('div');
+    document.body.append(band);
+    r.tool.mountLockMenu(band);
+    const menu = band.querySelector('.mb-lockmenu') as HTMLElement;
+    const btn = (c: string): HTMLElement => menu.querySelector(`[data-lock="${c}"]`) as HTMLElement;
+    r.tool.setMode('tape');
+    // 한 손: 시작점을 탭하면 맞춘 방향이 없어 띠 잠금 버튼이 고르기 줄을 연다
+    const open = (): void => {
+      r.tool.setInferenceLock(false);
+      r.tool.clear();
+      r.ptr('pointerdown', 101, 100, { pointerType: 'touch', buttons: 1 });
+      r.ptr('pointerup', 101, 100, { pointerType: 'touch' });
+      r.overlay.paintNow();
+      expect(r.tool.toggleLockMenu(true)).toBe(true);
+    };
+    // 마우스는 그대로: 누르기는 넘기고 click으로 골라 곧 닫는다
+    open();
+    press(btn('z'), 'mouse');
+    expect(r.tool.inferenceLock).toBeNull();
+    btn('z').click();
+    expect([r.tool.inferenceLock?.axis, menu.hidden]).toEqual(['z', true]);
+    // 손가락: 잠금은 누르는 순간, 줄은 남아 그 탭의 click을 받고(밑으로 가지 않음) 그 click에 닫힌다 — 다시 고르거나 풀지 않는다
+    open();
+    press(btn('x'), 'touch');
+    expect([r.tool.inferenceLock?.axis, menu.hidden]).toEqual(['x', false]);
+    btn('x').click();
+    expect([r.tool.inferenceLock?.axis, menu.hidden]).toEqual(['x', true]);
+    // 펜도 같다
+    open();
+    press(btn('y'), 'pen');
+    expect([r.tool.inferenceLock?.axis, menu.hidden]).toEqual(['y', false]);
+    btn('y').click();
+    expect([r.tool.inferenceLock?.axis, menu.hidden]).toEqual(['y', true]);
+    // click이 오지 않으면(끌림·길게 누르기) 1초 뒤(뒤따르는 click을 넘기는 시간과 같음) 닫는다
+    open();
+    press(btn('z'), 'touch');
+    vi.advanceTimersByTime(999);
+    expect(menu.hidden).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect([r.tool.inferenceLock?.axis, menu.hidden]).toEqual(['z', true]);
+    // 브라우저가 그 누르기를 거두면(pointercancel) 곧 닫는다
+    open();
+    press(btn('x'), 'touch');
+    btn('x').dispatchEvent(new Event('pointercancel', { bubbles: true }));
+    expect([r.tool.inferenceLock?.axis, menu.hidden]).toEqual(['x', true]);
+    // 정밀 조준 중 둘째 손가락(click이 오지 않음)은 지금처럼 누르는 순간 닫는다
+    open();
+    press(btn('y'), 'touch', false);
+    expect([r.tool.inferenceLock?.axis, menu.hidden]).toEqual(['y', true]);
+    // 줄이 남은 동안 도구를 버리면 줄을 떼고 기다림도 거둔다(1초 뒤 닫기가 오지 않음)
+    open();
+    press(btn('x'), 'touch');
+    r.tool.dispose();
+    expect(menu.isConnected).toBe(false);
+    vi.advanceTimersByTime(1000);
+    expect(menu.hidden).toBe(false);
   });
 });
 
