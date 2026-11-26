@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { focusIfLost, focusSpot, listKeys, lost, moveIndex, refocus, rove, treeKeys } from '../../src/app/kbd';
+import { focusIfLost, focusSpot, leaveDisabled, listKeys, lost, moveIndex, refocus, rove, treeKeys } from '../../src/app/kbd';
 import { PANEL_WIDTH_STEPS, SHEET_STEPS, clampSheetFraction, nextSize } from '../../src/app/layout';
 
 const key = (target: Element, k: string, init: KeyboardEventInit = {}): KeyboardEvent => {
@@ -174,6 +174,48 @@ describe('다시 그린 뒤 초점 되찾기·사라진 초점 옮기기(44차 �
     other.focus();
     focusIfLost(tool, bar);
     expect(document.activeElement).toBe(other);
+  });
+});
+
+describe('누른 버튼이 막히면 초점 옮기기(148차 — 브라우저 focus fixup이 초점을 문서로 보내기 전에)', () => {
+  it('초점을 쥔 버튼이 막혔을 때만 처음 쓸 수 있는 곳으로(반대쪽 버튼, 그것도 막혔으면 3D 보기) — 도구 막대 이전·다음 보기와 측정 띠 「다시 재기」', () => {
+    const box = html('<button class="back">이전 보기</button><button class="fwd" disabled>다음 보기</button><canvas tabindex="0"></canvas><button class="other">다른 것</button>');
+    const back = box.querySelector<HTMLButtonElement>('.back')!;
+    const fwd = box.querySelector<HTMLButtonElement>('.fwd')!;
+    const canvas = box.querySelector<HTMLElement>('canvas')!;
+    const other = box.querySelector<HTMLButtonElement>('.other')!;
+    // 이전 보기로 처음 칸에 닿음: 이전 막힘·다음 풀림 → 다음 보기로(jsdom은 focus fixup을 하지 않아 막힌 버튼에 초점이 남는다)
+    back.focus();
+    back.disabled = true;
+    fwd.disabled = false;
+    expect(document.activeElement).toBe(back);
+    leaveDisabled(back, fwd, canvas);
+    expect(document.activeElement).toBe(fwd);
+    // 다음 보기로 끝 칸에 닿음 → 이전 보기로
+    fwd.disabled = true;
+    back.disabled = false;
+    leaveDisabled(fwd, back, canvas);
+    expect(document.activeElement).toBe(back);
+    // 반대쪽도 막혔으면 다음 곳(3D 보기) — 「다시 재기」는 반대쪽 없이 3D 보기로
+    back.disabled = true;
+    leaveDisabled(back, fwd, canvas);
+    expect(document.activeElement).toBe(canvas);
+    // 막히지 않은 버튼, 초점이 다른 곳·문서(body)면 그대로(focusIfLost와 달리 문서에서 끌어오지 않는다 — 갱신 함수가 자주 불린다)
+    other.focus();
+    leaveDisabled(other, canvas);
+    expect(document.activeElement).toBe(other);
+    leaveDisabled(back, fwd, canvas);
+    expect(document.activeElement).toBe(other);
+    other.blur();
+    expect(document.activeElement).toBe(document.body);
+    leaveDisabled(back, fwd, canvas);
+    expect(document.activeElement).toBe(document.body);
+    // 앱 원문: 막는 줄 바로 뒤에서 — 이전·다음 보기는 서로(그다음 3D 보기), 「다시 재기」는 3D 보기
+    const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
+    expect(app).toMatch(
+      /e\.fwdBtn\.disabled = [^\n]+\n(?:\s*\/\/[^\n]*\n)*\s*const cv = this\.viewer\?\.canvas;\n\s*leaveDisabled\(e\.backBtn, e\.fwdBtn, cv\);\n\s*leaveDisabled\(e\.fwdBtn, e\.backBtn, cv\);/,
+    );
+    expect(app).toMatch(/e\.measureClear\.disabled = !tool\.clearable;\n(?:\s*\/\/[^\n]*\n)*\s*leaveDisabled\(e\.measureClear, this\.viewer\?\.canvas\);/);
   });
 });
 
