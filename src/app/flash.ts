@@ -2,23 +2,42 @@
  * 측정 띠 알림(복사했습니다, 안내 두기 켬 등): 잠깐 보이고 사라진다.
  * 종류(kind)를 붙여 띄운 알림은 그 종류로만 거둘 수 있다(다른 알림은 그대로 둔다 — 21차까지는 잠글 방향이 없다는 알림을
  * 잠금이 걸리면 거뒀다. 22차부터 그때는 측정 띠 위에 잠글 방향 고르기 줄을 연다).
+ * 166차(WCAG 2.2.1 — 연장): 마우스·펜을 알림 위에 올린 동안은 사라지지 않고, 떠나면 그 시간을 처음부터 다시 잰다
+ * (측정 띠 화면의 복사 결과는 다시 볼 곳이 없다). 알림에는 초점을 받는 칸이 없어 초점 길은 없다
  */
 export class FlashNote {
   private readonly el: HTMLElement;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private kind: string | null = null;
+  /** 보이는 시간(떠나면 다시 이만큼)과 포인터가 알림 위에 있는지(166차) */
+  private ms = 0;
+  private held = false;
 
   constructor(el: HTMLElement) {
     this.el = el;
+    el.addEventListener('pointerenter', () => {
+      this.held = true;
+      this.stopTimer();
+    });
+    el.addEventListener('pointerleave', () => {
+      this.held = false;
+      if (!el.hidden) this.arm();
+    });
   }
 
-  /** 글을 ms 동안 보인다(떠 있던 알림은 바꾼다) */
+  /** 글을 ms 동안 보인다(떠 있던 알림은 바꾼다 — 포인터가 위에 있으면 떠날 때까지) */
   show(text: string, ms = 1600, kind: string | null = null): void {
     this.el.textContent = text;
     this.el.hidden = false;
     this.kind = kind;
+    this.ms = ms;
     this.stopTimer();
-    this.timer = setTimeout(() => this.hide(), ms);
+    if (!this.held) this.arm();
+  }
+
+  private arm(): void {
+    this.stopTimer();
+    this.timer = setTimeout(() => this.hide(), this.ms);
   }
 
   /** 그 종류 알림이 떠 있으면 거둔다 */
@@ -30,6 +49,8 @@ export class FlashNote {
     this.stopTimer();
     this.el.hidden = true;
     this.kind = null;
+    // 올린 채 거둬도 숨은 칸에는 떠남이 오지 않을 수 있다 — 다음 알림은 다시 시간을 잰다
+    this.held = false;
   }
 
   private stopTimer(): void {

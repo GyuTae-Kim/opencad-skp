@@ -46,6 +46,51 @@ describe('측정 띠 알림', () => {
   });
 });
 
+describe('166차: 잠깐 알림 위에 마우스·펜을 올린 동안은 사라지지 않는다(WCAG 2.2.1 연장 — 측정 띠 화면의 복사 결과는 다시 볼 곳이 없음)', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('올린 동안 멈추고 떠나면 그 시간을 처음부터 다시 재며, 올린 채 바뀐 알림도 떠날 때까지 남는다', () => {
+    vi.useFakeTimers();
+    const el = document.createElement('div');
+    el.hidden = true;
+    const n = new FlashNote(el);
+    n.show('복사했습니다');
+    vi.advanceTimersByTime(1000);
+    el.dispatchEvent(new Event('pointerenter'));
+    // 1.6초가 한참 지나도 올린 동안은 남는다(고치기 전에는 0.6초 뒤 사라졌다)
+    vi.advanceTimersByTime(5000);
+    expect(el.hidden).toBe(false);
+    // 올린 채 새 알림으로 바뀌어도 남는다
+    n.show('복사하지 못했습니다');
+    vi.advanceTimersByTime(5000);
+    expect(el.hidden).toBe(false);
+    expect(el.textContent).toBe('복사하지 못했습니다');
+    // 떠나면 처음부터 다시 1.6초
+    el.dispatchEvent(new Event('pointerleave'));
+    vi.advanceTimersByTime(1500);
+    expect(el.hidden).toBe(false);
+    vi.advanceTimersByTime(100);
+    expect(el.hidden).toBe(true);
+    // 떠난 뒤의 알림은 지금처럼 1.6초
+    n.show('복사했습니다');
+    vi.advanceTimersByTime(1600);
+    expect(el.hidden).toBe(true);
+  });
+
+  it('올린 채 종류로 거두면 숨고, 다음 알림은 다시 시간을 잰다(숨은 칸에는 떠남이 오지 않을 수 있음)', () => {
+    vi.useFakeTimers();
+    const el = document.createElement('div');
+    const n = new FlashNote(el);
+    n.show('잠글 방향이 없습니다', 3200, 'no-lock');
+    el.dispatchEvent(new Event('pointerenter'));
+    n.drop('no-lock');
+    expect(el.hidden).toBe(true);
+    n.show('복사했습니다');
+    vi.advanceTimersByTime(1600);
+    expect(el.hidden).toBe(true);
+  });
+});
+
 describe('154차: 복사 결과를 알릴 곳(넓은 마우스 화면·측정을 끈 때는 측정 띠가 숨어 있다)', () => {
   /** 앱 bandQuery 흉내(측정 띠를 쓰는 화면 — styles.css .measure-bar와 같은 조건: 좁은 화면·손가락 기기) */
   const band = (matches: boolean): MediaQueryList => ({ matches }) as MediaQueryList;
