@@ -216,6 +216,20 @@ describe('휴대폰 점검(43차 — 스타일 규칙)', () => {
   });
 });
 
+describe('마우스 화면 누르는 칸 크기(169차 — WCAG 2.5.8, 스타일 규칙)', () => {
+  const css = readFileSync(resolve(__dirname, '../../src/app/styles.css'), 'utf8');
+  /** 선택자 하나의 맨 앞 줄 규칙(손가락 @media 밖 — 들여 쓴 규칙은 건너뜀) 본문에서 height·min-height 가운데 큰 값(px) */
+  const mouseHeight = (sel: string): number => {
+    const body = css.match(new RegExp(`(?:^|\\n)${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`))?.[1] ?? '';
+    const px = (p: string): number => Number(body.match(new RegExp(`(?:^|[;\\s])${p}:\\s*(\\d+(?:\\.\\d+)?)px`))?.[1] ?? 0);
+    return Math.max(px('height'), px('min-height'));
+  };
+
+  it('높이를 못 박은 버튼·줄은 마우스 화면에서도 24px 넘게 — 패널 아래 띠 최근 측정 줄의 복사 버튼은 줄이 틈 없이 쌓여 22px이면 위아래 버튼과 24px 원이 겹쳤다', () => {
+    for (const sel of ['.tbtn', '.icon-btn', '.vcb-btn', '.mb-btn', '.menu-item', '.prow', '.mini-btn', '.ml-copy-btn']) expect(mouseHeight(sel), sel).toBeGreaterThanOrEqual(24);
+  });
+});
+
 describe('측정 띠 알림 영역(45차 — 앱 원본 규칙)', () => {
   const src = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
   /** `const <이름> = h(` 호출 하나의 원본(괄호 짝까지) */

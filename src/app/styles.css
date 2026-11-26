@@ -2656,8 +2656,9 @@ html:lang(zh-CN) { --font: -apple-system, "PingFang SC", "Microsoft YaHei", sans
   font-variant-numeric: tabular-nums;
 }
 
+/* 줄마다 복사 버튼: 줄이 틈 없이 쌓이므로 마우스 화면에서도 24px(WCAG 2.5.8 — 22px이면 위아래 버튼과 24px 원이 겹쳤다, 169차) */
 .ml-copy-btn {
-  height: 22px;
+  height: 24px;
   padding: 0 6px;
 }
 
