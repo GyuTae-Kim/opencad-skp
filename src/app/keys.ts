@@ -117,13 +117,21 @@ export function inList(t: EventTarget | null): boolean {
 /**
  * 157차: 키 대상이 메뉴(role=menu — 공용 언어 고르기 메뉴 등) 안이고 그 메뉴가 스스로 쓰는 키(Esc·화살표·Home·End·PageUp·PageDown)인지.
  * 그러면 앱 창 키(app.ts onKey — 캡처)는 손대지 않는다: 언어 메뉴는 앱 목록 판정(inList)에 들지 않아, 걷는 중이면 화살표가 걷기·Esc가 걷기 끝,
- * 줄자·각도기를 켠 동안이면 화살표가 방향 잠금·Esc가 측정 지우기로 먼저 가 메뉴가 움직이지도 닫히지도 않았다. 글자 키·Tab·Enter는 그대로 앱 것.
+ * 줄자·각도기를 켠 동안이면 화살표가 방향 잠금·Esc가 측정 지우기로 먼저 가 메뉴가 움직이지도 닫히지도 않았다. Tab·Enter는 그대로 앱 차례.
  * 158차: 대화 상자(role=dialog — 그림 저장 창) 안의 Esc(APG: 닫기)도 그 창 것 — inList는 Esc를 거르지 않아 줄자·각도기를 켠 동안 Esc가 창을 닫지 않고
  * 잰 결과를 지웠다(걷기 끝·고른 안내 풀기도 같음). 창 안의 이동 키는 메뉴가 아니므로 그대로(크기 radio는 이미 inList)
+ * 164차: 메뉴 안의 글자·숫자·기호 키(인쇄되는 글자 하나 — Space·Shift 글자 포함)도 mod(Ctrl·⌘·Alt)가 없으면 그 메뉴 것(APG Menu: 글자는 그 글자로 시작하는 항목으로 —
+ * 선택 사항이라 이 앱은 넣지 않음, 메뉴 밖 단축키로 보내지 않음). 앱 창 키가 F 전체 보기·1~7 표준 뷰·T 줄자·걷기 W·? 안내·측정값 칸 숫자로 가져가
+ * 메뉴가 열린 채 뒤 3D 보기·도구가 바뀌었다(겹친 것 목록은 T에 떼어져 초점이 문서로). 조합 키(안내 되돌리기·열기·안내 고르기)는 메뉴가 쓰지 않는 명령 키라 앱 것
+ * — 메뉴 것으로 돌리면 브라우저 기본 동작(Ctrl+O 파일 열기·Ctrl+A 글 모두 고르기)이 된다
  */
-export function menuKey(t: EventTarget | null, key: string): boolean {
+export function menuKey(t: EventTarget | null, key: string, mod = false): boolean {
   const el = t as Element | null;
-  return !!el && typeof el.closest === 'function' && (key === 'Escape' ? !!el.closest('[role="menu"],[role="dialog"]') : LIST_KEYS.has(key) && !!el.closest('[role="menu"]'));
+  return (
+    !!el &&
+    typeof el.closest === 'function' &&
+    (key === 'Escape' ? !!el.closest('[role="menu"],[role="dialog"]') : (LIST_KEYS.has(key) || (key.length === 1 && !mod)) && !!el.closest('[role="menu"]'))
+  );
 }
 
 /**
