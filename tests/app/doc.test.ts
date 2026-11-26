@@ -26,7 +26,7 @@ import {
   unitSummary,
   unsupportedVersion,
 } from '../../src/app/doc';
-import { readSkpImages, skpToScene } from '../../src/index';
+import { SKP_MIN_SUPPORTED_MAJOR, readSkpImages, skpToScene } from '../../src/index';
 import { sectionPlanesFor } from '../../src/app/sections';
 import { oldSkpHeader } from '../build';
 import { PRE3_SCHEMAS, mfcFile, squareEntities } from '../mfcwrite';
@@ -62,6 +62,8 @@ describe('판·단위 글', () => {
     expect(unsupportedVersion({ name: 'x', units: 'unknown', meshes: [], lines: [], meta: { version: '5.0.1', container: 'mfc' } })).toBeNull();
     expect(unsupportedVersion({ name: 'x', units: 'unknown', meshes: [], lines: [], meta: { version: '6.0.1', container: 'mfc' } })).toBeNull();
     expect(unsupportedVersion({ name: 'x', units: 'unknown', meshes: [], lines: [], meta: { version: '20.0.1', container: 'mfc' } })).toBeNull();
+    // 공개 최소 판 상수는 실제 판 검사와 같은 값이다 — 그 판은 읽고 바로 아래 판은 못 읽는 판(145차, 해석기 쪽은 위 3보다 옛 스키마 거절·v3 읽음)
+    expect([SKP_MIN_SUPPORTED_MAJOR - 1, SKP_MIN_SUPPORTED_MAJOR].map((m) => unsupportedVersion({ name: 'x', units: 'unknown', meshes: [], lines: [], meta: { version: `${m}.0.1`, container: 'mfc' } }))).toEqual([`${SKP_MIN_SUPPORTED_MAJOR - 1}.0.1`, null]);
   });
 
   it('정보·단위 요약', () => {
