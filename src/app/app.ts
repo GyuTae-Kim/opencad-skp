@@ -99,7 +99,7 @@ import {
 } from './doc';
 import { MAX_FILE_BYTES, SKP_ACCEPT, baseName, fmtCount, formatBytes, formatMs, rgbCss } from './format';
 import type { AnnotationMarks } from './dimmarks';
-import { VIEW_MENU, inList, isEditableTarget, isViewKey, keyAction, menuKey } from './keys';
+import { VIEW_MENU, inList, inModal, isEditableTarget, isViewKey, keyAction, menuKey } from './keys';
 import type { LaunchRequest } from './launch';
 import {
   PANEL_WIDTH_DEFAULT,
@@ -3342,8 +3342,19 @@ export class SkpViewerApp implements PanelHost {
   // ───────────────────────── 키 ─────────────────────────
 
   private onKey(ev: KeyboardEvent): void {
-    // 바로 가기 안내(모달)가 열려 있으면 키는 그 상자 것(뒤 3D 보기로 보내지 않는다 — Esc는 상자가 닫는다)
-    if (this.shortcutsClose) return;
+    // 바로 가기 안내(모달)가 열려 있으면 키는 그 상자 것(뒤 3D 보기로 보내지 않는다 — Esc는 상자가 닫는다).
+    // 160차: 상자는 뒤 문서를 inert로 만들지 않아(showModal 아님) 초점이 상자 밖(주소 막대에서 Tab으로 들어온 뒤 버튼·3D 보기 캔버스, 상자 제목을 눌러 문서 몸)에 있을 수 있다 —
+    // 그 키는 전파를 막아 코어 캔버스 키(F·1~7 보기·가상 커서 Enter 고르기·걷기)와 뒤 위젯 키가 듣지 않게 하고(기본 동작은 그대로), Esc는 상자를 닫는다(APG dialog)
+    if (this.shortcutsClose) {
+      if (!inModal(ev.target)) {
+        ev.stopPropagation();
+        if (ev.key === 'Escape') {
+          ev.preventDefault();
+          this.shortcutsClose();
+        }
+      }
+      return;
+    }
     if (this.sliding && !['Shift', 'Control', 'Alt', 'Meta'].includes(ev.key)) this.stopSlideshow();
     if (this.menu && ev.key === 'Escape') {
       ev.preventDefault();
