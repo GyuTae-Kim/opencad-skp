@@ -124,7 +124,7 @@ import { cameraForBox, keepViewOnHeightChange } from './view';
 import { cssHex, isLightBackground, loadFileBackground, safeStorage, skyBackground, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
 import type { BackgroundOptions, Rgba } from 'opencad-viewer3d';
 import { DEFAULT_EDGE_COLOR, LineContrast, edgeLooks, lineColorOverrides } from './linecontrast';
-import { focusIfLost, focusSpot, leaveDisabled, listKeys, refocus } from './kbd';
+import { disclose, focusIfLost, focusSpot, leaveDisabled, listKeys, refocus } from './kbd';
 import type { Rgb, SkpEdgeColorMode, SkpShadowMeta, SkpStyleMeta } from '../meta';
 import { WalkStick } from './joystick';
 import { Vcb, vcbStartKey, type VcbKind } from './vcb';
@@ -646,7 +646,8 @@ export class SkpViewerApp implements PanelHost {
     // 지금 결과 복사·최근 측정 기록(새것부터 10개, 줄마다 복사)
     const measureCopy = h('button', { class: 'mb-btn icon', title: '지금 결과 글 복사', 'aria-label': '지금 결과 글 복사', html: icon('copy', 16) });
     measureCopy.addEventListener('click', () => this.copyMeasure('current'));
-    const measureLogBtn = h('button', { class: 'mb-btn icon', title: '최근 측정 기록', 'aria-label': '최근 측정 기록', html: icon('list', 16) });
+    // 펼침 상태는 aria-expanded로(153차 — 같은 목록인 패널 아래 띠는 접기 머리라 상태가 있다), 목록은 id로 가리킨다(문서에 하나)
+    const measureLogBtn = h('button', { class: 'mb-btn icon', title: '최근 측정 기록', 'aria-label': '최근 측정 기록', 'aria-expanded': 'false', 'aria-controls': 'measure-log', html: icon('list', 16) });
     measureLogBtn.addEventListener('click', () => this.toggleMeasureLog());
     // 방향 잠금(Shift가 없는 손가락 기기 — SketchUp 추론 잠금): 방향을 잡는 동안만 보이고, 누르면 지금 방향을 잠그고 다시 누르면 푼다.
     // 정밀 조준 중 다른 손가락으로 누르면 둘째 손가락이라 click이 오지 않으므로 손가락·펜은 누르는 순간에 받는다
@@ -670,7 +671,7 @@ export class SkpViewerApp implements PanelHost {
       t.setGuideMode(!t.guideMode);
       this.flashMeasure(t.guideMode ? '안내 두기 켬: 누르면 안내점·안내선을 둡니다' : '안내 두기 끔: 재기만 합니다');
     });
-    const measureLogEl = h('div', { class: 'measure-log', hidden: true });
+    const measureLogEl = h('div', { class: 'measure-log', id: 'measure-log', hidden: true });
     const measureFlash = h('div', { class: 'measure-flash', role: 'status', hidden: true });
     // 띠는 이름 붙은 묶음이고 알림 영역은 안의 결과 글(mb-text) 하나와 잠깐 알림(measure-flash)뿐이다(45차 — 띠가 role=status였을 때는
     // 결과 글의 aria-live가 그 안에 겹쳐 두 번 읽힐 수 있었고, 휴대폰에서 띠 안으로 옮긴 VCB 알림도 겹쳤다. WAI-ARIA 1.2 status는 암묵 polite·atomic)
@@ -1640,7 +1641,7 @@ export class SkpViewerApp implements PanelHost {
 
   clearMeasureLog(): void {
     this.measureLog = [];
-    this.els.measureLog.hidden = true;
+    disclose(this.els.measureLogBtn, this.els.measureLog, false);
     this.panel.refreshSelection();
     this.refreshStatus();
   }
@@ -1672,10 +1673,10 @@ export class SkpViewerApp implements PanelHost {
     return t?.active && !this.doc?.measure ? t.lockHintText(!!this.coarseQuery?.matches) : null;
   }
 
-  /** 측정 기록 펼치기(측정 띠 위 목록) */
+  /** 측정 기록 펼치기(측정 띠 위 목록 — 펼침·접힘은 모두 disclose로 버튼 aria-expanded와 함께, 153차) */
   private toggleMeasureLog(): void {
     const el = this.els.measureLog;
-    el.hidden = !el.hidden;
+    disclose(this.els.measureLogBtn, el, !!el.hidden);
     if (!el.hidden) this.renderMeasureLog();
   }
 
@@ -3784,7 +3785,7 @@ export class SkpViewerApp implements PanelHost {
     press(e.measureGuide, tool.guideMode);
     e.measureLogBtn.disabled = !this.measureLog.length;
     e.measureLogBtn.title = this.measureLog.length ? `최근 측정 기록 ${this.measureLog.length}개` : '최근 측정 기록';
-    if (!this.measureLog.length) e.measureLog.hidden = true;
+    if (!this.measureLog.length) disclose(e.measureLogBtn, e.measureLog, false);
     this.renderMeasureLog();
   }
 
