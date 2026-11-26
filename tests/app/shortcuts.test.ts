@@ -8,6 +8,13 @@ const press = (el: Element, key: string, shiftKey = false): void => {
   el.dispatchEvent(new KeyboardEvent('keydown', { key, shiftKey, bubbles: true, cancelable: true }));
 };
 
+/** 포인터 사건(jsdom에는 PointerEvent가 없어 pointerType만 붙인다) */
+const pointer = (el: Element, type: string, pointerType: string): void => {
+  const e = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(e, 'pointerType', { value: pointerType });
+  el.dispatchEvent(e);
+};
+
 afterEach(() => {
   document.body.innerHTML = '';
 });
@@ -105,5 +112,46 @@ describe('키보드 바로 가기 안내', () => {
     expect(again).toHaveBeenCalledTimes(1);
     closeFn();
     expect(again).toHaveBeenCalledTimes(1);
+  });
+
+  it('손가락·펜으로 바깥(어두운 바탕)을 누르면 뗀 뒤 그 탭의 click에서 닫는다 — 누를 때 바탕을 떼면 그 click이 밑의 단추·링크를 누른다(140차)', () => {
+    const opener = document.createElement('button');
+    document.body.append(opener);
+    for (const type of ['touch', 'pen']) {
+      opener.focus();
+      const onClose = vi.fn();
+      openShortcutsDialog(document.body, onClose);
+      const backdrop = document.querySelector<HTMLElement>('.sc-backdrop')!;
+      pointer(backdrop, 'pointerdown', type);
+      // 누를 때는 그대로: 바탕이 문서에 남아 그 탭의 click을 받는다(밑의 요소로 가지 않음)
+      expect(document.querySelector('[role=dialog]'), type).not.toBeNull();
+      expect(backdrop.isConnected, type).toBe(true);
+      expect(onClose, type).not.toHaveBeenCalled();
+      backdrop.click();
+      expect(document.querySelector('[role=dialog]'), type).toBeNull();
+      expect(onClose, type).toHaveBeenCalledTimes(1);
+      expect(document.activeElement, type).toBe(opener);
+    }
+    // 상자 안에서 누르고 바탕에서 뗀 것(click은 두 요소의 공통 조상인 바탕으로 감)은 닫지 않는다
+    const onClose = vi.fn();
+    openShortcutsDialog(document.body, onClose);
+    const backdrop = document.querySelector<HTMLElement>('.sc-backdrop')!;
+    const body = document.querySelector<HTMLElement>('.sc-body')!;
+    pointer(body, 'pointerdown', 'touch');
+    backdrop.click();
+    expect(document.querySelector('[role=dialog]')).not.toBeNull();
+    // 바탕에서 누른 손가락이 끌려 click이 바탕에 오지 않으면 닫지 않는다(상자 안 click도)
+    pointer(backdrop, 'pointerdown', 'touch');
+    body.click();
+    expect(document.querySelector('[role=dialog]')).not.toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    press(document.querySelector('.sc-box button')!, 'Escape');
+    expect(onClose).toHaveBeenCalledTimes(1);
+    // 마우스는 그대로 누를 때 닫는다(click은 뗀 바탕과 뗀 자리 요소의 공통 조상으로 가 밑의 단추를 누르지 않음)
+    const mouse = vi.fn();
+    openShortcutsDialog(document.body, mouse);
+    pointer(document.querySelector('.sc-backdrop')!, 'pointerdown', 'mouse');
+    expect(document.querySelector('[role=dialog]')).toBeNull();
+    expect(mouse).toHaveBeenCalledTimes(1);
   });
 });
