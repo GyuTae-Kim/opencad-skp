@@ -135,8 +135,17 @@ export function openShortcutsDialog(parent: HTMLElement, onClose: () => void): (
     onClose();
   };
   closeBtn.addEventListener('click', close);
+  // 바깥(어두운 바탕) 누르기: 마우스는 누를 때 닫는다. 손가락·펜은 그 탭의 click에서 닫는다(140차) — 브라우저는 손가락 탭을 뗀 뒤
+  // 그 자리 요소에 click을 내므로, 누를 때 바탕을 떼면 그 click이 밑의 제목 막대·도구 막대 단추·링크, 장면 탭을 누른다.
+  // 바탕에서 시작한 누르기만 닫는다(상자 안에서 누르고 바탕에서 뗀 click은 두 요소의 공통 조상인 바탕으로 온다)
+  let tap = false;
   backdrop.addEventListener('pointerdown', (e) => {
-    if (e.target === backdrop) close();
+    tap = e.target === backdrop && (e.pointerType === 'touch' || e.pointerType === 'pen');
+    if (e.target === backdrop && !tap) close();
+  });
+  backdrop.addEventListener('click', (e) => {
+    if (tap && e.target === backdrop) close();
+    tap = false;
   });
   box.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
