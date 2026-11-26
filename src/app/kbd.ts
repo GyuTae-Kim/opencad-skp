@@ -43,6 +43,18 @@ export function listKeys(e: KeyboardEvent, all: readonly HTMLElement[], prev: st
 }
 
 /**
+ * 메뉴 항목의 Tab·Shift+Tab(163차 — WAI-ARIA APG Menu Button 예제, NC 151차 꼴): 메뉴를 닫고 메뉴 버튼으로 초점. Tab은 기본 동작 그대로 버튼 다음 칸으로,
+ * Shift+Tab은 기본 동작을 막아 버튼에 머문다(메뉴는 body 끝에 붙어 버튼에서 옮기면 버튼 앞 칸으로 건너뛰었다). 버튼이 없으면 막지 않는다. 다룬 키면 true
+ */
+export function menuTab(e: KeyboardEvent, btn: HTMLElement | null, close: () => void): boolean {
+  if (e.key !== 'Tab') return false;
+  if (e.shiftKey && btn) e.preventDefault();
+  close();
+  btn?.focus();
+  return true;
+}
+
+/**
  * 나무(role=tree) 키: ↑↓·Home·End는 보이는 줄 사이, →는 펼친 줄의 첫 아이로, ←는 접힌 줄·잎에서 부모로
  * (닫힌 줄 펼치기·펼친 줄 접기는 줄이 먼저 받는다). 다룬 키면 true
  */

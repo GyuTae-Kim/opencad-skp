@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { closeOutside, disclose, focusIfLost, focusSpot, leaveDisabled, listKeys, listRows, lost, moveIndex, refocus, rove, setRange, treeKeys } from '../../src/app/kbd';
+import { closeOutside, disclose, focusIfLost, focusSpot, leaveDisabled, listKeys, listRows, lost, menuTab, moveIndex, refocus, rove, setRange, treeKeys } from '../../src/app/kbd';
 import { PANEL_WIDTH_STEPS, SHEET_STEPS, clampSheetFraction, nextSize } from '../../src/app/layout';
 import type { MeasureToolResult } from '../../src/app/measure';
 import { Panel, type PanelHost } from '../../src/app/panel';
@@ -585,6 +585,83 @@ describe('열린 메뉴·목록 밖으로 초점이 나가면 닫기(162차 — 
     expect(pick).toContain('const away = closeOutside([menu], () => this.close());');
     // ?로 바로 가기 안내를 열 때 겹친 것 목록도 앱 메뉴처럼 먼저 닫고 연 곳(3D 보기)으로 — 안내가 닫히면 그리로 초점을 돌려준다(목록 항목은 떼어져 돌아갈 곳이 없음)
     expect(app).toMatch(/openShortcuts\(\): void \{\n\s*if \(this\.shortcutsClose \|\| this\.shortcutsLoading\) return;\n\s*const b = this\.menuBtn;\n\s*this\.closeMenu\(\);\n\s*focusIfLost\(b\);\n\s*this\.pickList\?\.dismiss\(\);\n/);
+  });
+});
+
+describe('메뉴 항목 Tab·Shift+Tab(163차 — WAI-ARIA APG Menu Button 예제, NC 151차 꼴)', () => {
+  it('닫고 메뉴 버튼으로 — Shift+Tab은 기본 동작을 막아 버튼에 머물고(버튼 앞 칸으로 건너뛰지 않게), Tab은 기본 동작 그대로(버튼 다음 칸), 밖 초점 닫기(162차)와 두 번 닫히지 않음 — 앱 도구 막대 메뉴 넷이 이것으로', async () => {
+    const box = html('<button class="prev">전체 보기</button><button class="tbtn" aria-expanded="false">표준 뷰</button><button class="next">이전 보기</button>');
+    const [prev, btn, next] = [...box.querySelectorAll<HTMLButtonElement>('button')] as [HTMLButtonElement, HTMLButtonElement, HTMLButtonElement];
+    const tick = (): Promise<void> => new Promise((r) => setTimeout(r));
+    // 앱 openMenu·closeMenu 꼴: 메뉴는 body 끝에 붙이고(버튼과 이어지지 않음), 항목 keydown은 menuTab이 아니면 listKeys, 닫으면 떼고 밖 초점 듣기를 거둔다
+    let open: HTMLElement | null = null;
+    let menuBtn: HTMLButtonElement | null = null;
+    let off: (() => void) | null = null;
+    let closed = 0;
+    const closeMenu = (): void => {
+      if (!open) return;
+      open.remove();
+      open = null;
+      off?.();
+      off = null;
+      menuBtn?.setAttribute('aria-expanded', 'false');
+      menuBtn = null;
+      closed++;
+    };
+    const openMenu = async (): Promise<HTMLButtonElement[]> => {
+      const m = document.createElement('div');
+      m.className = 'menu';
+      m.setAttribute('role', 'menu');
+      m.innerHTML =
+        '<button class="menu-item" role="menuitem" tabindex="-1">앞</button><button class="menu-item" role="menuitem" tabindex="-1" disabled>꺼짐</button><button class="menu-item" role="menuitem" tabindex="-1">뒤</button>';
+      m.addEventListener('keydown', (e) => {
+        if (!menuTab(e, menuBtn, closeMenu)) listKeys(e, [...m.querySelectorAll<HTMLElement>('.menu-item')], 'ArrowUp', 'ArrowDown', true, 0);
+      });
+      document.body.append(m);
+      open = m;
+      menuBtn = btn;
+      btn.setAttribute('aria-expanded', 'true');
+      const items = [...m.querySelectorAll<HTMLButtonElement>('.menu-item')];
+      items[0]!.focus();
+      off = closeOutside([m, btn], closeMenu);
+      await tick();
+      return items;
+    };
+    // 다른 키는 다루지 않는다(↓는 listKeys가 꺼진 항목을 건너뛰어 옮김, Enter는 항목 누르기 몫 — 막지 않고 닫지 않음)
+    let items = await openMenu();
+    key(items[0]!, 'ArrowDown');
+    expect(document.activeElement).toBe(items[2]);
+    expect(key(items[2]!, 'Enter').defaultPrevented).toBe(false);
+    expect(closed).toBe(0);
+    // Shift+Tab: 한 번 닫고 버튼에 초점, 기본 동작을 막아 버튼에 머묾(전에는 버튼에서 앞 칸 — 전체 보기로 건너뜀)
+    const back = key(items[2]!, 'Tab', { shiftKey: true });
+    expect(back.defaultPrevented).toBe(true);
+    expect([closed, btn.getAttribute('aria-expanded'), document.querySelector('.menu')]).toEqual([1, 'false', null]);
+    expect(document.activeElement).toBe(btn);
+    // 닫으며 밖 초점 듣기를 거둬 그 뒤 초점 이동에 다시 닫지 않음
+    prev.focus();
+    expect(closed).toBe(1);
+    // Tab: 한 번 닫고 버튼에 초점, 기본 동작은 그대로 — 브라우저가 버튼에서 다음 칸(이전 보기)으로 옮김(jsdom은 기본 Tab 이동이 없어 버튼에 머묾)
+    items = await openMenu();
+    const fwd = key(items[0]!, 'Tab');
+    expect(fwd.defaultPrevented).toBe(false);
+    expect([closed, document.querySelector('.menu')]).toEqual([2, null]);
+    expect(document.activeElement).toBe(btn);
+    next.focus();
+    expect(closed).toBe(2);
+    // 버튼이 없으면 막지 않음(초점이 떼어진 항목에 남지 않게 — 브라우저 기본 이동에 맡김), Tab 밖의 키는 false
+    let shut = 0;
+    const lone = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, cancelable: true });
+    expect(menuTab(lone, null, () => shut++)).toBe(true);
+    expect([lone.defaultPrevented, shut]).toEqual([false, 1]);
+    const esc = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true });
+    expect(menuTab(esc, btn, () => shut++)).toBe(false);
+    expect([esc.defaultPrevented, shut]).toEqual([false, 1]);
+    // 원문: 도구 막대 메뉴 넷(openMenu 하나)이 menuTab으로 — 기본 동작을 늘 그대로 두던 Tab 줄은 남지 않음
+    const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
+    expect(app).toMatch(/import \{[^}]*\bmenuTab\b[^}]*\} from '\.\/kbd';/);
+    expect(app).toContain("if (!menuTab(e, this.menuBtn, () => this.closeMenu())) listKeys(e, [...menu.querySelectorAll<HTMLElement>('.menu-item')], 'ArrowUp', 'ArrowDown', true, 0);");
+    expect(app).not.toMatch(/if \(e\.key === 'Tab'\) \{\n\s*const b = this\.menuBtn;/);
   });
 });
 

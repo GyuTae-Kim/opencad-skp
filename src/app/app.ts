@@ -124,7 +124,7 @@ import { cameraForBox, keepViewOnHeightChange } from './view';
 import { cssHex, isLightBackground, loadFileBackground, safeStorage, skyBackground, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
 import type { BackgroundOptions, Rgba } from 'opencad-viewer3d';
 import { DEFAULT_EDGE_COLOR, LineContrast, edgeLooks, lineColorOverrides } from './linecontrast';
-import { closeOutside, disclose, focusIfLost, focusSpot, leaveDisabled, listKeys, listRows, refocus, setRange } from './kbd';
+import { closeOutside, disclose, focusIfLost, focusSpot, leaveDisabled, listKeys, listRows, menuTab, refocus, setRange } from './kbd';
 import type { Rgb, SkpEdgeColorMode, SkpShadowMeta, SkpStyleMeta } from '../meta';
 import { WalkStick } from './joystick';
 import { Vcb, vcbStartKey, type VcbKind } from './vcb';
@@ -3297,12 +3297,8 @@ export class SkpViewerApp implements PanelHost {
       menu.append(item);
     }
     menu.addEventListener('keydown', (e) => {
-      // Tab·Shift+Tab: 메뉴를 닫고 단추 다음·앞으로(기본 동작은 그대로 — 단추에서 옮긴다)
-      if (e.key === 'Tab') {
-        const b = this.menuBtn;
-        this.closeMenu();
-        b?.focus();
-      } else listKeys(e, [...menu.querySelectorAll<HTMLElement>('.menu-item')], 'ArrowUp', 'ArrowDown', true, 0);
+      // Tab·Shift+Tab: 메뉴를 닫고 Tab은 버튼 다음 칸, Shift+Tab은 메뉴 버튼으로(163차 — 전에는 버튼 앞 칸으로 건너뜀)
+      if (!menuTab(e, this.menuBtn, () => this.closeMenu())) listKeys(e, [...menu.querySelectorAll<HTMLElement>('.menu-item')], 'ArrowUp', 'ArrowDown', true, 0);
     });
     document.body.append(menu);
     const r = btn.getBoundingClientRect();
