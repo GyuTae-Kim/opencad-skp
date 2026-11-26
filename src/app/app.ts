@@ -162,6 +162,8 @@ interface NoticeState {
   kind: NoticeKind;
   title: Mixed;
   text: Mixed;
+  /** 가벼운 글(159차 — showNotice light: 복사 결과·2점 투시 거절·문맥 잃음·되찾는 중 안내)이면 다음 가벼운 글이 바꿔 띄운다 */
+  light: boolean;
 }
 
 /** window.opencadApp.state() 꼴 */
@@ -437,8 +439,6 @@ export class SkpViewerApp implements PanelHost {
   /** 그래픽 문맥 잃음·되찾음 안내와 놓은 것 다시 주기(release.ts — 조각을 받으면 뷰어마다 하나), 그 안내로 띄운 알림 */
   private ctxWatch: ContextWatch | null = null;
   private ctxNotice: NoticeState | null = null;
-  /** 측정 띠가 숨은 화면에서 복사 결과로 띄운 알림(154차 — 그 알림이 아직 떠 있으면 다음 복사 결과로 바꾼다) */
-  private copyNotice: NoticeState | null = null;
   /** 측정 도구를 받기 전에 켰을 때: 받는 동안 마지막으로 누른 도구를 받은 뒤에 켠다(다시 누르면 거둔다, 받지 못하면 알린다) */
   private readonly measureFirstUse = new FirstUse<MeasureMode>(
     () => this.ensureMeasureTool(),
@@ -1417,8 +1417,9 @@ export class SkpViewerApp implements PanelHost {
     if (this.ctxWatch) return this.ctxWatch;
     this.ctxWatch = new m.ContextWatch(v, {
       show: (kind, title, text) => {
-        this.showNotice(kind, title, text);
-        this.ctxNotice = this.notice;
+        // 잃음·되찾는 중(info)은 가벼운 글이라 떠 있는 경고·오류를 덮지 않고(159차 — 덮은 뒤 거두면 상자가 비어 그 경고를 아주 잃었다), 일부 실패(warn)는 지금처럼.
+        // 띄웠을 때만 쥔다 — 못 띄웠는데 지금 알림을 쥐면 거둘 때 남의 경고를 닫는다
+        if (this.showNotice(kind, title, text, kind === 'info')) this.ctxNotice = this.notice;
       },
       hide: () => {
         if (this.ctxNotice && this.notice === this.ctxNotice) this.closeNotice();
@@ -1642,12 +1643,9 @@ export class SkpViewerApp implements PanelHost {
       const t = ok ? '복사했습니다' : '복사하지 못했습니다';
       // 측정 띠가 보일 때만 띠 잠깐 알림(154차). 넓은 마우스 화면과 측정을 끈 때(패널 아래 띠의 복사)는 띠가 숨어 보이지도 읽히지도 않으므로
       // 그림 저장 실패·2점 투시 안내가 쓰는 알림 상자로(role=alert — 성공은 info, 실패는 error, 새 자리·스타일·글 없음).
-      // 알림 상자는 한 칸이라 떠 있는 경고·오류(해석 경고 등)는 덮어쓰지 않는다 — 그때는 고치기 전처럼 띄우지 않음(안내·앞 복사 결과는 바꿈)
+      // 알림 상자는 한 칸이라 떠 있는 경고·오류(해석 경고 등)는 덮어쓰지 않는다 — 그때는 고치기 전처럼 띄우지 않음(안내·앞 가벼운 글은 바꿈 — 가벼운 글, 159차부터 showNotice 한 자리)
       if (barShown(this.els.measureBar, this.bandQuery)) this.flashMeasure(t);
-      else if (noticeFree(this.els.notice, this.notice?.kind, this.notice === this.copyNotice)) {
-        this.showNotice(ok ? 'info' : 'error', t, '');
-        this.copyNotice = this.notice;
-      }
+      else this.showNotice(ok ? 'info' : 'error', t, '', true);
     });
   }
 
@@ -2581,7 +2579,8 @@ export class SkpViewerApp implements PanelHost {
       if (this.projection !== 'perspective') this.setProjection('perspective');
       const c = twoPointCamera(v.getCamera());
       if (!c) {
-        this.showNotice('info', '2점 투시로 바꿀 수 없습니다', '곧장 위·아래를 보는 보기(앙각 80° 넘게)는 2점 투시가 되지 않습니다. 옆에서 보도록 돌린 뒤 다시 켜세요.');
+        // 가벼운 글(159차): 떠 있는 해석 경고·오류를 덮지 않는다(그 알림을 닫고 다시 누르면 이 까닭이 보임)
+        this.showNotice('info', '2점 투시로 바꿀 수 없습니다', '곧장 위·아래를 보는 보기(앙각 80° 넘게)는 2점 투시가 되지 않습니다. 옆에서 보도록 돌린 뒤 다시 켜세요.', true);
         return;
       }
       this.twoPointOn = true;
@@ -3095,7 +3094,7 @@ export class SkpViewerApp implements PanelHost {
       x.open();
     } else if (!this.exportLoading && this.stageEl) {
       // 처음: 그림 저장 조각을 받아 창을 만든다(오프라인 앱은 서비스 워커가 미리 담아 둔다)
-      const notify = (e: unknown): void => this.showNotice('error', '그림을 저장하지 못했습니다', errorParts(e));
+      const notify = (e: unknown): boolean => this.showNotice('error', '그림을 저장하지 못했습니다', errorParts(e));
       const stage = this.stageEl;
       this.exportLoading = true;
       void import('./exporter')
@@ -3561,11 +3560,14 @@ export class SkpViewerApp implements PanelHost {
 
   /**
    * 알림 띠. 53차: 제목·글은 섞은 글(filetext.ts)로 받아 파일 이름·꾸러미 항목 이름은 그대로, 앱 글만 지금 언어로 옮겨 넣는다
-   * (번역층이 건너뛰게 data-i18n-skip — 사전 틀이 맞지 않아 글을 조각내 옮길 때 이름 조각까지 바뀌던 것을 막는다). 언어를 바꾸면 다시 옮긴다(noticeText)
+   * (번역층이 건너뛰게 data-i18n-skip — 사전 틀이 맞지 않아 글을 조각내 옮길 때 이름 조각까지 바뀌던 것을 막는다). 언어를 바꾸면 다시 옮긴다(noticeText).
+   * 159차: light(가벼운 글 — 복사 결과·2점 투시 거절·문맥 잃음·되찾는 중 안내)는 상자가 비었거나 안내(info)·앞 가벼운 글이 떠 있을 때만 띄운다(154차 복사 결과 규칙을 한 자리로).
+   * 상자는 한 칸이라 떠 있는 경고·오류(해석 경고·열기 오류 등 — 다시 열기 전에는 다시 볼 수 없는 글)를 덮으면 잃으므로 두고 false. 무거운 글(light 아님)은 지금처럼 늘 띄운다
    */
-  private showNotice(kind: NoticeKind, title: string | Mixed, text: string | Mixed): void {
-    this.notice = { kind, title: typeof title === 'string' ? [title] : title, text: typeof text === 'string' ? [text] : text };
+  private showNotice(kind: NoticeKind, title: string | Mixed, text: string | Mixed, light = false): boolean {
     const n = this.els.notice;
+    if (light && !noticeFree(n, this.notice?.kind, !!this.notice?.light)) return false;
+    this.notice = { kind, title: typeof title === 'string' ? [title] : title, text: typeof text === 'string' ? [text] : text, light };
     n.className = `notice ${kind}`;
     n.innerHTML = '';
     const close = h('button', { class: 'icon-btn', title: '알림 닫기', 'aria-label': '알림 닫기', html: icon('close') });
@@ -3581,6 +3583,7 @@ export class SkpViewerApp implements PanelHost {
     );
     this.noticeText();
     n.hidden = false;
+    return true;
   }
 
   /** 알림 제목·글을 지금 언어로(파일 글 자리는 그대로) */
