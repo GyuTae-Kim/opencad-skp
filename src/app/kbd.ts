@@ -124,6 +124,26 @@ export function disclose(b: HTMLElement, list: HTMLElement, open: boolean): void
 }
 
 /**
+ * 띄운 메뉴·목록을 바깥 누르기와 밖으로 나간 초점에 닫는다(162차 — WAI-ARIA APG Menu Button, NC 152차 꼴): 창 캡처 pointerdown·focusin을 같은 듣기로,
+ * 대상이 inside(메뉴·연 버튼) 밖이면 close. 연 차례 뒤의 사건부터 받고, 거두는 함수를 돌려준다(닫을 때 부름 — 타이머도 거둠). 초점은 옮기지 않는다.
+ * Tab 밖의 길(측정값 칸에 숫자를 쳐 칸으로 간 초점, 화면 읽기 프로그램이 옮긴 초점)로 메뉴가 열린 채 남으면 그 칸의 Esc를 앱 창 키가 메뉴 닫기로 먼저 가져갔다
+ */
+export function closeOutside(inside: readonly Element[], close: () => void): () => void {
+  const away = (e: Event): void => {
+    if (!inside.some((el) => el.contains(e.target as Node))) close();
+  };
+  const t = setTimeout(() => {
+    window.addEventListener('pointerdown', away, true);
+    window.addEventListener('focusin', away, true);
+  });
+  return () => {
+    clearTimeout(t);
+    window.removeEventListener('pointerdown', away, true);
+    window.removeEventListener('focusin', away, true);
+  };
+}
+
+/**
  * 막대(input range) 값과 화면 읽기 값(aria-valuetext)을 함께 둔다(155차 — WAI-ARIA, NC 140·STEP 146차 꼴): 속 수 대신 사람이 읽을 값 글을 읽게.
  * 앱이 막대 값을 맞추는 자리는 모두 이것으로(값과 읽는 글이 어긋나지 않게). 번역층은 이 속성을 옮기지 않으므로 글은 수·단위·기호만
  */

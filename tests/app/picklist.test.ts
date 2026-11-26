@@ -458,6 +458,35 @@ describe('목록 키와 고르기', () => {
     expect(s.chosen).toEqual([]);
   });
 
+  it('162차: 초점이 목록 밖으로 나가면(Esc·Tab 밖의 길 — 바로 가기 안내·화면 읽기 프로그램이 옮긴 초점) 고르지 않고 닫아 미리 강조를 되돌리고, 초점은 옮긴 자리 그대로 — 목록 안 초점은 그대로', () => {
+    const s = setup();
+    const t = s.d.tree!;
+    const [, near] = childrenOf(t, childrenOf(t, -1)[0]!);
+    const before: Selection = { kind: 'node', index: near! };
+    s.d.selection = before;
+    const other = document.body.appendChild(document.createElement('button'));
+    ptr(s.cv, 'pointerdown', { x: 100, y: 100, button: 2 });
+    ptr(s.cv, 'pointerup', { x: 100, y: 100, button: 2 });
+    expect(document.activeElement).toBe(items()[0]);
+    // 연 차례 뒤부터 듣는다(바깥 누르기와 같은 듣기)
+    vi.advanceTimersByTime(1);
+    items()[2]!.focus();
+    items()[1]!.focus();
+    expect(menu()).not.toBeNull();
+    expect(s.calls.at(-1)).toEqual(['preview', { kind: 'node', index: near }]);
+    other.focus();
+    expect(menu()).toBeNull();
+    expect(document.activeElement).toBe(other);
+    expect(s.chosen).toEqual([]);
+    expect(s.calls.at(-1)).toEqual(['preview', before]);
+    expect(s.setPickPreview).toHaveBeenLastCalledWith(null);
+    // 닫으며 거두어 다음 초점·누르기는 아무 일 없음
+    const n = s.calls.length;
+    s.cv.focus();
+    ptr(document.body, 'pointerdown', { x: 5, y: 5 });
+    expect(s.calls.length).toBe(n);
+  });
+
   it('후보가 없으면 누를 수 없는 "고를 것이 없습니다" 한 줄, 잘린 면만이면 같다', () => {
     const s = setup([]);
     ptr(s.cv, 'pointerdown', { x: 100, y: 100, button: 2 });
