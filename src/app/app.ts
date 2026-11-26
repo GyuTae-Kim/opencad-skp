@@ -3332,8 +3332,8 @@ export class SkpViewerApp implements PanelHost {
       ev.stopPropagation();
       return;
     }
-    // 줄자 시작점·각도기 기준 방향을 찍은 뒤 숫자를 치면 측정값 칸으로(SketchUp처럼 — 그동안 1~7 보기 키는 칸이 받는다)
-    const typing = (tool?.mode === 'tape' && tool.pointCount === 1) || (tool?.mode === 'protractor' && tool.pointCount === 2);
+    // 줄자 시작점·각도기 기준 방향을 찍은 뒤 숫자를 치면 측정값 칸으로(SketchUp처럼 — 그동안 1~7 보기 키는 칸이 받는다. 132차: 띠 안 칸도 그동안 보인다 — tool.vcbInBand)
+    const typing = tool?.typing;
     if (typing && !isEditableTarget(ev.target) && vcbStartKey(ev) && this.vcb.shown && !this.busy) {
       ev.preventDefault();
       ev.stopPropagation();
@@ -3696,7 +3696,8 @@ export class SkpViewerApp implements PanelHost {
 
   /**
    * 측정값 칸 자리·보이기: 줄자(길이)·각도기(각도)에서. 넓은 화면은 3D 보기 오른쪽 아래에 늘(SketchUp 측정값 칸처럼 지금 값을 보인다),
-   * 측정 띠를 쓰는 화면은 띠 안 둘째 줄에 그 도구의 결과·안내가 있을 때만(커서가 없어 결과의 방향으로 넣는다 — 그 전에는 띠를 작게)
+   * 측정 띠를 쓰는 화면은 띠 안 둘째 줄에 그 도구의 결과·안내가 있을 때만(커서가 없어 결과의 방향으로 넣는다 — 그 전에는 띠를 작게).
+   * 132차: 좁은 창의 마우스·키보드는 친 숫자가 칸으로 가는 차례(시작점 뒤)에도 — 판정은 측정 조각(tool.vcbInBand)
    */
   private placeVcb(): void {
     const tool = this.measureTool;
@@ -3709,8 +3710,7 @@ export class SkpViewerApp implements PanelHost {
     }
     const mode = this.doc ? (tool?.mode ?? null) : null;
     if (mode) this.vcb.setKind(mode === 'protractor' ? 'angle' : 'length');
-    const guides = (tool?.guides.length ?? 0) + (tool?.guideLines.length ?? 0);
-    const show = !!mode && (!band || tool!.result?.kind === mode || guides > 0 || tool!.canUndo);
+    const show = !!mode && (!band || tool!.vcbInBand);
     this.vcb.show(show);
     this.vcb.setGuides(tool?.guides.length ?? 0, tool?.guideLines.length ?? 0);
     this.vcb.setSelected(mode ? (tool?.selectedGuide ?? null) : null);

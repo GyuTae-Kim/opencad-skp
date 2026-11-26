@@ -10,7 +10,8 @@
  *   3. `viewer.onPick`: `tool.active`이면 무시한다(이 도구가 그 누르기를 쓴다).
  *   4. 창 keydown·keyup(캡처 단계): `tool.handleKey(e)`가 true면 처리 끝. Esc keydown에서 false면(지울 것이 없음) 앱이 도구를 끈다.
  *      그보다 먼저(도구를 끈 동안에도) `tool.undoKey(e)`가 true면 안내 되돌리기·다시 하기로 처리 끝.
- *   5. 측정값 칸을 만들었으면 `tool.mountUndo(칸)`(측정 띠의 되돌리기·다시 하기 단추), 보기 설정 메뉴에 `tool.guideMenuItems()`(안내 보이기·이 파일의 안내 모두 지우기),
+ *   5. 측정값 칸을 만들었으면 `tool.mountUndo(칸)`(측정 띠의 되돌리기·다시 하기 단추 — 띠 안에 칸을 보일지는 `tool.vcbInBand`, 친 숫자를 칸으로 보낼 차례는 `tool.typing` — 132차),
+ *      보기 설정 메뉴에 `tool.guideMenuItems()`(안내 보이기·이 파일의 안내 모두 지우기),
  *      새 문서면 `tool.openFile(파일 내용 SHA-256)`(안내를 비우고 이 브라우저에 기억한 그 파일의 안내를 되살린다 — guidestore.ts).
  *   6. 앱을 닫을 때 `tool.dispose()`.
  *
@@ -1423,6 +1424,21 @@ export class MeasureTool {
    */
   get clearable(): boolean {
     return this.pts.length > 0 || !!this.resultValue || this.tracker.size > 0;
+  }
+
+  /** 줄자 시작점·각도기 기준 방향을 찍은 뒤라 친 숫자가 측정값 칸으로 가는 차례인지(앱 창 키 — 그동안 1~7 보기 키는 칸이 받는다) */
+  get typing(): boolean {
+    return (this.modeValue === 'tape' && this.pts.length === 1) || (this.modeValue === 'protractor' && this.pts.length === 2);
+  }
+
+  /**
+   * 측정 띠를 쓰는 화면(좁은 창·손가락 기기)에서 띠 안에 측정값 칸을 보일지: 그 도구의 결과·안내·되돌릴 안내가 있으면(커서가 없는 손가락 기기는 결과의 방향으로 넣는다 —
+   * 그 전에는 띠를 작게), 손가락 기기가 아니면 친 숫자가 칸으로 가는 차례(typing)에도. 132차: 좁은 창의 마우스·키보드는 안내 글(measureHint)이
+   * "길이를 치면"·"각도를 치면"을 말하는데 칸이 숨어 친 숫자가 보기 키로 갔다(1~7 — 카메라가 표준 뷰로). 판정을 이 조각에 두어 첫 화면 JS를 늘리지 않는다
+   */
+  get vcbInBand(): boolean {
+    const m = this.modeValue;
+    return !!m && (this.resultValue?.kind === m || this.guidePts.length + this.guideLns.length > 0 || this.canUndo || (this.typing && !this.opts.touch?.()));
   }
 
   /** 마지막 측정 결과 */
