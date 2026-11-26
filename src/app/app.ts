@@ -128,7 +128,7 @@ import { disclose, focusIfLost, focusSpot, leaveDisabled, listKeys, refocus } fr
 import type { Rgb, SkpEdgeColorMode, SkpShadowMeta, SkpStyleMeta } from '../meta';
 import { WalkStick } from './joystick';
 import { Vcb, vcbStartKey, type VcbKind } from './vcb';
-import { FlashNote } from './flash';
+import { FlashNote, barShown } from './flash';
 import { errorParts, mixNodes, mixText, uiName, uiReady, uiText } from './i18n';
 import { fileText, mix, plainText, type Mixed } from './filetext';
 
@@ -1636,7 +1636,13 @@ export class SkpViewerApp implements PanelHost {
     const list = which === 'all' ? this.measureLog : which === 'current' ? (d.measure ? [d.measure] : []) : this.measureLog.slice(which, which + 1);
     if (!list.length) return;
     const text = list.map((m) => uiText(measureLine(m, d.units, mm))).join('\n');
-    void copyText(text).then((ok) => this.flashMeasure(ok ? '복사했습니다' : '복사하지 못했습니다'));
+    void copyText(text).then((ok) => {
+      const t = ok ? '복사했습니다' : '복사하지 못했습니다';
+      // 측정 띠가 보일 때만 띠 잠깐 알림(154차). 넓은 마우스 화면과 측정을 끈 때(패널 아래 띠의 복사)는 띠가 숨어 보이지도 읽히지도 않으므로
+      // 그림 저장 실패·2점 투시 안내가 쓰는 알림 상자로(role=alert — 성공은 info, 실패는 error, 새 자리·스타일·글 없음)
+      if (barShown(this.els.measureBar, this.bandQuery)) this.flashMeasure(t);
+      else this.showNotice(ok ? 'info' : 'error', t, '');
+    });
   }
 
   clearMeasureLog(): void {
