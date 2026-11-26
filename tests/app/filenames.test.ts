@@ -16,6 +16,8 @@ import { DEFAULT_UNITS } from '../../src/app/units';
 import { fileText, fillSlots, isAppName, joinMixed, mix, nameText, plainText, slotText } from '../../src/app/filetext';
 import { warningParts } from '../../src/app/warntext';
 import { errorParts, installLocalization, mixNodes, mixText, uiName } from '../../src/app/i18n';
+import { infoSections } from '../../src/app/infotab';
+import { readPages } from '../../src/app/pages';
 import { Panel, type PanelHost } from '../../src/app/panel';
 import { catalogs, registerCatalog, sourceMessage, translate } from '../../site/i18n.mjs';
 import { dimPoint, edge, entities, face, f64, instance, materialXml, modelDat, sectionPlanes, skpFile, texts, tlv, utf8, val, vertex } from '../build';
@@ -653,5 +655,33 @@ describe('패널의 파일 글(52차)', () => {
     expect(selectionParts(d, { kind: 'outline', index: r.index }).filter((p) => typeof p !== 'string')).toEqual([{ file: '무늬 · 이' }, { file: 'Group#1' }, { file: '무늬 · 이' }]);
     expect(selectionText(d, { kind: 'material', name: '이 — 면' })).toMatch(/^재질 이 — 면 · 면 \d+$/);
     expect(selectionText(d, { kind: 'definition', name: '나무' })).toBe('컴포넌트 정의 나무 · 놓인 수 3개');
+  });
+
+  it('149차: 이름 없는 장면의 「장면 n」은 앱 글 — 정보 탭 장면 카드(이름·도움말)·그리기 축 줄은 화면 언어로, 파일이 그 글로 붙인 이름은 그대로, 장면 탭도 같은 길', async () => {
+    const d = createDoc('무늬.skp', 1, { scene, ms: 1 });
+    // 파일이 「장면 1」로 붙인 이름(파일 글)·빈 이름·이름 칸 없는 장면(readPage가 「장면 n」을 넣는다)
+    d.pages = readPages({ pages: [{ name: '장면 1', description: '무늬' }, { name: '', description: '이 · 면' }, {}] });
+    d.activePage = null;
+    d.axesPage = 2;
+    for (const code of ['en', 'de', 'ja', 'zh-CN', 'ko']) {
+      dispose?.();
+      document.body.innerHTML = '';
+      history.replaceState(null, '', code === 'ko' ? '/opencad-skp/' : `/opencad-skp/${code}/`);
+      dispose = await installLocalization(document.body);
+      document.body.append(...infoSections(d, () => undefined));
+      await tick();
+      const named = (n: number): string => translate(`장면 ${n}`, code);
+      if (code !== 'ko') expect(named(2), code).not.toMatch(/[가-힣]/);
+      expect([...document.querySelectorAll('.scene-cap')].map((c) => c.textContent), code).toEqual(['장면 1', named(2), named(3)]);
+      expect([...document.querySelectorAll<HTMLElement>('.scene-card')].map((c) => c.title), code).toEqual(['장면 1\n무늬', `${named(2)}\n이 · 면`, named(3)]);
+      const axes = [...document.querySelectorAll('.prop-row')].find((r) => r.querySelector('.k')!.textContent === translate('그리기 축을 정한 장면', code))!;
+      expect(axes.querySelector('.v')!.textContent, code).toBe(named(3));
+    }
+    // 장면 탭(app.ts renderSceneTabs — 번역층이 건너뛰는 칸): 같은 표시로 그 이름만 앱 글로 옮기고, 언어를 바꾸면 이름 없는 장면이 있을 때 다시 그린다
+    const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
+    expect(app).toMatch(/const name = pg\.unnamed \? uiText\(pg\.name\) : pg\.name;/);
+    expect(app).toMatch(/title: \[name, pg\.description\]\.filter\(Boolean\)\.join\('\\n'\),\n\s*\},\n\s*name,\n/);
+    expect(app).toMatch(/if \(this\.doc\?\.pages\.some\(\(p\) => p\.unnamed\)\) this\.renderSceneTabs\(\);/);
+    expect(app).not.toMatch(/pg\.name \|\| `장면/);
   });
 });

@@ -15,7 +15,6 @@ import type {
   SkpShadowMeta,
   SkpCameraMeta,
   SkpDimensionMeta,
-  SkpPageMeta,
   SkpSectionPlaneMeta,
   SkpStyleMeta,
   SkpTagFolderMeta,
@@ -28,7 +27,7 @@ import { fileText, joinMixed, mix, nameText, plainText, type Mixed } from './fil
 import { definitionNodes } from './search';
 import { edgeGeometry, faceBox, faceGeometry, faceOfTriangle, readFaceIndex, segmentsBox, triangleCount, type FaceIndex, type PartBox } from './faces';
 import type { MeasureToolResult } from './measure';
-import { readActivePage, readAxes, readPages, readSectionPlane, readShadow } from './pages';
+import { readActivePage, readAxes, readPages, readSectionPlane, readShadow, type ScenePage } from './pages';
 import { formatAngle, formatArea, formatLength, mmPerSceneUnit, readUnits, type UnitsDisplay } from './units';
 import { fmtCount } from './format';
 import type { AttrLong, ParseResult } from './protocol';
@@ -242,7 +241,8 @@ export interface SkpDoc {
   units: UnitsDisplay;
   /** 저장 당시 카메라 */
   camera: SkpCameraMeta | null;
-  pages: SkpPageMeta[];
+  /** 장면(이름 없는 장면은 이름 칸에 앱 글 "장면 n"과 unnamed — 149차) */
+  pages: ScenePage[];
   /** 파일의 활성 장면 차례 */
   activePage: number | null;
   /** 모형 스타일 */

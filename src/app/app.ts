@@ -489,6 +489,8 @@ export class SkpViewerApp implements PanelHost {
       // 파일 글을 끼워 앱이 옮겨 넣은 글(패널 줄의 도움말·상태 줄의 고른 것 — 번역층이 건너뜀, 52차)도 새 언어로
       this.panel.rerender();
       this.refreshStatus();
+      // 장면 탭의 이름 없는 장면 글(149차 — 탭은 번역층이 건너뜀)
+      if (this.doc?.pages.some((p) => p.unnamed)) this.renderSceneTabs();
       // 떠 있는 알림의 제목·글도(파일 이름을 끼워 옮겨 넣은 글 — 53차)
       this.noticeText();
       const menu = this.menu;
@@ -2160,6 +2162,8 @@ export class SkpViewerApp implements PanelHost {
     const cur = d.page !== null && d.page >= 0 && d.page < d.pages.length ? d.page : 0;
     d.pages.forEach((pg, i) => {
       const on = d.page === i;
+      // 탭은 번역층이 건너뛰므로(파일 이름) 이름 없는 장면의 "장면 n"(앱 글)만 여기서 옮긴다(149차 — 언어를 바꾸면 다시 그린다)
+      const name = pg.unnamed ? uiText(pg.name) : pg.name;
       const b = h(
         'button',
         {
@@ -2168,9 +2172,9 @@ export class SkpViewerApp implements PanelHost {
           'data-page': String(i),
           tabindex: i === cur ? '0' : '-1',
           'aria-selected': on ? 'true' : 'false',
-          title: [pg.name, pg.description].filter(Boolean).join('\n'),
+          title: [name, pg.description].filter(Boolean).join('\n'),
         },
-        pg.name || `장면 ${i + 1}`,
+        name,
       );
       b.addEventListener('click', () => this.applyPage(i));
       list.append(b);

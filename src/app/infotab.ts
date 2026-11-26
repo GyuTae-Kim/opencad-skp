@@ -87,7 +87,8 @@ export function infoSections(d: SkpDoc, applyPage: (index: number) => void): HTM
     place.push(row('그리기 축 원점', `${fmtPt(ax.origin, 1)}${u ? ` ${u}` : ''}`));
     place.push(row('빨강·초록·파랑 축', [ax.x, ax.y, ax.z].map((a) => fmtPt(a, 3)).join(' · ')));
   }
-  if (axPage) place.push(row('그리기 축을 정한 장면', axPage.name, true));
+  // 이름 없는 장면의 "장면 n"은 앱 글(149차 — 번역층이 옮긴다)
+  if (axPage) place.push(row('그리기 축을 정한 장면', axPage.name, !axPage.unnamed));
   // 파일과 다른 축을 기억하는 장면이 있거나 장면이 축을 정했으면 장면 규칙을 알린다
   const key = (a: SkpAxesMeta | null | undefined): string => JSON.stringify(a ?? null);
   const sceneAxes = !!axPage || d.pages.some((p) => p.axes !== undefined && key(p.axes) !== key(d.axes));
@@ -109,12 +110,13 @@ export function infoSections(d: SkpDoc, applyPage: (index: number) => void): HTM
     d.pages.slice(0, 200).forEach((pg, i) => {
       const url = (pg.thumbnail && thumbs.get(pg.thumbnail)) || scenes.find((sc) => sc.name === pg.name)?.url || null;
       const on = d.page === i;
-      // 도움말은 장면 이름·설명(파일 글). 이름 칸(.scene-cap)은 번역층이 건너뛰므로 앱 글(이름 없는 장면·활성)은 여기서 옮긴다
+      // 도움말은 장면 이름·설명(파일 글). 이름 칸(.scene-cap)은 번역층이 건너뛰므로 앱 글(이름 없는 장면의 "장면 n" — 149차부터 readPage 표시로 가름·활성)은 여기서 옮긴다
+      const name = pg.unnamed ? uiText(pg.name) : pg.name;
       const card = h(
         'button',
-        { class: `scene-card pick${on ? ' sel' : ''}`, 'aria-pressed': on ? 'true' : 'false', title: [pg.name, pg.description].filter(Boolean).join('\n'), 'data-i18n-keep': 'title' },
+        { class: `scene-card pick${on ? ' sel' : ''}`, 'aria-pressed': on ? 'true' : 'false', title: [name, pg.description].filter(Boolean).join('\n'), 'data-i18n-keep': 'title' },
         url ? h('img', { src: url, alt: '', loading: 'lazy', decoding: 'async' }) : h('span', { class: 'scene-blank', html: icon('scene', 28) }),
-        h('span', { class: 'scene-cap' }, pg.name || uiText(`장면 ${i + 1}`), d.activePage === i ? chip(uiText('활성'), uiText('파일을 저장할 때 고른 장면')) : null),
+        h('span', { class: 'scene-cap' }, name, d.activePage === i ? chip(uiText('활성'), uiText('파일을 저장할 때 고른 장면')) : null),
       );
       card.addEventListener('click', () => applyPage(i));
       grid.append(card);

@@ -473,10 +473,18 @@ export function readStyle(v: unknown): SkpStyleMeta | null {
 /** 0 이상 유한한 초(그 밖은 undefined) */
 const seconds = (v: unknown): number | undefined => (isNum(v) && v >= 0 ? v : undefined);
 
-/** 장면 하나(모르는 꼴이어도 안전하게). 이름이 없으면 "장면 n" */
-export function readPage(v: unknown, index: number): SkpPageMeta {
+/**
+ * 앱이 읽은 장면. 이름이 없는 장면(해석기는 빈 글)은 이름 칸에 앱 글 "장면 n"을 넣고 unnamed를 남긴다 — 화면은 그 이름만 화면 언어로 옮긴다
+ * (149차: 장면 탭·정보 탭이 이름을 파일 글로 그려 네 언어 모두 한국어였다. 글로 가르면 파일이 "장면 3"이라 붙인 이름까지 옮겨져 표시로 가른다)
+ */
+export interface ScenePage extends SkpPageMeta {
+  unnamed?: true;
+}
+
+/** 장면 하나(모르는 꼴이어도 안전하게). 이름이 없으면 "장면 n"과 unnamed */
+export function readPage(v: unknown, index: number): ScenePage {
   const o = obj(v) ?? {};
-  const page: SkpPageMeta = { name: typeof o.name === 'string' && o.name ? o.name : `장면 ${index + 1}` };
+  const page: ScenePage = typeof o.name === 'string' && o.name ? { name: o.name } : { name: `장면 ${index + 1}`, unnamed: true };
   if (typeof o.description === 'string' && o.description) page.description = o.description;
   const cam = readCamera(o.camera);
   if (cam) page.camera = cam;
@@ -524,7 +532,7 @@ export function readShadow(v: unknown): SkpShadowMeta | null {
 }
 
 /** meta.pages → 장면 목록. 차례는 파일 그대로 지킨다(activePage·장면 단면 차례가 이 차례를 가리킨다) */
-export function readPages(meta: unknown): SkpPageMeta[] {
+export function readPages(meta: unknown): ScenePage[] {
   const list = obj(meta)?.pages;
   return Array.isArray(list) ? list.map((p, i) => readPage(p, i)) : [];
 }
