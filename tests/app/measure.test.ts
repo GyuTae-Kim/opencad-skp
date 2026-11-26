@@ -2533,6 +2533,79 @@ describe('측정 도구: 휴대폰 측정 띠의 다시 하기 단추', () => {
     r.tool.dispose();
     expect(host.querySelector('.vcb-redo')).toBeNull();
   });
+
+  it('134차: 다 되돌린 뒤에도 다시 할 것이 있으면 측정 띠 안에 측정값 칸 줄(다시 하기 단추)을 둔다 — 결과·안내가 없어도(Ctrl+Y가 없는 손가락 기기)', () => {
+    const r = rig(EDGES(), TOP, DEFAULT_UNITS, { touch: () => true });
+    r.tool.setMode('tape');
+    later();
+    r.click(102, 103, { pointerType: 'touch' });
+    later();
+    r.click(198, 101, { pointerType: 'touch' });
+    expect(r.tool.result).toMatchObject({ kind: 'tape', distance: 100 });
+    expect(r.tool.applyLength(-25)).toBe('ok');
+    // 다시 재기(결과를 지움): 안내가 있어 칸 줄은 남는다
+    r.tool.clear();
+    expect([r.tool.result, r.tool.guides.length, r.tool.vcbInBand]).toEqual([null, 1, true]);
+    // 다 되돌리면 결과·안내·되돌릴 것이 없지만 다시 할 것이 있어 남는다(전에는 줄째 숨어 다시 하기 단추도 없었다)
+    expect(r.tool.undo()).toBe(true);
+    expect([r.tool.guides.length, r.tool.canUndo, r.tool.canRedo, r.tool.vcbInBand]).toEqual([0, false, true, true]);
+    // 도구를 바꿔도(결과는 버림) 다시 할 것이 있으면 남고, 끄면 없다
+    r.tool.setMode('protractor');
+    expect(r.tool.vcbInBand).toBe(true);
+    r.tool.setMode(null);
+    expect(r.tool.vcbInBand).toBe(false);
+    r.tool.setMode('tape');
+    expect(r.tool.redo()).toBe(true);
+    expect([r.tool.guides.length, r.tool.canUndo, r.tool.canRedo, r.tool.vcbInBand]).toEqual([1, true, false, true]);
+    // 마우스(좁은 창): 모서리 두 번 누르기로 둔 안내선(결과 없음)을 되돌려도 같다
+    const m = rig(EDGES());
+    m.tool.setMode('tape');
+    later();
+    m.click(170, 101);
+    m.click(171, 102);
+    expect([m.tool.guideLines.length, m.tool.result, m.tool.pointCount]).toEqual([1, null, 0]);
+    expect(m.tool.undo()).toBe(true);
+    expect([m.tool.guideLines.length, m.tool.canRedo, m.tool.vcbInBand]).toEqual([0, true, true]);
+  });
+
+  it('134차: 키보드로 누른 되돌리기·다시 하기 단추가 다 되돌리거나 다 다시 해 숨으면 초점을 옆 단추로(문서로 빠지지 않게) — 숨지 않거나 초점이 단추에 없으면 그대로', () => {
+    const r = rig(EDGES());
+    const host = document.createElement('form');
+    const input = document.createElement('input');
+    host.append(input);
+    document.body.append(host);
+    r.tool.mountUndo(host);
+    const undo = host.querySelector<HTMLButtonElement>('.vcb-undo')!;
+    const redo = host.querySelector<HTMLButtonElement>('.vcb-redo')!;
+    placeTwo(r, later);
+    undo.focus();
+    // 되돌릴 것이 하나 남아 숨지 않으면 그대로
+    undo.click();
+    expect(undo.hidden).toBe(false);
+    expect(document.activeElement).toBe(undo);
+    // 다 되돌려 숨으면 다시 하기로(jsdom은 focus fixup을 하지 않아 고치기 전에는 숨은 단추에 남는다)
+    undo.click();
+    expect([undo.hidden, redo.hidden]).toEqual([true, false]);
+    expect(document.activeElement).toBe(redo);
+    redo.click();
+    expect(document.activeElement).toBe(redo);
+    redo.click();
+    expect([undo.hidden, redo.hidden]).toEqual([false, true]);
+    expect(document.activeElement).toBe(undo);
+    // 단추에 초점이 있는 채 친 되돌리기 키(undoKey)도 같다
+    const ctrlZ = (): boolean => r.tool.undoKey(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, cancelable: true }));
+    expect(ctrlZ()).toBe(true);
+    expect(document.activeElement).toBe(undo);
+    expect(ctrlZ()).toBe(true);
+    expect(undo.hidden).toBe(true);
+    expect(document.activeElement).toBe(redo);
+    // 초점이 다른 곳이면 옮기지 않는다
+    input.focus();
+    expect(r.tool.redo()).toBe(true);
+    expect(r.tool.redo()).toBe(true);
+    expect(redo.hidden).toBe(true);
+    expect(document.activeElement).toBe(input);
+  });
 });
 
 describe('측정 도구: 둔 안내를 파일별로 기억(파일 내용 지문)', () => {
