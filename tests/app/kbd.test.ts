@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { focusIfLost, focusSpot, leaveDisabled, listKeys, lost, moveIndex, refocus, rove, treeKeys } from '../../src/app/kbd';
+import { disclose, focusIfLost, focusSpot, leaveDisabled, listKeys, lost, moveIndex, refocus, rove, treeKeys } from '../../src/app/kbd';
 import { PANEL_WIDTH_STEPS, SHEET_STEPS, clampSheetFraction, nextSize } from '../../src/app/layout';
 import type { MeasureToolResult } from '../../src/app/measure';
 import { Panel, type PanelHost } from '../../src/app/panel';
@@ -352,6 +352,39 @@ describe('패널 아래 띠를 통째로 다시 그려도 초점을 같은 열�
     // 앱 원문: 패널에 3D 보기 캔버스를 넘긴다
     const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
     expect(app).toMatch(/\n\s*get view\(\)[^{\n]*\{\n\s*return this\.viewer\?\.canvas;\n/);
+  });
+});
+
+describe('펼치고 접는 버튼의 펼침 상태(153차 — 측정 띠 "최근 측정 기록", APG Disclosure)', () => {
+  it('목록 숨김과 버튼 aria-expanded를 함께 바꾸고, 앱은 그 목록의 펼침·접힘을 모두 이것으로(누름·기록 지우기·빈 기록), 목록 id 하나를 aria-controls로', () => {
+    const box = html('<button class="mb-btn" aria-expanded="false" aria-controls="measure-log">기록</button><div class="measure-log" id="measure-log" hidden></div>');
+    const b = box.querySelector<HTMLButtonElement>('button')!;
+    const list = box.querySelector<HTMLElement>('.measure-log')!;
+    // 누름(앱 toggleMeasureLog 꼴 — 지금 숨김이면 펼침): 펼침 → 접힘
+    disclose(b, list, !!list.hidden);
+    expect(list.hidden).toBe(false);
+    expect(b.getAttribute('aria-expanded')).toBe('true');
+    disclose(b, list, !!list.hidden);
+    expect(list.hidden).toBe(true);
+    expect(b.getAttribute('aria-expanded')).toBe('false');
+    // 펼친 채 기록 지우기·빈 기록 → 접힘, 접힌 채 다시 줘도 접힘 그대로
+    disclose(b, list, true);
+    disclose(b, list, false);
+    expect(list.hidden).toBe(true);
+    expect(b.getAttribute('aria-expanded')).toBe('false');
+    disclose(b, list, false);
+    expect(list.hidden).toBe(true);
+    expect(b.getAttribute('aria-expanded')).toBe('false');
+    // 앱 원문: 처음 접힘·목록 id(문서에 하나)를 가리킴, 목록 숨김을 바꾸는 세 길(누름·기록 지우기·빈 기록 띠 맞춤)이 모두 disclose — 숨김에 바로 넣는 줄 없음
+    const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
+    expect(app).toMatch(/const measureLogBtn = h\('button', \{[^}\n]*'aria-expanded': 'false', 'aria-controls': 'measure-log',/);
+    expect(app).toMatch(/const measureLogEl = h\('div', \{ class: 'measure-log', id: 'measure-log', hidden: true \}\);/);
+    expect(app.match(/id: 'measure-log'/g)).toHaveLength(1);
+    expect(app).toMatch(/private toggleMeasureLog\(\): void \{\n\s*const el = this\.els\.measureLog;\n\s*disclose\(this\.els\.measureLogBtn, el, !!el\.hidden\);\n/);
+    expect(app).toMatch(/clearMeasureLog\(\): void \{\n\s*this\.measureLog = \[\];\n\s*disclose\(this\.els\.measureLogBtn, this\.els\.measureLog, false\);\n/);
+    expect(app).toMatch(/if \(!this\.measureLog\.length\) disclose\(e\.measureLogBtn, e\.measureLog, false\);/);
+    expect(app.match(/disclose\((?:this\.els|e)\.measureLogBtn, /g)).toHaveLength(3);
+    expect(app).not.toMatch(/measureLog\.hidden =|el\.hidden = !el\.hidden/);
   });
 });
 

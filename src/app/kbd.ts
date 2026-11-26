@@ -113,3 +113,12 @@ export function focusIfLost(el: HTMLElement | null | undefined, inside?: Element
 export function leaveDisabled(b: HTMLButtonElement, ...to: (HTMLElement | null | undefined)[]): void {
   for (const el of to) if (document.activeElement === b && !usable(b)) focusIfLost(el, b);
 }
+
+/**
+ * 펼치고 접는 버튼 b와 그 목록 list(153차 — WAI-ARIA APG Disclosure): 목록을 보이거나 숨기고 b의 aria-expanded를 같은 값으로 둔다.
+ * 목록을 펼치고 접는 길은 모두 이것을 부른다(화면 읽기 프로그램이 버튼에서 목록이 열렸는지 듣게 — 숨김만 바꾸면 상태가 어긋난다)
+ */
+export function disclose(b: HTMLElement, list: HTMLElement, open: boolean): void {
+  list.hidden = !open;
+  b.setAttribute('aria-expanded', String(open));
+}
