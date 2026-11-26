@@ -2487,17 +2487,26 @@ export class MeasureTool {
   /**
    * 127차: 가상 커서 자리 글을 키 밖의 변화 뒤 알릴 곳(keypick.ts가 줄자·각도기 방식으로 켤 때 알림 칸 쓰기를 주고, 고르기·끔이면 null).
    * 카메라·그리기 방식 가림·숨김(sweep)·단면이 켜진 가상 커서 자리 추정을 다시 구하게 하면, 그 변화가 KEY_SETTLE_MS 동안 더 오지 않은 뒤 한 번
-   * 지금 자리 글(keyText — 돌리기는 다시 구하면 끝나 첫 후보 글)을 넘긴다. 처음 변화 때 자리 글(들은 글)과 같으면 넘기지 않고, 그사이 키 길(옮기기·Tab·Esc·Enter·끄기)이 글을 쓰면 버린다
+   * 지금 자리 글(keyText — 돌리기는 다시 구하면 끝나 첫 후보 글)을 넘긴다. 처음 변화 때 자리 글(들은 글)과 같으면 넘기지 않고, 그사이 키 길(옮기기·Tab·Esc·Enter·끄기)이 글을 쓰면 버린다.
+   * 130차: 알림 글을 쓰지 않는 키(handleKey — Shift 잠금·풂, Esc 지우기, 안내 두기 키)가 그 자리 추정을 다시 구하게 해도 같은 길이다
    */
   keyWatch(say: ((text: string) => void) | null): void {
     this.keySay = say;
     if (!say) this.keyQuiet();
   }
 
-  /** 127차: 키 밖의 변화가 켜진 가상 커서 자리 추정을 다시 구하게 한다(다시 구하기 전에 부른다) — 처음이면 지금 자리 글을 두고 가라앉기 타이머를 다시 건다 */
-  private keyStale(): void {
-    if (!this.keySay || this.cursor?.type !== 'keyboard' || !this.viewer.keyboardCursor) return;
-    this.keyBase ??= this.keyText(this.hover, !!this.cycle);
+  /** 127차: 켜진 가상 커서이고 알림 칸이 있다(측정 도구 커서가 가상 커서·코어 커서 켜짐·keyWatch) */
+  private get keyLive(): boolean {
+    return !!this.keySay && this.cursor?.type === 'keyboard' && !!this.viewer.keyboardCursor;
+  }
+
+  /**
+   * 127차: 키 밖의 변화가 켜진 가상 커서 자리 추정을 다시 구하게 한다(다시 구하기 전에 부른다) — 처음이면 지금 자리 글을 두고 가라앉기 타이머를 다시 건다.
+   * heard(130차 — handleKey): 키 앞에 둔 그 자리 글(키가 이미 점·잠금을 바꿔 지금 추정으로는 들은 글을 만들지 못한다)
+   */
+  private keyStale(heard?: string): void {
+    if (!this.keyLive) return;
+    this.keyBase ??= heard ?? this.keyText(this.hover, !!this.cycle);
     if (this.keyTimer !== null) clearTimeout(this.keyTimer);
     this.keyTimer = setTimeout(() => this.keySettle(), KEY_SETTLE_MS);
   }
@@ -2565,8 +2574,19 @@ export class MeasureTool {
    * (126차 — 그 누름의 첫 Shift+Tab이면 걸기 전으로 되돌리고 뗄 때까지 다시 잠그지 않는다, unShift).
    * →·←·↑·↓(keydown): 축·나란히 잠금 켜고 끄기, 각도기 중심을 찍기 전에는 →·←·↑로 각도기 평면 고정(앱은 목록·입력 칸의 화살표를 넘기지 않는다).
    * 안내 두기 키(Ctrl, Mac은 Option): 그 키만 눌렀다 떼면(keyup) 안내 두기 켜고 끄기 — 그사이 다른 키·누르기·휠이 있으면 바꾸지 않는다(Ctrl+O 등).
+   * 130차: 켜진 가상 커서에서 이 키들은 알림 글을 쓰지 않으므로, 키가 커서 자리 추정을 다시 구하게 했으면(Shift 잠금·풂, Esc 지우기, 안내 두기 키)
+   * 127차 길(keyStale)로 가라앉은 뒤 한 번, 키 앞에 들은 글과 다를 때만 새 자리 글을 알린다(그사이 옮기기·Tab·Enter 같은 키 길이 글을 쓰면 버린다).
    */
   handleKey(e: KeyboardEvent): boolean {
+    // 키 앞 자리 글(들은 글): 그 자리 추정이 맞춰져 있을 때만 둔다
+    const heard = this.modeValue && this.keyLive && !this.hoverDirty ? this.keyText(this.hover, !!this.cycle) : null;
+    const done = this.takeKey(e);
+    if (heard !== null && this.hoverDirty) this.keyStale(heard);
+    return done;
+  }
+
+  /** handleKey의 키 처리(130차에 알림 칸 몫과 나눔) */
+  private takeKey(e: KeyboardEvent): boolean {
     if (!this.modeValue) return false;
     const gk = this.opts.guideKey ?? 'Control';
     if (e.key === gk) {
