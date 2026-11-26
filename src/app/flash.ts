@@ -38,3 +38,16 @@ export class FlashNote {
     this.timer = null;
   }
 }
+
+/**
+ * 측정 띠(그 안의 잠깐 알림)가 지금 보이는지(154차): 띠가 켜져 있고(hidden 아님 — 측정 중) 띠를 쓰는 화면(app.ts bandQuery —
+ * styles.css .measure-bar와 같은 미디어 질의: 좁은 화면·손가락 기기)일 때만. 넓은 마우스 화면은 스타일시트가 띠를 늘 display: none으로 두어
+ * 띠 잠깐 알림이 보이지도 읽히지도 않는다. matchMedia가 없으면(null) 보이지 않는 것으로 본다
+ */
+export const barShown = (bar: HTMLElement, band: MediaQueryList | null): boolean => !bar.hidden && !!band?.matches;
+
+/**
+ * 알림 상자에 복사 결과를 띄워도 되는지(154차): 비었거나 안내(info)거나 앞 복사 결과(own)일 때만. 알림 상자는 한 칸이라
+ * 떠 있는 경고·오류(해석 경고·열기 오류 등 — 다시 열기 전에는 다시 볼 수 없는 글)를 덮어쓰면 잃으므로 두고, 그때 복사 결과는 띄우지 않는다
+ */
+export const noticeFree = (box: HTMLElement, kind: string | undefined, own: boolean): boolean => !!box.hidden || own || kind === 'info';

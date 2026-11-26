@@ -128,7 +128,7 @@ import { disclose, focusIfLost, focusSpot, leaveDisabled, listKeys, refocus } fr
 import type { Rgb, SkpEdgeColorMode, SkpShadowMeta, SkpStyleMeta } from '../meta';
 import { WalkStick } from './joystick';
 import { Vcb, vcbStartKey, type VcbKind } from './vcb';
-import { FlashNote } from './flash';
+import { FlashNote, barShown, noticeFree } from './flash';
 import { errorParts, mixNodes, mixText, uiName, uiReady, uiText } from './i18n';
 import { fileText, mix, plainText, type Mixed } from './filetext';
 
@@ -437,6 +437,8 @@ export class SkpViewerApp implements PanelHost {
   /** 그래픽 문맥 잃음·되찾음 안내와 놓은 것 다시 주기(release.ts — 조각을 받으면 뷰어마다 하나), 그 안내로 띄운 알림 */
   private ctxWatch: ContextWatch | null = null;
   private ctxNotice: NoticeState | null = null;
+  /** 측정 띠가 숨은 화면에서 복사 결과로 띄운 알림(154차 — 그 알림이 아직 떠 있으면 다음 복사 결과로 바꾼다) */
+  private copyNotice: NoticeState | null = null;
   /** 측정 도구를 받기 전에 켰을 때: 받는 동안 마지막으로 누른 도구를 받은 뒤에 켠다(다시 누르면 거둔다, 받지 못하면 알린다) */
   private readonly measureFirstUse = new FirstUse<MeasureMode>(
     () => this.ensureMeasureTool(),
@@ -1636,7 +1638,17 @@ export class SkpViewerApp implements PanelHost {
     const list = which === 'all' ? this.measureLog : which === 'current' ? (d.measure ? [d.measure] : []) : this.measureLog.slice(which, which + 1);
     if (!list.length) return;
     const text = list.map((m) => uiText(measureLine(m, d.units, mm))).join('\n');
-    void copyText(text).then((ok) => this.flashMeasure(ok ? '복사했습니다' : '복사하지 못했습니다'));
+    void copyText(text).then((ok) => {
+      const t = ok ? '복사했습니다' : '복사하지 못했습니다';
+      // 측정 띠가 보일 때만 띠 잠깐 알림(154차). 넓은 마우스 화면과 측정을 끈 때(패널 아래 띠의 복사)는 띠가 숨어 보이지도 읽히지도 않으므로
+      // 그림 저장 실패·2점 투시 안내가 쓰는 알림 상자로(role=alert — 성공은 info, 실패는 error, 새 자리·스타일·글 없음).
+      // 알림 상자는 한 칸이라 떠 있는 경고·오류(해석 경고 등)는 덮어쓰지 않는다 — 그때는 고치기 전처럼 띄우지 않음(안내·앞 복사 결과는 바꿈)
+      if (barShown(this.els.measureBar, this.bandQuery)) this.flashMeasure(t);
+      else if (noticeFree(this.els.notice, this.notice?.kind, this.notice === this.copyNotice)) {
+        this.showNotice(ok ? 'info' : 'error', t, '');
+        this.copyNotice = this.notice;
+      }
+    });
   }
 
   clearMeasureLog(): void {
