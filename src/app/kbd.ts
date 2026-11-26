@@ -102,3 +102,11 @@ export function lost(inside?: Element | null): boolean {
 export function focusIfLost(el: HTMLElement | null | undefined, inside?: Element | null): void {
   if (el?.isConnected && !el.closest('[hidden]') && !(el as HTMLButtonElement).disabled && lost(inside)) el.focus({ preventScroll: true });
 }
+
+/**
+ * 초점을 쥔 버튼 b가 막혔으면 to 가운데 처음 쓸 수 있는 곳으로(148차 — 키보드로 누른 버튼이 그 누름으로 막히면 브라우저 focus fixup이 초점을 문서로 보낸다.
+ * 막는 줄 바로 뒤에서 부른다). focusIfLost와 달리 초점이 b에 없으면(문서·다른 곳) 그대로다 — 자주 불리는 갱신 함수가 초점을 끌어오지 않게
+ */
+export function leaveDisabled(b: HTMLButtonElement, ...to: (HTMLElement | null | undefined)[]): void {
+  for (const el of to) if (b.disabled && document.activeElement === b) focusIfLost(el, b);
+}

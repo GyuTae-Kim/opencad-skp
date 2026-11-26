@@ -124,7 +124,7 @@ import { cameraForBox, keepViewOnHeightChange } from './view';
 import { cssHex, isLightBackground, loadFileBackground, safeStorage, skyBackground, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
 import type { BackgroundOptions, Rgba } from 'opencad-viewer3d';
 import { DEFAULT_EDGE_COLOR, LineContrast, edgeLooks, lineColorOverrides } from './linecontrast';
-import { focusIfLost, focusSpot, listKeys, refocus } from './kbd';
+import { focusIfLost, focusSpot, leaveDisabled, listKeys, refocus } from './kbd';
 import type { Rgb, SkpEdgeColorMode, SkpShadowMeta, SkpStyleMeta } from '../meta';
 import { WalkStick } from './joystick';
 import { Vcb, vcbStartKey, type VcbKind } from './vcb';
@@ -3606,6 +3606,10 @@ export class SkpViewerApp implements PanelHost {
     press(e.panelBtn, this.panelOpen && has);
     e.backBtn.disabled = !has || !this.history.canBack();
     e.fwdBtn.disabled = !has || !this.history.canForward();
+    // 키보드로 누른 이전(다음) 보기가 끝 칸에 닿아 막히면 초점을 반대쪽 버튼으로, 그것도 막혔으면 3D 보기로(148차 — 문서로 빠지지 않게, NC 120차 꼴)
+    const cv = this.viewer?.canvas;
+    leaveDisabled(e.backBtn, e.fwdBtn, cv);
+    leaveDisabled(e.fwdBtn, e.backBtn, cv);
     const sec = this.viewer?.section ?? null;
     for (const [k, b] of e.secBtns) press(b, k === 'off' ? !sec : sec?.axis === k);
     press(e.secMenuBtn, !!sec);
@@ -3752,6 +3756,8 @@ export class SkpViewerApp implements PanelHost {
     }
     // 다시 재기: 진행 중 점·결과·끌어온 점이 있으면(지울 것을 측정 조각이 정한다 — 결과는 d.measure와 같다)
     e.measureClear.disabled = !tool.clearable;
+    // 키보드로 누른 「다시 재기」가 지워 막히면 초점을 3D 보기로(148차 — 다시 재는 키보드 길이 3D 보기의 가상 커서, 측정값 칸 returnFocus와 같은 곳)
+    leaveDisabled(e.measureClear, this.viewer?.canvas);
     e.measureCopy.disabled = !d.measure;
     // 방향을 잡는 동안은 복사(결과가 없다) 자리에 잠금 단추
     const directing = tool.directing;
