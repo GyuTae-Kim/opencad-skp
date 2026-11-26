@@ -125,7 +125,12 @@ export function openShortcutsDialog(parent: HTMLElement, onClose: () => void): (
     for (const it of g.items) dl.append(h('dt', {}, keyChips(it.keys)), h('dd', {}, it.label));
     body.append(h('section', { class: 'sc-group' }, h('h3', {}, g.title), dl));
   }
-  body.append(h('p', { class: 'sc-note' }, '입력 칸에 글을 넣는 동안에는 바로 가기가 듣지 않습니다. 3D 보기: 왼쪽 끌기 돌리기 · 오른쪽 끌기 옮기기 · 휠 확대.'));
+  // 끝 줄의 3D 보기 조작은 그 기기의 글로(143차 — 손가락 기기에도 왼쪽·오른쪽 끌기·휠 글이라 쓸 수 없는 안내였다): 처음 화면 안내(app.ts)와 같은
+  // CSS 갈래(styles.css .fine-only·.coarse-only — pointer: coarse)와 같은 손가락 낱말. 입력 칸 글은 두 갈래 모두(하드웨어 키보드를 단 태블릿)
+  body.append(
+    h('p', { class: 'sc-note fine-only' }, '입력 칸에 글을 넣는 동안에는 바로 가기가 듣지 않습니다. 3D 보기: 왼쪽 끌기 돌리기 · 오른쪽 끌기 옮기기 · 휠 확대.'),
+    h('p', { class: 'sc-note coarse-only' }, '입력 칸에 글을 넣는 동안에는 바로 가기가 듣지 않습니다. 3D 보기: 한 손가락 끌기 돌리기 · 두 손가락 옮기기·확대.'),
+  );
   const box = h('div', { class: 'sc-box', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId }, h('div', { class: 'sc-head' }, h('h2', { id: titleId }, '키보드 바로 가기'), closeBtn), body);
   const backdrop = h('div', { class: 'sc-backdrop' }, box);
   let closed = false;

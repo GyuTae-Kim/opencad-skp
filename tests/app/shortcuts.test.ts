@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { keyAction } from '../../src/app/keys';
 import { guideUndoKey, selectAllKey } from '../../src/app/measure';
 import { SHORTCUTS, openShortcutsDialog } from '../../src/app/shortcuts';
+import { translate } from '../../site/i18n.mjs';
 
 const press = (el: Element, key: string, shiftKey = false): void => {
   el.dispatchEvent(new KeyboardEvent('keydown', { key, shiftKey, bubbles: true, cancelable: true }));
@@ -153,5 +154,33 @@ describe('키보드 바로 가기 안내', () => {
     pointer(document.querySelector('.sc-backdrop')!, 'pointerdown', 'mouse');
     expect(document.querySelector('[role=dialog]')).toBeNull();
     expect(mouse).toHaveBeenCalledTimes(1);
+  });
+
+  it('끝 줄의 3D 보기 조작: 마우스 글은 마우스 기기에서만, 손가락 기기(pointer: coarse)에는 같은 사전의 손가락 글 — 처음 화면과 같은 CSS 갈래(143차)', () => {
+    openShortcutsDialog(document.body, vi.fn());
+    const notes = [...document.querySelectorAll<HTMLElement>('.sc-note')];
+    // jsdom은 CSS 미디어(pointer: coarse)를 풀지 않아 갈래 클래스로 본다(styles.css .fine-only·.coarse-only — 처음 화면 app.ts와 같은 꼴)
+    for (const n of notes) if (/왼쪽 끌기|오른쪽 끌기|휠/.test(n.textContent!)) expect(n.classList.contains('fine-only'), n.textContent!).toBe(true);
+    const fine = notes.filter((n) => n.classList.contains('fine-only'));
+    const coarse = notes.filter((n) => n.classList.contains('coarse-only'));
+    expect(fine.length).toBe(1);
+    expect(coarse.length).toBe(1);
+    // 손가락 글은 처음 화면 손가락 안내와 같은 낱말, 입력 칸 글은 두 갈래 모두(하드웨어 키보드를 단 태블릿)
+    const touch = coarse[0]!.textContent!;
+    expect(touch).toContain('한 손가락 끌기 돌리기 · 두 손가락 옮기기·확대');
+    for (const n of [...fine, ...coarse]) expect(n.textContent).toMatch(/^입력 칸에 글을 넣는 동안에는 바로 가기가 듣지 않습니다\. 3D 보기: /);
+    // 네 언어 모두 사전 글(한글이 남지 않음)이고 손가락 낱말을 쓰며 마우스 낱말(누르기·휠·왼쪽·오른쪽 버튼)은 없다
+    const words: Record<string, [finger: RegExp, mouse: RegExp]> = {
+      en: [/finger/i, /mouse|click|wheel|left|right/i],
+      ja: [/本指/, /マウス|クリック|ホイール|左|右/],
+      'zh-CN': [/单指|双指/, /鼠标|点击|单击|滚轮|左键|右键/],
+      de: [/Finger/, /Maus|klick/i],
+    };
+    for (const [code, [finger, mouse]] of Object.entries(words)) {
+      const t = translate(touch, code);
+      expect(t, code).not.toMatch(/[가-힣]/);
+      expect(t, code).toMatch(finger);
+      expect(t, code).not.toMatch(mouse);
+    }
   });
 });
