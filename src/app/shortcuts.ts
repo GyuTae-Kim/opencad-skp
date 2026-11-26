@@ -91,7 +91,9 @@ export const SHORTCUTS: readonly ShortcutGroup[] = [
       { keys: ['W', 'S', '↑', '↓'], label: '앞 · 뒤로' },
       { keys: ['A', 'D'], label: '옆으로' },
       { keys: ['←', '→'], label: '돌기' },
-      { keys: ['Q', 'E'], label: '위 · 아래로(중력을 끈 때)' },
+      // 142차: 코어 걷기는 E·PageUp이 위, Q·PageDown이 아래(앞 · 뒤로 줄처럼 키와 글을 차례로 짝짓는다 — 141차까지 Q, E라 Q가 위로 읽혔다).
+      // 걷는 중 PageUp·PageDown은 장면 넘기기 대신 위·아래(keys.ts)
+      { keys: ['E', 'Q', 'PageUp', 'PageDown'], label: '위 · 아래로(중력을 끈 때)' },
       { keys: ['Shift'], label: '빠르게' },
       { keys: ['Esc'], label: '걷기 끝내기' },
     ],
