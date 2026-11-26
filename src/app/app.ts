@@ -2004,6 +2004,11 @@ export class SkpViewerApp implements PanelHost {
     return this.isolatedOn;
   }
 
+  /** 3D 보기(PanelHost — 키보드로 누른 패널 아래 띠 버튼이 없어지면 초점을 둘 곳, 151차) */
+  get view(): HTMLElement | undefined {
+    return this.viewer?.canvas;
+  }
+
   /**
    * 장면(페이지) 적용: 장면이 기억하는 것만 바꾼다(카메라·숨긴 태그·숨긴 개체·단면·스타일·그림자·그리기 축).
    * 카메라는 장면 전환 시간(없으면 2초) 동안 부드럽게 옮긴다.

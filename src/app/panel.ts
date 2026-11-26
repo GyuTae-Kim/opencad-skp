@@ -7,7 +7,7 @@
  * 노드가 아주 많아도 화면이 느려지지 않게 자식은 처음 CHILD_LIMIT개만 그리고 "더 보기"로 늘린다.
  */
 import { h, icon } from './dom';
-import { focusSpot, listKeys, refocus, rove, treeKeys } from './kbd';
+import { focusIfLost, focusSpot, listKeys, refocus, rove, treeKeys } from './kbd';
 import type { MeasureToolResult } from './measure';
 import {
   KIND_LABEL,
@@ -76,6 +76,8 @@ export interface PanelHost {
   zoomToSelection(): void;
   closePanel(): void;
   readonly measuring: boolean;
+  /** 3D 보기(151차 — 키보드로 누른 아래 띠 버튼이 없어지면 초점을 둘 마지막 곳) */
+  readonly view?: HTMLElement | null;
 }
 
 /** 목록이 아주 길 때 한 번에 그리는 줄 수 */
@@ -123,6 +125,9 @@ function foundText(total: number, shown: number): string {
   return total > shown ? `찾은 항목 ${fmtCount(total)}개 중 처음 ${fmtCount(shown)}개` : `찾은 항목 ${fmtCount(total)}개`;
 }
 
+/** 아래 띠 버튼의 반대 동작 열쇠(151차 — 누름으로 그 버튼이 없어지면 초점을 둘 첫 곳, 150차 차례: 숨기기 ↔ 모두 보이기) */
+const FOOT_BACK: Record<string, string> = { 'button|hide': 'button|show', 'button|show': 'button|hide' };
+
 export class Panel {
   readonly el: HTMLElement;
   private readonly tabsEl: HTMLElement;
@@ -131,6 +136,8 @@ export class Panel {
   private doc: SkpDoc | null = null;
   /** 최근 측정 목록을 펼쳐 두었는지(다시 그려도 지킨다) */
   private logOpen = false;
+  /** 아래 띠 칸 → 열쇠(그린 바로 뒤 적음 — 151차) */
+  private readonly footKeys = new WeakMap<Element, string>();
 
   constructor(private readonly host: PanelHost) {
     this.tabsEl = h('div', { class: 'ptabs', role: 'tablist', 'aria-label': '패널 탭' });
@@ -864,6 +871,9 @@ export class Panel {
   private renderFoot(): void {
     const d = this.doc;
     const f = this.foot;
+    // 통째로 다시 그려 떼어질 칸에 초점이 있으면 그 열쇠(지난 그리기 때 적어 둔 것 — 151차)
+    const a = document.activeElement;
+    const key = a && f.contains(a) ? this.footKeys.get(a) : undefined;
     f.innerHTML = '';
     if (!d) {
       f.hidden = true;
@@ -885,7 +895,8 @@ export class Panel {
     const anyHidden = d.hiddenNodes.size > 0 || d.hiddenOutline.size > 0;
     if (canHide || anyHidden) {
       const act = (label: string, ico: string, title: string, run: () => void, on = false): HTMLButtonElement => {
-        const b = h('button', { class: `mini-btn${on ? ' on' : ''}`, title, 'aria-pressed': on ? 'true' : undefined, html: `${icon(ico, 14)}<span>${label}</span>` });
+        // data-key: 분리 버튼은 누르면 이름이 바뀐다(다시 그려도 같은 버튼으로 — 151차)
+        const b = h('button', { class: `mini-btn${on ? ' on' : ''}`, 'data-key': ico, title, 'aria-pressed': on ? 'true' : undefined, html: `${icon(ico, 14)}<span>${label}</span>` });
         b.addEventListener('click', run);
         return b;
       };
@@ -927,6 +938,16 @@ export class Panel {
     }
     f.hidden = !lines.length;
     f.append(...lines);
+    // 칸마다 열쇠(태그|data-key ?? aria-label ?? 글 — 번역층이 옮기기 전 원문, NC 137차 꼴. 띠에는 입력 칸이 없어 label 글 갈래는 없음)를 적고,
+    // 초점이 띠 안이었으면 같은 열쇠의 첫 칸 → 반대 동작 → 3D 보기 가운데 처음 쓸 수 있는 곳으로(150차 차례 — 151차).
+    // 지우기만 하면 떼어진 버튼의 초점이 문서로 빠져(focus fixup) 다음 Tab이 문서 처음부터였다
+    const first = new Map<string, HTMLElement>();
+    for (const el of f.querySelectorAll<HTMLElement>('button,summary')) {
+      const k = `${el.localName}|${el.dataset.key ?? el.getAttribute('aria-label') ?? el.textContent}`;
+      this.footKeys.set(el, k);
+      if (!first.has(k)) first.set(k, el);
+    }
+    if (key) for (const el of [first.get(key), first.get(FOOT_BACK[key] ?? ''), this.host.view]) focusIfLost(el);
   }
 }
 
