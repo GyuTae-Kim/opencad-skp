@@ -231,8 +231,13 @@ describe('장면 읽기', () => {
     });
     expect(pages).toHaveLength(3);
     expect(pages[0]).toEqual({ name: '평면', hiddenTags: ['벽'], hiddenFolders: [2, 0], hiddenNodes: [1, 4], sectionPlanes: [0], delay: 2 });
-    expect(pages[1]).toEqual({ name: '장면 2' });
+    // 이름 없는 장면(꼴이 다르거나 빈 이름): 이름 칸에 「장면 n」(앱 글)을 넣고 빈 것이었다는 표시를 남긴다(149차 — 화면은 그 이름만 화면 언어로 옮긴다)
+    expect(pages[1]).toEqual({ name: '장면 2', unnamed: true });
     expect(pages[2]!.name).toBe('장면 3');
+    expect(pages[2]!.unnamed).toBe(true);
+    expect('unnamed' in pages[0]!).toBe(false);
+    // 파일이 그 글로 붙인 이름은 파일 글(표시 없음)
+    expect(readPages({ pages: [{ name: '장면 4' }] })).toEqual([{ name: '장면 4' }]);
     expect(pages[2]!.style).toEqual({ xray: true, background: [1, 0.5, 0], sky: null });
     expect(readPages({})).toEqual([]);
     expect(readActivePage({ activePage: 2 }, 3)).toBe(2);
