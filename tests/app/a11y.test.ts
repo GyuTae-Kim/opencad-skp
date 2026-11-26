@@ -210,3 +210,35 @@ describe('단추 기본 type(47차 — 첫 화면 조각 줄이기)', () => {
     expect((f.querySelector('button') as HTMLButtonElement).type).toBe('button');
   });
 });
+
+describe('초점 테두리 둘레 대비(170차 — WCAG 2.4.7·1.4.11 3:1)', () => {
+  /** 선택자 규칙의 outline-offset(px — 마지막 값), 없으면 NaN */
+  const offsetOf = (sel: string): number => {
+    const m = [...bodies(sel).matchAll(/outline-offset:\s*(-?\d+)px/g)].pop();
+    return m ? Number(m[1]) : NaN;
+  };
+  // 바로 가기 안내(모달) 본문은 굴리려고 Tab으로 초점을 받는 영역(shortcuts.ts — 닫기 버튼과 둘뿐)이고 상자 폭을 꽉 채운다.
+  // 테두리가 바깥(전역 :focus-visible — 1px 띄움)이면 띄운 1px이 상자 테두리, 테두리 2px은 상자 밖 어두운 바탕(.sc-backdrop을 앱 바탕에 섞은 색) 위다
+  const ringBelow = (T: Record<string, string>): string[] => {
+    const own = offsetOf('.sc-body:focus-visible');
+    const off = Number.isNaN(own) ? offsetOf(':focus-visible') : own;
+    const S = surfaces(T);
+    const dim = rgba(/background:\s*([^;]+)/.exec(bodies('.sc-backdrop'))?.[1]);
+    const ring = rgba(T['--accent']);
+    const sides: [string, Rgba][] = [['상자 테두리', rgba(T['--border'])], off <= -2 ? ['본문 바탕', S.elev!] : ['상자 밖 어두운 바탕', over(dim, S.app!)]];
+    return sides.filter(([, c]) => contrast(ring, c) < 3).map(([k, c]) => `${k} ${contrast(ring, c).toFixed(2)}`);
+  };
+  for (const [name, T] of THEMES) {
+    it(`${name}: 바로 가기 안내 본문의 초점 테두리는 맞닿은 두 색과 모두 3:1(밝은 테마는 상자 밖이면 어두운 바탕 위 1.9:1)`, () => {
+      expect(ringBelow(T)).toEqual([]);
+    });
+  }
+  it('그 테두리는 메뉴 항목과 같은 꼴(강조색 2px, 안쪽 -2px)이고 상자 안쪽 둥근 모서리(10px − 테두리 1px)를 따른다', () => {
+    const b = bodies('.sc-body:focus-visible');
+    expect(b).toMatch(/outline:\s*2px solid var\(--accent\)/);
+    expect(b).toMatch(/outline-offset:\s*-2px/);
+    expect(b).toMatch(/border-radius:\s*0 0 9px 9px/);
+    expect(bodies('.sc-box')).toMatch(/border:\s*1px solid var\(--border\)/);
+    expect(bodies('.sc-box')).toMatch(/border-radius:\s*10px/);
+  });
+});
