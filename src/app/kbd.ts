@@ -122,3 +122,12 @@ export function disclose(b: HTMLElement, list: HTMLElement, open: boolean): void
   list.hidden = !open;
   b.setAttribute('aria-expanded', String(open));
 }
+
+/**
+ * 막대(input range) 값과 화면 읽기 값(aria-valuetext)을 함께 둔다(155차 — WAI-ARIA, NC 140·STEP 146차 꼴): 속 수 대신 사람이 읽을 값 글을 읽게.
+ * 앱이 막대 값을 맞추는 자리는 모두 이것으로(값과 읽는 글이 어긋나지 않게). 번역층은 이 속성을 옮기지 않으므로 글은 수·단위·기호만
+ */
+export function setRange(el: HTMLInputElement, value: number, text: string): void {
+  el.value = String(value);
+  el.setAttribute('aria-valuetext', text);
+}

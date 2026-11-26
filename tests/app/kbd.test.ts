@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { disclose, focusIfLost, focusSpot, leaveDisabled, listKeys, lost, moveIndex, refocus, rove, treeKeys } from '../../src/app/kbd';
+import { disclose, focusIfLost, focusSpot, leaveDisabled, listKeys, lost, moveIndex, refocus, rove, setRange, treeKeys } from '../../src/app/kbd';
 import { PANEL_WIDTH_STEPS, SHEET_STEPS, clampSheetFraction, nextSize } from '../../src/app/layout';
 import type { MeasureToolResult } from '../../src/app/measure';
 import { Panel, type PanelHost } from '../../src/app/panel';
@@ -385,6 +385,54 @@ describe('펼치고 접는 버튼의 펼침 상태(153차 — 측정 띠 "최근
     expect(app).toMatch(/if \(!this\.measureLog\.length\) disclose\(e\.measureLogBtn, e\.measureLog, false\);/);
     expect(app.match(/disclose\((?:this\.els|e)\.measureLogBtn, /g)).toHaveLength(3);
     expect(app).not.toMatch(/measureLog\.hidden =|el\.hidden = !el\.hidden/);
+  });
+});
+
+describe('막대의 화면 읽기 값(155차 — NC 140·STEP 146차 꼴, WAI-ARIA aria-valuetext)', () => {
+  it('막대 값과 aria-valuetext를 함께 두고, 앱은 단면 위치(0~1000 → 장면 범위 안 %)·시야각(옆 값 글 그대로)을 맞추는 자리에서 모두 이것으로 — 번역층이 옮기지 않아 낱말 없이', () => {
+    const box = html(
+      '<input type="range" class="sec-range" min="0" max="1000" step="1" value="500"><input type="range" class="fov-range" min="10" max="120" step="1" value="35"><span class="fov-value"></span>',
+    );
+    const [sec, fov] = [...box.querySelectorAll<HTMLInputElement>('input')] as [HTMLInputElement, HTMLInputElement];
+    const fovValue = box.querySelector<HTMLElement>('.fov-value')!;
+    setRange(sec, 625, '62.5%');
+    expect(sec.value).toBe('625');
+    expect(sec.getAttribute('aria-valuetext')).toBe('62.5%');
+    // 앱 원문의 실제 조각을 실제 setRange·막대로 돌린다(앱 클래스를 시험에서 만들지 않음 — pwa 시험의 new Function 꼴)
+    const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
+    const part = (from: string, to: string): string => {
+      const a = app.indexOf(from);
+      expect(a).toBeGreaterThan(0);
+      return app.slice(a, app.indexOf('\n', app.indexOf(to, a)));
+    };
+    const runSec = new Function('e', 'sec', 'setRange', part('const pos = sec ?', 'setRange(e.secRange,')) as (e: unknown, s: { t: number } | null, f: typeof setRange) => void;
+    const runFov = new Function('e', 'v', 'setRange', part('const fov = Math.round(v.fov);', 'setRange(e.fovRange,')) as (e: unknown, v: { fov: number }, f: typeof setRange) => void;
+    const secAt = (s: { t: number } | null): [string, string | null] => {
+      runSec({ secRange: sec }, s, setRange);
+      return [sec.value, sec.getAttribute('aria-valuetext')];
+    };
+    // 단면 위치: 처음(값 500·단면 없음), 끌기·키·축·뒤집기 뒤 코어 t, 끔(값 그대로), 범위 밖 t는 0~1로 묶음 — 0.1% 한 칸
+    sec.value = '500';
+    sec.removeAttribute('aria-valuetext');
+    expect(secAt(null)).toEqual(['500', '50%']);
+    expect(secAt({ t: 0.25 })).toEqual(['250', '25%']);
+    expect(secAt({ t: 0.123 })).toEqual(['123', '12.3%']);
+    expect(secAt(null)).toEqual(['123', '12.3%']);
+    expect(secAt({ t: 0.5004 })).toEqual(['500', '50%']);
+    expect(secAt({ t: 1.2 })).toEqual(['1000', '100%']);
+    expect(secAt({ t: -0.1 })).toEqual(['0', '0%']);
+    // 시야각: 옆에 보이는 값 글을 그대로
+    runFov({ fovRange: fov, fovValue }, { fov: 34.6 }, setRange);
+    expect([fov.value, fovValue.textContent, fov.getAttribute('aria-valuetext')]).toEqual(['35', '35°', '35°']);
+    runFov({ fovRange: fov, fovValue }, { fov: 90 }, setRange);
+    expect([fov.value, fovValue.textContent, fov.getAttribute('aria-valuetext')]).toEqual(['90', '90°', '90°']);
+    // 원문: kbd에서 가져오고, 두 막대의 값을 맞추는 자리는 setRange 둘뿐(막대 value에 바로 넣는 줄 없음), 옆 값 글을 쓰는 줄은 하나
+    expect(app).toMatch(/import \{[^}]*\bsetRange\b[^}]*\} from '\.\/kbd';/);
+    expect(app.match(/setRange\(e\.(?:secRange|fovRange), /g)).toHaveLength(2);
+    expect(app).not.toMatch(/(?:secRange|fovRange)\.value = /);
+    expect(app.match(/fovValue\.textContent = /g)).toHaveLength(1);
+    // 번역층은 aria-valuetext를 옮기지 않는다(그래서 값 글은 수·단위·기호만)
+    expect(readFileSync(resolve(__dirname, '../../src/app/i18n.ts'), 'utf8')).not.toContain('aria-valuetext');
   });
 });
 

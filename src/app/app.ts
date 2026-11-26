@@ -124,7 +124,7 @@ import { cameraForBox, keepViewOnHeightChange } from './view';
 import { cssHex, isLightBackground, loadFileBackground, safeStorage, skyBackground, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
 import type { BackgroundOptions, Rgba } from 'opencad-viewer3d';
 import { DEFAULT_EDGE_COLOR, LineContrast, edgeLooks, lineColorOverrides } from './linecontrast';
-import { disclose, focusIfLost, focusSpot, leaveDisabled, listKeys, refocus } from './kbd';
+import { disclose, focusIfLost, focusSpot, leaveDisabled, listKeys, refocus, setRange } from './kbd';
 import type { Rgb, SkpEdgeColorMode, SkpShadowMeta, SkpStyleMeta } from '../meta';
 import { WalkStick } from './joystick';
 import { Vcb, vcbStartKey, type VcbKind } from './vcb';
@@ -2620,9 +2620,11 @@ export class SkpViewerApp implements PanelHost {
     const touch = !!this.coarseQuery?.matches;
     this.stick?.setVisible(this.walking && touch && !!this.doc);
     if (!e.camBar.hidden && v) {
-      const fov = v.fov;
-      e.fovRange.value = String(Math.round(fov));
-      e.fovValue.textContent = `${Math.round(fov)}°`;
+      // 화면 읽기 값은 옆에 보이는 값 글 그대로(155차 — 속 수 대신)
+      const fov = Math.round(v.fov);
+      const fovText = `${fov}°`;
+      e.fovValue.textContent = fovText;
+      setRange(e.fovRange, fov, fovText);
       const persp = v.getProjection() === 'perspective';
       e.fovRange.disabled = !persp;
       press(e.walkBtn, this.walking);
@@ -3650,7 +3652,9 @@ export class SkpViewerApp implements PanelHost {
     press(e.secFlip, !!sec?.flip);
     e.secFill.disabled = !has || !sec;
     press(e.secFill, this.sectionFill);
-    if (sec) e.secRange.value = String(Math.round(Math.min(1, Math.max(0, sec.t)) * 1000));
+    // 화면 읽기 값은 속 수(0~1000) 대신 장면 범위 안 자리 %(155차 — 옆에 값 글이 없어 손잡이 자리 그대로, 0.1% 한 칸. 끄면 막대 값 그대로)
+    const pos = sec ? Math.round(Math.min(1, Math.max(0, sec.t)) * 1000) : Number(e.secRange.value);
+    setRange(e.secRange, pos, `${pos / 10}%`);
   }
 
   private refreshStatus(): void {
