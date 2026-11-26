@@ -13,7 +13,7 @@ vi.mock('../src/model', async (importOriginal) => {
   return { ...orig, readModelDat: (...a: Parameters<typeof orig.readModelDat>) => (hold.model as SkpModel | null) ?? orig.readModelDat(...a) };
 });
 
-import { skpToScene } from '../src/index';
+import { skpFileToScene, skpToScene, skpToSceneAsync } from '../src/index';
 import { EDGE_COLOR } from '../src/scene';
 import { entities, modelDat, skpFile, styleXml, utf8 } from './build';
 
@@ -159,6 +159,34 @@ describe('skpToScene meta 잇기', () => {
       // outline이 없으면 나무가 없어 숨긴 개체는 노드로 바꾸지 않는다
       expect((s.meta as SkpMetaExtras).pages![0]!.hiddenNodes).toBeUndefined();
       expect((s.meta as SkpMetaExtras).treeInfo).toBeUndefined();
+    } finally {
+      hold.model = null;
+    }
+  });
+
+  it('annotations: false면 주석(글·지시선·보조점·단면)을 펼치지 않고 형상은 같다 — skpToScene·skpToSceneAsync·skpFileToScene(144차)', async () => {
+    // 장면을 만들며 손 모형의 표를 비우므로(releaseModel) 부를 때마다 새 손 모형
+    const fresh = (): Uint8Array => {
+      hold.model = handModel();
+      return file();
+    };
+    const isAnn = (id: string): boolean => /^skp-(dims|leaders|guides|sections)-/.test(id);
+    try {
+      const on = skpToScene(fresh(), { outline: true });
+      expect(on.lines.some((l) => isAnn(l.id))).toBe(true);
+      expect(on.points).toHaveLength(1);
+      const offs = [skpToScene(fresh(), { outline: true, annotations: false })];
+      offs.push(await skpToSceneAsync(fresh(), { outline: true, annotations: false }));
+      offs.push((await skpFileToScene(new Blob([fresh() as BlobPart]), { outline: true, annotations: false })).scene);
+      for (const off of offs) {
+        const m = off.meta as Record<string, unknown> & SkpMetaExtras;
+        expect(off.lines.filter((l) => isAnn(l.id)).map((l) => l.id)).toEqual([]);
+        expect(off.points).toBeUndefined();
+        expect([m.texts, m.dimensions, m.sectionPlanes, m.annotationItems]).toEqual([undefined, undefined, undefined, undefined]);
+        // 메시·주석 밖 선분은 켠 장면과 같다
+        expect(off.meshes.map((x) => x.id)).toEqual(on.meshes.map((x) => x.id));
+        expect(off.lines.map((l) => l.id)).toEqual(on.lines.filter((l) => !isAnn(l.id)).map((l) => l.id));
+      }
     } finally {
       hold.model = null;
     }

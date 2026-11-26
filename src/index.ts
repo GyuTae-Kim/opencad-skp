@@ -84,6 +84,12 @@ export interface SkpOptions {
   extras?: boolean;
   /** 매끈한 모서리로 이어진 면을 부드럽게 칠할 꼭짓점 법선(Mesh3d.normals)을 낸다. 기본 false(예전처럼 평면 음영) */
   smooth?: boolean;
+  /**
+   * 주석(문자·치수·보조선·보조점·단면 평면)을 펼쳐 선분 묶음(skp-dims-*·skp-leaders-*·skp-guides-*·skp-sections-*)·보조점(scene.points)과
+   * meta.texts·dimensions·sectionPlanes·annotationItems로 낸다. 기본 true(모형에 주석이 없으면 출력이 같다). false면 펼치지 않는다
+   * (144차 — 그 전에는 이 선택이 buildSceneParts에만 있어 넘겨도 듣지 않았다)
+   */
+  annotations?: boolean;
   /** 진행 알림(0~1, 단계 글). 해석은 동기라 단계 안에서도 몇천 항목마다 부른다 */
   onProgress?: (fraction: number, stage: string) => void;
   /**
@@ -474,6 +480,7 @@ function sceneFrom(read: Package | Scene3d, st: Start, opts: SkpOptions): Scene3
       outline: !!opts.outline,
       extras: !!opts.extras,
       smooth: !!opts.smooth,
+      annotations: opts.annotations !== false,
       ...(front && front.every(Number.isFinite) ? { defaultFaceColor: [front[0], front[1], front[2], 1] as const } : {}),
       // 앞·뒤 재질이 다른 면은 뒷면 색·무늬를 따로(재질 없는 뒷면은 스타일 뒷면 색)
       ...(back && back.every(Number.isFinite) ? { defaultBackColor: [back[0], back[1], back[2], 1] as const } : {}),
