@@ -74,7 +74,8 @@ export function attrSection(d: SkpDoc, e: EntityInfo): HTMLElement {
                 more.replaceWith(box);
                 box.focus();
               },
-              () => more.replaceWith(hint('전체 값을 읽지 못했습니다.')),
+              // 152차: 버튼 자리에 새로 붙는 글이라 role=alert(aria-live 없이 — 새로 붙어도 읽힘, 알림 상자 오류와 같은 꼴). 전에는 화면 읽기 프로그램이 읽지 않았다
+              () => more.replaceWith(h('p', { class: 'hint', role: 'alert' }, '전체 값을 읽지 못했습니다.')),
             );
           });
           v1.append(more);

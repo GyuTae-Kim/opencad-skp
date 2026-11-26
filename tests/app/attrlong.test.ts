@@ -134,4 +134,27 @@ describe('속성 사전 칸: 전체 값 보기', () => {
     expect(el.querySelector('button')).toBeNull();
     expect(el.querySelector('.hint')!.textContent).toBe('사전 2개는 줄였습니다.');
   });
+
+  it('152차: 전체 값을 읽지 못해 버튼 자리에 새로 붙는 글은 role=alert(화면 읽기 프로그램이 읽게 — NC 135·STEP 143차 꼴), 처음 그린 안내 글은 그대로', async () => {
+    const attrs: SkpAttrDictsMeta[] = [{ Render: { conf: big(50_000, '렌더 설정;') } }];
+    const long = splitLongAttrs(attrs)!;
+    // Blob을 읽지 못함(디스크로 내린 Blob이 사라짐 등)
+    long.blob = { slice: () => ({ text: () => Promise.reject(new Error('NotReadableError')) }) } as unknown as Blob;
+    const doc = { attrLong: long, scene: { meta: { attributes: attrs } } } as unknown as SkpDoc;
+    const el = attrSection(doc, { title: '', rows: [], dicts: attributeDicts(attrs[0]), moreDicts: 1 });
+    document.body.append(el);
+    el.querySelector<HTMLButtonElement>('button.attr-more')!.click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(el.querySelector('button.attr-more')).toBeNull();
+    const note = el.querySelector<HTMLElement>('.prop-row .hint')!;
+    expect(note.textContent).toBe('전체 값을 읽지 못했습니다.');
+    // aria-live 없이 role=alert(새로 붙어도 읽힘 — 알림 상자 오류와 같은 꼴)
+    expect(note.getAttribute('role')).toBe('alert');
+    expect(note.hasAttribute('aria-live')).toBe(false);
+    // 처음 그린 칸의 안내 글(줄인 사전 수)은 알림이 아니다(패널이 선택 탭을 다시 그릴 때마다 읽히지 않게)
+    const more = el.querySelector<HTMLElement>(':scope > .hint')!;
+    expect(more.textContent).toBe('사전 1개는 줄였습니다.');
+    expect(more.hasAttribute('role')).toBe(false);
+    el.remove();
+  });
 });
