@@ -97,6 +97,34 @@ describe('속성 사전 칸: 전체 값 보기', () => {
     el.remove();
   });
 
+  it('146차: 2,000자에서 자른 글 값 가운데 워커가 떼지 않은 것(4,000자 이하 — 장면 정보에 통째로)도 같은 단추로 원래 글을', async () => {
+    const mid = big(ATTR_LONG_CHARS, 'XML;');
+    const edge = big(ATTR_VALUE_CHARS + 1);
+    const attrs: SkpAttrDictsMeta[] = [{ V: { conf: mid, edge, full: big(ATTR_VALUE_CHARS), list: [big(ATTR_VALUE_CHARS)] as never } }];
+    // 워커는 4,000자 이하 글을 떼지 않는다 — Blob 자리 없음
+    expect(splitLongAttrs(attrs)).toBeNull();
+    const doc = { scene: { meta: { attributes: attrs } } } as unknown as SkpDoc;
+    const el = attrSection(doc, { title: '', rows: [], dicts: attributeDicts(attrs[0]), moreDicts: 0 });
+    document.body.append(el);
+    // 자른 글 줄(conf·edge)에만 — 자르지 않은 2,000자 글·글이 아닌 목록(화면 글은 잘려도)은 그대로
+    const btns = [...el.querySelectorAll<HTMLButtonElement>('button.attr-more')];
+    expect(btns.map((b) => [b.closest('.prop-row')!.querySelector('.k')!.textContent, b.textContent])).toEqual([
+      ['conf', `전체 값 보기(${ATTR_LONG_CHARS.toLocaleString('ko-KR')}자)`],
+      ['edge', `전체 값 보기(${(ATTR_VALUE_CHARS + 1).toLocaleString('ko-KR')}자)`],
+    ]);
+    // 줄 글·도움말은 예전처럼 2,000자 + …
+    expect(btns[0]!.closest('.prop-row')!.querySelector('.v [translate="no"]')!.getAttribute('title')).toBe(attributeText(mid));
+    btns[0]!.click();
+    await new Promise((r) => setTimeout(r, 0));
+    const box = el.querySelector<HTMLTextAreaElement>('textarea.attr-full')!;
+    expect(box.value).toBe(mid);
+    expect(box.readOnly).toBe(true);
+    expect(document.activeElement).toBe(box);
+    expect(box.getAttribute('aria-label')).toBe('conf 전체 값');
+    expect(el.querySelectorAll('button.attr-more')).toHaveLength(1);
+    el.remove();
+  });
+
   it('긴 값이 없는 문서는 예전 칸 그대로(단추 없음)', () => {
     const attrs: SkpAttrDictsMeta[] = [{ A: { k: 'v' } }];
     const doc = { scene: { meta: { attributes: attrs } } } as unknown as SkpDoc;

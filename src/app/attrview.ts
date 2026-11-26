@@ -1,7 +1,8 @@
 /**
  * 선택 탭의 속성 사전 칸(47차 — 처음 그릴 때 받는 조각): 사전마다 접는 묶음과 열쇠·값 줄을 만들고, 해석 워커가 앞부분만 넘긴
  * 아주 긴 글 값(worker/attrlong.ts — ATTR_LONG_CHARS 넘게)에는 "전체 값 보기" 단추를 두어, 누르면 원래 글을 Blob에서 그 자리만 잘라 읽어
- * 읽기 전용 글 칸에 보인다(고르고 복사할 수 있다). 짧은 값은 예전처럼 2,000자에서 자른 글만.
+ * 읽기 전용 글 칸에 보인다(고르고 복사할 수 있다). 2,000자에서 자른 글 값 가운데 워커가 떼지 않은 것(4,000자 이하)은 장면 정보의 원래 글을
+ * 같은 단추로 보인다(146차). 목록·수 같은 글이 아닌 값은 예전처럼 2,000자에서 자른 글만.
  */
 import type { SkpAttrValueMeta } from '../meta';
 import { h } from './dom';
@@ -58,11 +59,15 @@ export function attrSection(d: SkpDoc, e: EntityInfo): HTMLElement {
       ...dict.entries.map(([k, v]) => {
         const v1 = h('span', { class: 'v' }, h('span', { title: v, translate: 'no' }, v));
         const r = keys?.get(k);
-        if (r && long) {
-          const more = h('button', { class: 'mini-btn attr-more' }, `전체 값 보기(${fmtCount(r.chars)}자)`);
+        // 146차: 2,000자에서 자른 글 값 가운데 워커가 떼지 않은 것(ATTR_LONG_CHARS 이하 — 장면 정보에 통째로 있음)도 같은 단추로 원래 글을 보인다
+        // (전에는 Blob 자리가 있는 값에만 단추가 있어 2,001~4,000자 값은 뒤를 볼 길이 없었다). 글 값은 잘렸을 때만 화면 글과 다르다(entity.ts attributeText)
+        const raw = r ? undefined : (dict.src as Dict | undefined)?.[k];
+        const full = r && long ? { chars: r.chars, read: () => readLong(long, r) } : typeof raw === 'string' && raw !== v ? { chars: raw.length, read: async () => raw } : null;
+        if (full) {
+          const more = h('button', { class: 'mini-btn attr-more' }, `전체 값 보기(${fmtCount(full.chars)}자)`);
           more.addEventListener('click', () => {
             more.disabled = true;
-            readLong(long, r).then(
+            full.read().then(
               (text) => {
                 const box = h('textarea', { class: 'attr-full', readonly: true, rows: 8, spellcheck: 'false', 'aria-label': mixText(mix`${fileText(k)} 전체 값`), 'data-i18n-keep': 'aria-label' });
                 box.value = text;
