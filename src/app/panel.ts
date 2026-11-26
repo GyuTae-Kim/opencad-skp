@@ -7,7 +7,7 @@
  * 노드가 아주 많아도 화면이 느려지지 않게 자식은 처음 CHILD_LIMIT개만 그리고 "더 보기"로 늘린다.
  */
 import { h, icon } from './dom';
-import { focusIfLost, focusSpot, listKeys, refocus, rove, treeKeys } from './kbd';
+import { focusIfLost, focusSpot, listKeys, listRows, refocus, rove, treeKeys } from './kbd';
 import type { MeasureToolResult } from './measure';
 import {
   KIND_LABEL,
@@ -918,7 +918,7 @@ export class Panel {
       const axes = measureAxes(m, d.units, mm);
       lines.push(h('div', {}, h('b', {}, `${measureText(m, d.units, mm)} `), axes ? h('span', { class: 'dim' }, axes) : null));
     } else if (this.host.measuring) lines.push(h('div', { class: 'dim' }, this.host.measureHint ?? '측정: 점을 누르세요 · Esc = 지우기, 한 번 더 = 끄기'));
-    // 최근 측정(새것부터): 줄마다 복사, 모두 복사·기록 지우기
+    // 최근 측정(새것부터): 줄마다 복사, 모두 복사·기록 지우기. 줄은 목록으로 묶는다(156차 — 줄 수·차례를 읽고 같은 이름의 줄 복사 버튼이 그 줄 글과 한 칸)
     const log = this.host.measureLogList;
     if (log.length) {
       const mm = mmPerSceneUnit(d.scene.units);
@@ -932,7 +932,7 @@ export class Panel {
       all.addEventListener('click', () => this.host.copyMeasure('all'));
       const clear = h('button', { class: 'mini-btn' }, '기록 지우기');
       clear.addEventListener('click', () => this.host.clearMeasureLog());
-      lines.push(h('details', { class: 'measure-history', open: this.logOpen ? true : undefined }, h('summary', {}, `최근 측정 ${fmtCount(log.length)}개`), ...rows, h('div', { class: 'pbar' }, all, clear)));
+      lines.push(h('details', { class: 'measure-history', open: this.logOpen ? true : undefined }, h('summary', {}, `최근 측정 ${fmtCount(log.length)}개`), listRows(rows), h('div', { class: 'pbar' }, all, clear)));
       const det = lines[lines.length - 1] as HTMLDetailsElement;
       det.addEventListener('toggle', () => (this.logOpen = det.open));
     }

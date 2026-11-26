@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { disclose, focusIfLost, focusSpot, leaveDisabled, listKeys, lost, moveIndex, refocus, rove, setRange, treeKeys } from '../../src/app/kbd';
+import { disclose, focusIfLost, focusSpot, leaveDisabled, listKeys, listRows, lost, moveIndex, refocus, rove, setRange, treeKeys } from '../../src/app/kbd';
 import { PANEL_WIDTH_STEPS, SHEET_STEPS, clampSheetFraction, nextSize } from '../../src/app/layout';
 import type { MeasureToolResult } from '../../src/app/measure';
 import { Panel, type PanelHost } from '../../src/app/panel';
@@ -433,6 +433,59 @@ describe('막대의 화면 읽기 값(155차 — NC 140·STEP 146차 꼴, WAI-AR
     expect(app.match(/fovValue\.textContent = /g)).toHaveLength(1);
     // 번역층은 aria-valuetext를 옮기지 않는다(그래서 값 글은 수·단위·기호만)
     expect(readFileSync(resolve(__dirname, '../../src/app/i18n.ts'), 'utf8')).not.toContain('aria-valuetext');
+  });
+});
+
+describe('최근 측정 줄을 목록으로(156차 — 152차 감사 ④, WAI-ARIA list·listitem)', () => {
+  it('줄을 하나씩 listitem 칸에 담아 list로 묶고(감싼 칸은 블록 div — 스타일시트 그대로), 측정 띠 기록 목록·패널 아래 띠 최근 측정이 모두 이것으로 — 머리·모두 복사·기록 지우기는 목록 밖', () => {
+    // 도우미: 차례·수 그대로, 칸마다 그 줄 요소 하나(같은 요소 — 클래스·글·누름 길 그대로)
+    const rows = ['a', 'b', 'c'].map((t) => {
+      const b = document.createElement('button');
+      b.className = 'ml-row';
+      b.textContent = t;
+      return b;
+    });
+    const list = listRows(rows);
+    expect([list.tagName, list.getAttribute('role')]).toEqual(['DIV', 'list']);
+    expect([...list.children].map((li) => [li.tagName, li.getAttribute('role'), li.childElementCount, li.firstElementChild])).toEqual(rows.map((r) => ['DIV', 'listitem', 1, r]));
+    expect(listRows([]).childElementCount).toBe(0);
+    // 패널 아래 띠(실제 패널·작은 모형 — 151차 시험 꼴): 최근 측정 두 줄
+    const d = rowDoc();
+    const log: MeasureToolResult[] = [
+      { kind: 'tape', a: [0, 0, 0], b: [1, 0, 0], distance: 1, dx: 1, dy: 0, dz: 0 },
+      { kind: 'tape', a: [0, 0, 0], b: [0, 2, 0], distance: 2, dx: 0, dy: 2, dz: 0 },
+    ];
+    const copied: (number | 'all' | 'current')[] = [];
+    const noop = (): void => {};
+    const host: PanelHost = {
+      setTagVisible: noop, setAllTagsVisible: noop, setOutlineVisible: noop, setNodeVisible: noop, setExpanded: noop, collapseAll: noop, setPickMode: noop,
+      setShowSoft: noop, setShowHidden: noop, setFolderVisible: noop, setAnnotationVisible: noop, setFileSection: noop, applyPage: noop,
+      hideSelection: noop, isolateSelection: noop, unhideAll: noop, isolated: false, measureHint: null, measureLogList: log,
+      copyMeasure: (w) => copied.push(w), clearMeasureLog: noop,
+      select: noop, selectPickedPart: noop, zoomToSelection: noop, closePanel: noop, measuring: false,
+    };
+    const panel = new Panel(host);
+    document.body.append(panel.el);
+    panel.el.hidden = false;
+    panel.show(d);
+    const det = panel.el.querySelector<HTMLElement>('.pfoot .measure-history')!;
+    expect([...det.children].map((c) => c.tagName + (c.getAttribute('role') ? `[${c.getAttribute('role')}]` : ''))).toEqual(['SUMMARY', 'DIV[list]', 'DIV']);
+    const items = [...det.querySelector<HTMLElement>(':scope > [role="list"]')!.children];
+    expect(items.map((li) => li.getAttribute('role'))).toEqual(['listitem', 'listitem']);
+    // 줄 글과 그 줄의 복사 버튼이 한 칸(버튼 이름이 모두 같아도 그 줄이 문맥), 차례 그대로, 목록 안 버튼은 줄 복사뿐
+    for (const li of items) expect([li.querySelectorAll('.ml-line').length, li.querySelectorAll('.ml-line > span').length, li.querySelectorAll('button.ml-copy-btn').length, li.querySelectorAll('button').length]).toEqual([1, 1, 1, 1]);
+    items[1]!.querySelector('button')!.click();
+    expect(copied).toEqual([1]);
+    // 앱 원문: 측정 띠 기록 목록도 같은 도우미로(앱 클래스를 시험에서 만들지 않음), 두 모듈 모두 kbd에서 가져옴
+    const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
+    const pan = readFileSync(resolve(__dirname, '../../src/app/panel.ts'), 'utf8');
+    for (const src of [app, pan]) expect(src).toMatch(/import \{[^}]*\blistRows\b[^}]*\} from '\.\/kbd';/);
+    expect(app).toMatch(/el\.replaceChildren\(h\('div', \{ class: 'ml-head' \}, [^\n]*\), listRows\(rows\), h\('div', \{ class: 'pbar ml-acts' \}, all, clear\)\);/);
+    expect(pan).toMatch(/h\('summary', \{\}, `최근 측정 \$\{fmtCount\(log\.length\)\}개`\), listRows\(rows\), h\('div', \{ class: 'pbar' \}, all, clear\)/);
+    // 스타일시트 그대로: 두 목록의 자식 결합자는 요약(summary)뿐이라 감싼 블록 칸이 걸리는 규칙을 바꾸지 않고, role로 꾸미는 규칙도 없음
+    const css = readFileSync(resolve(__dirname, '../../src/app/styles.css'), 'utf8');
+    expect(css.match(/\.(?:measure-log|measure-history|ml-row|ml-line)\s*>\s*[^\s{,]+/g)).toEqual(['.measure-history > summary', '.measure-history > summary']);
+    expect(css).not.toMatch(/\[role="?list/);
   });
 });
 
