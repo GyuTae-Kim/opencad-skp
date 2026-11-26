@@ -3361,8 +3361,9 @@ export class SkpViewerApp implements PanelHost {
     // 겹친 것 목록(57차)이 열려 있으면 Esc는 목록만 닫고 3D 보기로 돌아간다(고른 것을 지우지 않는다 — 목록에 초점이 가면 코어 가상 커서는 이미 꺼졌다)
     if (this.pickList?.escape(ev)) return;
     // 157차: 그 밖의 메뉴(공용 언어 고르기 메뉴 — role=menu) 안의 Esc·이동 키는 그 메뉴 것(걷기·방향 잠금·측정 지우기로 가져가 메뉴가 움직이지도 닫히지도 않았다).
-    // 158차: 대화 상자(그림 저장 창 — role=dialog) 안의 Esc도 그 창 것(잰 결과를 지우거나 걷기를 끝내고 창은 열린 채였다)
-    if (menuKey(ev.target, ev.key)) return;
+    // 158차: 대화 상자(그림 저장 창 — role=dialog) 안의 Esc도 그 창 것(잰 결과를 지우거나 걷기를 끝내고 창은 열린 채였다).
+    // 164차: 메뉴 안의 글자·숫자 키(조합 키 없이)도 메뉴 것(F·1~7·T·걷기·?·측정값 칸 숫자로 가져가 메뉴가 열린 채 뒤 3D 보기·도구가 바뀌었다)
+    if (menuKey(ev.target, ev.key, ev.ctrlKey || ev.metaKey || ev.altKey)) return;
     const v = this.viewer;
     const tool = this.measureTool;
     // 안내 되돌리기·다시 하기(Ctrl·⌘+Z, Ctrl+Y·Ctrl·⌘+Shift+Z — 도구를 끈 동안에도, 입력 칸은 브라우저 몫)

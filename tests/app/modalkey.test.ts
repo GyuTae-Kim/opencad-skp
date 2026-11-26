@@ -152,7 +152,8 @@ describe('모달 대화 상자가 열린 동안 상자 밖 키는 뒤 3D 보기�
       'if (this.sliding',
       "if (this.menu && ev.key === 'Escape')",
       'if (this.pickList?.escape(ev)) return;',
-      'if (menuKey(ev.target, ev.key)) return;',
+      // 164차: 메뉴 안 글자·숫자 키도 거르는 가드(조합 키는 넘김)
+      'if (menuKey(ev.target, ev.key, ev.ctrlKey || ev.metaKey || ev.altKey)) return;',
       'if (tool?.undoKey(ev))',
       'if (this.keyPick?.handleKey(ev))',
       'const act = keyAction({',
