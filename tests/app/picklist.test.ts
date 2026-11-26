@@ -435,16 +435,19 @@ describe('목록 키와 고르기', () => {
     expect(document.activeElement).toBe(s.cv);
   });
 
-  it('Esc·Tab은 고르지 않고 닫아 3D 보기로 초점(앱 Esc로 넘기지 않는다), 창 크기가 바뀌면 닫는다', () => {
+  it('Esc·Tab·Shift+Tab은 고르지 않고 닫아 3D 보기로 초점(앱 Esc로 넘기지 않는다), 창 크기가 바뀌면 닫는다', () => {
     const s = setup();
     const onWindowKey = vi.fn();
     window.addEventListener('keydown', onWindowKey);
     try {
-      for (const k of ['Escape', 'Tab']) {
+      for (const [k, shiftKey] of [['Escape', false], ['Tab', false], ['Tab', true]] as const) {
         ptr(s.cv, 'pointerdown', { x: 100, y: 100, button: 2 });
         ptr(s.cv, 'pointerup', { x: 100, y: 100, button: 2 });
-        key(items()[0]!, k);
+        // 163차: Shift+Tab도 연 곳(3D 보기 — 문맥 메뉴라 여는 버튼이 없음)으로, 기본 동작을 막아 그 앞 칸으로 건너뛰지 않음(도구 막대 메뉴 kbd.ts menuTab과 같은 규칙)
+        const e = new KeyboardEvent('keydown', { key: k, shiftKey, bubbles: true, cancelable: true });
+        items()[0]!.dispatchEvent(e);
         expect(menu(), k).toBeNull();
+        expect(e.defaultPrevented, k).toBe(true);
         expect(document.activeElement).toBe(s.cv);
       }
       expect(onWindowKey).not.toHaveBeenCalled();
