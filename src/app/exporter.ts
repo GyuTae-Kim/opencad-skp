@@ -208,7 +208,8 @@ export async function renderExport(ctx: ExportContext, o: ExportOptions): Promis
       }
     }
     if (ctx.labels) drawLabels(g, labelOps(ctx.labels.placements, ctx.labels.itemList), scale);
-    if (ctx.overlay) drawMeasureBoxes(g, ctx.overlay.labels, canvas.getBoundingClientRect(), scale);
+    // 측정 결과 글은 덧그림 층 안, 툴팁은 그 층 바로 뒤 형제 칸(aria-hidden 밖 — 168차)이라 둘을 담은 3D 보기 칸에서 찾는다
+    if (ctx.overlay) drawMeasureBoxes(g, ctx.overlay.el.parentElement ?? ctx.overlay.labels, canvas.getBoundingClientRect(), scale);
   } else if (ctx.overlay) {
     try {
       await drawOverlaySvg(c.getContext('2d')!, ctx.overlay.svg, cssW, cssH, scale, '.anno-marks');

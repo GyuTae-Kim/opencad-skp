@@ -641,8 +641,8 @@ export interface GuideMenuItem {
 /** 이 도구가 쓰는 뷰어 기능(시험에서 가짜로 바꿀 수 있게) */
 export type MeasureViewer = Pick<Viewer3d, 'canvas' | 'pick' | 'getCamera' | 'onCameraChange' | 'getRenderMode' | 'section'> &
   Partial<Pick<Viewer3d, 'sections' | 'viewCubeRect' | 'navigation' | 'keyboardCursor' | 'isVisible' | 'hiddenRanges' | 'onSectionChange' | 'visibilityVersion'>>;
-/** 이 도구가 쓰는 덧그림 기능 */
-export type MeasureOverlay = Pick<Overlay, 'svg' | 'labels' | 'set' | 'frame' | 'invalidate'>;
+/** 이 도구가 쓰는 덧그림 기능(el — 툴팁 칸을 그 바로 뒤에 둔다, 168차) */
+export type MeasureOverlay = Pick<Overlay, 'el' | 'svg' | 'labels' | 'set' | 'frame' | 'invalidate'>;
 
 /**
  * 누르기로 볼 최대 움직임(화소): 코어 끌기 시작 거리와 같다(마우스·펜 DRAG_START_PX 4, 터치 TOUCH_DRAG_START_PX 10).
@@ -1305,6 +1305,8 @@ export class MeasureTool {
   private haloNow: string | null = null;
   private readonly layer: HTMLDivElement;
   private readonly tip: HTMLDivElement;
+  /** 툴팁 칸(168차): aria-hidden인 덧그림 층 밖, 그 층 바로 뒤 형제 */
+  private readonly tipBox: HTMLDivElement;
   private readonly off: (() => void)[] = [];
   private disposed = false;
 
@@ -1334,6 +1336,11 @@ export class MeasureTool {
     this.tip.style.cssText = 'position:absolute;left:0;top:0;white-space:nowrap;pointer-events:none;display:none;';
     // 글을 이 도구가 옮겨 넣으면 번역층이 다시 옮기지 않게(옮긴 글을 원문으로 되찾다가 다른 열쇠의 글로 바꾸지 않게)
     if (opts.localize) this.tip.setAttribute('data-i18n-skip', '');
+    // 168차: 덧그림 층은 aria-hidden(모형 글·결과 글을 읽지 않게)이라 그 밑의 알림은 읽히지 않는다 — 툴팁만 층 밖, 층 바로 뒤 형제 칸에 둔다.
+    // 칸은 .overlay와 같은 자리·쌓임·잘림·누르기 통과이고, 도구를 켠 동안 툴팁을 떼지 않아 같은 알림 칸의 글만 바뀐다
+    this.tipBox = document.createElement('div');
+    this.tipBox.style.cssText = 'position:absolute;inset:0;z-index:1;overflow:hidden;pointer-events:none;';
+    this.tipBox.append(this.tip);
     const cv = viewer.canvas;
     const on = <E extends Event>(el: EventTarget, type: string, fn: (e: E) => void): void => {
       el.addEventListener(type, fn as EventListener);
@@ -2007,6 +2014,7 @@ export class MeasureTool {
       this.layer.replaceChildren();
       this.g.remove();
       this.layer.remove();
+      this.tipBox.remove();
     }
   }
 
@@ -3677,6 +3685,9 @@ export class MeasureTool {
     // 다른 덧그림이 층을 비웠으면 다시 붙인다
     if (this.g.parentNode !== this.overlay.svg) this.overlay.svg.append(this.g);
     if (this.layer.parentNode !== this.overlay.labels) this.overlay.labels.append(this.layer);
+    // 툴팁 칸(168차): 도구를 켠 동안 덧그림 층 바로 뒤에 두고, 끈 동안(안내만 그림)은 뗀다
+    if (!mode) this.tipBox.remove();
+    else if (this.overlay.el.nextSibling !== this.tipBox) this.overlay.el.after(this.tipBox);
     this.g.replaceChildren();
     this.layer.replaceChildren();
     this.labelQueue = [];
@@ -3801,7 +3812,7 @@ export class MeasureTool {
       rects.push({ x: (c.fx ?? c.x) - 22, y: (c.fy ?? c.y + AIM_OFFSET_PX) - 22, width: 44, height: 44 });
     }
     const t = this.tip;
-    if (t.style.display !== 'none' && t.parentNode === this.layer && t.offsetWidth > 0 && t.offsetHeight > 0)
+    if (t.style.display !== 'none' && this.tipBox.isConnected && t.offsetWidth > 0 && t.offsetHeight > 0)
       rects.push({ x: parseFloat(t.style.left) || 0, y: parseFloat(t.style.top) || 0, width: t.offsetWidth, height: t.offsetHeight });
     rects.push(...covers());
     const edged = [...rects, ...edgeBands(f.width, f.height)];
@@ -3951,7 +3962,6 @@ export class MeasureTool {
     if (c.type === 'keyboard') el.setAttribute('aria-hidden', 'true');
     else el.removeAttribute('aria-hidden');
     el.style.display = 'block';
-    this.layer.append(el);
     const pos = tooltipPosition(c.x, c.y, el.offsetWidth || 0, el.offsetHeight || 0, f.width, f.height, c.type === 'aim', covers());
     el.style.left = `${pos.left}px`;
     el.style.top = `${pos.top}px`;

@@ -5093,6 +5093,57 @@ describe('측정 도구: 키보드 점 찍기(59차 — 가상 커서 자리, ke
   });
 });
 
+describe('측정 도구: 툴팁 알림을 aria-hidden 덧그림 층 밖에 두기(168차 — 124차 「마우스 툴팁은 알림 영역이라 읽음」)', () => {
+  it('마우스 툴팁(role=status)의 조상에는 aria-hidden="true"가 없고, 가상 커서면 툴팁만 감춘다(59차)', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    r.move(151, 101);
+    expect(r.tip()).toBe('중간점');
+    const tip = r.q('.measure-tip') as HTMLElement;
+    expect(tip.getAttribute('role')).toBe('status');
+    expect(tip.closest('[aria-hidden="true"]')).toBeNull();
+    // 가상 커서: 알림 칸(kp-live)이 같은 글과 좌표를 읽어 툴팁 알림만 감춘다 — 마우스로 돌아오면 다시 드러난다
+    r.tool.keyHover(102, 103);
+    r.overlay.paintNow();
+    expect(r.tip()).toBe('끝점');
+    expect(tip.closest('[aria-hidden="true"]')).toBe(tip);
+    r.move(153, 101);
+    expect(r.tip()).toBe('중간점');
+    expect(tip.closest('[aria-hidden="true"]')).toBeNull();
+  });
+
+  it('툴팁 칸은 덧그림 층 바로 뒤 형제(같은 자리·쌓임·잘림·누르기 통과)이고, 다시 그려도 툴팁을 떼지 않으며, 덧그림 층과 결과 글은 감춘 그대로다', () => {
+    const r = rig(EDGES());
+    r.tool.setMode('tape');
+    r.move(151, 101);
+    const tip = r.q('.measure-tip') as HTMLElement;
+    const box = tip.parentElement as HTMLElement;
+    expect(r.overlay.el.nextElementSibling).toBe(box);
+    expect(box.hasAttribute('aria-hidden')).toBe(false);
+    expect([box.style.position, box.style.zIndex, box.style.overflow, box.style.pointerEvents]).toEqual(['absolute', '1', 'hidden', 'none']);
+    // 커서를 옮겨 다시 그려도 같은 알림 칸에 글만 바뀐다(그림마다 떼었다 붙이지 않음)
+    const mo = new MutationObserver(() => undefined);
+    mo.observe(document.body, { childList: true, subtree: true });
+    r.move(198, 101);
+    const removed = mo.takeRecords().flatMap((m) => [...m.removedNodes]);
+    mo.disconnect();
+    expect(r.tip()).toBe('끝점');
+    expect(r.q('.measure-tip')).toBe(tip);
+    expect(removed).not.toContain(tip);
+    // 덧그림 층의 aria-hidden은 그대로: 측정 층·결과 글(측정 띠·측정값 칸에 같은 값)은 그 밑에 남는다
+    r.click(102, 103);
+    r.click(198, 101);
+    r.move(30, 20);
+    expect(r.overlay.el.getAttribute('aria-hidden')).toBe('true');
+    expect(r.q('.measure-label-length')!.closest('[aria-hidden="true"]')).toBe(r.overlay.el);
+    expect(r.q('.measure-layer')!.closest('[aria-hidden="true"]')).toBe(r.overlay.el);
+    // 도구를 끄면 툴팁도 칸째 뗀다
+    r.tool.setMode(null);
+    expect(r.q('.measure-tip')).toBeNull();
+    expect(box.isConnected).toBe(false);
+  });
+});
+
 describe('측정 도구: 마우스 미리 보기에서 Tab으로 겹친 스냅 후보 돌리기(124차 — 코어 0.116.0 tabCycle과 같은 규칙)', () => {
   // 126차 시험이 멈춘 시계를 되돌린다
   afterEach(() => {
