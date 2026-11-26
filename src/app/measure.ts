@@ -1434,11 +1434,12 @@ export class MeasureTool {
   /**
    * 측정 띠를 쓰는 화면(좁은 창·손가락 기기)에서 띠 안에 측정값 칸을 보일지: 그 도구의 결과·안내·되돌릴 안내가 있으면(커서가 없는 손가락 기기는 결과의 방향으로 넣는다 —
    * 그 전에는 띠를 작게), 손가락 기기가 아니면 친 숫자가 칸으로 가는 차례(typing)에도. 132차: 좁은 창의 마우스·키보드는 안내 글(measureHint)이
-   * "길이를 치면"·"각도를 치면"을 말하는데 칸이 숨어 친 숫자가 보기 키로 갔다(1~7 — 카메라가 표준 뷰로). 판정을 이 조각에 두어 첫 화면 JS를 늘리지 않는다
+   * "길이를 치면"·"각도를 치면"을 말하는데 칸이 숨어 친 숫자가 보기 키로 갔다(1~7 — 카메라가 표준 뷰로). 판정을 이 조각에 두어 첫 화면 JS를 늘리지 않는다.
+   * 134차: 다시 할 안내가 있을 때도(다 되돌린 뒤 결과·안내가 없으면 칸 줄째 숨어 다시 하기 단추가 없었다 — 손가락 기기는 Ctrl+Y가 없다)
    */
   get vcbInBand(): boolean {
     const m = this.modeValue;
-    return !!m && (this.resultValue?.kind === m || this.guidePts.length + this.guideLns.length > 0 || this.canUndo || (this.typing && !this.opts.touch?.()));
+    return !!m && (this.resultValue?.kind === m || this.guidePts.length + this.guideLns.length > 0 || this.canUndo || this.canRedo || (this.typing && !this.opts.touch?.()));
   }
 
   /** 마지막 측정 결과 */
@@ -1949,15 +1950,20 @@ export class MeasureTool {
   }
 
   /**
-   * 안내가 바뀐 뒤: 이 파일 열쇠로 기억하고, 덧그림을 붙이거나 떼고(도구를 끈 동안에도 안내가 보이면 그린다), 되돌리기·다시 하기 단추를 맞추고 앱에 알린다
+   * 안내가 바뀐 뒤: 이 파일 열쇠로 기억하고, 덧그림을 붙이거나 떼고(도구를 끈 동안에도 안내가 보이면 그린다), 되돌리기·다시 하기 단추를 맞추고 앱에 알린다.
+   * 134차: 초점이 있던 되돌리기·다시 하기 단추가 숨으면(다 되돌림·다 다시 함 — 누르기·그 단추에서 친 Ctrl·⌘+Z) 앱이 칸 줄을 맞춘 뒤 옆 단추로 옮긴다
+   * (숨은 초점은 브라우저가 문서로 옮겨 제자리를 잃는다 — focus fixup). 다 되돌리면 다시 할 것이, 다 다시 하면 되돌릴 것이 있어 옆 단추는 남는다(vcbInBand)
    */
   private notifyGuides(): void {
+    const a = document.activeElement;
     this.persist();
     this.syncPainter();
     if (this.undoBtn) this.undoBtn.hidden = !this.canUndo;
     if (this.redoBtn) this.redoBtn.hidden = !this.canRedo;
     this.syncGuideDelete();
     this.opts.onGuides?.();
+    const o = a === this.undoBtn ? this.redoBtn : a === this.redoBtn ? this.undoBtn : null;
+    if (o && (a as HTMLElement).hidden && o.isConnected && !o.closest('[hidden]')) o.focus({ preventScroll: true });
   }
 
   /** 덧그림 붙이기·떼기: 도구를 켰거나, 끈 동안에도 보이는 안내가 있으면 그린다 */
