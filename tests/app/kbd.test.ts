@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { disclose, focusIfLost, focusSpot, leaveDisabled, listKeys, listRows, lost, moveIndex, refocus, rove, setRange, treeKeys } from '../../src/app/kbd';
+import { closeOutside, disclose, focusIfLost, focusSpot, leaveDisabled, listKeys, listRows, lost, moveIndex, refocus, rove, setRange, treeKeys } from '../../src/app/kbd';
 import { PANEL_WIDTH_STEPS, SHEET_STEPS, clampSheetFraction, nextSize } from '../../src/app/layout';
 import type { MeasureToolResult } from '../../src/app/measure';
 import { Panel, type PanelHost } from '../../src/app/panel';
@@ -486,6 +486,105 @@ describe('최근 측정 줄을 목록으로(156차 — 152차 감사 ④, WAI-AR
     const css = readFileSync(resolve(__dirname, '../../src/app/styles.css'), 'utf8');
     expect(css.match(/\.(?:measure-log|measure-history|ml-row|ml-line)\s*>\s*[^\s{,]+/g)).toEqual(['.measure-history > summary', '.measure-history > summary']);
     expect(css).not.toMatch(/\[role="?list/);
+  });
+});
+
+describe('열린 메뉴·목록 밖으로 초점이 나가면 닫기(162차 — NC 152차 꼴, WAI-ARIA APG Menu Button)', () => {
+  it('바깥 누르기와 밖으로 나간 초점에 닫고(메뉴·연 버튼 안은 그대로, 연 차례의 사건은 받지 않음, 초점은 옮기지 않음) — 앱 메뉴·겹친 것 목록이 이것으로, 열린 채 남아 측정값 칸의 Esc를 창 키가 가져가지 않게', async () => {
+    const box = html(
+      '<button class="tbtn">보기 설정</button><div class="menu" role="menu"><button class="menu-item" role="menuitem" tabindex="-1">가</button><button class="menu-item" role="menuitem" tabindex="-1">나</button></div><input class="vcb-input"><button class="other">다른</button>',
+    );
+    const btn = box.querySelector<HTMLButtonElement>('.tbtn')!;
+    const menu = box.querySelector<HTMLElement>('.menu')!;
+    const [a, b] = [...menu.querySelectorAll<HTMLButtonElement>('.menu-item')] as [HTMLButtonElement, HTMLButtonElement];
+    const input = box.querySelector<HTMLInputElement>('input')!;
+    const other = box.querySelector<HTMLButtonElement>('.other')!;
+    const tick = (): Promise<void> => new Promise((r) => setTimeout(r));
+    const press = (el: Element): void => void el.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true }));
+    // 앱 openMenu 꼴: 듣기를 두고 첫 항목에 초점, 닫을 때(closeMenu) 거둔다
+    let open = false;
+    let closed = 0;
+    let off: (() => void) | null = null;
+    const shut = (): void => {
+      open = false;
+      off?.();
+      off = null;
+    };
+    const openMenu = (): void => {
+      open = true;
+      off = closeOutside([menu, btn], () => {
+        closed++;
+        shut();
+      });
+      a.focus();
+    };
+    openMenu();
+    // 연 차례(같은 작업)의 사건은 받지 않는다
+    press(other);
+    expect([open, closed]).toEqual([true, 0]);
+    await tick();
+    // 메뉴 안 항목·연 버튼으로 옮기는 초점과 누르기는 그대로
+    b.focus();
+    btn.focus();
+    a.focus();
+    press(b);
+    press(btn);
+    expect([open, closed]).toEqual([true, 0]);
+    // Tab 밖의 길로 초점이 밖(측정값 칸)으로 나가면 닫는다 — 한 번(닫으며 거둠), 초점은 옮긴 자리 그대로
+    input.focus();
+    expect([open, closed]).toEqual([false, 1]);
+    expect(document.activeElement).toBe(input);
+    other.focus();
+    press(other);
+    expect(closed).toBe(1);
+    // 바깥 누르기도 같은 듣기
+    openMenu();
+    await tick();
+    press(other);
+    expect([open, closed]).toEqual([false, 2]);
+    // 듣기 전에 거두면 타이머도 거둔다(연 차례에 닫힌 메뉴가 다음 메뉴를 닫지 않게)
+    let late = 0;
+    closeOutside([menu, btn], () => late++)();
+    await tick();
+    input.focus();
+    press(other);
+    expect(late).toBe(0);
+    // 창 키 꼴(app.ts onKey — 메뉴가 열려 있으면 대상이 어디든 Esc를 메뉴 닫기로 가져가 버튼으로 초점·전파 막음)과 측정값 칸 Esc(입력 그만두기)
+    const log: string[] = [];
+    const onKey = (ev: KeyboardEvent): void => {
+      if (open && ev.key === 'Escape') {
+        ev.stopPropagation();
+        shut();
+        btn.focus();
+        log.push('메뉴 닫기');
+      }
+    };
+    input.addEventListener('keydown', (e) => void (e.key === 'Escape' && log.push('입력 그만두기')));
+    window.addEventListener('keydown', onKey, true);
+    try {
+      openMenu();
+      await tick();
+      // 측정 시작점 뒤 숫자 키: 창 키가 측정값 칸 입력을 시작해 칸으로 초점(vcb.begin) — 메뉴는 그때 닫혀 칸의 Esc가 칸에 닿는다
+      input.focus();
+      key(input, 'Escape');
+      expect(log).toEqual(['입력 그만두기']);
+      expect(document.activeElement).toBe(input);
+      expect(closed).toBe(3);
+    } finally {
+      window.removeEventListener('keydown', onKey, true);
+      shut();
+    }
+    // 원문: 앱 도구 막대 메뉴(표준 뷰·단면·보기 설정·앱 설정 — openMenu 하나)와 겹친 것 목록이 같은 도우미, 바깥 누르기만 따로 듣는 줄은 남지 않음
+    const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
+    const pick = readFileSync(resolve(__dirname, '../../src/app/picklist.ts'), 'utf8');
+    for (const src of [app, pick]) {
+      expect(src).toMatch(/import \{[^}]*\bcloseOutside\b[^}]*\} from '\.\/kbd';/);
+      expect(src).not.toMatch(/addEventListener\('pointerdown', away/);
+    }
+    expect(app).toContain('this.menuOff = closeOutside([menu, btn], () => this.closeMenu());');
+    expect(pick).toContain('const away = closeOutside([menu], () => this.close());');
+    // ?로 바로 가기 안내를 열 때 겹친 것 목록도 앱 메뉴처럼 먼저 닫고 연 곳(3D 보기)으로 — 안내가 닫히면 그리로 초점을 돌려준다(목록 항목은 떼어져 돌아갈 곳이 없음)
+    expect(app).toMatch(/openShortcuts\(\): void \{\n\s*if \(this\.shortcutsClose \|\| this\.shortcutsLoading\) return;\n\s*const b = this\.menuBtn;\n\s*this\.closeMenu\(\);\n\s*focusIfLost\(b\);\n\s*this\.pickList\?\.dismiss\(\);\n/);
   });
 });
 

@@ -124,7 +124,7 @@ import { cameraForBox, keepViewOnHeightChange } from './view';
 import { cssHex, isLightBackground, loadFileBackground, safeStorage, skyBackground, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
 import type { BackgroundOptions, Rgba } from 'opencad-viewer3d';
 import { DEFAULT_EDGE_COLOR, LineContrast, edgeLooks, lineColorOverrides } from './linecontrast';
-import { disclose, focusIfLost, focusSpot, leaveDisabled, listKeys, listRows, refocus, setRange } from './kbd';
+import { closeOutside, disclose, focusIfLost, focusSpot, leaveDisabled, listKeys, listRows, refocus, setRange } from './kbd';
 import type { Rgb, SkpEdgeColorMode, SkpShadowMeta, SkpStyleMeta } from '../meta';
 import { WalkStick } from './joystick';
 import { Vcb, vcbStartKey, type VcbKind } from './vcb';
@@ -3247,6 +3247,8 @@ export class SkpViewerApp implements PanelHost {
     const b = this.menuBtn;
     this.closeMenu();
     focusIfLost(b);
+    this.pickList?.dismiss();
+    // 162차: 겹친 것 목록도 앞에서 닫고 3D 보기로(안내가 초점을 가져가면 목록이 닫혀 안내를 닫을 때 돌아갈 항목이 떼어진다).
     // 안내 글은 열 때 받는다(44차 — 첫 화면 JS에서 빼서 키보드 이동 코드 자리를 만든다. 오프라인 앱은 서비스 워커가 미리 담아 둔다)
     this.shortcutsLoading = true;
     void import('./shortcuts')
@@ -3313,12 +3315,8 @@ export class SkpViewerApp implements PanelHost {
     this.menuBtn = btn;
     btn.setAttribute('aria-expanded', 'true');
     ((menu.querySelector('.menu-item.checked') ?? menu.querySelector('.menu-item:not(:disabled)')) as HTMLElement | null)?.focus();
-    const away = (e: PointerEvent): void => {
-      if (menu.contains(e.target as Node) || btn.contains(e.target as Node)) return;
-      this.closeMenu();
-    };
-    setTimeout(() => window.addEventListener('pointerdown', away, true));
-    this.menuOff = () => window.removeEventListener('pointerdown', away, true);
+    // 바깥을 누르거나 초점이 메뉴·버튼 밖으로 나가면 닫는다(162차 — Tab 밖의 길로 열린 채 남으면 그 칸의 Esc를 아래 onKey가 메뉴 닫기로 먼저 가져갔다)
+    this.menuOff = closeOutside([menu, btn], () => this.closeMenu());
   }
 
   private menuOff: (() => void) | null = null;

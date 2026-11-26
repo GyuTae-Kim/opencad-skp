@@ -16,14 +16,14 @@
  * - 항목: 그 고르기의 그룹·컴포넌트 이름(keyPickName — 파일 글은 그대로)과 맞은 것의 종류(면·모서리·보조점 — 가상 커서 알림과 같은 사전 열쇠).
  *   고르면 앱 처리기에 그 후보와 고른 것을 넘긴다(목록이 보인 그대로 고른다).
  * - 목록은 메뉴(role=menu — 표준 뷰 메뉴와 같은 꼴, 손가락 기기는 항목 높이 44px): ↑↓·Home·End로 오가고 Enter·Space로 고르며,
- *   Esc·Tab은 닫고 3D 보기로 초점을 돌린다. 바깥을 누르거나 창 크기가 바뀌면 닫는다. 글은 지금 화면 언어로 넣고 번역층에서 뺀다(app.ts openMenu와 같다).
+ *   Esc·Tab은 닫고 3D 보기로 초점을 돌린다. 바깥을 누르거나 초점이 밖으로 나가거나(162차) 창 크기가 바뀌면 닫는다. 글은 지금 화면 언어로 넣고 번역층에서 뺀다(app.ts openMenu와 같다).
  * 코어 입구와 함께 받는다(core.ts loadViewerCore — 첫 화면 조각 밖).
  */
 import type { Pick3d, Viewer3d } from 'opencad-viewer3d';
 import { dragStartPx } from 'opencad-viewer3d/pointer';
 import { selectionForPick, type Selection, type SkpDoc } from './doc';
 import { uiText } from './i18n';
-import { listKeys } from './kbd';
+import { closeOutside, listKeys } from './kbd';
 import { KEY_PICK_TEXT, PICK_CYCLE, keyPickName, pickFaceRanges, pickGroupKey } from './keypick';
 
 /** 손가락·펜 길게 누르기(ms) — 줄자·각도기 정밀 조준(350 ms)보다 길게, 브라우저·OS 길게 누르기 메뉴와 비슷하게 */
@@ -241,16 +241,12 @@ export class PickList {
     menu.style.maxHeight = `${Math.max(120, H - 16)}px`;
     this.menu = menu;
     (buttons.find((b) => !b.disabled) ?? buttons[0])?.focus({ preventScroll: true });
-    const away = (e: Event): void => {
-      if (!menu.contains(e.target as Node)) this.close();
-    };
     const resize = (): void => this.close();
-    // 연 누르기 뒤의 사건은 받지 않는다(다음 누르기부터)
-    const t = setTimeout(() => window.addEventListener('pointerdown', away, true));
+    // 바깥을 누르거나 초점이 목록 밖으로 나가면 닫는다 — 연 누르기 뒤의 사건부터(162차: 초점도 — 앱 도구 막대 메뉴와 같은 도우미, 초점은 옮긴 자리 그대로)
+    const away = closeOutside([menu], () => this.close());
     window.addEventListener('resize', resize);
     this.menuOff = () => {
-      clearTimeout(t);
-      window.removeEventListener('pointerdown', away, true);
+      away();
       window.removeEventListener('resize', resize);
     };
   }
