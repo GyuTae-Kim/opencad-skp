@@ -130,7 +130,7 @@ import { WalkStick } from './joystick';
 import { Vcb, vcbStartKey, type VcbKind } from './vcb';
 import { FlashNote, barShown, noticeFree } from './flash';
 import { errorParts, mixNodes, statusTitle, uiName, uiReady, uiText } from './i18n';
-import { fileText, mix, plainText, type Mixed } from './filetext';
+import { fileText, mix, plainText, type FileText, type Mixed } from './filetext';
 
 export const APP_TITLE = 'OpenCAD SketchUp 뷰어';
 const TOOLS_URL = 'https://gyutae-kim.github.io/opencad';
@@ -460,6 +460,8 @@ export class SkpViewerApp implements PanelHost {
   private isolatedOn = false;
   private openSeq = 0;
   private busy = false;
+  /** 여는 중 덮개 제목(섞은 글 — 언어를 바꾸면 다시 그린다) */
+  private busyHead: Mixed = [];
   private ready = false;
   private notice: NoticeState | null = null;
   private menu: HTMLElement | null = null;
@@ -498,6 +500,8 @@ export class SkpViewerApp implements PanelHost {
       if (this.doc?.pages.some((p) => p.unnamed)) this.renderSceneTabs();
       // 떠 있는 알림의 제목·글도(파일 이름을 끼워 옮겨 넣은 글 — 53차)
       this.noticeText();
+      // 여는 중 덮개 제목도(214차 — 번역층이 서기 전에 주소로 연 예제·파일의 제목이 다음 단계까지 한국어로 남았다)
+      if (this.busy) this.els.busyTitle.replaceChildren(...mixNodes(this.busyHead));
       const menu = this.menu;
       const btn = this.menuBtn;
       if (menu && btn)
@@ -1098,7 +1102,8 @@ export class SkpViewerApp implements PanelHost {
   async openSample(): Promise<void> {
     const attempt = beginOpen('sample', 'skp');
     const seq = ++this.openSeq;
-    this.setBusy('예제 모형', 0.005, '예제 모형 만드는 중');
+    // 예제 이름은 앱이 지은 글이라 앱 글 조각으로(214차 — 파일 글 자리라 다른 언어에서도 「예제 모형」으로 남았다)
+    this.setBusy({ file: '예제 모형', ui: true }, 0.005, '예제 모형 만드는 중');
     let bytes: Uint8Array;
     let name: string;
     try {
@@ -3577,7 +3582,7 @@ export class SkpViewerApp implements PanelHost {
 
   // ───────────────────────── 화면 갱신 ─────────────────────────
 
-  private setBusy(name: string | null, fraction = 0, stage = ''): void {
+  private setBusy(name: string | FileText | null, fraction = 0, stage = ''): void {
     const e = this.els;
     // 덮개를 숨기는 한 자리(「취소」 누름·Esc·다 열림·실패 — 194차): 초점이 덮개 안(「취소」)이었으면 알림 ✕와 같은 곳(3D 보기, 문서 전이면 「파일 열기」 — 44차)으로
     // (WCAG 2.4.3, STEP 189차 꼴 — 전에는 숨은 버튼과 함께 문서로 빠졌다). 덮개 밖 초점은 그대로, 보이게 하거나 단계만 바꾸는 부름은 보지 않는다
@@ -3588,8 +3593,9 @@ export class SkpViewerApp implements PanelHost {
     if (name !== null) {
       this.closeMenu();
       const pct = Math.round(Math.max(0, Math.min(1, fraction)) * 100);
-      // 파일 이름은 그대로(52차 — "무늬 · 이.skp 여는 중…"이 "Texture · Opening 이.skp…"로 바뀌었다)
-      e.busyTitle.replaceChildren(...mixNodes(mix`${fileText(name)} 여는 중…`));
+      // 파일 이름은 그대로(52차 — "무늬 · 이.skp 여는 중…"이 "Texture · Opening 이.skp…"로 바뀌었다), 앱이 지은 이름(예제)은 앱 글 조각 그대로
+      this.busyHead = mix`${typeof name === 'string' ? fileText(name) : name} 여는 중…`;
+      e.busyTitle.replaceChildren(...mixNodes(this.busyHead));
       e.busyBar.style.width = `${Math.max(2, pct)}%`;
       e.busyBar.parentElement!.setAttribute('aria-valuenow', String(pct));
       e.busyStage.textContent = `${stage} · ${pct}%`;
