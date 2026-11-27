@@ -690,4 +690,29 @@ describe('패널의 파일 글(52차)', () => {
     expect(app).toMatch(/if \(this\.doc\?\.pages\.some\(\(p\) => p\.unnamed\)\) this\.renderSceneTabs\(\);/);
     expect(app).not.toMatch(/pg\.name \|\| `장면/);
   });
+
+  it('180차: 이름 없는 태그 폴더의 보이기 체크 이름·줄 풀이는 보이는 자리 글 「(이름 없는 폴더)」를 품는다(2.5.3 — 빈 이름 사이 두 칸이 아니게), 이름 있는 폴더는 파일 글 그대로', async () => {
+    for (const code of ['ko', 'en', 'de', 'ja', 'zh-CN']) {
+      dispose?.();
+      document.body.innerHTML = '';
+      history.replaceState(null, '', code === 'ko' ? '/opencad-skp/' : `/opencad-skp/${code}/`);
+      dispose = await installLocalization(document.body);
+      const d = createDoc('무늬.skp', 1, { scene, ms: 1 });
+      // 빈 이름 폴더(해석기가 파일의 빈 이름을 그대로 둔다)와 이름 있는 폴더(다른 언어 사전의 번역 글과 같은 이름)
+      d.tagFolders = [{ name: '', visible: true, parent: -1 }, { name: 'テクスチャ', visible: true, parent: -1 }];
+      d.panelTab = 'tags';
+      let panel!: Panel;
+      panel = new Panel(host(d, () => panel));
+      document.body.append(panel.el);
+      panel.el.hidden = false;
+      panel.show(d);
+      await tick();
+      const tr = (k: string): string => (code === 'ko' ? k : catalogs[code]![k]!);
+      const names = [tr('(이름 없는 폴더)'), 'テクスチャ'];
+      const rows = [...panel.el.querySelectorAll<HTMLElement>('.prow.folder')];
+      expect(rows.map((r) => r.querySelector('.name')!.textContent), code).toEqual(names);
+      expect(rows.map((r) => r.querySelector('input')!.getAttribute('aria-label')), code).toEqual(names.map((n) => tr('태그 폴더 {0} 보이기').replace('{0}', n)));
+      expect(rows.map((r) => r.title), code).toEqual(names.map((n) => tr('태그 폴더 {0} — 숨기면 안의 태그가 모두 숨습니다').replace('{0}', n)));
+    }
+  });
 });
