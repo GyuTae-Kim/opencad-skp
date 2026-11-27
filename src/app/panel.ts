@@ -920,7 +920,15 @@ export class Panel {
           { class: 'pbar foot-acts' },
           canHide ? act('숨기기', 'hide', '고른 것을 보기에서 숨깁니다(파일은 그대로)', () => this.host.hideSelection()) : null,
           canHide || this.host.isolated
-            ? act(this.host.isolated ? '분리 풀기' : '분리해서 보기', 'isolate', '고른 것만 보입니다 — 다시 누르면 모두 보입니다', () => this.host.isolateSelection(), this.host.isolated)
+            ? act(
+                this.host.isolated ? '분리 풀기' : '분리해서 보기',
+                'isolate',
+                // 풀이 원문은 누르기 전(할 일)과 눌린 뒤(지금 상태)로 나눈다(211차 — 한 원문이면 원문이 열쇠인 번역층이 지금 상태 꼴로만 옮겨
+                // 누르기 전 풀이가 영어·일본어·독일어에서 「이미 고른 것만 보고 있음」으로 읽혔다, WCAG 2.4.6·3.3.2 — 210차 잠글 방향 줄 꼴)
+                this.host.isolated ? '고른 것만 보입니다 — 다시 누르면 모두 보입니다' : '고른 것만 보기 — 다시 누르면 모두 보입니다',
+                () => this.host.isolateSelection(),
+                this.host.isolated,
+              )
             : null,
           anyHidden ? act('모두 보이기', 'show', '숨긴 그룹·컴포넌트를 모두 다시 보입니다(태그는 그대로)', () => this.host.unhideAll()) : null,
         ),

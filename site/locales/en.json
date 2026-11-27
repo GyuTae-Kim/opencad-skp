@@ -212,6 +212,7 @@
   "경고 {0}개": "{0} warnings",
   "고른 것": "Selected",
   "고른 것: {0}": "Selected: {0}",
+  "고른 것만 보기 — 다시 누르면 모두 보입니다": "Show only what you selected — click again to see them all",
   "고른 것만 보입니다 — 다시 누르면 모두 보입니다": "You only see what you selected — click again to see them all",
   "고른 것을 보기에서 숨깁니다(파일은 그대로)": "Hides the selection from view (file remains intact)",
   "고름: {0} \"{1}\" #{2}{3} ({4})": "Picked: {0} \"{1}\" #{2}{3} ({4})",

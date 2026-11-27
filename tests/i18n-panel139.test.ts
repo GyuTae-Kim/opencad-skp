@@ -14,7 +14,7 @@
  * 옛 오역이 다시 들어오지 않게 그 낱말을 막고, 고친 줄이 같은 사전의 맞는 낱말(근거 줄과 같은 말)을 쓰는지 본다.
  */
 import { describe, expect, it } from 'vitest';
-import { catalogs, translate } from '../site/i18n.mjs';
+import { catalogs, sourceMessage, translate } from '../site/i18n.mjs';
 
 const LANGS = ['en', 'ja', 'zh-CN', 'de'] as const;
 type Lang = (typeof LANGS)[number];
@@ -110,5 +110,54 @@ describe('패널·그림 저장·보기 설정·시작 화면 글의 네 언어 
     // 틀로 옮기는 글(수를 끼움)·목록 경고 글
     expect(translate('재질 3개', 'zh-CN')).toBe('材质 3 件');
     expect(translate('인스턴스 목록이 깨져 뒷부분을 읽지 못했습니다', 'ja')).toBe('インスタンスリストが破損しているため、以降を読み込めませんでした');
+  });
+});
+
+// 211차(210차 꼴): 패널 아래 띠 「분리해서 보기」 풀이 — 누르기 전(할 일) 원문을 눌린 뒤(지금 상태) 원문과 나눴다(state186.test 211차가 쓰는 곳을 본다)
+describe('「분리해서 보기」 풀이는 누르기 전 할 일, 눌린 뒤 지금 상태(211차 — WCAG 2.4.6·3.3.2)', () => {
+  it('새 할 일 원문은 네 사전에서 할 일 꼴·하나뿐(거꾸로 찾기 제 원문), 지금 상태 원문은 그대로, 근거 줄은 같은 사전의 「…만 보기」', () => {
+    const TODO = '고른 것만 보기 — 다시 누르면 모두 보입니다';
+    const NOW = '고른 것만 보입니다 — 다시 누르면 모두 보입니다';
+    const todo: Record<Lang, string> = {
+      en: 'Show only what you selected — click again to see them all',
+      ja: '選んだものだけを表示 — もう一度クリックするとすべて表示します',
+      'zh-CN': '只显示所选项 — 再次点击显示全部',
+      de: 'Nur die Auswahl zeigen – erneut klicken, um alle anzuzeigen',
+    };
+    // 눌린 뒤(지금 상태) — 옛 값 그대로
+    const now: Record<Lang, string> = {
+      en: 'You only see what you selected — click again to see them all',
+      ja: '選んだものだけを表示しています — もう一度クリックするとすべて表示します',
+      'zh-CN': '仅显示所选项 — 再次点击显示全部',
+      de: 'Sie sehen nur das, was Sie ausgewählt haben – klicken Sie erneut, um alle anzuzeigen',
+    };
+    const all = LANGS.flatMap((lang) => Object.values(catalogs[lang]!));
+    for (const lang of LANGS) {
+      expect(catalogs[lang]![TODO], `${lang}: ${TODO}`).toBe(todo[lang]);
+      expect(catalogs[lang]![NOW], `${lang}: ${NOW}`).toBe(now[lang]);
+      expect(translate(TODO, lang), lang).toBe(todo[lang]);
+      expect(all.filter((v) => v === todo[lang]).length, todo[lang]).toBe(1);
+      expect(sourceMessage(todo[lang]), todo[lang]).toBe(TODO);
+      expect(sourceMessage(now[lang]), now[lang]).toBe(NOW);
+    }
+    // 할 일 꼴(누르면 그렇게 됨): 영어 명령형·일본어 「…だけを表示」(진행 「しています」 없음)·중국어 只显示·독일어 「Nur … zeigen –」(부정형 + 「Klicken, um …」)
+    expect(todo.en).toMatch(/^Show only /);
+    expect(todo.en).not.toMatch(/^You /);
+    expect(todo.ja).toMatch(/^選んだものだけを表示 — /);
+    expect(todo.ja).not.toMatch(/しています/);
+    expect(todo['zh-CN']).toMatch(/^只显示/);
+    expect(todo.de).toMatch(/^Nur die Auswahl zeigen – erneut klicken, um /);
+    expect(todo.de).not.toMatch(/Sie sehen/);
+    // 근거 줄: 같은 사전의 할 일 꼴 「…만 보기」(고른 것 카드 「면만」 풀이)·독일어 「누르면 …」 풀이·「고른 것」을 이르는 낱말
+    const basis: [key: string, lang: Lang, has: string][] = [
+      ['누른 면 하나의 넓이만 보기', 'en', 'Show only '],
+      ['누른 면 하나의 넓이만 보기', 'ja', 'だけを表示'],
+      ['누른 면 하나의 넓이만 보기', 'zh-CN', '只显示'],
+      ['누른 면 하나의 넓이만 보기', 'de', 'Nur '],
+      ['누른 면 하나의 넓이만 보기', 'de', ' zeigen'],
+      ['누르면 이 단면을 끕니다', 'de', 'Klicken, um '],
+      ['고른 것을 보기에서 숨깁니다(파일은 그대로)', 'de', 'die Auswahl'],
+    ];
+    for (const [key, lang, has] of basis) expect(catalogs[lang]![key], `${lang}: ${key}`).toContain(has);
   });
 });

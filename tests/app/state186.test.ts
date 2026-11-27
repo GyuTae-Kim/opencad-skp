@@ -103,3 +103,58 @@ describe('패널 목록 줄의 고름 상태(186차 — WCAG 4.1.2, 단면 줄 a
     expect(pressed(mats())).toEqual(['false', 'false']);
   });
 });
+
+/**
+ * 211차(210차 꼴 — WCAG 2.4.6·3.3.2): 패널 아래 띠 「분리해서 보기」 버튼 풀이(title — 이름은 보이는 글이라 풀이는 화면 읽기 설명)가
+ * 누르기 전(할 일 — 누르면 고른 것만 보임)과 눌린 뒤(「분리 풀기」·눌림 — 지금 상태: 고른 것만 보임)에 같은 원문
+ * 「고른 것만 보입니다 — 다시 누르면 모두 보입니다」를 써서, 원문 그대로가 열쇠인 번역층이 지금 상태 꼴 한 번역(영어 You only see what you selected …·
+ * 일본어 …表示しています·독일어 Sie sehen nur …)으로만 옮겨 누르기 전 버튼 풀이가 「이미 고른 것만 보고 있음」으로 읽혔다.
+ * 누르기 전만 할 일 원문 「고른 것만 보기 — …」로 나누고, 눌린 뒤는 옛 원문(지금 상태) 그대로 — 이름·data-key·눌림·누르는 길은 그대로.
+ */
+describe('패널 아래 띠 「분리해서 보기」 풀이는 누르기 전 할 일, 눌린 뒤 지금 상태(211차 — 210차 꼴, WCAG 2.4.6·3.3.2)', () => {
+  it('누르기 전 풀이만 할 일 원문으로 — 눌린 뒤는 옛 원문(지금 상태), 이름(보이는 글)·data-key·눌림·같은 띠 다른 버튼 풀이는 그대로', () => {
+    const d = rowDoc();
+    d.selection = { kind: 'node', index: 0 };
+    let isolated = false;
+    const noop = (): void => {};
+    const host: PanelHost = {
+      setTagVisible: noop, setAllTagsVisible: noop, setOutlineVisible: noop, setNodeVisible: noop, setExpanded: noop, collapseAll: noop, setPickMode: noop,
+      setShowSoft: noop, setShowHidden: noop, setFolderVisible: noop, setAnnotationVisible: noop, setFileSection: noop, applyPage: noop,
+      hideSelection: noop,
+      // 앱(app.ts isolateSelection)처럼 켜고 끈 뒤 패널 보이기를 다시 맞춘다(아래 띠를 다시 그림)
+      isolateSelection: () => {
+        isolated = !isolated;
+        panel.refreshVisibility();
+      },
+      unhideAll: noop,
+      get isolated() {
+        return isolated;
+      },
+      measureHint: null, measureLogList: [], copyMeasure: noop, clearMeasureLog: noop,
+      select: noop, selectPickedPart: noop, zoomToSelection: noop, closePanel: noop, measuring: false,
+    };
+    const panel = new Panel(host);
+    document.body.append(panel.el);
+    panel.el.hidden = false;
+    panel.show(d);
+    const iso = (): HTMLButtonElement => panel.el.querySelector<HTMLButtonElement>('.pfoot .foot-acts button[data-key="isolate"]')!;
+    const TODO = '고른 것만 보기 — 다시 누르면 모두 보입니다';
+    const NOW = '고른 것만 보입니다 — 다시 누르면 모두 보입니다';
+    // 누르기 전: 할 일 풀이(이름은 보이는 글 「분리해서 보기」, 눌림 속성 없음 — 지금과 같음)
+    expect(iso().textContent).toBe('분리해서 보기');
+    expect(iso().hasAttribute('aria-pressed')).toBe(false);
+    expect(iso().title).toBe(TODO);
+    // 누름 → 「분리 풀기」·눌림, 풀이는 지금 상태(옛 원문)
+    iso().click();
+    expect(iso().textContent).toBe('분리 풀기');
+    expect(iso().getAttribute('aria-pressed')).toBe('true');
+    expect(iso().title).toBe(NOW);
+    // 다시 누름 → 처음대로
+    iso().click();
+    expect(iso().textContent).toBe('분리해서 보기');
+    expect(iso().hasAttribute('aria-pressed')).toBe(false);
+    expect(iso().title).toBe(TODO);
+    // 같은 띠 「숨기기」 풀이는 그대로
+    expect(panel.el.querySelector<HTMLButtonElement>('.pfoot .foot-acts button[data-key="hide"]')!.title).toBe('고른 것을 보기에서 숨깁니다(파일은 그대로)');
+  });
+});
