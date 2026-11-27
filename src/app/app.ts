@@ -129,7 +129,7 @@ import type { Rgb, SkpEdgeColorMode, SkpShadowMeta, SkpStyleMeta } from '../meta
 import { WalkStick } from './joystick';
 import { Vcb, vcbStartKey, type VcbKind } from './vcb';
 import { FlashNote, barShown, noticeFree } from './flash';
-import { errorParts, mixNodes, mixText, uiName, uiReady, uiText } from './i18n';
+import { errorParts, mixNodes, statusTitle, uiName, uiReady, uiText } from './i18n';
 import { fileText, mix, plainText, type Mixed } from './filetext';
 
 export const APP_TITLE = 'OpenCAD SketchUp 뷰어';
@@ -3691,7 +3691,7 @@ export class SkpViewerApp implements PanelHost {
     if (!d) {
       e.stMain.textContent = '파일을 열면 여기에 모형 정보가 보입니다 · SketchUp 3~2027(.skp)';
       e.stWarn.hidden = true;
-      e.stSel.textContent = '';
+      e.stSel.textContent = e.stSel.title = '';
       return;
     }
     const info = d.info;
@@ -3723,7 +3723,8 @@ export class SkpViewerApp implements PanelHost {
     if (picked.length) e.stSel.replaceChildren(h('span', {}, '고른 것'), ': ', h('span', { 'data-i18n-skip': '' }, ...mixNodes(picked)));
     else if (lock) e.stSel.replaceChildren(h('span', {}, sel), ' · ', h('span', { class: 'st-lock' }, lock));
     else e.stSel.textContent = sel;
-    e.stSel.title = mixText(picked.length ? picked : [sel]);
+    // title은 보이는 글 그대로 — 말줄임이면 잠금 안내도 여기서 본다(181차, 고른 것은 측정 중이 아닐 때만이라 잠금 안내와 함께 오지 않음)
+    e.stSel.title = statusTitle(picked.length ? picked : [sel], lock);
     e.stSel.setAttribute('data-i18n-keep', 'title');
     this.refreshMeasureBar();
     this.refreshSelBar();
