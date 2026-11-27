@@ -759,3 +759,49 @@ describe('이름·값 줄을 설명 목록으로(171차 — WCAG 1.3.1 정보와
     expect(css).not.toMatch(/\.prop-row\s*[>+~]|[>+~]\s*\.prop-row/);
   });
 });
+
+describe('찾기 칸의 이름을 보이는 자리 글로(172차 — WCAG 2.5.3 말로 부르는 이름·4.1.2 이름)', () => {
+  it('구성 탭 찾기 칸(나무·한 단계 목록이 모두 searchBox)의 접근 이름(aria-label)이 보이는 이름표인 자리 글과 같고, 무엇을 찾는지는 찾기 영역 이름으로 — 찾는 글을 친 뒤에도 그대로, 있던 두 글뿐', () => {
+    const d = rowDoc();
+    d.panelTab = 'outline';
+    const noop = (): void => {};
+    const host: PanelHost = {
+      setTagVisible: noop, setAllTagsVisible: noop, setOutlineVisible: noop, setNodeVisible: noop, setExpanded: noop, collapseAll: noop, setPickMode: noop,
+      setShowSoft: noop, setShowHidden: noop, setFolderVisible: noop, setAnnotationVisible: noop, setFileSection: noop, applyPage: noop,
+      hideSelection: noop, isolateSelection: noop, unhideAll: noop, isolated: false, measureHint: null, measureLogList: [],
+      copyMeasure: noop, clearMeasureLog: noop,
+      select: noop, selectPickedPart: noop, zoomToSelection: noop, closePanel: noop, measuring: false,
+    };
+    const panel = new Panel(host);
+    document.body.append(panel.el);
+    panel.el.hidden = false;
+    panel.show(d);
+    const field = (): HTMLInputElement => {
+      const all = [...panel.el.querySelectorAll<HTMLInputElement>('.pbody input[type="search"]')];
+      expect(all).toHaveLength(1);
+      return all[0]!;
+    };
+    const check = (): void => {
+      const input = field();
+      // 보이는 이름표: 감싼 label·for가 없고 자리 글뿐(위 절 제목은 「그룹·컴포넌트 N개」)
+      expect([input.className, input.labels!.length, input.placeholder]).toEqual(['search-input', 0, '이름·정의·태그로 찾기']);
+      // 이름은 aria-label(자리 글에만 기대지 않음)이고 그 글이 보이는 자리 글 그대로(고치기 전: 「그룹·컴포넌트 찾기(이름·정의·태그)」 — 자리 글을 품지 않았다)
+      expect([input.getAttribute('aria-label'), input.hasAttribute('aria-labelledby')]).toEqual([input.placeholder, false]);
+      // 무엇을 찾는지(그룹·컴포넌트를 이름·정의·태그로)는 감싼 찾기 영역(role=search)의 이름으로 — 칸 이름이던 같은 글
+      const box = input.parentElement!;
+      expect([box.className, box.getAttribute('role'), box.getAttribute('aria-label')]).toEqual(['search-box', 'search', '그룹·컴포넌트 찾기(이름·정의·태그)']);
+    };
+    check();
+    // 찾는 글을 친 뒤 다시 그려도(자리 글이 보이지 않아도) 이름 그대로
+    d.outlineQuery = 'Near';
+    panel.rerender();
+    expect(field().value).toBe('Near');
+    check();
+    // 원문: 찾기 칸은 하나(나무·한 단계 목록 두 곳이 같은 searchBox), 두 글은 사전에 있던 글
+    const pan = readFileSync(resolve(__dirname, '../../src/app/panel.ts'), 'utf8');
+    expect(pan.match(/type: 'search'/g)).toHaveLength(1);
+    expect(pan.match(/this\.searchBox\(d, fill\)/g)).toHaveLength(2);
+    const en = JSON.parse(readFileSync(resolve(__dirname, '../../site/locales/en.json'), 'utf8')) as Record<string, string>;
+    expect([en['이름·정의·태그로 찾기'], en['그룹·컴포넌트 찾기(이름·정의·태그)']]).toEqual(['Find by name·definition·tag', 'Find groups·components (name·definition·tag)']);
+  });
+});

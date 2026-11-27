@@ -570,6 +570,12 @@ describe('패널의 파일 글(52차)', () => {
       d.outlineQuery = '무늬';
       panel.rerender();
       await tick();
+      // 172차: 찾기 칸 이름(aria-label)은 보이는 자리 글과 같은 사전 글이라 번역층이 둘을 같은 글로 옮기고(2.5.3), 찾기 영역 이름도 지금 언어로
+      const lang = document.documentElement.lang;
+      const find = panel.el.querySelector<HTMLInputElement>('.search-input')!;
+      expect([find.placeholder, find.getAttribute('aria-label'), find.parentElement!.getAttribute('aria-label')], lang).toEqual(
+        [translate('이름·정의·태그로 찾기', lang), translate('이름·정의·태그로 찾기', lang), translate('그룹·컴포넌트 찾기(이름·정의·태그)', lang)],
+      );
       d.outlineQuery = '';
       d.fileSections = [d.sectionPlanes[0]!.index];
       d.panelTab = 'tags';
