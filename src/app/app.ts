@@ -3848,6 +3848,8 @@ export class SkpViewerApp implements PanelHost {
     const directing = tool.directing;
     const locked = !!tool.inferenceLock;
     e.measureLock.hidden = !directing;
+    // 방향 잠금 버튼에서 친 Esc(점 취소) 등으로 방향을 잡지 않게 되어 그 버튼이 숨으면 초점을 3D 보기로(196차 — 195차 줄 안 Esc·148차 「다시 재기」와 같은 곳), 초점이 그 버튼 밖이면 그대로
+    leaveDisabled(e.measureLock, this.viewer?.canvas);
     e.measureCopy.hidden = directing;
     press(e.measureLock, locked);
     e.measureLock.title = locked ? '방향 잠금 풀기' : '지금 방향 잠그기(다시 누르면 풀기)';

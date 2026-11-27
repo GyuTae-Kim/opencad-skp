@@ -94,7 +94,7 @@ import type { V3 } from 'opencad-viewer3d/math';
 import { Overlay, frameFor } from '../../src/app/overlay';
 import { DRAG_START_PX, TOUCH_DRAG_START_PX } from 'opencad-viewer3d';
 import { DEFAULT_UNITS, type UnitsDisplay } from '../../src/app/units';
-import { keepBarFocus } from '../../src/app/kbd';
+import { keepBarFocus, leaveDisabled } from '../../src/app/kbd';
 
 /** 줄자를 켠 키보드 기기의 처음 안내 */
 const TAPE_START_HINT = '줄자: 잴 시작점을 누르세요 · 모서리를 두 번 누르면 그 위에 안내선';
@@ -3179,8 +3179,9 @@ describe('측정 도구: 잠글 방향 고르기(한 손 잠금 — 22차, Sketc
   });
 
   // 191차 시험의 앱 측정 띠 꼴: 띠(버튼 줄 — 방향 잠금 버튼과 다른 버튼, 끝에 잠글 방향 줄)와 초점을 받는 3D 보기(코어 캔버스처럼 tabindex).
-  // 앱 refreshMeasureBar처럼 안내·잠금이 바뀔 때(onHint·onLock) 띠는 도구를 켠 동안만, 방향 잠금 버튼은 방향을 잡는 동안만 보인다. owner가 거짓이면 버튼을 넘기지 않는다
-  const appBand = (owner = true) => {
+  // 앱 refreshMeasureBar처럼 안내·잠금이 바뀔 때(onHint·onLock) 띠는 도구를 켠 동안만, 방향 잠금 버튼은 방향을 잡는 동안만 보인다. owner가 거짓이면 버튼을 넘기지 않는다.
+  // app이 참이면 196차 앱 꼴 그대로: 띠째 숨으면 그 앞에서 끝(189차 길), 방향 잠금 버튼을 숨기는 줄 바로 뒤 leaveDisabled(3D 보기 — 초점이 그 버튼에 있을 때만)
+  const appBand = (owner = true, app = false) => {
     const band = document.createElement('div');
     const acts = document.createElement('div');
     const lockBtn = document.createElement('button');
@@ -3188,13 +3189,17 @@ describe('측정 도구: 잠글 방향 고르기(한 손 잠금 — 22차, Sketc
     band.append(acts);
     document.body.append(band);
     let tool: MeasureTool | null = null;
+    let view: HTMLElement | null = null;
     const sync = (): void => {
       if (!tool) return;
       band.hidden = !tool.active;
+      if (app && band.hidden) return;
       lockBtn.hidden = !tool.directing;
+      if (app) leaveDisabled(lockBtn, view);
     };
     const r = rig({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 10, 0, 0]]), lines('h', [[50, -50, 0, 80, -50, 0]])] }, TOP, DEFAULT_UNITS, { onHint: sync, onLock: sync });
     tool = r.tool;
+    view = r.canvas;
     r.canvas.tabIndex = 0;
     r.tool.mountLockMenu(band, owner ? lockBtn : undefined);
     const menu = band.querySelector('.mb-lockmenu') as HTMLElement;
@@ -3382,7 +3387,7 @@ describe('측정 도구: 잠글 방향 고르기(한 손 잠금 — 22차, Sketc
     r.key('Escape');
     expect(menu.hidden).toBe(true);
     expect(document.activeElement).toBe(other);
-    // 방향 잠금 버튼(줄을 연 버튼 — 줄 밖)
+    // 방향 잠금 버튼(줄을 연 버튼 — 줄 밖. 그 버튼이 숨을 때 3D 보기로 보내는 것은 앱 refreshMeasureBar — 196차, 아래 시험)
     open();
     lockBtn.focus();
     r.key('Escape');
@@ -3403,6 +3408,103 @@ describe('측정 도구: 잠글 방향 고르기(한 손 잠금 — 22차, Sketc
     r.key('Escape');
     expect(document.activeElement).toBe(r.canvas);
     expect(f).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
+  // 196차 시험의 앱 원문: refreshMeasureBar 한 메서드(다음 메서드 「자동 확인용」 snapshot 앞까지)
+  const measureBarSource = (): string => {
+    const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
+    return app.slice(app.indexOf('  private refreshMeasureBar('), app.indexOf('  snapshot(): AppSnapshot'));
+  };
+
+  it('196차: 방향 잠금 버튼에 초점이 있을 때 그 버튼에서 친 Esc(점 취소)로 방향을 잡지 않게 되어 앱이 그 버튼을 숨기면 3D 보기로(숨은 버튼의 초점이 문서로 빠지지 않게, WCAG 2.4.3 — 195차 줄 안 Esc·148차 「다시 재기」와 같은 곳). 줄이 열린 채·각도기도 같다 — 앱은 숨기는 줄 바로 뒤에서', () => {
+    const { r, band, lockBtn, menu, tap, open } = appBand(true, true);
+    // 줄자 시작점을 찍어 방향을 잡는 중(방향 잠금 버튼이 보임)
+    tap(101, 100);
+    expect([r.tool.pointCount, lockBtn.hidden]).toEqual([1, false]);
+    lockBtn.focus();
+    const f = vi.spyOn(r.canvas, 'focus');
+    expect(r.key('Escape')).toBe(true);
+    expect([r.tool.pointCount, r.tool.active, lockBtn.hidden, band.hidden]).toEqual([0, true, true, false]);
+    expect(document.activeElement).toBe(r.canvas);
+    // 화면은 굴리지 않는다(148차 leaveDisabled — focusIfLost)
+    expect(f).toHaveBeenCalledWith({ preventScroll: true });
+    f.mockRestore();
+    // 잠글 방향 줄이 열린 채 방향 잠금 버튼에서 친 Esc: 초점이 줄 밖이라 195차 길은 하지 않고, 앱이 그 버튼을 숨기는 자리에서 3D 보기로(줄은 그 뒤에 닫힌다)
+    open();
+    lockBtn.focus();
+    r.key('Escape');
+    expect([r.tool.pointCount, menu.hidden, lockBtn.hidden, lockBtn.getAttribute('aria-expanded')]).toEqual([0, true, true, 'false']);
+    expect(document.activeElement).toBe(r.canvas);
+    // 각도기: 중심을 찍어 기준 방향을 잡는 중
+    r.tool.setMode('protractor');
+    r.move(101, 100);
+    r.click(101, 100);
+    expect([r.tool.mode, r.tool.pointCount, lockBtn.hidden]).toEqual(['protractor', 1, false]);
+    lockBtn.focus();
+    r.key('Escape');
+    expect([r.tool.pointCount, lockBtn.hidden, band.hidden]).toEqual([0, true, false]);
+    expect(document.activeElement).toBe(r.canvas);
+    // 앱 원문: 방향 잠금 버튼을 숨기는 줄 바로 뒤에서 3D 보기(148차 「다시 재기」와 같은 꼴), 띠째 숨으면 그 앞에서 끝(189차 길)
+    const bar = measureBarSource();
+    expect(bar).toMatch(/e\.measureLock\.hidden = !directing;\n(?:\s*\/\/[^\n]*\n)*\s*leaveDisabled\(e\.measureLock, this\.viewer\?\.canvas\);\n\s*e\.measureCopy\.hidden = directing;\n/);
+    expect(bar.indexOf('if (!on || !d || !tool) return;')).toBeGreaterThan(0);
+    expect(bar.indexOf('if (!on || !d || !tool) return;')).toBeLessThan(bar.indexOf('leaveDisabled(e.measureLock'));
+  });
+
+  it('196차: 초점이 방향 잠금 버튼 밖이면(3D 보기·문서·띠의 다른 버튼) 그 버튼이 숨어도 옮기지 않고, 그 버튼에 있어도 그대로 보이는 갱신(잠그기·풀기)이면 그대로. 측정을 끄면(띠째 숨음) 3D 보기로 먼저 옮기지 않고 189차대로 끈 도구 버튼', () => {
+    const { r, band, lockBtn, tap } = appBand(true, true);
+    const other = lockBtn.nextElementSibling as HTMLButtonElement;
+    // 시작점을 새로 찍는다(앞 탭과 두 번 누르기로 겹치지 않게 지우고 — 191차 open 꼴)
+    const start = (): void => {
+      r.tool.clear();
+      tap(101, 100);
+      expect([r.tool.pointCount, lockBtn.hidden]).toEqual([1, false]);
+    };
+    const f = vi.spyOn(r.canvas, 'focus');
+    // 3D 보기에서 친 Esc(지금 그대로 — 다시 옮기지 않는다)
+    start();
+    r.canvas.focus();
+    f.mockClear();
+    r.key('Escape');
+    expect([r.tool.pointCount, lockBtn.hidden]).toEqual([0, true]);
+    expect(document.activeElement).toBe(r.canvas);
+    expect(f).not.toHaveBeenCalled();
+    // 문서(body — 누르기로 초점을 받지 않는 기기 등)는 끌어오지 않는다
+    start();
+    r.canvas.blur();
+    expect(document.activeElement).toBe(document.body);
+    r.key('Escape');
+    expect(lockBtn.hidden).toBe(true);
+    expect(document.activeElement).toBe(document.body);
+    // 띠의 다른 버튼
+    start();
+    other.focus();
+    r.key('Escape');
+    expect(lockBtn.hidden).toBe(true);
+    expect(document.activeElement).toBe(other);
+    expect(f).not.toHaveBeenCalled();
+    // 방향 잠금 버튼에 있어도 그 버튼이 그대로 보이면(→로 빨강 축 잠그기·다시 →로 풀기 — 방향을 잡는 중) 그대로
+    start();
+    lockBtn.focus();
+    expect(r.key('ArrowRight')).toBe(true);
+    expect([r.tool.inferenceLock?.axis, lockBtn.hidden]).toEqual(['x', false]);
+    expect(r.key('ArrowRight')).toBe(true);
+    expect([r.tool.inferenceLock, lockBtn.hidden]).toEqual([null, false]);
+    expect(document.activeElement).toBe(lockBtn);
+    // 측정 끄기(T·✕·도구 막대 — 앱 setMeasureMode: 189차 keepBarFocus → 끄기 → 띠째 숨음): 방향을 잡는 동안은 결과가 없어 끄기 전에 띠를 다시 맞추지 않는다 — 끈 도구 버튼
+    const tapeBtn = document.createElement('button');
+    document.body.append(tapeBtn);
+    const back = keepBarFocus(band, tapeBtn);
+    r.tool.setMode(null);
+    expect([r.tool.active, band.hidden]).toEqual([false, true]);
+    expect(f).not.toHaveBeenCalled();
+    back();
+    expect(document.activeElement).toBe(tapeBtn);
+    f.mockRestore();
+    // 앱 원문: 띠를 다시 맞추는 동안 초점을 옮기는 곳은 148차 「다시 재기」와 이번 방향 잠금 버튼의 leaveDisabled 둘뿐(초점이 그 버튼에 있을 때만 옮긴다 — 148차 시험)
+    const bar = measureBarSource();
+    expect(bar.match(/leaveDisabled\(/g)?.length).toBe(2);
+    expect(bar).not.toMatch(/focusIfLost\(|\.focus\(/);
   });
 });
 
