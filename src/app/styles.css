@@ -1985,8 +1985,9 @@ button.scene-card.sel {
 
 .mb-btn.on {
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 18%, var(--bg-input));
-  color: var(--accent);
+  /* 입력 칸 바탕 위 옅은 강조 + 강조 글(눌린 도구 막대 버튼과 같은 짝, 197차 — 강조색 18% 위 강조색 글은 밝은 테마 3.4:1) */
+  background: linear-gradient(var(--accent-soft) 0 0), var(--bg-input);
+  color: var(--accent-fg);
 }
 
 /* 휴대폰 걷기 조이스틱: 왼쪽 아래(카메라 띠 위) */

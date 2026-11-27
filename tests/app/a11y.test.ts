@@ -294,3 +294,30 @@ describe('색만으로 전하지 않음(185차 — WCAG 1.4.1 색 사용: 밝기
     for (const [name, T] of THEMES) expect(contrast(rgba(T['--accent']), rgba(T['--border-soft'])), name).toBeGreaterThanOrEqual(3);
   });
 });
+
+describe('눌린 띠 버튼 글 대비(197차 — WCAG 1.4.3: 47차 짝 목록에 없던 측정·카메라 띠의 켬 상태)', () => {
+  /** 규칙의 그 속성 값 — 첫 규칙(보통 화면, 고대비 @media 규칙은 파일 뒤) */
+  const prop = (sel: string, p: string): string => new RegExp(`(?:^|[;\\s])${p}:\\s*([^;]+)`).exec(bodies(sel))?.[1]?.trim() ?? '';
+  /** 토큰 하나, color-mix(in srgb, var(--가) P%, var(--나)), linear-gradient(var(--가) 0 0), var(--나)(나 위에 반투명 가를 겹침)를 그 테마 색으로 */
+  const paint = (T: Record<string, string>, v: string): Rgba => {
+    let m = /^color-mix\(in srgb, var\((--[\w-]+)\) (\d+)%, var\((--[\w-]+)\)\)$/.exec(v);
+    if (m) {
+      const [a, b, p] = [rgba(T[m[1]!]), rgba(T[m[3]!]), Number(m[2]) / 100];
+      return [0, 1, 2].map((i) => a[i]! * p + b[i]! * (1 - p)).concat(1) as Rgba;
+    }
+    m = /^linear-gradient\(var\((--[\w-]+)\) 0 0\), var\((--[\w-]+)\)$/.exec(v);
+    if (m) return over(rgba(T[m[1]!]), rgba(T[m[2]!]));
+    return rgba(T[/^var\((--[\w-]+)\)$/.exec(v)?.[1] ?? '']);
+  };
+  for (const [name, T] of THEMES) {
+    it(`${name}: 눌린 띠 버튼(걷기·2점 투시·중력·부딪힘·방향 잠금·안내 두기) 글은 제 바탕 위 4.5:1(밝은 테마 강조색 18% 바탕 위 강조색 글은 3.4:1)`, () => {
+      // 걷기를 켜면 중력·부딪힘은 처음부터 눌린 채(app.ts press — class on), 카메라 띠는 넓은 화면에도 보인다
+      const fg = paint(T, prop('.mb-btn.on', 'color'));
+      const bg = paint(T, prop('.mb-btn.on', 'background'));
+      expect(contrast(fg, bg)).toBeGreaterThanOrEqual(4.5);
+      // 테두리는 그대로 강조색(끈 테두리와 3:1 — 185차), 띠 버튼 바탕은 입력 칸 바탕
+      expect(prop('.mb-btn.on', 'border-color')).toBe('var(--accent)');
+      expect(prop('.mb-btn', 'background')).toBe('var(--bg-input)');
+    });
+  }
+});
