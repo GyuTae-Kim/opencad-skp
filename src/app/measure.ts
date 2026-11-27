@@ -1656,7 +1656,8 @@ export class MeasureTool {
 
   /**
    * 잠글 방향 고르기 줄 열기·닫기(on이 없으면 바꾸기). 방향을 잡는 중이 아니면(고를 방향이 없으면) 닫는다. 열었으면 true.
-   * 고르거나, 점을 찍거나 취소·지우기·도구 바꾸기로 방향을 잡지 않게 되거나, 다른 길로 잠그면 닫힌다(refreshHint)
+   * 고르거나, 점을 찍거나 취소·지우기·도구 바꾸기로 방향을 잡지 않게 되거나, 다른 길로 잠그면 닫힌다(refreshHint).
+   * 닫을 때 초점이 줄 안이었으면 줄을 연 버튼(mountLockMenu owner)으로 돌려준다(191차 — 방향을 잡는 동안만)
    */
   toggleLockMenu(on?: boolean): boolean {
     const m = this.lockMenu;
@@ -1681,8 +1682,13 @@ export class MeasureTool {
       );
     }
     if (m.hidden === !open) return open;
+    // 191차: 닫을 때 초점이 줄 안이면(키보드로 고른 방향 버튼 등 — 숨긴 줄 안 초점은 브라우저가 문서로 보낸다) 줄을 연 방향 잠금 버튼으로(APG Disclosure·Menu Button, WCAG 2.4.3).
+    // 밖이면 그대로. 방향을 잡지 않게 되면(도구 끔 — 띠째 숨어 189차 길이 앞섬, 점 취소 — 그 버튼도 숨음) 하지 않는다
+    const back = !open && m.contains(document.activeElement);
     m.hidden = !open;
-    this.lockBtn?.setAttribute('aria-expanded', String(open));
+    const b = this.lockBtn;
+    b?.setAttribute('aria-expanded', String(open));
+    if (back && b && this.directing && b.isConnected && !b.closest('[hidden]')) b.focus({ preventScroll: true });
     // 결과 글·툴팁이 줄을 비키게 다시 그린다
     this.overlay.invalidate();
     return open;

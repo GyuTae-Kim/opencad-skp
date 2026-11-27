@@ -3176,6 +3176,145 @@ describe('측정 도구: 잠글 방향 고르기(한 손 잠금 — 22차, Sketc
     const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
     expect(app).toContain('tool.mountLockMenu(this.els.measureBar, this.els.measureLock);');
   });
+
+  // 191차 시험의 앱 측정 띠 꼴: 띠(버튼 줄 — 방향 잠금 버튼과 다른 버튼, 끝에 잠글 방향 줄)와 초점을 받는 3D 보기(코어 캔버스처럼 tabindex).
+  // 앱 refreshMeasureBar처럼 안내·잠금이 바뀔 때(onHint·onLock) 띠는 도구를 켠 동안만, 방향 잠금 버튼은 방향을 잡는 동안만 보인다. owner가 거짓이면 버튼을 넘기지 않는다
+  const appBand = (owner = true) => {
+    const band = document.createElement('div');
+    const acts = document.createElement('div');
+    const lockBtn = document.createElement('button');
+    acts.append(lockBtn, document.createElement('button'));
+    band.append(acts);
+    document.body.append(band);
+    let tool: MeasureTool | null = null;
+    const sync = (): void => {
+      if (!tool) return;
+      band.hidden = !tool.active;
+      lockBtn.hidden = !tool.directing;
+    };
+    const r = rig({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 10, 0, 0]]), lines('h', [[50, -50, 0, 80, -50, 0]])] }, TOP, DEFAULT_UNITS, { onHint: sync, onLock: sync });
+    tool = r.tool;
+    r.canvas.tabIndex = 0;
+    r.tool.mountLockMenu(band, owner ? lockBtn : undefined);
+    const menu = band.querySelector('.mb-lockmenu') as HTMLElement;
+    const btn = (c: string): HTMLButtonElement => menu.querySelector(`[data-lock="${c}"]`) as HTMLButtonElement;
+    const tap = (x: number, y: number): void => {
+      r.ptr('pointerdown', x, y, { pointerType: 'touch', buttons: 1 });
+      r.ptr('pointerup', x, y, { pointerType: 'touch' });
+      r.overlay.paintNow();
+    };
+    r.tool.setMode('tape');
+    // 시작점을 찍어 방향을 잡는 중에 줄을 연다(맞춘 방향이 없는 한 손 탭 뒤 앱 방향 잠금 버튼이 여는 꼴)
+    const open = (): void => {
+      r.tool.setInferenceLock(false);
+      r.tool.clear();
+      tap(101, 100);
+      expect(r.tool.toggleLockMenu(true)).toBe(true);
+      expect([menu.hidden, lockBtn.hidden, band.hidden]).toEqual([false, false, false]);
+    };
+    return { r, band, lockBtn, menu, btn, tap, open };
+  };
+
+  it('191차: 줄 안 방향 버튼에 초점이 있을 때 키로 고르면(Enter·Space — click) 줄을 닫고 초점을 줄을 연 방향 잠금 버튼으로 돌려준다(APG Disclosure·Menu Button — 숨긴 줄 안 초점이 문서로 빠지지 않게, WCAG 2.4.3). 다른 길로 잠가 닫혀도 같다', () => {
+    const { r, lockBtn, menu, btn, open } = appBand();
+    open();
+    btn('x').focus();
+    expect(document.activeElement).toBe(btn('x'));
+    const f = vi.spyOn(lockBtn, 'focus');
+    btn('x').click();
+    expect([r.tool.inferenceLock?.axis, menu.hidden, lockBtn.hidden, lockBtn.getAttribute('aria-expanded')]).toEqual(['x', true, false, 'false']);
+    expect(document.activeElement).toBe(lockBtn);
+    // 화면은 굴리지 않는다(측정 조각의 다른 초점 되살림과 같은 꼴)
+    expect(f).toHaveBeenCalledWith({ preventScroll: true });
+    f.mockRestore();
+    // 다른 길로 잠가 닫혀도(화살표 축 잠금 — 줄 안에서 친 화살표·Shift도 같은 setLock 길) 방향을 잡는 중이라 방향 잠금 버튼이 남아 그리로
+    open();
+    btn('y').focus();
+    expect(r.tool.setInferenceLock('z')).toBe(true);
+    expect([r.tool.inferenceLock?.axis, menu.hidden, lockBtn.hidden]).toEqual(['z', true, false]);
+    expect(document.activeElement).toBe(lockBtn);
+    // 손가락 1초 뒤 닫기(141차)도 그때 초점이 줄 안이면(키보드로 줄에 들어간 뒤 손가락으로 고름) 같다 — 누르는 동안은 줄이 남고 초점도 그대로
+    vi.useFakeTimers();
+    open();
+    btn('x').focus();
+    press(btn('x'), 'touch');
+    expect([r.tool.inferenceLock?.axis, menu.hidden]).toEqual(['x', false]);
+    expect(document.activeElement).toBe(btn('x'));
+    vi.advanceTimersByTime(1000);
+    expect([r.tool.inferenceLock?.axis, menu.hidden]).toEqual(['x', true]);
+    expect(document.activeElement).toBe(lockBtn);
+  });
+
+  it('191차: 닫을 때 초점이 줄 밖이면 옮기지 않는다 — 문서·방향 잠금 버튼(다시 누름)·3D 보기(점 찍기·손가락 1초 뒤 닫기). 방향을 잡지 않게 되어 방향 잠금 버튼도 숨으면(점 취소 Esc, 도구 끔 — 띠째 숨어 189차 길이 끈 도구 버튼으로) 줄 안 초점이어도 하지 않는다', () => {
+    vi.useFakeTimers();
+    const { r, band, lockBtn, menu, btn, tap, open } = appBand();
+    // 문서: 초점을 주지 않는 누르기로 고름 — 문서에서 끌어오지 않는다
+    open();
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement).toBe(document.body);
+    btn('z').click();
+    expect([r.tool.inferenceLock?.axis, menu.hidden]).toEqual(['z', true]);
+    expect(document.activeElement).toBe(document.body);
+    // 대조: 같은 줄을 줄 안 초점에서 고르면 방향 잠금 버튼
+    open();
+    btn('y').focus();
+    btn('y').click();
+    expect([r.tool.inferenceLock?.axis, menu.hidden]).toEqual(['y', true]);
+    expect(document.activeElement).toBe(lockBtn);
+    // 방향 잠금 버튼을 다시 눌러 닫음(앱 toggleMeasureLock) — 초점은 이미 그 버튼(줄 밖), 다시 옮기지 않는다
+    open();
+    lockBtn.focus();
+    const f = vi.spyOn(lockBtn, 'focus');
+    expect(r.tool.toggleLockMenu()).toBe(false);
+    expect([menu.hidden, lockBtn.getAttribute('aria-expanded')]).toEqual([true, 'false']);
+    expect(f).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(lockBtn);
+    f.mockRestore();
+    // 3D 보기: 열어 둔 채 점을 찍음
+    open();
+    r.canvas.focus();
+    tap(165, 150);
+    expect(r.results.at(-1)?.kind).toBe('tape');
+    expect(menu.hidden).toBe(true);
+    expect(document.activeElement).toBe(r.canvas);
+    // 3D 보기: 손가락으로 고른 뒤 1초 뒤 닫기(141차) — 초점이 3D 보기에 있으면 그대로
+    open();
+    r.canvas.focus();
+    press(btn('x'), 'touch');
+    vi.advanceTimersByTime(1000);
+    expect([r.tool.inferenceLock?.axis, menu.hidden]).toEqual(['x', true]);
+    expect(document.activeElement).toBe(r.canvas);
+    // 점 취소(줄 안에서 친 Esc — 측정 handleKey): 방향을 잡지 않게 되어 앱이 방향 잠금 버튼도 숨긴다 — 곧 숨는 버튼으로 옮기지 않는다
+    open();
+    btn('x').focus();
+    expect(r.key('Escape')).toBe(true);
+    expect([r.tool.pointCount, menu.hidden, lockBtn.hidden]).toEqual([0, true, true]);
+    expect(document.activeElement).not.toBe(lockBtn);
+    // 도구 끔(✕·Esc·T·도구 막대 — 앱 setMeasureMode): 띠째 숨어 189차 keepBarFocus가 끈 도구 버튼으로 보낸다 — 이번 길은 하지 않는다
+    open();
+    btn('x').focus();
+    r.tool.setMode(null);
+    expect([menu.hidden, band.hidden, lockBtn.hidden]).toEqual([true, true, true]);
+    expect(document.activeElement).not.toBe(lockBtn);
+  });
+
+  it('191차: 줄을 연 버튼을 넘기지 않은 줄(owner 없음)은 닫을 때 초점을 옮기지 않는다 — 같은 차례에 버튼을 넘긴 줄은 방향 잠금 버튼으로(대조)', () => {
+    const a = appBand(false);
+    a.open();
+    a.btn('x').focus();
+    a.btn('x').click();
+    expect([a.r.tool.inferenceLock?.axis, a.menu.hidden, a.lockBtn.hasAttribute('aria-expanded')]).toEqual(['x', true, false]);
+    // 아무것도 하지 않는다(가짜 DOM은 숨긴 줄 안 초점을 그대로 둔다 — 브라우저는 문서로)
+    expect(document.activeElement).toBe(a.btn('x'));
+    // 대조(다른 도구 — 앞 도구는 버려 창 듣기가 겹치지 않게)
+    a.r.tool.dispose();
+    const b = appBand();
+    b.open();
+    b.btn('x').focus();
+    b.btn('x').click();
+    expect([b.r.tool.inferenceLock?.axis, b.menu.hidden]).toEqual(['x', true]);
+    expect(document.activeElement).toBe(b.lockBtn);
+  });
 });
 
 describe('측정 도구: 지나간 모서리는 그 선분 묶음이 숨거나 단면이 바뀌면 버린다(106차 — 코어 0.99.0과 같은 규칙)', () => {
