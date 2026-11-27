@@ -264,6 +264,13 @@ describe('글 간격을 넓혀도 글이 든 칸이 잘리거나 겹치지 않�
       expect(rule(sel), sel).not.toMatch(/(^|[;\s])height:\s*\d/);
     }
   });
+
+  it('작은 버튼 안 아이콘은 글 앞 같은 줄(inline-block) — 전역 .ico 블록이면 글 위 줄로 쌓여 기본 화면에서도 24px 밖으로 넘쳤다', () => {
+    // 아이콘 14px·vertical-align −2px은 줄 높이(12px × 1.45 = 17.4, 1.5배 18) 안 — 한 줄 + 테두리 2 = 19.4~20 ≤ 24
+    expect(rule('.ico')).toMatch(/display:\s*block/);
+    expect(rule('.mini-btn .ico')).toMatch(/display:\s*inline-block/);
+    expect(rule('.mini-btn .ico')).toMatch(/vertical-align:\s*-2px/);
+  });
 });
 
 describe('측정 띠 알림 영역(45차 — 앱 원본 규칙)', () => {

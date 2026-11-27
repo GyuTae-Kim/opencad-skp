@@ -2314,7 +2314,9 @@ button.scene-card.sel {
   margin-top: 4px;
 }
 
+/* 아이콘은 글 앞 같은 줄(전역 .ico 블록이면 글 위 줄로 쌓여 24px 밖으로 넘쳤다 — 177차) */
 .mini-btn .ico {
+  display: inline-block;
   vertical-align: -2px;
   margin-right: 3px;
 }
