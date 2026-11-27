@@ -180,7 +180,10 @@ export class Panel {
     for (const el of this.body.querySelectorAll<HTMLElement>('[data-sel]')) {
       const on = el.dataset.sel === key;
       el.classList.toggle('sel', on);
+      // 나무 줄은 고름(aria-selected), 재질 줄(버튼)·정의 표 줄(줄 안 버튼 — 표 줄의 aria-selected는 grid 안에서만 뜻이 있다)은
+      // 누르면 고르고 다시 누르면 푸는 토글이라 눌림으로(186차 — 단면 줄 꼴, 전에는 클래스만 바뀌어 화면 읽기에 고른 줄이 없었다)
       if (el.getAttribute('role') === 'treeitem') el.setAttribute('aria-selected', on ? 'true' : 'false');
+      else (el.localName === 'button' ? el : el.querySelector('button'))?.setAttribute('aria-pressed', on ? 'true' : 'false');
     }
     if (reveal) this.body.querySelector('.sel')?.scrollIntoView({ block: 'nearest' });
     this.renderFoot();
