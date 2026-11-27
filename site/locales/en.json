@@ -489,7 +489,7 @@
   "문자·치수 기본값을 읽지 못했습니다": "Failed to read text and dimension defaults",
   "문자가 너무 많아 {0}개까지만 담았습니다": "Too many texts; only {0} were included.",
   "바닥 격자 (F7)": "Floor Grid (F7)",
-  "바닥 격자 켜고 끄기": "Toggle ground grid",
+  "바닥 격자 켜고 끄기": "Toggle floor grid",
   "바둑판": "Checkerboard",
   "박공지붕": "Gable roof",
   "반지름": "Radius",

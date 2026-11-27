@@ -489,7 +489,7 @@
   "문자·치수 기본값을 읽지 못했습니다": "Standardwerte für Texte und Bemaßungen konnten nicht gelesen werden",
   "문자가 너무 많아 {0}개까지만 담았습니다": "Zu viele Texte, daher wurden nur {0} berücksichtigt.",
   "바닥 격자 (F7)": "Raster am Boden (F7)",
-  "바닥 격자 켜고 끄기": "Bodenraster ein/aus",
+  "바닥 격자 켜고 끄기": "Raster am Boden ein/aus",
   "바둑판": "Schachbrett",
   "박공지붕": "Satteldach",
   "반지름": "Radius",

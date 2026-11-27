@@ -8,6 +8,7 @@
  * (통째 열쇠)의 「F 전체 보기」 낱말도 버튼의 보이는 글 값으로 맞췄다(en View all, ja 全体表示, zh 查看全部).
  * 판정은 대소문자·붙임표(-)·띄어쓰기를 가리지 않는다(175차 표와 같은 셈 — 음성 조작은 붙임표를 낱말 사이로 듣는다).
  * 204차: 바로 가기 안내 F7 줄(ja 床グリッドの表示切替)만 남은 グリッド를 같은 기능 값 넷의 格子로(床の格子の表示切替).
+ * 205차: 같은 줄의 영어 ground·중국어 地面·독일어 붙은 말 Bodenraster를 버튼 이름 낱말로(floor·地板·Raster am Boden).
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -155,7 +156,49 @@ describe('제목 막대·도구 막대 버튼의 이름이 다섯 언어 모두 
     const all = LANGS.flatMap((lang) => Object.values(catalogs[lang]!));
     expect(all.filter((v) => v === value).length).toBe(1);
     expect(sourceMessage(value)).toBe(TOGGLE);
-    // 원문·다른 언어는 그대로
-    expect(LANGS.filter((lang) => lang !== 'ja').map((lang) => catalogs[lang]![TOGGLE])).toEqual(['Toggle ground grid', '显示或隐藏地面网格', 'Bodenraster ein/aus']);
+    // 다른 언어는 205차에 같은 꼴로 맞췄다(아래 205차 시험)
+    expect(LANGS.filter((lang) => lang !== 'ja').map((lang) => catalogs[lang]![TOGGLE])).toEqual(['Toggle floor grid', '显示或隐藏地板网格', 'Raster am Boden ein/aus']);
+  });
+
+  it('205차: 바닥 격자(F7)를 부르는 값 다섯은 네 언어 모두 보이는 글을 품고, 바로 가기 안내 F7 줄은 버튼 이름 낱말을 품는다 — 영어 floor·중국어 地板·독일어 Raster am Boden(3.2.4·2.5.3)', () => {
+    const shortcuts = readFileSync(resolve(__dirname, '../src/app/shortcuts.ts'), 'utf8');
+    const NAME = '바닥 격자 (F7)';
+    const TOGGLE = '바닥 격자 켜고 끄기';
+    // 쓰는 자리(204차와 같음): 도구 막대 「격자」 버튼(보이는 글·이름)·휴대폰 보기 설정 메뉴 항목, 바로 가기 안내 F7 줄, 처음 화면 키 줄, 정보 탭 조작 줄
+    expect(app).toContain(`tbtn('격자', 'grid', '${NAME}', `);
+    expect(app).toContain("{ label: '격자', checked: this.gridOn, ");
+    expect(shortcuts).toContain(`{ keys: ['F7'], label: '${TOGGLE}' }`);
+    expect(app).toContain(`'${START}'`);
+    expect(infotab).toContain(`'${INFO}'`);
+    const keys = ['격자', NAME, TOGGLE, START, INFO];
+    for (const lang of LANGS) {
+      const cat = catalogs[lang]!;
+      expect(Object.keys(cat).filter((k) => k.includes('격자')).sort(), lang).toEqual([...keys].sort());
+      // 다섯 값 모두 버튼의 보이는 글(격자)을 품고, 바로 가기 안내 줄은 버튼 이름(풍선 — 「 (F7)」을 뗀 값)을 품는다
+      for (const k of keys) expect(norm(cat[k]!), `${lang}: ${k}`).toContain(norm(cat['격자']!));
+      const name = cat[NAME]!.replace(' (F7)', '');
+      expect(norm(cat[TOGGLE]!), `${lang}: ${TOGGLE}`).toContain(norm(name));
+      // 그 버튼 이름 낱말을 품은 값은 이름과 바로 가기 안내 줄 둘뿐(다른 기능과 같은 이름이 아님)
+      expect(Object.entries(cat).filter(([, v]) => norm(v).includes(norm(name))).map(([k]) => k).sort(), lang).toEqual([NAME, TOGGLE].sort());
+    }
+    // [언어, 고친 값, 옛 낱말] — 새 값은 네 사전에서 하나뿐이라 거꾸로 찾기가 제 원문으로
+    const fixed: [lang: Lang, value: string, old: RegExp][] = [
+      ['en', 'Toggle floor grid', /ground/i],
+      ['zh-CN', '显示或隐藏地板网格', /地面/],
+      ['de', 'Raster am Boden ein/aus', /Bodenraster/],
+    ];
+    const all = LANGS.flatMap((lang) => Object.values(catalogs[lang]!));
+    for (const [lang, value, old] of fixed) {
+      expect(catalogs[lang]![TOGGLE], lang).toBe(value);
+      expect(value, lang).not.toMatch(old);
+      expect(all.filter((v) => v === value).length, value).toBe(1);
+      expect(sourceMessage(value), value).toBe(TOGGLE);
+    }
+    // 영어 ground·중국어 地面은 이제 지면(배경 버튼 풀이)·걷기 바닥 줄에만 — 바닥 격자와 겹치지 않는다
+    for (const [lang, word] of [['en', /\bground\b/i], ['zh-CN', /地面/]] as const)
+      for (const k of keys) expect(catalogs[lang]![k], `${lang}: ${k}`).not.toMatch(word);
+    // 원문·일본어(204차)는 그대로
+    expect(translate(TOGGLE, 'ko')).toBe(TOGGLE);
+    expect(catalogs.ja![TOGGLE]).toBe('床の格子の表示切替');
   });
 });
