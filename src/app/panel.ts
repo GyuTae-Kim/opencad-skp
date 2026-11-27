@@ -87,9 +87,13 @@ export const CHILD_LIMIT = 200;
 /** 나무 전체에서 그리는 줄 수 한도 */
 const TREE_ROW_LIMIT = 4000;
 
-/** 정보 줄. file: 값이 파일 글(이름·설명 등 — 번역층에서 뺀다, 52차) */
+/**
+ * 정보 줄. file: 값이 파일 글(이름·설명 등 — 번역층에서 뺀다, 52차).
+ * 이름 칸 dt·값 칸 dd를 줄 칸 div에 담고 부르는 곳이 dl로 묶는다(171차 — WCAG 1.3.1: span 둘일 때는 화면 읽기에 이름과 값이 짝 없는 두 글이었다.
+ * 바로 가기 안내의 dl 꼴, HTML은 dl 안 dt·dd 묶음 div를 허용)
+ */
 export const row = (k: string, v: string, file?: boolean): HTMLElement =>
-  h('div', { class: 'prop-row' }, h('span', { class: 'k' }, k), h('span', { class: 'v', title: v, translate: file ? 'no' : null }, v));
+  h('div', { class: 'prop-row' }, h('dt', { class: 'k' }, k), h('dd', { class: 'v', title: v, translate: file ? 'no' : null }, v));
 /** 앱이 지금 언어로 옮겨 넣은 속성(mixText — 파일 글을 끼운 글)을 번역층이 다시 옮기지 않게 */
 export const keep = <E extends HTMLElement>(el: E, attrs = 'title'): E => (el.setAttribute('data-i18n-keep', attrs), el);
 /** 받아 둔 속성 사전 칸·정보 탭 조각(attrview.ts·infotab.ts) */
@@ -838,7 +842,7 @@ export class Panel {
       section(
         e.title,
         this.pickBar(d),
-        ...rows,
+        rows.length ? h('dl', {}, ...rows) : null,
         pickPart || allOfDef ? h('div', { class: 'pbar' }, pickPart, allOfDef) : null,
         !d.selection ? hint('3D나 구성 목록에서 그룹·컴포넌트·재질을 고르면 그 정보를 보입니다. "면·모서리"로 누르면 면 하나의 넓이·모서리 하나의 길이를 봅니다.') : null,
       ),

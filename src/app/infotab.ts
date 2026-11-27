@@ -29,16 +29,21 @@ export function infoSections(d: SkpDoc, applyPage: (index: number) => void): HTM
     section(
       '파일',
       thumb ? keep(h('img', { class: 'model-thumb', src: thumb.url, alt: mixText(mix`${F(d.name)} 모형 미리보기(파일 안 그림)`), decoding: 'async' }), 'alt') : null,
-      row('이름', d.name, true),
-      row('형식', docLabel(info)),
-      row('SketchUp 판', info.version ? `${info.version} (${releaseName(info.version)})` : '모름'),
-      d.modelName ? row('모형 이름', d.modelName, true) : null,
-      d.modelDescription ? row('설명', d.modelDescription, true) : null,
-      d.classifications.length ? row('분류 체계', d.classifications.join(' · '), true) : null,
-      row('단위', unitSummary(info, s.units)),
-      row('단위 형식', unitsLabel(d.units)),
-      row('크기', formatBytes(d.size)),
-      row('읽은 시간', formatMs(d.ms)),
+      // 이름·값 줄은 절마다 dl 하나로(171차 — panel.ts row)
+      h(
+        'dl',
+        {},
+        row('이름', d.name, true),
+        row('형식', docLabel(info)),
+        row('SketchUp 판', info.version ? `${info.version} (${releaseName(info.version)})` : '모름'),
+        d.modelName ? row('모형 이름', d.modelName, true) : null,
+        d.modelDescription ? row('설명', d.modelDescription, true) : null,
+        d.classifications.length ? row('분류 체계', d.classifications.join(' · '), true) : null,
+        row('단위', unitSummary(info, s.units)),
+        row('단위 형식', unitsLabel(d.units)),
+        row('크기', formatBytes(d.size)),
+        row('읽은 시간', formatMs(d.ms)),
+      ),
     ),
   );
   const rows: HTMLElement[] = [];
@@ -59,7 +64,7 @@ export function infoSections(d: SkpDoc, applyPage: (index: number) => void): HTM
     rows.push(row('범위 크기', `${fmtNum(b.max[0] - b.min[0], 1)} × ${fmtNum(b.max[1] - b.min[1], 1)} × ${fmtNum(b.max[2] - b.min[2], 1)} ${u}`));
     rows.push(row('최소', fmtPt(b.min, 1)), row('최대', fmtPt(b.max, 1)));
   }
-  out.push(section('모형 통계', ...rows));
+  out.push(section('모형 통계', rows.length ? h('dl', {}, ...rows) : null));
   // 위치(Model Info > 위치)·그림자 설정·옮긴 그리기 축
   const loc = d.location;
   const sh = d.shadow;
@@ -96,7 +101,7 @@ export function infoSections(d: SkpDoc, applyPage: (index: number) => void): HTM
     out.push(
       section(
         '위치·그림자',
-        ...place,
+        place.length ? h('dl', {}, ...place) : null,
         sun ? hint('보기 설정의 "그림자"로 이 날짜·시각·위치의 해 그림자를 켜고 끕니다.') : null,
         d.drawAxes ? hint('줄자·각도기의 축 고정·기본 평면과 줄자 결과의 dx·dy·dz는 옮긴 그리기 축을 따릅니다.') : null,
         sceneAxes ? hint('그리기 축을 기억하는 장면을 고르면 그 장면의 축으로 바뀌고, 기억하지 않는 장면은 지금 축을 그대로 둡니다(파일을 다시 열면 파일의 축).') : null,

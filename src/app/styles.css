@@ -2282,7 +2282,7 @@ button.scene-card.sel {
   font-weight: 400;
 }
 
-.attr-dict > .prop-row {
+.attr-dict .prop-row {
   padding-inline: 8px;
 }
 
@@ -2772,7 +2772,9 @@ html:lang(zh-CN) { --font: -apple-system, "PingFang SC", "Microsoft YaHei", sans
   margin: 0;
 }
 
-.sc-list dt {
+.sc-list dt,
+.psec dl,
+.psec dd {
   margin: 0;
 }
 
