@@ -12,7 +12,7 @@ import { AXIS_LABELS, FACE_PERPENDICULAR_LABEL, GUIDE_LINE_LABEL, SNAP_LABELS, T
 import { SHORTCUTS } from '../src/app/shortcuts';
 import { chunkFailText } from '../src/app/core';
 import { CONTEXT_LOST_TEXT, CONTEXT_LOST_TITLE, RESTORE_FAIL_TEXT, RESTORE_FAIL_TITLE, RESTORE_TEXT, RESTORE_TITLE } from '../src/app/release';
-import { catalogs, currentLanguage, languageUrl, languages, translate } from '../site/i18n.mjs';
+import { catalogs, currentLanguage, languageUrl, languages, sourceMessage, translate } from '../site/i18n.mjs';
 import { DEFAULT_UNITS, unitsLabel } from '../src/app/units';
 import { KeyPick } from '../src/app/keypick';
 import type { KeyboardSnapOptions, Viewer3d } from 'opencad-viewer3d';
@@ -186,6 +186,28 @@ describe('language URLs and UI presentation', () => {
     expect(translate(GUIDE_CLEAR_FILE_LABEL, 'en')).toBe('Clear all guides for this file');
     expect(translate(GUIDE_REDO_LABEL, 'de')).toBe('Rückgängig gemachte Änderung an Hilfselementen wiederherstellen');
     expect(translate('안내점·안내선을 두거나 지운 것 되돌리기(100단계)', 'ja')).toBe('ガイド点・ガイド線の配置や消去を元に戻す（100段階まで）');
+  });
+  it('206차: 각도기 Shift(지금 평면에 고정)를 부르는 값 셋 — 바로 가기 안내 줄·각도기 버튼 풍선·측정 안내 — 은 네 언어 모두 같은 「고정」 낱말(독일어 풍선 sperren → fixieren, 3.2.4)', () => {
+    const app = readFileSync(resolve(__dirname, '../src/app/app.ts'), 'utf8');
+    const shortcuts = readFileSync(resolve(__dirname, '../src/app/shortcuts.ts'), 'utf8');
+    const LINE = '각도기: 지금 평면에 고정';
+    const TITLE = '각도기: 중심 → 기준 방향 → 잴 방향(Shift = 평면 고정·방향 잠금) · Esc 지우기';
+    const HINT = '각도기: 중심점을 누르세요 · Shift를 누르고 있으면 평면 고정';
+    // 쓰는 자리: 바로 가기 안내 Shift 줄, 각도기 버튼 풍선(화면 읽기 이름), 측정 띠·상태 막대의 각도기 첫 안내
+    expect(shortcuts).toContain(`{ keys: ['Shift'], label: '${LINE}' }`);
+    expect(app).toContain(`tbtn('각도기', 'protractor', '${TITLE}', `);
+    expect(measureHint('protractor', 0, false)).toBe(HINT);
+    // 원문 셋 모두 평면은 「고정」 — 언어마다 한 낱말(독일어는 평면 fixieren·방향 sperren으로 가른다: 화살표 줄·상태 글과 같게)
+    const word: Record<string, RegExp> = { en: /\block\b/i, de: /\bfixier/, ja: /固定/, 'zh-CN': /锁定/ };
+    for (const [code, re] of Object.entries(word))
+      for (const k of [LINE, TITLE, HINT]) expect(catalogs[code][k], `${code}: ${k}`).toMatch(re);
+    // 고친 값: 평면은 fixieren, 방향은 그대로 sperren — 네 사전에서 하나뿐이라 거꾸로 찾기가 제 원문으로
+    const value = 'Winkelmesser: Mittelpunkt → Bezugsrichtung → Messrichtung (Shift = Ebene fixieren oder Richtung sperren) · Esc zum Löschen';
+    expect(catalogs.de[TITLE]).toBe(value);
+    expect(value).not.toMatch(/Ebene oder Richtung sperren/);
+    const all = Object.keys(word).flatMap((code) => Object.values(catalogs[code]));
+    expect(all.filter((v) => v === value).length).toBe(1);
+    expect(sourceMessage(value)).toBe(TITLE);
   });
   it('translates the select-tool guide selection (status, card)', () => {
     const hangul = /[가-힣]/;

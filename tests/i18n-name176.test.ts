@@ -9,9 +9,13 @@
  * 판정은 대소문자·붙임표(-)·띄어쓰기를 가리지 않는다(175차 표와 같은 셈 — 음성 조작은 붙임표를 낱말 사이로 듣는다).
  * 204차: 바로 가기 안내 F7 줄(ja 床グリッドの表示切替)만 남은 グリッド를 같은 기능 값 넷의 格子로(床の格子の表示切替).
  * 205차: 같은 줄의 영어 ground·중국어 地面·독일어 붙은 말 Bodenraster를 버튼 이름 낱말로(floor·地板·Raster am Boden).
+ * 206차: 표준 뷰 일곱(1~7)의 바로 가기 안내 줄·버튼 풍선·정보 탭 조작 줄 낱말을 메뉴 항목 낱말로(중국어 위·아래 上·下,
+ * 독일어 앞·뒤·등각 Vorne·Hinten·Isometrie, 일본어 등각 アイソメ — 메뉴 항목은 뷰 큐브 면 글과 같은 열쇠라 그대로).
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { VIEW_KEYS, VIEW_LABELS } from 'opencad-viewer3d/viewkeys';
+import { CUBE_FACES } from 'opencad-viewer3d/viewcube';
 import { describe, expect, it } from 'vitest';
 import { catalogs, sourceMessage, translate } from '../site/i18n.mjs';
 
@@ -118,7 +122,8 @@ describe('제목 막대·도구 막대 버튼의 이름이 다섯 언어 모두 
     expect(app).toContain("tbtn('격자', 'grid', '바닥 격자 (F7)', ");
     // [열쇠, 언어, 고친 값, 근거 열쇠(그 버튼의 보이는 글), 옛 낱말]
     const fixed: [key: string, lang: Lang, value: string, basis: string, old: RegExp][] = [
-      [VIEWS, 'de', 'Standardansichten (1 Vorderansicht · 2 Rückansicht · 3 Links · 4 Rechts · 5 Oben · 6 Unten · 7 Isometrisch)', '표준 뷰', /Standardansicht\b/],
+      // 독일어 표준 뷰 풀이는 206차에 앞·뒤·등각 낱말도 메뉴 항목 낱말로 맞췄다(아래 206차 시험)
+      [VIEWS, 'de', 'Standardansichten (1 Vorne · 2 Hinten · 3 Links · 4 Rechts · 5 Oben · 6 Unten · 7 Isometrie)', '표준 뷰', /Standardansicht\b/],
       [SAMPLE, 'en', 'Open sample model (house model created in the browser)', '예제 열기', /example/i],
       [START, 'ja', '左ドラッグ：回転 · 右ドラッグ：移動 · ホイール：拡大 · F：全体を表示 · 1～7：標準ビュー · F7：格子', '격자', /グリッド/],
     ];
@@ -200,5 +205,66 @@ describe('제목 막대·도구 막대 버튼의 이름이 다섯 언어 모두 
     // 원문·일본어(204차)는 그대로
     expect(translate(TOGGLE, 'ko')).toBe(TOGGLE);
     expect(catalogs.ja![TOGGLE]).toBe('床の格子の表示切替');
+  });
+
+  it('206차: 표준 뷰 일곱(1~7)을 부르는 값은 네 언어 모두 메뉴 항목 낱말 — 바로 가기 안내 1~7 줄·표준 뷰 버튼 풍선·정보 탭 조작 줄(중국어 上·下, 독일어 Vorne·Hinten·Isometrie, 일본어 アイソメ — 3.2.4·2.5.3)', () => {
+    const shortcuts = readFileSync(resolve(__dirname, '../src/app/shortcuts.ts'), 'utf8');
+    const VIEWS = '표준 뷰 (1 앞 · 2 뒤 · 3 왼쪽 · 4 오른쪽 · 5 위 · 6 아래 · 7 등각)';
+    const KEYS = '앞 · 뒤 · 왼쪽 · 오른쪽 · 위 · 아래 · 남동 등각';
+    // 쓰는 자리: 표준 뷰 메뉴 항목(코어 VIEW_LABELS), 표준 뷰 버튼 풍선, 바로 가기 안내 1~7 줄, 정보 탭 조작 줄
+    expect(app).toContain('{ label: VIEW_LABELS[v], run: () => this.setView(v) }');
+    expect(app).toContain(`title: '${VIEWS}',`);
+    expect(shortcuts).toContain(`{ keys: ['1', '2', '3', '4', '5', '6', '7'], label: '${KEYS}' }`);
+    expect(infotab).toContain(`'${INFO}'`);
+    // 키 1~7의 메뉴 항목 원문 — 뷰 큐브 면 글(그림 안 글)도 같은 열쇠라 메뉴 항목 값은 바꾸지 않는다
+    const menu = ['1', '2', '3', '4', '5', '6', '7'].map((k) => VIEW_LABELS[VIEW_KEYS[k]!]);
+    expect(menu).toEqual(['앞', '뒤', '왼쪽', '오른쪽', '위', '아래', '남동 등각']);
+    expect(KEYS.split(' · ')).toEqual(menu);
+    for (const face of CUBE_FACES) expect(face.label, face.name).toBe(VIEW_LABELS[face.name]);
+    const miss: string[] = [];
+    for (const lang of LANGS) {
+      const cat = catalogs[lang]!;
+      const names = menu.map((k) => norm(cat[k]!));
+      const keys = cat[KEYS]!.split(' · ').map(norm);
+      // 풀이는 「(1 앞 · … · 7 등각)」, 정보 탭은 「1~7: 앞·…·등각 · F7」 꼴(괄호·쌍점·물결·나눔표는 언어마다 반각·전각)
+      const title = [...cat[VIEWS]!.matchAll(/(\d) ([^·()（）]+?)\s*(?=·|\)|）)/g)].map((m) => norm(m[2]!));
+      const info = /1[~〜～]7[:：]\s*(.+?)\s*[·・]\s*F7/.exec(cat[INFO]!)![1]!.split(/[,、・]\s*/).map(norm);
+      expect([keys.length, title.length, info.length], lang).toEqual([7, 7, 7]);
+      const iso = info[6]!; // 방위 없는 「등각」 한 낱말
+      names.forEach((name, i) => {
+        if (keys[i] !== name) miss.push(`${lang} 안내 줄 ${i + 1}: ${keys[i]} ↔ 메뉴 ${name}`);
+        // 짧은 글(메뉴 항목)이 풀이 긴 이름의 앞 낱말 — 7은 방위를 뺀 등각 낱말
+        if (!title[i]!.startsWith(i < 6 ? name : iso)) miss.push(`${lang} 풀이 ${i + 1}: ${title[i]} ↔ 메뉴 ${name}`);
+        if (i < 6 ? info[i] !== name : !name.includes(iso)) miss.push(`${lang} 정보 탭 ${i + 1}: ${info[i]} ↔ 메뉴 ${name}`);
+      });
+    }
+    expect(miss).toEqual([]);
+    // [언어, 열쇠, 고친 값, 옛 낱말] — 새 값은 네 사전에서 하나뿐이라 거꾸로 찾기가 제 원문으로
+    const fixed: [lang: Lang, key: string, value: string, old: RegExp][] = [
+      ['zh-CN', KEYS, '前 · 后 · 左 · 右 · 上 · 下 · 东南等轴测', /顶|底/],
+      ['zh-CN', VIEWS, '标准视图（1 前视图 · 2 后视图 · 3 左视图 · 4 右视图 · 5 上视图 · 6 下视图 · 7 等轴测图）', /俯|底/],
+      ['de', VIEWS, 'Standardansichten (1 Vorne · 2 Hinten · 3 Links · 4 Rechts · 5 Oben · 6 Unten · 7 Isometrie)', /Vorderansicht|Rückansicht|isometrisch/i],
+      ['de', INFO, 'F: Gesamtansicht · 1~7: Vorne, hinten, links, rechts, oben, unten, Isometrie · F7: Raster · Strg/⌘+O: Öffnen', /isometrisch/i],
+      ['ja', KEYS, '前 · 後 · 左 · 右 · 上 · 下 · 南東アイソメ', /等角/],
+      ['ja', VIEWS, '標準ビュー（1 前 · 2 後 · 3 左 · 4 右 · 5 上 · 6 下 · 7 アイソメ）', /等角/],
+      ['ja', INFO, 'F：全体を表示・1〜7：前・後・左・右・上・下・アイソメ・F7：格子・Ctrl/⌘+O：開く', /等角/],
+    ];
+    const all = LANGS.flatMap((lang) => Object.values(catalogs[lang]!));
+    for (const [lang, key, value, old] of fixed) {
+      expect(catalogs[lang]![key], `${lang}: ${key}`).toBe(value);
+      expect(value, `${lang}: ${key}`).not.toMatch(old);
+      expect(all.filter((v) => v === value).length, value).toBe(1);
+      expect(sourceMessage(value), value).toBe(key);
+    }
+    // 옛 낱말은 사전에 남지 않는다(일본어 等角, 독일어 Vorderansicht·Rückansicht·isometrisch, 중국어 俯视图·底视图)
+    expect(Object.values(catalogs.ja!).filter((v) => v.includes('等角'))).toEqual([]);
+    expect(Object.values(catalogs.de!).filter((v) => /Vorderansicht|Rückansicht|isometrisch/i.test(v))).toEqual([]);
+    expect(Object.values(catalogs['zh-CN']!).filter((v) => /俯视图|底视图/.test(v))).toEqual([]);
+    // 메뉴 항목·뷰 큐브 면 값(짧은 열쇠)·영어·원문은 그대로
+    expect(['위', '아래'].map((k) => catalogs['zh-CN']![k])).toEqual(['上', '下']);
+    expect(['앞', '뒤', '남동 등각'].map((k) => catalogs.de![k])).toEqual(['Vorne', 'Hinten', 'SO-Isometrie']);
+    expect(catalogs.ja!['남동 등각']).toBe('南東アイソメ');
+    expect([KEYS, VIEWS].map((k) => catalogs.en![k])).toEqual(['Front · Back · Left · Right · Top · Bottom · SE isometric', 'Standard Views (1 Front · 2 Back · 3 Left · 4 Right · 5 Top · 6 Bottom · 7 Isometric)']);
+    expect(translate(VIEWS, 'ko')).toBe(VIEWS);
   });
 });
