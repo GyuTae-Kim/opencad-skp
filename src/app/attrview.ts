@@ -56,8 +56,9 @@ export function attrSection(d: SkpDoc, e: EntityInfo): HTMLElement {
         h('span', { class: 'chip' }, dict.source === 'definition' ? '정의' : '이 항목'),
         h('span', { class: 'count' }, `${fmtCount(dict.entries.length)}개`),
       ),
-      ...dict.entries.map(([k, v]) => {
-        const v1 = h('span', { class: 'v' }, h('span', { title: v, translate: 'no' }, v));
+      // 열쇠·값 줄은 사전마다 dl 하나로(171차 — 패널 이름·값 줄 panel.ts row와 같은 꼴: 줄 칸 div 안 dt·dd)
+      h('dl', {}, ...dict.entries.map(([k, v]) => {
+        const v1 = h('dd', { class: 'v' }, h('span', { title: v, translate: 'no' }, v));
         const r = keys?.get(k);
         // 146차: 2,000자에서 자른 글 값 가운데 워커가 떼지 않은 것(ATTR_LONG_CHARS 이하 — 장면 정보에 통째로 있음)도 같은 단추로 원래 글을 보인다
         // (전에는 Blob 자리가 있는 값에만 단추가 있어 2,001~4,000자 값은 뒤를 볼 길이 없었다). 글 값은 잘렸을 때만 화면 글과 다르다(entity.ts attributeText)
@@ -80,8 +81,8 @@ export function attrSection(d: SkpDoc, e: EntityInfo): HTMLElement {
           });
           v1.append(more);
         }
-        return h('div', { class: 'prop-row' }, h('span', { class: 'k', translate: 'no' }, k), v1);
-      }),
+        return h('div', { class: 'prop-row' }, h('dt', { class: 'k', translate: 'no' }, k), v1);
+      })),
       dict.more ? hint(`열쇠 ${fmtCount(dict.more)}개는 더 있어 줄였습니다.`) : null,
     );
   });

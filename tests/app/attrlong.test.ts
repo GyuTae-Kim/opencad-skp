@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { splitLongAttrs } from '../../src/worker/attrlong';
 import { attrSection, longRefs } from '../../src/app/attrview';
-import { ATTR_VALUE_CHARS, attributeDicts, attributeText } from '../../src/app/entity';
+import { ATTR_KEY_LIMIT, ATTR_VALUE_CHARS, attributeDicts, attributeText } from '../../src/app/entity';
 import { ATTR_HEAD_CHARS, ATTR_LONG_CHARS, type AttrLong, type AttrLongRef } from '../../src/app/protocol';
 import type { SkpAttrDictsMeta } from '../../src/meta';
 import type { SkpDoc } from '../../src/app/doc';
@@ -156,5 +156,32 @@ describe('속성 사전 칸: 전체 값 보기', () => {
     expect(more.textContent).toBe('사전 1개는 줄였습니다.');
     expect(more.hasAttribute('role')).toBe(false);
     el.remove();
+  });
+});
+
+describe('속성 사전 줄을 설명 목록으로(171차 — WCAG 1.3.1 정보와 관계, 패널 이름·값 줄과 같은 꼴)', () => {
+  it('사전마다 요약 뒤 열쇠·값 줄을 dl 하나로 묶고(줄 칸 div > dt.k + dd.v — 클래스·글 그대로), 줄인 열쇠 수 안내는 dl 밖, 전체 값 보기 버튼은 값 칸 dd 안', () => {
+    const many: Record<string, string> = {};
+    for (let i = 0; i <= ATTR_KEY_LIMIT; i++) many[`k${String(i).padStart(4, '0')}`] = `v${i}`;
+    const attrs: SkpAttrDictsMeta[] = [{ A: { conf: big(ATTR_VALUE_CHARS + 1), mode: 'fast' }, B: many }];
+    const doc = { scene: { meta: { attributes: attrs } } } as unknown as SkpDoc;
+    const el = attrSection(doc, { title: '', rows: [], dicts: attributeDicts(attrs[0]), moreDicts: 0 });
+    const dicts = [...el.querySelectorAll('details.attr-dict')];
+    // 고치기 전: 요약 뒤 줄 칸(DIV)이 사전 칸에 바로 — 열쇠와 값이 짝 없는 두 글
+    expect(dicts.map((x) => [...x.children].map((c) => c.tagName))).toEqual([
+      ['SUMMARY', 'DL'],
+      ['SUMMARY', 'DL', 'P'],
+    ]);
+    const rows = [...el.querySelectorAll('.prop-row')];
+    expect(rows).toHaveLength(2 + ATTR_KEY_LIMIT);
+    expect(new Set(rows.map((r) => [r.parentElement!.tagName, r.tagName, ...[...r.children].map((c) => `${c.tagName}.${c.className}`)].join(' ')))).toEqual(
+      new Set(['DL DIV DT.k DD.v']),
+    );
+    expect([...dicts[0]!.querySelectorAll('dt')].map((t) => [t.textContent, t.getAttribute('translate')])).toEqual([
+      ['conf', 'no'],
+      ['mode', 'no'],
+    ]);
+    expect(el.querySelector('button.attr-more')!.closest('dd')!.className).toBe('v');
+    expect(dicts[1]!.querySelector(':scope > p.hint')!.textContent).toBe('열쇠 1개는 더 있어 줄였습니다.');
   });
 });

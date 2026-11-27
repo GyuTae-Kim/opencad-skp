@@ -6,6 +6,10 @@ import { closeOutside, disclose, focusIfLost, focusSpot, leaveDisabled, listKeys
 import { PANEL_WIDTH_STEPS, SHEET_STEPS, clampSheetFraction, nextSize } from '../../src/app/layout';
 import type { MeasureToolResult } from '../../src/app/measure';
 import { Panel, type PanelHost } from '../../src/app/panel';
+import { infoSections } from '../../src/app/infotab';
+import { entityInfo } from '../../src/app/entity';
+import { selectionEntity } from '../../src/app/doc';
+import { mmPerSceneUnit } from '../../src/app/units';
 import { rowDoc } from './rowdoc';
 
 const key = (target: Element, k: string, init: KeyboardEventInit = {}): KeyboardEvent => {
@@ -700,5 +704,58 @@ describe('키보드 초점 스타일(44차)', () => {
   it('패널 탭은 모든 폭에서 모자라면 두 줄(넓은 화면 독일어 "Informationen"이 가로 스크롤 밖), 보기 켜기 줄 이름은 줄을 바꾼다', () => {
     expect(part).toMatch(/\n\.ptabs \{\s*flex-wrap: wrap;\s*overflow-x: visible;/);
     expect(part).toMatch(/\.prow\.opt \.name \{\s*white-space: normal;/);
+  });
+});
+
+describe('이름·값 줄을 설명 목록으로(171차 — WCAG 1.3.1 정보와 관계, H40 dl·dt·dd, 바로 가기 안내와 같은 꼴)', () => {
+  it('선택 탭·정보 탭의 줄마다 이름 칸 dt·값 칸 dd(줄 칸 div·클래스·글·차례 그대로)를 절마다 dl 하나로 묶고 dl 안은 줄 칸뿐 — 버튼 줄·안내 글은 dl 밖, UA 기본 여백만 지운다', () => {
+    const d = rowDoc();
+    d.selection = { kind: 'node', index: 0 };
+    d.panelTab = 'entity';
+    const noop = (): void => {};
+    const host: PanelHost = {
+      setTagVisible: noop, setAllTagsVisible: noop, setOutlineVisible: noop, setNodeVisible: noop, setExpanded: noop, collapseAll: noop, setPickMode: noop,
+      setShowSoft: noop, setShowHidden: noop, setFolderVisible: noop, setAnnotationVisible: noop, setFileSection: noop, applyPage: noop,
+      hideSelection: noop, isolateSelection: noop, unhideAll: noop, isolated: false, measureHint: null, measureLogList: [],
+      copyMeasure: noop, clearMeasureLog: noop,
+      select: noop, selectPickedPart: noop, zoomToSelection: noop, closePanel: noop, measuring: false,
+    };
+    const panel = new Panel(host);
+    document.body.append(panel.el);
+    panel.el.hidden = false;
+    panel.show(d);
+    // 줄 꼴: 묶음 태그 · 줄 태그 · 이름 칸 · 값 칸(고치기 전: SECTION · DIV · SPAN.k · SPAN.v — 이름과 값이 짝 없는 두 글)
+    const shape = (root: ParentNode): string[] =>
+      [...root.querySelectorAll('.prop-row')].map((r) => [r.parentElement!.tagName, r.tagName, ...[...r.children].map((c) => `${c.tagName}.${c.className}`)].join(' '));
+    // 절마다 dl은 줄이 있을 때 하나, 그 안은 줄 칸뿐(dl 바로 아래는 dt·dd 묶음 div만 — HTML dl 내용 모형)
+    const lists = (secs: Element[]): void => {
+      for (const s of secs) {
+        const dls = [...s.querySelectorAll('dl')];
+        expect(dls.length, s.querySelector('h3')?.textContent ?? '').toBe(s.querySelector('.prop-row') ? 1 : 0);
+        for (const dl of dls) expect([...dl.children].map((c) => c.className)).toEqual([...dl.children].map(() => 'prop-row'));
+      }
+    };
+    const body = panel.el.querySelector<HTMLElement>('.pbody')!;
+    const ent = shape(body);
+    expect(ent.length).toBeGreaterThan(1);
+    expect(new Set(ent)).toEqual(new Set(['DL DIV DT.k DD.v']));
+    lists([...body.querySelectorAll('section')]);
+    // 글·차례 그대로(엔티티 정보 줄과 같음), 3D 누르기 막대는 dl 밖
+    const e = entityInfo(selectionEntity(d), d.units, mmPerSceneUnit(d.scene.units));
+    expect([...body.querySelectorAll('.prop-row')].map((r) => [r.querySelector('dt')!.textContent, r.querySelector('dd')!.textContent])).toEqual(e.rows.map((r) => [r.label, r.value]));
+    expect(body.querySelector('dl .seg-mini, dl .hint, dl button')).toBeNull();
+    // 정보 탭 조각(파일·모형 통계 — 절마다 dl 하나, 안내 글·목록은 밖)
+    const secs = infoSections(d, noop);
+    document.body.append(...secs);
+    const info = secs.flatMap((s) => shape(s));
+    expect(info.length).toBeGreaterThan(5);
+    expect(new Set(info)).toEqual(new Set(['DL DIV DT.k DD.v']));
+    lists(secs);
+    for (const s of secs) expect(s.querySelector('dl .hint, dl ul, dl .scene-grid')).toBeNull();
+    // 모양 그대로: UA 기본 여백(dl 위아래 1em·dd 왼쪽 40px)만 바로 가기 안내 dl의 여백 규칙으로 지우고, 속성 사전 줄 안쪽 여백은 dl을 거쳐도 걸리게
+    const css = readFileSync(resolve(__dirname, '../../src/app/styles.css'), 'utf8');
+    expect(css).toMatch(/\n\.sc-list dt,\n\.psec dl,\n\.psec dd \{\n {2}margin: 0;\n\}\n/);
+    expect(css).toMatch(/\n\.attr-dict \.prop-row \{\n {2}padding-inline: 8px;\n\}\n/);
+    expect(css).not.toMatch(/\.prop-row\s*[>+~]|[>+~]\s*\.prop-row/);
   });
 });
