@@ -124,7 +124,7 @@ import { cameraForBox, keepViewOnHeightChange } from './view';
 import { cssHex, isLightBackground, loadFileBackground, safeStorage, skyBackground, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
 import type { BackgroundOptions, Rgba } from 'opencad-viewer3d';
 import { DEFAULT_EDGE_COLOR, LineContrast, edgeLooks, lineColorOverrides } from './linecontrast';
-import { closeOutside, disclose, focusIfLost, focusSpot, keepRowFocus, leaveDisabled, listKeys, listRows, menuTab, refocus, setRange, toolbarKeys } from './kbd';
+import { closeOutside, disclose, focusIfLost, focusSpot, keepBarFocus, keepRowFocus, leaveDisabled, listKeys, listRows, menuTab, refocus, setRange, toolbarKeys } from './kbd';
 import type { Rgb, SkpEdgeColorMode, SkpShadowMeta, SkpStyleMeta } from '../meta';
 import { WalkStick } from './joystick';
 import { Vcb, vcbStartKey, type VcbKind } from './vcb';
@@ -645,12 +645,8 @@ export class SkpViewerApp implements PanelHost {
     const measureClear = h('button', { class: 'mb-btn mb-clear', title: '찍은 점과 결과 지우기', 'aria-label': '다시 재기', html: `${icon('back', 16)}<span class="mb-clear-text">다시 재기</span>` });
     measureClear.addEventListener('click', () => this.measureTool?.clear());
     const measureClose = h('button', { class: 'mb-btn icon', title: '측정 끝내기', 'aria-label': '측정 끝내기', html: icon('close', 16) });
-    // 닫으면 숨는 띠 안 초점은 그 도구 단추로(44차 — body로 사라지지 않게)
-    measureClose.addEventListener('click', () => {
-      const b = this.measureModeNow === 'protractor' ? this.els.protractorBtn : this.els.measureBtn;
-      this.setMeasureMode(null);
-      focusIfLost(b, measureBar);
-    });
+    // 닫으면 숨는 띠 안 초점은 그 도구 버튼으로(44차 — body로 사라지지 않게, 189차부터 Esc·T와 같은 setMeasureMode 한 자리)
+    measureClose.addEventListener('click', () => this.setMeasureMode(null));
     // 지금 결과 복사·최근 측정 기록(새것부터 10개, 줄마다 복사)
     const measureCopy = h('button', { class: 'mb-btn icon', title: '지금 결과 글 복사', 'aria-label': '지금 결과 글 복사', html: icon('copy', 16) });
     measureCopy.addEventListener('click', () => this.copyMeasure('current'));
@@ -700,10 +696,10 @@ export class SkpViewerApp implements PanelHost {
     const selMore = h('button', { class: 'mb-btn sel-more', title: '패널의 선택 탭에서 전체 정보 보기', html: `${icon('panel', 16)}<span>자세히</span>` });
     selMore.addEventListener('click', () => this.showEntityTab());
     const selClose = h('button', { class: 'mb-btn icon', title: '선택 해제', 'aria-label': '선택 해제', html: icon('close', 16) });
+    // 숨는 카드 안 초점은 3D 보기로(44차 — 189차부터 Esc와 같은 refreshSelBar 한 자리)
     selClose.addEventListener('click', () => {
       this.measureTool?.deselectGuide();
       this.applySelection(null, false);
-      focusIfLost(this.viewer?.canvas, selBar);
     });
     const selBar = h('div', { class: 'measure-bar sel-bar', role: 'group', 'aria-label': '고른 것', hidden: true }, selText, h('div', { class: 'mb-acts' }, selPart, selMore, selClose));
     // 카메라 띠: 걷기(1인칭)·시야각·2점 투시(보기 설정 메뉴로 연다, 걸으면 늘 보인다). 휴대폰은 걷는 동안 왼쪽 아래에 조이스틱
@@ -2876,11 +2872,14 @@ export class SkpViewerApp implements PanelHost {
     // 측정은 궤도 보기에서(걷기의 끌기는 둘러보기다). 측정 띠를 쓰는 화면은 카메라 띠가 측정 띠를 덮으므로 닫는다(43차 — 걷기도 끝남)
     if (mode && this.bandQuery?.matches) this.closeCamBar();
     if (mode && this.walking) this.setWalk(false);
+    // 끄면 숨는 띠 안 초점은 끄는 도구의 버튼으로(✕·Esc·T·도구 막대가 모두 여기 — 189차, 44차 ✕와 같은 곳). 띠 밖 초점은 그대로
+    const back = keepBarFocus(this.els.measureBar, this.measureModeNow === 'protractor' ? this.els.protractorBtn : this.els.measureBtn);
     t.setMode(mode);
     if (!mode) this.doc.measure = null;
     this.panel.refreshSelection();
     this.refreshToolbar();
     this.refreshStatus();
+    back();
   }
 
   /** 처음 켤 때 받던 측정 도구 조각이 왔다(또는 받지 못했다): 그때까지 바란 도구를 켜고, 받지 못했으면 바랐을 때만 알린다 */
@@ -3746,7 +3745,10 @@ export class SkpViewerApp implements PanelHost {
     // 카메라 띠가 열려 있으면 그 자리를 쓴다. 고르기 도구로 고른 안내는 패널을 열었거나 넓은 화면이어도 띄운다(지우기 단추 — 측정 도구 조각이 붙임)
     const guide = !!d && !this.measuring && e.camBar.hidden ? (this.measureTool?.guidePickText(true) ?? null) : null;
     const on = !!guide || (!!d && !!d.selection && !this.measuring && !this.panelOpen && e.camBar.hidden);
+    // 숨는 카드 안 초점(✕·Esc·자세히 — 189차)은 3D 보기로(44차 ✕와 같은 곳), 카드 밖 초점은 그대로
+    const back = keepBarFocus(e.selBar, this.viewer?.canvas);
     e.selBar.hidden = !on;
+    back();
     e.selBar.classList.toggle('is-guide', !!guide);
     if (guide) {
       e.selText.replaceChildren(h('b', { class: 'mb-value' }, guide));

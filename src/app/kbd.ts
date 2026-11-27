@@ -152,6 +152,17 @@ export function keepRowFocus(box: Element, list: Element, home: () => HTMLElemen
 }
 
 /**
+ * 띠 bar를 숨길 수 있는 차례(189차 — 측정 띠·고른 것 카드를 숨기는 한 자리라 ✕·Esc·T 등 닫는 길이 모두 지난다): 앞에 부르고 돌려준 함수를 그 뒤에 부른다.
+ * 초점이 bar 안이었고 bar가 숨었으면 to로(✕와 같은 곳), 밖(3D 보기·패널·문서)이었거나 bar가 보이면 그대로. 전에는 띠 안 버튼에서 친 Esc·T로 닫으면 초점이 문서로 빠졌다(WCAG 2.4.3)
+ */
+export function keepBarFocus(bar: HTMLElement, to: HTMLElement | null | undefined): () => void {
+  const had = bar.contains(document.activeElement);
+  return () => {
+    if (had && bar.hidden) focusIfLost(to, bar);
+  };
+}
+
+/**
  * 펼치고 접는 버튼 b와 그 목록 list(153차 — WAI-ARIA APG Disclosure): 목록을 보이거나 숨기고 b의 aria-expanded를 같은 값으로 둔다.
  * 목록을 펼치고 접는 길은 모두 이것을 부른다(화면 읽기 프로그램이 버튼에서 목록이 열렸는지 듣게 — 숨김만 바꾸면 상태가 어긋난다)
  */

@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { closeOutside, disclose, focusIfLost, focusSpot, keepRowFocus, leaveDisabled, listKeys, listRows, lost, menuTab, moveIndex, refocus, rove, setRange, treeKeys } from '../../src/app/kbd';
+import { closeOutside, disclose, focusIfLost, focusSpot, keepBarFocus, keepRowFocus, leaveDisabled, listKeys, listRows, lost, menuTab, moveIndex, refocus, rove, setRange, treeKeys } from '../../src/app/kbd';
 import { PANEL_WIDTH_STEPS, SHEET_STEPS, clampSheetFraction, nextSize } from '../../src/app/layout';
 import type { MeasureToolResult } from '../../src/app/measure';
 import { Panel, type PanelHost } from '../../src/app/panel';
@@ -348,6 +348,181 @@ describe('줄 목록을 통째로 다시 그려도 초점을 가까운 줄로(18
     draw(['나']);
     back();
     expect(document.activeElement).toBe(other);
+  });
+});
+
+describe('측정 띠·고른 것 카드를 띠 안 버튼에서 친 Esc·T로 닫아도 ✕와 같은 곳으로(189차 — 숨기는 한 자리에 되살림, WCAG 2.4.3)', () => {
+  // 앱 꼴: 도구 막대 줄자·각도기·패널 버튼, 3D 보기(코어 캔버스 tabIndex 0), 측정 띠(복사·다시 재기·✕), 고른 것 카드(면만·자세히·✕)
+  const stage = () => {
+    const box = html(
+      '<button class="tape">줄자</button><button class="prot">각도기</button><button class="panel">패널</button><canvas tabindex="0"></canvas>' +
+        '<div class="measure-bar" hidden><button class="copy">복사</button><button class="clear">다시 재기</button><button class="close">측정 끝내기</button></div>' +
+        '<div class="sel-bar" hidden><button class="part">면만</button><button class="more">자세히</button><button class="close">선택 해제</button></div>',
+    );
+    const $ = (s: string): HTMLElement => box.querySelector<HTMLElement>(s)!;
+    const bar = $('.measure-bar');
+    const card = $('.sel-bar');
+    const st = { mode: null as 'tape' | 'protractor' | null, selected: false };
+    // refreshStatus 꼴: 측정 띠(도구를 켠 동안), 고른 것 카드(고른 것이 있고 측정 중이 아님 — refreshSelBar는 숨김 줄 앞뒤에서 도우미)
+    const refresh = (): void => {
+      bar.hidden = !st.mode;
+      const back = keepBarFocus(card, $('canvas'));
+      card.hidden = !(st.selected && !st.mode);
+      back();
+    };
+    // setMeasureMode 꼴: 도구를 바꾸기 앞에 끄는 도구의 버튼(✕와 같은 셈)으로 부르고, 띠를 맞춘 뒤 돌려준 함수
+    const setMode = (mode: 'tape' | 'protractor' | null): void => {
+      const back = keepBarFocus(bar, st.mode === 'protractor' ? $('.prot') : $('.tape'));
+      st.mode = mode;
+      refresh();
+      back();
+    };
+    // applySelection 꼴
+    const select = (on: boolean): void => {
+      st.selected = on;
+      refresh();
+    };
+    // 창 keydown capture(onKey) 꼴: 측정 중 지울 것 없는 Esc → 끄기, 그 밖의 Esc → 고른 것 지우기(clearSelection), T → 줄자 켜고 끄기(toggleMeasure)
+    const onKey = (ev: KeyboardEvent): void => {
+      if (ev.key === 'Escape') {
+        if (st.mode) setMode(null);
+        else select(false);
+      } else if (ev.key === 't' || ev.key === 'T') setMode(st.mode === 'tape' ? null : 'tape');
+    };
+    document.addEventListener('keydown', onKey, true);
+    // ✕ 둘: 측정 띠는 setMeasureMode(null)만, 카드는 applySelection(null)만(되살림은 위 두 자리)
+    bar.querySelector('.close')!.addEventListener('click', () => setMode(null));
+    card.querySelector('.close')!.addEventListener('click', () => select(false));
+    return { $, bar, card, setMode, select, done: () => document.removeEventListener('keydown', onKey, true) };
+  };
+
+  it('초점이 띠·카드 안이면 Esc·T로 닫아도 ✕와 같은 곳 — 측정 띠는 끈 도구의 버튼, 카드는 3D 보기. 앱은 setMeasureMode·refreshSelBar 한 자리에서', () => {
+    const { $, bar, card, setMode, select, done } = stage();
+    try {
+      // 줄자 띠의 복사 버튼에서 Esc(지울 것 없음 — 측정 끄기) → 줄자 버튼(jsdom은 focus fixup을 하지 않아 고치기 전에는 숨은 띠 안에 남는다)
+      setMode('tape');
+      $('.measure-bar .copy').focus();
+      key($('.measure-bar .copy'), 'Escape');
+      expect(bar.hidden).toBe(true);
+      expect(lost()).toBe(false);
+      expect(document.activeElement).toBe($('.tape'));
+      // 각도기 띠의 다시 재기에서 Esc → 각도기 버튼
+      setMode('protractor');
+      $('.measure-bar .clear').focus();
+      key($('.measure-bar .clear'), 'Escape');
+      expect(document.activeElement).toBe($('.prot'));
+      // 줄자 띠에서 T(줄자 끄기) → 줄자 버튼
+      setMode('tape');
+      $('.measure-bar .copy').focus();
+      key($('.measure-bar .copy'), 't');
+      expect(bar.hidden).toBe(true);
+      expect(document.activeElement).toBe($('.tape'));
+      // 각도기 띠에서 T는 줄자로 바꿈 — 띠가 그대로라 초점도 그대로
+      setMode('protractor');
+      $('.measure-bar .copy').focus();
+      key($('.measure-bar .copy'), 'T');
+      expect(bar.hidden).toBe(false);
+      expect(document.activeElement).toBe($('.measure-bar .copy'));
+      // ✕(기준 — 지금 줄자)도 같은 자리를 지나 같은 곳
+      $('.measure-bar .close').focus();
+      $('.measure-bar .close').click();
+      expect(document.activeElement).toBe($('.tape'));
+      // 카드의 자세히에서 Esc(고른 것 지우기) → 3D 보기, 면만에서 T(측정 중이라 카드가 숨음) → 3D 보기, ✕ → 3D 보기
+      select(true);
+      expect(card.hidden).toBe(false);
+      $('.sel-bar .more').focus();
+      key($('.sel-bar .more'), 'Escape');
+      expect(card.hidden).toBe(true);
+      expect(document.activeElement).toBe($('canvas'));
+      select(true);
+      $('.sel-bar .part').focus();
+      key($('.sel-bar .part'), 't');
+      expect([card.hidden, bar.hidden]).toEqual([true, false]);
+      expect(document.activeElement).toBe($('canvas'));
+      setMode(null);
+      expect(card.hidden).toBe(false);
+      $('.sel-bar .close').focus();
+      $('.sel-bar .close').click();
+      expect(document.activeElement).toBe($('canvas'));
+    } finally {
+      done();
+    }
+    // 앱 원문: 도구를 끄는 곳은 setMeasureMode뿐(✕·Esc·T가 지남), 카드를 숨기는 곳은 refreshSelBar(✕·Esc가 applySelection → refreshStatus로 지남)
+    const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
+    const mode = app.slice(app.indexOf('  private setMeasureMode('), app.indexOf('  private measureArrived('));
+    expect(mode).toMatch(
+      /const back = keepBarFocus\(this\.els\.measureBar, this\.measureModeNow === 'protractor' \? this\.els\.protractorBtn : this\.els\.measureBtn\);\n\s*t\.setMode\(mode\);\n/,
+    );
+    expect(mode).toMatch(/this\.refreshStatus\(\);\n\s*back\(\);\n {2}\}\n/);
+    expect(app).toContain("measureClose.addEventListener('click', () => this.setMeasureMode(null));");
+    expect(app).toMatch(/ev\.key === 'Escape' && !this\.busy\) \{\n\s*ev\.preventDefault\(\);\n\s*ev\.stopPropagation\(\);\n\s*this\.setMeasureMode\(null\);\n/);
+    expect(app).toMatch(/act\.kind === 'tape'\) \{\n\s*ev\.preventDefault\(\);\n\s*ev\.stopPropagation\(\);\n\s*this\.toggleMeasure\(\);\n/);
+    expect(app).toMatch(/toggleMeasure\(on = [^\n]*\): void \{\n\s*this\.setMeasureMode\(on \? 'tape' : null\);\n/);
+    expect(app).toMatch(/const back = keepBarFocus\(e\.selBar, this\.viewer\?\.canvas\);\n\s*e\.selBar\.hidden = !on;\n\s*back\(\);\n/);
+    expect(app).toMatch(/selClose\.addEventListener\('click', \(\) => \{\n\s*this\.measureTool\?\.deselectGuide\(\);\n\s*this\.applySelection\(null, false\);\n\s*\}\);/);
+    expect(app).toMatch(/act\.kind === 'clearSelection'\) \{\n(?:\s*\/\/[^\n]*\n)*\s*this\.applySelection\(null, false\);\n/);
+    expect(app).toMatch(/this\.panel\.refreshSelection\(reveal\);\n\s*this\.refreshStatus\(\);\n\s*\}/);
+    expect(app).toMatch(/this\.refreshMeasureBar\(\);\n\s*this\.refreshSelBar\(\);\n\s*\}/);
+  });
+
+  it('초점이 띠·카드 밖이면(3D 보기·패널 버튼·문서) Esc·T로 닫아도 옮기지 않고, 띠 안이었어도 닫는 사이 다른 곳으로 옮겼거나 띠가 그대로면 그대로', () => {
+    const { $, bar, card, setMode, select, done } = stage();
+    try {
+      // 3D 보기에서 친 Esc·T(지금 그대로 — 3D 보기)
+      setMode('tape');
+      $('canvas').focus();
+      key($('canvas'), 'Escape');
+      expect(bar.hidden).toBe(true);
+      expect(document.activeElement).toBe($('canvas'));
+      setMode('protractor');
+      key($('canvas'), 'Escape');
+      expect(document.activeElement).toBe($('canvas'));
+      setMode('tape');
+      key($('canvas'), 't');
+      expect(bar.hidden).toBe(true);
+      expect(document.activeElement).toBe($('canvas'));
+      // 패널 버튼에서 T
+      setMode('tape');
+      $('.panel').focus();
+      key($('.panel'), 'T');
+      expect(bar.hidden).toBe(true);
+      expect(document.activeElement).toBe($('.panel'));
+      // 문서(body — 누르기로 초점을 받지 않는 기기 등)는 끌어오지 않는다
+      setMode('tape');
+      $('.panel').blur();
+      expect(document.activeElement).toBe(document.body);
+      key(document.body, 'Escape');
+      expect(bar.hidden).toBe(true);
+      expect(document.activeElement).toBe(document.body);
+      // 카드: 3D 보기·문서에서 친 Esc
+      select(true);
+      $('canvas').focus();
+      key($('canvas'), 'Escape');
+      expect(card.hidden).toBe(true);
+      expect(document.activeElement).toBe($('canvas'));
+      select(true);
+      $('canvas').blur();
+      key(document.body, 'Escape');
+      expect(card.hidden).toBe(true);
+      expect(document.activeElement).toBe(document.body);
+      // 카드 안 초점이어도 카드가 그대로 보이는 다시 맞춤(같은 고른 것)이면 그대로
+      select(true);
+      $('.sel-bar .more').focus();
+      select(true);
+      expect(card.hidden).toBe(false);
+      expect(document.activeElement).toBe($('.sel-bar .more'));
+    } finally {
+      done();
+    }
+    // 띠 안이었지만 숨기기 전에 다른 곳으로 옮겼으면 그대로
+    const box = html('<div class="bar"><button class="in">안</button></div><button class="to">갈 곳</button><button class="other">다른 것</button>');
+    const b = box.querySelector<HTMLElement>('.bar')!;
+    box.querySelector<HTMLElement>('.in')!.focus();
+    const back = keepBarFocus(b, box.querySelector<HTMLElement>('.to'));
+    box.querySelector<HTMLElement>('.other')!.focus();
+    b.hidden = true;
+    back();
+    expect(document.activeElement).toBe(box.querySelector('.other'));
   });
 });
 
