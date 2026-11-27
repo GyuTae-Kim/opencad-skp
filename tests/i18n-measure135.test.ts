@@ -88,12 +88,12 @@ describe('측정 묶음의 같은 기능 같은 낱말·뜻 맞춤(209차)', () 
     for (const t of [KEY_ESC, ESC, TAPE_VCB, ANGLE_VCB]) expect(shortcutLabels, t).toContain(t);
     expect(read('infotab.ts')).toContain(`h('li', {}, '${INFO_ESC}')`);
     expect(read('app.ts')).toContain(`tbtn('각도기', 'protractor', '${PROTRACTOR}', `);
-    // 213차: 마우스·키보드 갈래 줄자 안내 넷의 동사 click → press(기기를 가리지 않는 「누르세요」 — i18n.test 213차)
+    // 213차: 마우스·키보드 갈래 줄자 안내 넷의 동사 click → select(3D에서 끝점·자리를 가리키는 「누르세요」 — 기기를 가리지 않는 고르기 낱말, i18n.test 213차)
     const fixed: [key: string, lang: Lang, value: string][] = [
-      [END_GUIDE, 'en', 'Tape Measure: press the end point · type a length for a guide point · Esc to cancel'],
-      [END_EDGE, 'en', 'Tape Measure: press the end point · type a length for a guide line parallel to the edge · Esc to cancel'],
-      [AT_EDGE, 'en', 'Tape Measure: press where to place a guide line parallel to the edge · type a length to place it at that distance · Esc to cancel'],
-      [AT_POINT, 'en', 'Tape Measure: press where to place a guide point · type a length to place it at that distance · Esc to cancel'],
+      [END_GUIDE, 'en', 'Tape Measure: select the end point · type a length for a guide point · Esc to cancel'],
+      [END_EDGE, 'en', 'Tape Measure: select the end point · type a length for a guide line parallel to the edge · Esc to cancel'],
+      [AT_EDGE, 'en', 'Tape Measure: select where to place a guide line parallel to the edge · type a length to place it at that distance · Esc to cancel'],
+      [AT_POINT, 'en', 'Tape Measure: select where to place a guide point · type a length to place it at that distance · Esc to cancel'],
       [KEY_ESC, 'en', 'While the Tape Measure or Protractor virtual cursor is on: clear the placed points and the result first; if there are none, turn off the cursor'],
       [ESC, 'ja', '読み込み中ならキャンセル → 測定点を消去 → 測定をオフ → 選択を解除'],
       [INFO_ESC, 'ja', 'Esc：測定点を消去→もう一度押すと測定をオフ・測定中でなければ選択を解除'],

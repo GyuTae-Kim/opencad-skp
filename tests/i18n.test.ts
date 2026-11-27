@@ -237,7 +237,8 @@ describe('language URLs and UI presentation', () => {
     const fixed: Record<string, string> = {
       '각도기: 지금 평면에 고정': '量角器：固定到当前平面',
       [TITLE]: '量角器：中心 → 参考方向 → 测量方向（Shift = 固定平面或锁定方向）· Esc清除',
-      [HINT]: '量角器：按下中心点 · 按住 Shift 键固定平面',
+      // 213차: 중심점을 가리키는 누름은 고르기 낱말 选择(213차 「자리 가리키기」) — 固定 그대로
+      [HINT]: '量角器：选择中心点 · 按住 Shift 键固定平面',
       [AXES]: '卷尺·量角器的轴固定和默认平面，以及卷尺结果的 dx·dy·dz，都遵循移动后的绘图轴。',
     };
     const all = ['en', 'zh-CN', 'de', 'ja'].flatMap((code) => Object.values(catalogs[code]));
@@ -760,17 +761,18 @@ describe('213차: 기기를 가리지 않는 「누르다」 원문의 번역은
         'zh-CN': '组 {0} · 组件 {1}。按一下高亮显示，按两次放大。',
         de: 'Gruppe {0} · Komponente {1}. Drücken Sie, um es hervorzuheben, und drücken Sie zweimal, um es zu vergrößern.',
       }],
+      // 3D에서 자리를 가리키는 한 번 누름은 고르기 낱말(아래 「자리 가리키기」 it), 두 번 누름은 그대로 double-press·2回押す·按两次·zweimal drücken
       ['줄자: 잴 시작점을 누르세요 · 모서리를 두 번 누르면 그 위에 안내선', {
-        en: 'Tape Measure: Press the starting point for measurement · Double-press an edge to place a guide line on it',
-        ja: 'メジャー: 計測の始点を押してください · エッジを2回押すとその上にガイド線',
-        'zh-CN': '卷尺：按下起点进行测量 · 按两次边线可在其上放置参考线',
-        de: 'Maßband: Startpunkt drücken, um zu messen · Zweimaliges Drücken auf eine Kante setzt eine Hilfslinie darauf',
+        en: 'Tape Measure: Select the starting point for measurement · Double-press an edge to place a guide line on it',
+        ja: 'メジャー: 計測の始点を選択してください · エッジを2回押すとその上にガイド線',
+        'zh-CN': '卷尺：选择起点进行测量 · 按两次边线可在其上放置参考线',
+        de: 'Maßband: Startpunkt auswählen, um zu messen · Zweimaliges Drücken auf eine Kante setzt eine Hilfslinie darauf',
       }],
       ['각도기: 중심점을 누르세요 · Shift를 누르고 있으면 평면 고정', {
-        en: 'Protractor: press the center point · hold Shift to lock the plane',
-        ja: '分度器: 中心点を押してください · Shiftキーを押している間は平面を固定',
-        'zh-CN': '量角器：按下中心点 · 按住 Shift 键固定平面',
-        de: 'Winkelmesser: Mittelpunkt drücken · Umschalttaste gedrückt halten, um die Ebene zu fixieren',
+        en: 'Protractor: select the center point · hold Shift to lock the plane',
+        ja: '分度器: 中心点を選択してください · Shiftキーを押している間は平面を固定',
+        'zh-CN': '量角器：选择中心点 · 按住 Shift 键固定平面',
+        de: 'Winkelmesser: Mittelpunkt auswählen · Umschalttaste gedrückt halten, um die Ebene zu fixieren',
       }],
       ['누르면 이 단면으로 자릅니다(같은 그룹의 다른 단면은 꺼짐)', {
         en: 'Press to cut with this section (other sections in the same group turn off)',
@@ -780,17 +782,18 @@ describe('213차: 기기를 가리지 않는 「누르다」 원문의 번역은
       }],
       ['누르면 이 단면을 끕니다', { en: 'Press to turn this section off', ja: '押すとこの断面をオフにします', 'zh-CN': '按下关闭此剖面', de: 'Drücken, um diesen Schnitt auszuschalten' }],
       ['뷰 큐브: 면·모서리·구석을 누르면 그 방향으로 봅니다', {
-        en: 'View Cube: Press a face, edge, or corner to view in that direction.',
-        ja: 'ビューキューブ: 面、エッジ、または角を押すと、その方向からの表示に切り替わります。',
-        'zh-CN': '视图立方体：在面、边或角上按下即可朝该方向查看',
-        de: 'Ansichtswürfel: Drücken Sie auf eine Fläche, Kante oder Ecke, um in diese Richtung zu sehen.',
+        en: 'View Cube: Select a face, edge, or corner to view in that direction.',
+        ja: 'ビューキューブ: 面、エッジ、または角を選択すると、その方向からの表示に切り替わります。',
+        'zh-CN': '视图立方体：选择面、边或角即可朝该方向查看',
+        de: 'Ansichtswürfel: Wählen Sie eine Fläche, Kante oder Ecke aus, um in diese Richtung zu sehen.',
       }],
-      ['3D 누르기', { en: 'Press in 3D', ja: '3Dで押す', 'zh-CN': '3D 按下', de: 'Drücken in 3D' }],
+      ['3D 누르기', { en: 'Select in 3D', ja: '3Dで選択', 'zh-CN': '3D 选择', de: 'Auswählen in 3D' }],
+      // 안내 두기 버튼 풀이: 3D를 가리키는 누름은 고르기 낱말, 버튼을 다시 누름(토글)은 press again·もう一度押す·再按一次·erneut drücken 그대로
       ['안내 두기: 누르기로 안내점·안내선 두기(다시 누르면 재기만)', {
-        en: 'Place guides: pressing places guide points and guide lines (press again to only measure)',
-        ja: 'ガイド配置: 押してガイド点・ガイド線を置く（もう一度押すと計測のみ）',
-        'zh-CN': '放置参考：按下放置参考点和参考线（再按一次只测量）',
-        de: 'Hilfslinien setzen: Drücken setzt Hilfspunkte und Hilfslinien (erneut drücken = nur messen)',
+        en: 'Place guides: selecting a point places guide points and guide lines (press again to only measure)',
+        ja: 'ガイド配置: 選択してガイド点・ガイド線を置く（もう一度押すと計測のみ）',
+        'zh-CN': '放置参考：选择位置放置参考点和参考线（再按一次只测量）',
+        de: 'Hilfslinien setzen: Auswählen setzt Hilfspunkte und Hilfslinien (erneut drücken = nur messen)',
       }],
     ];
     for (const [key, values] of want)
@@ -798,16 +801,54 @@ describe('213차: 기기를 가리지 않는 「누르다」 원문의 번역은
         expect(catalogs[l][key], `${l}: ${key}`).toBe(values[l]);
         expect(translate(key, l), `${l}: ${key}`).toBe(values[l]);
       }
-    // 근거 줄: 같은 사전이 기기를 가리지 않는 누름을 이 낱말로 부른다(212차 「눌러서 이 결과 복사」·측정 안내, 두 번 누름은 구성 나무 안내·정의 줄 안내)
+    // 근거 줄: 같은 사전이 버튼·줄·토글의 기기를 가리지 않는 누름을 이 낱말로 부른다(212차 「눌러서 이 결과 복사」·「다시 누르면」, 두 번 누름은 구성 나무 안내·정의 줄 안내)
     const basis: [key: string, lang: Lang, has: string][] = [
       ['눌러서 이 결과 복사', 'en', 'Press to copy this result'],
       ['눌러서 이 결과 복사', 'ja', '押してこの結果をコピー'],
       ['눌러서 이 결과 복사', 'zh-CN', '按下复制此结果'],
-      ['측정: 점을 누르세요', 'de', 'Messen: Punkt drücken'],
+      ['줄자: 다시 누르면 새로 잽니다 · Esc 지우기', 'de', 'Erneut drücken'],
       ['› 버튼으로 펼치면 3D에서 누를 때도 그 안의 항목을 고릅니다. 누르면 강조, 두 번 누르면 확대합니다.', 'en', 'double-press to zoom'],
       ['› 버튼으로 펼치면 3D에서 누를 때도 그 안의 항목을 고릅니다. 누르면 강조, 두 번 누르면 확대합니다.', 'de', 'zum Zoomen zweimal drücken'],
       ['줄을 누르면 그 정의의 인스턴스를 모두 고르고, 두 번 누르면 그것들에 맞춰 봅니다.', 'ja', '2回押すと'],
       ['줄을 누르면 그 정의의 인스턴스를 모두 고르고, 두 번 누르면 그것들에 맞춰 봅니다.', 'zh-CN', '按两次'],
+    ];
+    for (const [key, lang, has] of basis) expect(catalogs[lang][key], `${lang}: ${key}`).toContain(has);
+  });
+
+  // 213차 리드 검토: 「누르기」 낱말은 버튼·줄·손잡이·토글(「다시 누르면」)에 두고, 3D에서 자리·대상(점·중심점·끝점·면·모서리)을 가리키는 누름은
+  // 같은 사전의 고르기 낱말로(영어 press a point·Press in 3D가 어색) — 두 번 누름(Double-press 등)과 「누른 면」 꼴 꾸밈(고르기 낱말이면 「고른 면만 고르기」로 겹침)은 그대로
+  it('자리 가리키기: 3D에서 점·중심점·끝점·면·모서리를 가리키는 누름은 네 언어 모두 같은 사전의 고르기 낱말(기기 낱말 없음)', () => {
+    // 고르기 낱말 — 사전에서 셈(고르기 원문(고르·고른·고를·골라) 열쇠 값: en select 41·pick 0, de auswählen 25·wählen 14, ja 選択 28·選ぶ 23, zh 选择 37·选取 0)
+    const SELECT: Record<Lang, RegExp> = { en: /\bselect/i, ja: /選択/, 'zh-CN': /选择/, de: /wähl/i };
+    const POINT = [
+      '3D 누르기',
+      '3D나 구성 목록에서 그룹·컴포넌트·재질을 고르면 그 정보를 보입니다. "면·모서리"로 누르면 면 하나의 넓이·모서리 하나의 길이를 봅니다.',
+      '각도기: 기준 방향의 점을 누르세요 · Esc 취소', '각도기: 안내선을 둘 방향의 점을 누르세요 · 각도를 치면 그 각도에 · Esc 취소',
+      '각도기: 잴 방향의 점을 누르세요 · 각도를 치면 안내선 · Esc 취소', '각도기: 중심점을 누르세요 · Shift를 누르고 있으면 평면 고정',
+      '먼저 시작점을 누르세요', '먼저 중심점과 기준 방향을 누르세요', '뷰 큐브: 면·모서리·구석을 누르면 그 방향으로 봅니다',
+      '안내 두기 켬: 누르면 안내점·안내선을 둡니다', '안내 두기: 누르기로 안내점·안내선 두기(다시 누르면 재기만)',
+      '줄자: 끝점을 누르세요 · 길이를 치면 모서리와 나란한 안내선 · Esc 취소', '줄자: 끝점을 누르세요 · 길이를 치면 안내점 · Esc 취소',
+      '줄자: 모서리와 나란한 안내선을 둘 곳을 누르세요 · 길이를 치면 그 거리에 · Esc 취소', '줄자: 안내를 둘 시작점을 누르세요 · 모서리 위면 나란한 안내선, 점이면 안내점',
+      '줄자: 안내점을 둘 곳을 누르세요 · 길이를 치면 그 거리에 · Esc 취소', '줄자: 잴 시작점을 누르세요 · 모서리를 두 번 누르면 그 위에 안내선',
+      '측정: 점을 누르세요', '측정: 점을 누르세요 · Esc = 지우기, 한 번 더 = 끄기',
+    ];
+    for (const k of POINT)
+      for (const l of LANGS) {
+        expect(catalogs[l][k], `${l}: ${k}`).toMatch(SELECT[l]);
+        expect(catalogs[l][k], `${l}: ${k}`).not.toMatch(DEVICE[l]);
+      }
+    // 쓰는 곳: 측정 안내 마우스·키보드 갈래 12 가운데 「다시 누르면 새로 잽니다」 둘(다시 누름 — press again 그대로) 밖은 모두 자리 가리키기
+    const fine = new Set<string>();
+    for (const mode of ['tape', 'protractor'] as const)
+      for (const n of [0, 1, 2]) for (const has of [false, true]) for (const edge of [false, true]) for (const guide of [false, true]) fine.add(measureHint(mode, n, has, false, edge, guide)!);
+    expect([...fine].filter((k) => !POINT.includes(k)).sort()).toEqual(['각도기: 다시 누르면 새로 잽니다 · Esc 지우기', '줄자: 다시 누르면 새로 잽니다 · Esc 지우기']);
+    // 근거 줄: 같은 사전이 3D에서 고르는 일을 이 낱말로 부른다
+    const PANEL = '3D나 구성 목록에서 그룹·컴포넌트·재질을 고르면 그 정보를 보입니다. "면·모서리"로 누르면 면 하나의 넓이·모서리 하나의 길이를 봅니다.';
+    const basis: [key: string, lang: Lang, has: string][] = [
+      [PANEL, 'en', 'Select a group·component·material in 3D'],
+      [PANEL, 'ja', 'マテリアルを選択すると'],
+      [PANEL, 'zh-CN', '在 3D 或结构列表中选择'],
+      ['3D에서 누를 때 고르는 것', 'de', 'in 3D auswählt'],
     ];
     for (const [key, lang, has] of basis) expect(catalogs[lang][key], `${lang}: ${key}`).toContain(has);
   });
