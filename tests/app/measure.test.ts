@@ -3501,10 +3501,160 @@ describe('측정 도구: 잠글 방향 고르기(한 손 잠금 — 22차, Sketc
     back();
     expect(document.activeElement).toBe(tapeBtn);
     f.mockRestore();
-    // 앱 원문: 띠를 다시 맞추는 동안 초점을 옮기는 곳은 148차 「다시 재기」와 이번 방향 잠금 버튼의 leaveDisabled 둘뿐(초점이 그 버튼에 있을 때만 옮긴다 — 148차 시험)
+    // 앱 원문: 띠를 다시 맞추는 동안 초점을 옮기는 곳은 148차 「다시 재기」·이번 방향 잠금 버튼·203차 복사 버튼의 leaveDisabled 셋뿐(초점이 그 버튼에 있을 때만 옮긴다 — 148차 시험)
     const bar = measureBarSource();
-    expect(bar.match(/leaveDisabled\(/g)?.length).toBe(2);
+    expect(bar.match(/leaveDisabled\(/g)?.length).toBe(3);
     expect(bar).not.toMatch(/focusIfLost\(|\.focus\(/);
+  });
+});
+
+describe('측정 띠 복사·「다시 재기」 버튼에 둔 초점과 측정을 끄는 차례(203차 — 196차 다음 후보, WCAG 2.4.3)', () => {
+  // 앱 측정 띠 꼴(196차 appBand에 복사·다시 재기·✕를 더함 — 앱 refreshMeasureBar 차례 그대로): 결과·안내·잠금이 바뀔 때(onResult → onMeasure, onHint, onLock → refreshStatus)
+  // 띠는 도구를 켠 동안만(숨으면 그 앞에서 끝 — 189차 길), 다시 재기는 지울 것이 있을 때만·복사는 결과가 있을 때만 쓸 수 있고(방향을 잡는 동안 복사 자리에 방향 잠금 버튼),
+  // 막거나 숨기는 줄 바로 뒤 leaveDisabled(3D 보기 — 초점이 그 버튼에 있을 때만). mode는 앱 setMeasureMode 꼴(189차 keepBarFocus(띠, 끄는 도구의 버튼) → 측정 조각 setMode → 다시 맞춤 → 되살림)
+  const stage = () => {
+    const band = document.createElement('div');
+    const lockBtn = document.createElement('button');
+    const copy = document.createElement('button');
+    const clear = document.createElement('button');
+    const close = document.createElement('button');
+    band.append(lockBtn, copy, clear, close);
+    const tapeBtn = document.createElement('button');
+    const protBtn = document.createElement('button');
+    document.body.append(band, tapeBtn, protBtn);
+    let tool: MeasureTool | null = null;
+    let view: HTMLElement | null = null;
+    const sync = (): void => {
+      if (!tool) return;
+      band.hidden = !tool.active;
+      if (band.hidden) return;
+      clear.disabled = !tool.clearable;
+      leaveDisabled(clear, view);
+      copy.disabled = !tool.result;
+      leaveDisabled(copy, view);
+      lockBtn.hidden = !tool.directing;
+      leaveDisabled(lockBtn, view);
+      copy.hidden = tool.directing;
+    };
+    const r = rig({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 10, 0, 0]]), lines('h', [[50, -50, 0, 80, -50, 0]])] }, TOP, DEFAULT_UNITS, { onResult: sync, onHint: sync, onLock: sync });
+    tool = r.tool;
+    view = r.canvas;
+    r.canvas.tabIndex = 0;
+    const mode = (m: 'tape' | 'protractor' | null): void => {
+      const back = keepBarFocus(band, r.tool.mode === 'protractor' ? protBtn : tapeBtn);
+      r.tool.setMode(m);
+      sync();
+      back();
+    };
+    const at = (x: number, y: number): void => {
+      r.move(x, y);
+      r.click(x, y);
+    };
+    // 그 도구로 결과 하나(줄자: 모서리 e 끝점 → h 끝점, 각도기: e 끝점 중심 → h 두 끝점 — 이어 누르는 자리는 두 번 누르기 거리 밖)
+    const measure = (m: 'tape' | 'protractor'): void => {
+      if (r.tool.mode !== m) mode(m);
+      r.tool.clear();
+      at(101, 100);
+      at(151, 150);
+      if (m === 'protractor') at(181, 150);
+      expect([r.tool.result?.kind, r.tool.pointCount, band.hidden, copy.disabled, copy.hidden, clear.disabled]).toEqual([m, 0, false, false, false, false]);
+    };
+    return { r, band, copy, clear, close, tapeBtn, protBtn, mode, at, measure };
+  };
+  // 앱 원문: refreshMeasureBar 한 메서드(196차 시험과 같은 자리)
+  const barSource = (): string => {
+    const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
+    return app.slice(app.indexOf('  private refreshMeasureBar('), app.indexOf('  snapshot(): AppSnapshot'));
+  };
+
+  it('203차: 결과가 있을 때 복사 버튼에 초점을 두고 친 Esc(결과 지움 — 도구는 켜진 채)로 그 버튼이 꺼지면 3D 보기로(문서로 빠지지 않게 — 148차 「다시 재기」·196차 방향 잠금 버튼과 같은 곳). 각도기도 같고, 앱은 막는 줄 바로 뒤에서', () => {
+    const { r, band, copy, clear, measure } = stage();
+    measure('tape');
+    copy.focus();
+    const f = vi.spyOn(r.canvas, 'focus');
+    expect(r.key('Escape')).toBe(true);
+    expect([r.tool.result, r.tool.active, band.hidden, copy.disabled]).toEqual([null, true, false, true]);
+    expect(document.activeElement).toBe(r.canvas);
+    // 화면은 굴리지 않는다(148차 leaveDisabled — focusIfLost)
+    expect(f).toHaveBeenCalledWith({ preventScroll: true });
+    f.mockRestore();
+    // 「다시 재기」에서 친 Esc는 148차 그대로 3D 보기
+    measure('tape');
+    clear.focus();
+    r.key('Escape');
+    expect([r.tool.result, clear.disabled]).toEqual([null, true]);
+    expect(document.activeElement).toBe(r.canvas);
+    // 각도기 결과의 복사 버튼
+    measure('protractor');
+    copy.focus();
+    r.key('Escape');
+    expect([r.tool.mode, r.tool.result, band.hidden, copy.disabled]).toEqual(['protractor', null, false, true]);
+    expect(document.activeElement).toBe(r.canvas);
+    // 앱 원문: 복사 버튼을 막는 줄 바로 뒤에서 3D 보기(148차 「다시 재기」와 같은 꼴), 띠째 숨으면 그 앞에서 끝(189차 길)
+    const bar = barSource();
+    expect(bar).toMatch(/e\.measureCopy\.disabled = !d\.measure;\n(?:\s*\/\/[^\n]*\n)*\s*leaveDisabled\(e\.measureCopy, this\.viewer\?\.canvas\);\n/);
+    expect(bar.indexOf('if (!on || !d || !tool) return;')).toBeGreaterThan(0);
+    expect(bar.indexOf('if (!on || !d || !tool) return;')).toBeLessThan(bar.indexOf('leaveDisabled(e.measureCopy'));
+  });
+
+  it('203차: 결과가 있을 때 복사·「다시 재기」에 초점을 두고 측정을 끄면(T·✕·도구 막대 — 앱 setMeasureMode) 3D 보기로 먼저 옮기지 않고 189차대로 끈 도구 버튼 — 측정 조각은 도구를 끈 뒤에 결과를 지운다. 바꾸기·결과 없음·띠 밖은 그대로', () => {
+    const { r, band, copy, clear, close, tapeBtn, protBtn, mode, at, measure } = stage();
+    const f = vi.spyOn(r.canvas, 'focus');
+    // 줄자 결과 · 복사에서 끄기 → 줄자 버튼(띠가 숨는 차례가 먼저라 복사 줄에 닿지 않는다)
+    measure('tape');
+    copy.focus();
+    f.mockClear();
+    mode(null);
+    expect([r.tool.active, r.tool.result, band.hidden]).toEqual([false, null, true]);
+    expect(f).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(tapeBtn);
+    // 줄자 결과 · 「다시 재기」에서 끄기 → 줄자 버튼(148차 줄 — 전에는 끄기 전에 띠를 다시 맞춰 3D 보기)
+    measure('tape');
+    clear.focus();
+    f.mockClear();
+    mode(null);
+    expect(f).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(tapeBtn);
+    // 각도기 결과 · 복사에서 끄기 → 각도기 버튼
+    measure('protractor');
+    copy.focus();
+    mode(null);
+    expect(document.activeElement).toBe(protBtn);
+    // ✕(기준 — 막히지 않는 버튼)도 결과가 있을 때 같은 곳
+    measure('tape');
+    close.focus();
+    mode(null);
+    expect(document.activeElement).toBe(tapeBtn);
+    // 결과 없음(진행 중 시작점) · 「다시 재기」에서 끄기 → 줄자 버튼(지금 그대로 — 끄는 동안 알림이 없다)
+    mode('tape');
+    r.tool.clear();
+    at(101, 100);
+    expect([r.tool.pointCount, clear.disabled, copy.disabled, copy.hidden]).toEqual([1, false, true, true]);
+    clear.focus();
+    f.mockClear();
+    mode(null);
+    expect(f).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(tapeBtn);
+    // 도구 바꾸기(띠 그대로 — 각도기 결과에서 줄자로): 복사가 꺼지면 3D 보기(138차 refocusOn과 같은 곳 — 그 자리에서)
+    measure('protractor');
+    copy.focus();
+    mode('tape');
+    expect([r.tool.mode, band.hidden, copy.disabled]).toEqual(['tape', false, true]);
+    expect(document.activeElement).toBe(r.canvas);
+    // 띠 밖(3D 보기·문서)이면 끄기도 그대로
+    measure('tape');
+    r.canvas.focus();
+    mode(null);
+    expect(document.activeElement).toBe(r.canvas);
+    measure('tape');
+    r.canvas.blur();
+    expect(document.activeElement).toBe(document.body);
+    mode(null);
+    expect(document.activeElement).toBe(document.body);
+    f.mockRestore();
+    // 측정 조각 원문: 도구 값을 먼저 바꾸고 진행 중 점·결과를 지운다(지우며 알리는 결과 null을 앱이 바뀐 도구로 받게)
+    const src = readFileSync(resolve(__dirname, '../../src/app/measure.ts'), 'utf8');
+    expect(src).toMatch(/const same = mode === this\.modeValue;\n(?:\s*\/\/[^\n]*\n)*\s*this\.modeValue = mode;\n\s*if \(!same\) this\.reset\(\);\n/);
   });
 });
 
