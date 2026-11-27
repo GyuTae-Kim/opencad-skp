@@ -200,6 +200,52 @@ describe('다시 흐르기(47차 — 1.4.10, 1280px 창 400% = 320×256)', () =>
     expect(bodies('.measure-bar', '@media (max-height: 300px) and (max-width: 479.98px)')).toMatch(/flex-wrap:\s*wrap/);
     expect(bodies('.measure-bar .mb-text', '@media (max-height: 300px) and (max-width: 479.98px)')).toMatch(/flex:\s*1 1 100%/);
   });
+
+  // 200차: 1.4.10은 폭만 정한다 — 폭 320px이면 높이와 상관없이(320px 휴대폰 세로·높은 창 400%). @media 머리를 그 창(마우스)에 맞춰 본다
+  const mediaFits = (q: string, w: number, ht: number): boolean =>
+    q.split(',').some((part) => {
+      const f = [...part.matchAll(/\(([\w-]+):\s*([^)]+)\)/g)];
+      return f.length > 0 && f.every(([, k, v]) => (k === 'max-width' ? w <= parseFloat(v) : k === 'max-height' ? ht <= parseFloat(v) : k === 'pointer' && v.trim() === 'fine'));
+    });
+  /** @media 블록마다 머리와 안 글(주석 뺌) */
+  const mediaBlocks = (): { q: string; src: string }[] => {
+    const src = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    return [...src.matchAll(/@media ([^{]+)\{/g)].map((m) => {
+      const open = m.index! + m[0].length;
+      let depth = 1;
+      let i = open;
+      for (; i < src.length && depth > 0; i++) {
+        if (src[i] === '{') depth++;
+        else if (src[i] === '}') depth--;
+      }
+      return { q: m[1]!.trim(), src: src.slice(open, i - 1) };
+    });
+  };
+  /** 그 창에 맞는 @media 블록 안에서 선택자(쉼표 목록 안이어도)가 받는 규칙 본문 */
+  const fitting = (sel: string, w: number, ht: number): string =>
+    mediaBlocks()
+      .filter((b) => mediaFits(b.q, w, ht))
+      .flatMap((b) => [...b.src.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter((m) => m[1]!.split(',').map((s) => s.trim()).includes(sel)).map((m) => m[2]!))
+      .join(';');
+  const twoRows = (w: number, ht: number): boolean => /flex-wrap:\s*wrap/.test(fitting('.measure-bar', w, ht)) && /flex:\s*1 1 100%/.test(fitting('.measure-bar .mb-text', w, ht));
+
+  it('폭 320px은 높이 300px을 넘어도 측정 띠·고른 것 카드의 글을 한 줄에 두고 버튼을 다음 줄로 — 버튼 옆이면 글 칸 68px라 영어 measurement·독일어 Winkelmesser:가 버튼 밑으로 넘쳐 가렸다', () => {
+    // 손셈(띠 한 줄): 띠 폭 = 3D 보기 320 − 16, 안 폭 = − 테두리 둘 − 여백(오른 6·왼 12), 글 칸 = − 사이 10 − 버튼 다섯(38px — 「다시 재기」는 430px 아래 아이콘만)·사이 넷
+    const bar = bodies('.measure-bar');
+    const num = (re: RegExp, s: string): number => Number(re.exec(s)?.[1]);
+    const pad = /padding:\s*\d+px (\d+)px \d+px (\d+)px/.exec(bar);
+    const inner = 320 - num(/max-width:\s*calc\(100% - (\d+)px\)/, bar) - 2 * num(/border:\s*(\d+)px/, bar) - Number(pad?.[1]) - Number(pad?.[2]);
+    const btn = num(/width:\s*(\d+)px/, bodies('.mb-btn.icon'));
+    const gap = num(/gap:\s*(\d+)px/, bodies('.mb-acts'));
+    expect([inner, inner - num(/(?:^|;)\s*gap:\s*(\d+)px/, bar) - (5 * btn + 4 * gap)]).toEqual([284, 68]);
+    // 두 줄이면 글은 284px 줄, 버튼 줄에는 여섯(방향 잠금·복사가 함께여도)이 들어간다
+    expect(6 * btn + 5 * gap).toBeLessThanOrEqual(inner);
+    // 47차 낮은 창(1280×1024 창 400% = 320×256)과 320px 휴대폰 세로(320×568) 모두 두 줄, 띠 폭을 넘는 띄어쓰기 없는 파일 이름은 띠 안에서 끊는다
+    expect([twoRows(320, 256), twoRows(320, 568)]).toEqual([true, true]);
+    expect(fitting('.measure-bar .mb-text', 320, 568)).toMatch(/overflow-wrap:\s*anywhere/);
+    // 넓은 창·375px 휴대폰 세로는 그대로 한 줄(넓은 화면은 바꾸지 않는다)
+    expect([twoRows(375, 667), twoRows(1280, 800)]).toEqual([false, false]);
+  });
 });
 
 describe('단추 기본 type(47차 — 첫 화면 조각 줄이기)', () => {

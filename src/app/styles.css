@@ -3066,7 +3066,9 @@ button.def-cell {
   }
 }
 
-@media (max-height: 300px) and (max-width: 479.98px) {
+/* 폭 360px 아래(320px 휴대폰 세로·높은 창 400%)는 높이와 상관없이 같게: 버튼 옆 글 칸이 68px(측정)·31px(독일어 고른 것)라 낱말·파일 이름이 버튼 밑으로 가렸다.
+ * 띠 폭을 넘는 띄어쓰기 없는 파일 이름은 띠 안에서 끊는다(200차 — WCAG 1.4.10) */
+@media (max-height: 300px) and (max-width: 479.98px), (max-width: 359.98px) {
   .measure-bar {
     flex-wrap: wrap;
     row-gap: 6px;
@@ -3074,6 +3076,7 @@ button.def-cell {
 
   .measure-bar .mb-text {
     flex: 1 1 100%;
+    overflow-wrap: anywhere;
   }
 }
 
