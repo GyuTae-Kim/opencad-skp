@@ -13,6 +13,8 @@
  * - 「› 버튼으로 펼치면 …」 en: 앞의 「펼치면」이 빠진 글 → Expand with the › button …
  * 옛 오역이 다시 들어오지 않게 그 낱말을 막고, 고친 줄이 같은 사전의 맞는 낱말(근거 줄과 같은 말)을 쓰는지 본다.
  */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { catalogs, sourceMessage, translate } from '../site/i18n.mjs';
 
@@ -159,5 +161,47 @@ describe('「분리해서 보기」 풀이는 누르기 전 할 일, 눌린 뒤 
       ['고른 것을 보기에서 숨깁니다(파일은 그대로)', 'de', 'die Auswahl'],
     ];
     for (const [key, lang, has] of basis) expect(catalogs[lang]![key], `${lang}: ${key}`).toContain(has);
+  });
+});
+
+// 212차: 같은 띠 「모두 보이기」 풀이 — 원문은 이 버튼에만 쓰여(나눌 원문이 없음) 영어·독일어 번역 값만 누르기 전 할 일 꼴로 고쳤다
+describe('「모두 보이기」 풀이는 누르기 전 할 일 꼴(212차 — WCAG 2.4.6·3.3.2)', () => {
+  it('영어·독일어 값은 이 사전 버튼 풀이의 명령 꼴(보이는 글의 낱말로 시작)이고 결과 꼴이 아니다, 일본어·중국어는 그대로, 네 사전에서 하나뿐', () => {
+    const KEY = '숨긴 그룹·컴포넌트를 모두 다시 보입니다(태그는 그대로)';
+    // 쓰는 곳: 패널 아래 띠 「모두 보이기」 버튼 풀이 하나(숨긴 것이 있을 때)
+    const panel = readFileSync(resolve(__dirname, '../src/app/panel.ts'), 'utf8');
+    expect(panel).toContain(`act('모두 보이기', 'show', '${KEY}', () => this.host.unhideAll())`);
+    expect(panel.split(KEY).length - 1).toBe(1);
+    const want: Record<Lang, string> = {
+      en: 'Show all hidden groups and components again (tags remain the same)',
+      ja: '非表示のグループ・コンポーネントをすべて再表示します（タグの状態は維持されます）',
+      'zh-CN': '再次显示所有隐藏的组和组件（标签保留）',
+      de: 'Alle ausgeblendeten Gruppen und Komponenten wieder einblenden (Tags bleiben gleich)',
+    };
+    const all = LANGS.flatMap((lang) => Object.values(catalogs[lang]!));
+    for (const lang of LANGS) {
+      expect(catalogs[lang]![KEY], `${lang}: ${KEY}`).toBe(want[lang]);
+      expect(translate(KEY, lang), lang).toBe(want[lang]);
+      expect(all.filter((v) => v === want[lang]).length, want[lang]).toBe(1);
+      expect(sourceMessage(want[lang]), want[lang]).toBe(KEY);
+      // 결과(누른 뒤 상태) 꼴이 아니다(211차까지 영어 are visible again·독일어 sind wieder sichtbar)
+      expect(want[lang], lang).not.toMatch(/are visible again|sind wieder sichtbar/);
+    }
+    // 보이는 글(버튼 「모두 보이기」)의 낱말로 시작·품음(2.5.3): 영어 Show all …, 독일어 Alle … einblenden
+    expect(want.en.startsWith(`${catalogs.en!['모두 보이기']} `)).toBe(true);
+    expect(catalogs.de!['모두 보이기']).toBe('Alle einblenden');
+    expect(want.de).toMatch(/^Alle .* wieder einblenden \(/);
+    // 괄호 뒤(태그는 그대로)는 옛 값 그대로
+    expect(want.en).toMatch(/ \(tags remain the same\)$/);
+    expect(want.de).toMatch(/ \(Tags bleiben gleich\)$/);
+    // 근거 줄: 이 사전 버튼 풀이의 명령 꼴 — 같은 「모두 …ㅂ니다(…는 그대로)」 원문의 「최근 문서 목록을 모두 지웁니다」, 같은 띠 211차 「고른 것만 보기」
+    const basis: [key: string, lang: Lang, re: RegExp][] = [
+      ['최근 문서 목록을 모두 지웁니다(원래 파일은 그대로)', 'en', /^Clear the whole /],
+      ['최근 문서 목록을 모두 지웁니다(원래 파일은 그대로)', 'de', / leeren \(/],
+      ['고른 것만 보기 — 다시 누르면 모두 보입니다', 'en', /^Show only /],
+      ['고른 것만 보기 — 다시 누르면 모두 보입니다', 'de', /^Nur die Auswahl zeigen – /],
+      ['보이기·숨기기', 'de', /^Einblenden\//],
+    ];
+    for (const [key, lang, re] of basis) expect(catalogs[lang]![key], `${lang}: ${key}`).toMatch(re);
   });
 });
