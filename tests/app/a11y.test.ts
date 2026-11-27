@@ -242,3 +242,30 @@ describe('초점 테두리 둘레 대비(170차 — WCAG 2.4.7·1.4.11 3:1)', ()
     expect(bodies('.sc-box')).toMatch(/border-radius:\s*10px/);
   });
 });
+
+describe('제목 막대·도구 막대 버튼의 화면 읽기 이름(173차 — WCAG 3.2.4 일관된 식별·2.5.3 이름 안의 이름표)', () => {
+  // 한 줄 tbtn('보이는 글', '아이콘', 'title', 할 일, 클래스?, true?) 부르기 — 이름은 끝 true면 보이는 글, 아니면 title(풀이)
+  const calls = [...app.matchAll(/tbtn\('([^']*)', '[^']*', '([^']*)', (.*)$/gm)].map((m) => {
+    const tail = /(?:, '([^']*)')?(?:, (true))?\)[\],;]*$/.exec(m[3]!);
+    return { label: m[1]!, title: m[2]!, cls: tail?.[1] ?? '', named: tail?.[2] === 'true' };
+  });
+  // 글이 보이는 버튼(icon-only는 글이 늘 숨어 보이는 이름표가 없다 — 이름은 풀이 그대로)
+  const shown = calls.filter((c) => !c.cls.split(' ').includes('icon-only'));
+
+  it('글이 보이는 버튼은 화면 읽기 이름이 보이는 글을 그대로 품는다(풀이 글이 이름이면 「그림 저장」·「예제 열기」가 이름에 없었다)', () => {
+    expect(shown.length).toBeGreaterThanOrEqual(13);
+    expect(shown.filter((c) => !(c.named ? c.label : c.title).includes(c.label)).map((c) => c.label)).toEqual([]);
+  });
+
+  it('이름을 보이는 글로 둔 버튼은 같은 기능의 다른 자리(처음 화면 버튼·보기 설정 메뉴·그림 저장 창)와 같은 글이고 네 언어 사전에 그 열쇠가 있다', () => {
+    expect(shown.filter((c) => c.named).map((c) => c.label)).toEqual(['예제 열기', '그림 저장']);
+    const exporter = readFileSync(resolve(__dirname, '../../src/app/exporter.ts'), 'utf8');
+    expect(app).toContain("html: `${icon('sample')}<span>예제 열기</span>`");
+    expect(app).toContain("label: '그림 저장…'");
+    expect(exporter).toContain("'aria-label': '그림 저장'");
+    for (const lang of ['en', 'de', 'ja', 'zh-CN']) {
+      const dict = JSON.parse(readFileSync(resolve(__dirname, `../../site/locales/${lang}.json`), 'utf8')) as Record<string, string>;
+      for (const k of ['예제 열기', '그림 저장', '그림 저장…']) expect(dict[k], `${lang}: ${k}`).toBeTruthy();
+    }
+  });
+});
