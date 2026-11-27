@@ -3085,6 +3085,11 @@ button.def-cell {
     flex: 1 1 100%;
     overflow-wrap: anywhere;
   }
+
+  /* 새 판 띠도 3D 보기 폭(− 24px)까지(208차): 폭이 없으면 left 50%의 shrink-to-fit이라 절반에서 감겨 3D 보기를 채우고 버튼은 굴려야 보였다 */
+  .update-bar {
+    width: max-content;
+  }
 }
 
 /*
