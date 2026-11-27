@@ -2975,7 +2975,10 @@ describe('측정 도구: 잠글 방향 고르기(한 손 잠금 — 22차, Sketc
     r.move(165, 150);
     expect(r.tool.toggleLockMenu()).toBe(true);
     expect(r.tool.lockMenuOpen).toBe(true);
-    expect([...menu.querySelectorAll('[data-lock]')].map((b) => b.textContent)).toEqual([LOCK_HINTS.x, LOCK_HINTS.y, LOCK_HINTS.z, LOCK_HINTS.parallel]);
+    // 버튼 글은 할 일 「…잠그기」(210차 — 지금 상태인 잠금 안내 LOCK_HINTS 「…잠금」과 원문을 나눠, 번역이 누를 버튼을 「잠갔음」 꼴로 옮기지 않게).
+    // 따로 이름(aria-label)이 없어 보이는 글이 곧 화면 읽기·음성 조작 이름(2.5.3)
+    expect([...menu.querySelectorAll('[data-lock]')].map((b) => b.textContent)).toEqual(['빨강 축으로 잠그기', '녹색 축으로 잠그기', '파랑 축으로 잠그기', '모서리와 나란히 잠그기']);
+    expect([...menu.querySelectorAll('[data-lock]')].filter((b) => b.hasAttribute('aria-label'))).toEqual([]);
     expect((menu.querySelector('[data-lock="y"] .mb-lockswatch') as HTMLElement).style.background).not.toBe('');
     // 같은 것을 다시 바꾸면 닫힌다
     expect(r.tool.toggleLockMenu()).toBe(false);
@@ -2988,6 +2991,8 @@ describe('측정 도구: 잠글 방향 고르기(한 손 잠금 — 22차, Sketc
     expect(r.tool.inferenceLock).toMatchObject({ kind: 'parallel', source: 'button' });
     expect(r.tool.lockMenuOpen).toBe(false);
     expect(r.locks.at(-1)).toBe('parallel');
+    // 고른 뒤 측정 띠·상태 막대의 잠금 안내는 지금 상태 글 그대로(LOCK_HINTS — 버튼 글과 다른 원문, 210차)
+    expect(r.tool.lockHintText(false)?.split(' · ')[0]).toBe(LOCK_HINTS.parallel);
     // 잠근 동안은 열지 않는다
     expect(r.tool.toggleLockMenu(true)).toBe(false);
     r.tool.setInferenceLock(false);
