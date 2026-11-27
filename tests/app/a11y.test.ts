@@ -246,6 +246,51 @@ describe('다시 흐르기(47차 — 1.4.10, 1280px 창 400% = 320×256)', () =>
     // 넓은 창·375px 휴대폰 세로는 그대로 한 줄(넓은 화면은 바꾸지 않는다)
     expect([twoRows(375, 667), twoRows(1280, 800)]).toEqual([false, false]);
   });
+
+  // 201차: 그림 저장 창(exporter.ts)은 3D 보기(.stage — 넘침 숨김) 안에 붙는데 높이 한도가 없어, 400% 확대(320×256 — 3D 보기 143px)에서 265px 창의 위(닫기 ✕·크기)가 잘렸다
+  it('그림 저장 창은 3D 보기 안 남은 높이까지만 두고 그 안에서 굴린다(47차 알림 꼴 — 반대쪽 8px), 넓은 화면·높은 창은 한도에 닿지 않아 그대로', () => {
+    const plain = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    /** @media 밖 규칙 본문(들여 쓰지 않은 그 선택자 한 줄) */
+    const top = (sel: string): string => new RegExp(`\\n${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`).exec(plain)?.[1] ?? '';
+    const cascade = (sel: string, w: number, ht: number): string => `${top(sel)};${fitting(sel, w, ht)}`;
+    /** 마지막으로 이기는 그 속성의 px 값(min-height는 height로 세지 않음) */
+    const px = (prop: string, s: string): number => Number([...s.matchAll(new RegExp(`(?:^|[;\\s])${prop}:\\s*([\\d.]+)px`, 'g'))].pop()?.[1]);
+    // 손셈(3D 보기 높이): 창 − 제목 막대(+ 아래 선 1) − 도구 막대 한 줄(위아래 여백 + 버튼 + 아래 선 1) − 상태 막대(+ 위 선 1)
+    const stage = (w: number, ht: number): number =>
+      ht - (px('height', cascade('.titlebar', w, ht)) + 1) - (2 * px('padding', cascade('.toolbar', w, ht)) + px('height', cascade('.tbtn', w, ht)) + 1) - (px('height', cascade('.statusbar', w, ht)) + 1);
+    const sizes: [number, number][] = [[320, 256], [320, 300], [320, 400], [1280, 300], [1280, 400], [1280, 800], [320, 568]];
+    expect(sizes.map(([w, ht]) => stage(w, ht))).toEqual([143, 187, 287, 185, 285, 685, 455]);
+    // 손셈(창 높이, 마우스): 테두리 둘 + 위아래 여백 + 머리(닫기 버튼 + 아래 사이) + 크기 묶음(이름 12px 한 줄 + 아래 사이, 라디오 둘, 아래 사이) + 확인 줄 둘 + 버튼 줄(위 사이 + 버튼) + 알림 줄(위 사이 + 1em)
+    const d = top('.export-dialog');
+    const pad = /padding:\s*(\d+)px \d+px (\d+)px/.exec(d);
+    const lh = Number(/font:\s*\d+px\/([\d.]+)/.exec(plain)?.[1]);
+    const legend = top('.ex-group legend');
+    const opt = px('min-height', top('.ex-opt'));
+    const H =
+      2 * px('border', d) + Number(pad?.[1]) + Number(pad?.[2]) + px('height', top('.icon-btn')) + px('margin-bottom', top('.ex-head')) +
+      px('font-size', legend) * lh + px('margin-bottom', legend) + 2 * opt + Number(/margin:\s*0 0 (\d+)px/.exec(top('.ex-group'))?.[1]) +
+      2 * opt + px('margin-top', top('.ex-acts')) + px('height', top('.btn')) + px('margin', top('.ex-status')) + px('font-size', top('.ex-status'));
+    expect(Math.round(H)).toBe(265);
+    // 창(마우스)마다 [한도에 닿는지, 붙는 쪽(좁으면 아래 12px, 넓으면 위 56px) 반대쪽에 남는 높이]
+    const place = (w: number, ht: number): [boolean, number] => {
+      const s = cascade('.export-dialog', w, ht);
+      const cut = [...s.matchAll(/max-height:\s*calc\(100% - (\d+)px\)/g)].pop()?.[1];
+      const limit = cut === undefined ? Infinity : stage(w, ht) - Number(cut);
+      const at = /bottom:\s*\d+px/.test(fitting('.export-dialog', w, ht)) ? px('bottom', s) : px('top', s);
+      return [H > limit, Math.round(stage(w, ht) - at - Math.min(H, limit))];
+    };
+    expect(/overflow-y:\s*auto/.test(top('.export-dialog'))).toBe(true);
+    // 3D 보기보다 높아 잘리던 창(좁은 320×256·300, 넓은 높이 300·400)은 한도까지 줄고 반대쪽 8px을 남겨 그 안에서 굴린다 — 320×400·1280×800·320×568은 한도에 닿지 않아 그대로
+    expect(sizes.map(([w, ht]) => place(w, ht))).toEqual([
+      [true, 8],
+      [true, 8],
+      [false, 10],
+      [true, 8],
+      [true, 8],
+      [false, 364],
+      [false, 178],
+    ]);
+  });
 });
 
 describe('단추 기본 type(47차 — 첫 화면 조각 줄이기)', () => {
