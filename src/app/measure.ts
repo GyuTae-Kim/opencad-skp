@@ -1277,6 +1277,8 @@ export class MeasureTool {
   private redoBtn: HTMLButtonElement | null = null;
   /** 측정 띠의 잠글 방향 고르기 줄(mountLockMenu로 붙인다 — 22차 한 손 잠금) */
   private lockMenu: HTMLDivElement | null = null;
+  /** 그 줄을 펼치는 버튼(앱 측정 띠의 방향 잠금 버튼 — 187차: 펼침은 aria-expanded로) */
+  private lockBtn: HTMLElement | null = null;
   /** 손가락·펜으로 고른 탭의 click을 기다리는 동안(141차 — 그때까지 줄을 닫지 않는다, 1초 뒤 닫기) */
   private lockTap: ReturnType<typeof setTimeout> | null = null;
   /** 고른 것 카드의 고른 안내 지우기·숨기기 단추(mountGuideDelete로 붙인다 — 23차 고르기 도구로 고른 안내, 숨기기는 25차), 손가락 기기의 모두 고르기(29차) */
@@ -1592,17 +1594,25 @@ export class MeasureTool {
   /**
    * 측정 띠에 잠글 방향 고르기 줄을 붙인다(앱이 띠를 만든 뒤 한 번 — mountUndo처럼). 줄은 띠 위에 뜨고(.mb-lockmenu),
    * 단추마다 잠금 안내 글(LOCK_HINTS — "빨강 축으로 잠금")과 축 색 견본. 손가락·펜은 누르는 순간에 받는다(정밀 조준 중 둘째 손가락도 되게)
+   * owner는 줄을 펼치는 버튼(앱 측정 띠의 방향 잠금 버튼 — 187차): 펼쳤는지를 aria-expanded로 내고(여닫는 길은 모두 toggleLockMenu),
+   * 줄은 버튼 바로 뒤가 아니라 띠 끝에 붙어 aria-controls로 잇는다(WCAG 4.1.2, APG Disclosure)
    */
-  mountLockMenu(host: HTMLElement): void {
+  mountLockMenu(host: HTMLElement, owner?: HTMLElement): void {
     if (this.lockMenu) {
       host.append(this.lockMenu);
       return;
     }
     const m = document.createElement('div');
     m.className = 'mb-lockmenu';
+    m.id = 'measure-lockmenu';
     m.setAttribute('role', 'group');
     m.setAttribute('aria-label', LOCK_MENU_LABEL);
     m.hidden = true;
+    if (owner) {
+      owner.setAttribute('aria-controls', m.id);
+      owner.setAttribute('aria-expanded', 'false');
+      this.lockBtn = owner;
+    }
     let pressedAt = -Infinity;
     const pick = (b: Element | null): void => {
       const c = b?.getAttribute('data-lock') as LockChoice | null | undefined;
@@ -1672,6 +1682,7 @@ export class MeasureTool {
     }
     if (m.hidden === !open) return open;
     m.hidden = !open;
+    this.lockBtn?.setAttribute('aria-expanded', String(open));
     // 결과 글·툴팁이 줄을 비키게 다시 그린다
     this.overlay.invalidate();
     return open;
@@ -3100,6 +3111,9 @@ export class MeasureTool {
     if (this.lockTap !== null) clearTimeout(this.lockTap);
     this.lockTap = null;
     this.lockMenu?.remove();
+    // 뗀 줄을 가리키지 않게 버튼의 펼침·가리킴도 거둔다(187차)
+    this.lockBtn?.removeAttribute('aria-controls');
+    this.lockBtn?.removeAttribute('aria-expanded');
     this.barFit?.disconnect();
     this.barFit = null;
     this.barAllBtn?.remove();
