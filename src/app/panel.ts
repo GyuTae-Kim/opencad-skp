@@ -376,7 +376,8 @@ export class Panel {
     };
     d.tagFolders.forEach((f, i) => {
       const depth = depthOf(i);
-      const name = F(f.name);
+      // 180차: 이름 없는 폴더는 보이는 자리 글(앱 글 — 지금 언어)을 체크 이름·줄 풀이에도 둔다(빈 이름이면 「태그 폴더  보이기」라 보이는 글을 품지 않았다 — 2.5.3)
+      const name = f.name ? F(f.name) : nameText('(이름 없는 폴더)');
       const cb = h('input', { type: 'checkbox', 'data-folder': String(i), 'aria-label': mixText(mix`태그 폴더 ${name} 보이기`), 'data-i18n-keep': 'aria-label' });
       cb.checked = !d.hiddenFolders.has(i);
       cb.addEventListener('change', () => this.host.setFolderVisible(i, cb.checked));
