@@ -3579,8 +3579,12 @@ export class SkpViewerApp implements PanelHost {
 
   private setBusy(name: string | null, fraction = 0, stage = ''): void {
     const e = this.els;
+    // 덮개를 숨기는 한 자리(「취소」 누름·Esc·다 열림·실패 — 194차): 초점이 덮개 안(「취소」)이었으면 알림 ✕와 같은 곳(3D 보기, 문서 전이면 「파일 열기」 — 44차)으로
+    // (WCAG 2.4.3, STEP 189차 꼴 — 전에는 숨은 버튼과 함께 문서로 빠졌다). 덮개 밖 초점은 그대로, 보이게 하거나 단계만 바꾸는 부름은 보지 않는다
+    const keep = name === null ? keepBarFocus(e.busy, this.viewer && this.doc ? this.viewer.canvas : e.start.querySelector('button')) : null;
     this.busy = name !== null;
     e.busy.hidden = name === null;
+    keep?.();
     if (name !== null) {
       this.closeMenu();
       const pct = Math.round(Math.max(0, Math.min(1, fraction)) * 100);

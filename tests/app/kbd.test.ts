@@ -1405,3 +1405,113 @@ describe('나무 「더 보기」를 끝까지 펼쳐 그 버튼이 사라지면
     expect(pan).toMatch(/box\.addEventListener\('focusin', \(e\) => \{\n\s*const it = \(e\.target as HTMLElement\)\.closest<HTMLElement>\('\[role=treeitem\]'\);\n\s*if \(it\) rove\(\[\.\.\.box\.querySelectorAll<HTMLElement>\('\[role=treeitem\]'\)\], it, true\);\n/);
   });
 });
+
+describe('여는 중 덮개 「취소」에 둔 초점을 덮개가 숨을 때 3D 보기·「파일 열기」로(194차 — 188차 드문 길, STEP 189차 꼴, WCAG 2.4.3)', () => {
+  // 앱 꼴: 3D 보기(코어 캔버스 tabIndex 0), 처음 화면(첫 버튼 「파일 열기」·「예제 열기」 — 문서가 있으면 숨음), 여는 중 덮개(단계 글·「취소」), 패널 버튼
+  const stage = () => {
+    const box = html(
+      '<canvas tabindex="0"></canvas><div class="start"><button class="btn primary">파일 열기</button><button class="btn">예제 열기</button></div>' +
+        '<div class="busy" hidden><div class="busy-card"><div class="busy-row"><div class="busy-stage"></div><button class="mini-btn">취소</button></div></div></div><button class="panel">패널</button>',
+    );
+    const $ = (s: string): HTMLElement => box.querySelector<HTMLElement>(s)!;
+    // 앱 원문 setBusy의 앞머리(덮개를 보이고 숨기는 줄까지 — 단계 글을 쓰는 if 앞)를 잘라 실제 keepBarFocus로 돌린다(155차 new Function 꼴 — 앱 클래스를 시험에서 만들지 않음)
+    const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
+    const at = app.indexOf('  private setBusy(');
+    expect(at).toBeGreaterThan(0);
+    const body = app.slice(app.indexOf('{\n', at) + 2, app.indexOf('    if (name !== null) {', at));
+    const run = new Function('name', 'keepBarFocus', body) as (this: unknown, name: string | null, f: typeof keepBarFocus) => void;
+    const ctx = { els: { busy: $('.busy'), start: $('.start') }, viewer: null as { canvas: HTMLElement } | null, doc: null as object | null, busy: false };
+    // refreshChrome 꼴: 문서가 있으면 처음 화면을 숨긴다(뷰어는 첫 문서를 열 때 만든다)
+    const setDoc = (on: boolean): void => {
+      ctx.doc = on ? {} : null;
+      if (on) ctx.viewer ??= { canvas: $('canvas') };
+      $('.start').hidden = on;
+    };
+    const setBusy = (name: string | null): void => run.call(ctx, name, keepBarFocus);
+    // 「취소」 click → cancelOpen → setBusy(null)
+    $('.busy .mini-btn').addEventListener('click', () => setBusy(null));
+    return { $, app, ctx, setDoc, setBusy };
+  };
+
+  it('「취소」에 초점이 있을 때 덮개가 숨으면(취소 누름·Esc·다 열림·실패 — 모두 setBusy(null)) 문서가 있으면 3D 보기, 문서 전이면 처음 화면 「파일 열기」로 — 단계·진행만 바뀌면 그대로', () => {
+    const { $, app, ctx, setDoc, setBusy } = stage();
+    const cancel = $('.busy .mini-btn');
+    // ① 앞 문서가 열린 채 새 파일을 여는 중 「취소」를 키보드로 누름(Enter·Space는 click) → 3D 보기.
+    //    고치기 전: 숨은 덮개 안 「취소」에 남았다(브라우저는 focus fixup으로 문서 body로 — jsdom은 하지 않음)
+    setDoc(true);
+    setBusy('a.skp');
+    expect([$('.busy').hidden, ctx.busy]).toEqual([false, true]);
+    cancel.focus();
+    // ② 단계·진행만 바뀌는 부름(보인 채)은 그대로
+    setBusy('a.skp');
+    expect(document.activeElement).toBe(cancel);
+    cancel.click();
+    expect([$('.busy').hidden, ctx.busy]).toEqual([true, false]);
+    expect(lost()).toBe(false);
+    expect(document.activeElement).toBe($('canvas'));
+    // ③ 문서 전(코어를 아직 받지 않음)에 여는 중 Esc(cancelOpen)·받기 실패 → 「파일 열기」
+    setDoc(false);
+    ctx.viewer = null;
+    setBusy('b.skp');
+    cancel.focus();
+    setBusy(null);
+    expect(document.activeElement).toBe($('.start .primary'));
+    // ④ 문서 전, 코어는 받았지만 열지 못함(옛 판·빈 장면·해석 오류 — openBlob finally) → 「파일 열기」
+    ctx.viewer = { canvas: $('canvas') };
+    setBusy('c.skp');
+    cancel.focus();
+    setBusy(null);
+    expect(document.activeElement).toBe($('.start .primary'));
+    // ⑤ 처음 문서가 다 열림: 그 사이 문서가 생겨 처음 화면이 숨고(refreshChrome은 처음 화면 안 초점만 3D 보기로) 끝에 덮개가 숨음 → 3D 보기
+    setBusy('d.skp');
+    cancel.focus();
+    setDoc(true);
+    expect(document.activeElement).toBe(cancel);
+    setBusy(null);
+    expect(document.activeElement).toBe($('canvas'));
+    // 앱 원문: 「취소」 click·Esc(덮개가 보이는 동안 keyAction → cancelOpen)·openBlob 끝(다 열림·실패)이 모두 setBusy(null), 덮개를 숨기는 줄은 하나,
+    // 갈 곳은 알림 ✕와 같은 곳(44차)이고 처음 화면 첫 버튼은 「파일 열기」
+    expect(app).toContain("cancelBtn.addEventListener('click', () => this.cancelOpen());");
+    expect(app).toMatch(/cancelOpen\(\): void \{\n\s*this\.openSeq\+\+;\n\s*this\.client\.cancel\(\);\n\s*this\.parsingSeq = 0;\n\s*this\.setBusy\(null\);\n\s*\}/);
+    expect(app).toMatch(/act\.kind === 'cancelOpen'\) \{\n\s*ev\.preventDefault\(\);\n\s*ev\.stopPropagation\(\);\n\s*this\.cancelOpen\(\);\n/);
+    expect(app).toContain('if (seq === this.openSeq) this.setBusy(null);');
+    expect(app.match(/\.busy\.hidden = /g)).toHaveLength(1);
+    expect(app).toContain("focusIfLost(this.viewer && this.doc ? this.viewer.canvas : this.els.start.querySelector('button'), n);");
+    expect(app.slice(app.indexOf('private buildStart(')).match(/h\('button'[^\n]*/)?.[0]).toContain('파일 열기');
+  });
+
+  it('초점이 덮개 밖이면(3D 보기·처음 화면 버튼·문서) 덮개가 숨어도 옮기지 않고, 「취소」에 있었어도 숨기 전에 다른 곳으로 옮겼으면 그대로 — 앱은 setBusy 한 자리에서', () => {
+    const { $, app, setDoc, setBusy } = stage();
+    // 3D 보기에서 친 Esc(덮개가 보이는 동안 — cancelOpen)·다 열림 → 3D 보기 그대로
+    setDoc(true);
+    setBusy('a.skp');
+    $('canvas').focus();
+    setBusy(null);
+    expect(document.activeElement).toBe($('canvas'));
+    // 문서(body — 끌어 놓아 열거나 누르기로 초점을 받지 않는 기기)는 끌어오지 않는다
+    setBusy('b.skp');
+    $('canvas').blur();
+    expect(document.activeElement).toBe(document.body);
+    setBusy(null);
+    expect(document.activeElement).toBe(document.body);
+    // 처음 화면 「예제 열기」로 연 첫 문서가 열리지 못함 → 「예제 열기」 그대로
+    setDoc(false);
+    setBusy('예제 모형');
+    $('.start .btn:not(.primary)').focus();
+    setBusy(null);
+    expect(document.activeElement).toBe($('.start .btn:not(.primary)'));
+    // 「취소」에 있다가 숨기 전에 패널 버튼으로 옮김 → 그대로
+    setDoc(true);
+    setBusy('c.skp');
+    $('.busy .mini-btn').focus();
+    $('.panel').focus();
+    setBusy(null);
+    expect(document.activeElement).toBe($('.panel'));
+    // 원문: 숨기는 부름(name null)에서만 덮개 숨김 줄 앞에 keepBarFocus(189차 — 초점이 덮개 안이었을 때만 옮김), 돌려준 함수를 그 뒤에
+    const at = app.indexOf('  private setBusy(');
+    expect(app.slice(at, app.indexOf('    if (name !== null) {', at))).toMatch(
+      /const keep = name === null \? keepBarFocus\(e\.busy, this\.viewer && this\.doc \? this\.viewer\.canvas : e\.start\.querySelector\('button'\)\) : null;\n\s*this\.busy = name !== null;\n\s*e\.busy\.hidden = name === null;\n\s*keep\?\.\(\);\n/,
+    );
+    expect(app.match(/keepBarFocus\(/g)).toHaveLength(3);
+  });
+});
