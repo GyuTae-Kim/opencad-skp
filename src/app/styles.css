@@ -973,8 +973,9 @@ kbd {
   margin: 0 2px 6px;
 }
 
+/* 높이는 최소만: 줄 바꿈 없는 버튼 줄에서 줄어 글이 두 줄이 되면(글 간격을 넓힌 사용자 스타일·긴 번역) 둘째 줄이 테두리 밖으로 넘쳐 겹쳤다(WCAG 1.4.12, 177차 — 한 줄이면 24px 그대로) */
 .mini-btn {
-  height: 24px;
+  min-height: 24px;
   padding: 0 9px;
   border: 1px solid var(--border-soft);
   border-radius: 6px;
@@ -1562,8 +1563,9 @@ button.scene-card.sel {
   border-radius: 7px;
 }
 
+/* 높이는 최소만(위 .mini-btn과 같은 까닭 — 177차, 한 줄이면 22px 그대로) */
 .seg-btn {
-  height: 22px;
+  min-height: 22px;
   padding: 0 8px;
   border: 0;
   border-radius: 5px;
@@ -2312,7 +2314,9 @@ button.scene-card.sel {
   margin-top: 4px;
 }
 
+/* 아이콘은 글 앞 같은 줄(전역 .ico 블록이면 글 위 줄로 쌓여 24px 밖으로 넘쳤다 — 177차) */
 .mini-btn .ico {
+  display: inline-block;
   vertical-align: -2px;
   margin-right: 3px;
 }

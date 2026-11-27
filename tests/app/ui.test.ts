@@ -230,6 +230,49 @@ describe('마우스 화면 누르는 칸 크기(169차 — WCAG 2.5.8, 스타일
   });
 });
 
+describe('글 간격을 넓혀도 글이 든 칸이 잘리거나 겹치지 않게(177차 — WCAG 1.4.12, 스타일 규칙)', () => {
+  const css = readFileSync(resolve(__dirname, '../../src/app/styles.css'), 'utf8');
+  /** 선택자 하나의 맨 앞 줄 규칙(손가락 @media 밖 — 들여 쓴 규칙은 건너뜀) 본문 */
+  const rule = (sel: string): string => css.match(new RegExp(`(?:^|\\n)${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`))?.[1] ?? '';
+  const px = (body: string, p: string): number => Number(body.match(new RegExp(`(?:^|[;\\s])${p}:\\s*(\\d+(?:\\.\\d+)?)px`))?.[1] ?? 0);
+
+  it('높이를 못 박은 한 줄 글 칸은 줄 높이 1.5배에도 한 줄이 든다(글 크기 × 1.5 + 위아래 테두리 ≤ 높이)', () => {
+    // [선택자, 규칙에 글 크기가 없을 때 물려받는 크기(body·측정값 칸 13px), 위아래 테두리 합(상태 막대는 content-box라 0)]
+    const cells: [string, number, number][] = [
+      ['.tbtn', 13, 2],
+      ['.tgroup.seg .tbtn', 13, 2],
+      ['.st-warn', 13, 0],
+      ['.btn', 13, 2],
+      ['.ptab', 13, 2],
+      ['.search-input', 13, 2],
+      ['.mb-btn', 13, 2],
+      ['.vcb-input', 13, 2],
+      ['.vcb-btn', 13, 2],
+      ['.statusbar', 13, 0],
+    ];
+    for (const [sel, inherited, border] of cells) {
+      const body = rule(sel);
+      expect(px(body, 'height'), sel).toBeGreaterThan(0);
+      expect((px(body, 'font-size') || inherited) * 1.5 + border, sel).toBeLessThanOrEqual(px(body, 'height'));
+    }
+  });
+
+  it('줄 바꿈 없는 버튼 줄의 작은 글 버튼(패널 버튼 줄·3D 누르기 방식)은 높이를 못 박지 않고 최소 높이만 — 한 줄이면 그대로, 글 간격으로 두 줄이 되면 높아진다', () => {
+    // 고정 높이면 줄어든 버튼의 둘째 줄이 테두리 밖으로 넘쳐 아래 글과 겹쳤다(영어·일본어 선택 탭 버튼 줄은 기본 간격에서도)
+    for (const [sel, min] of [['.mini-btn', 24], ['.seg-btn', 22]] as const) {
+      expect(rule(sel), sel).toMatch(new RegExp(`min-height:\\s*${min}px`));
+      expect(rule(sel), sel).not.toMatch(/(^|[;\s])height:\s*\d/);
+    }
+  });
+
+  it('작은 버튼 안 아이콘은 글 앞 같은 줄(inline-block) — 전역 .ico 블록이면 글 위 줄로 쌓여 기본 화면에서도 24px 밖으로 넘쳤다', () => {
+    // 아이콘 14px·vertical-align −2px은 줄 높이(12px × 1.45 = 17.4, 1.5배 18) 안 — 한 줄 + 테두리 2 = 19.4~20 ≤ 24
+    expect(rule('.ico')).toMatch(/display:\s*block/);
+    expect(rule('.mini-btn .ico')).toMatch(/display:\s*inline-block/);
+    expect(rule('.mini-btn .ico')).toMatch(/vertical-align:\s*-2px/);
+  });
+});
+
 describe('측정 띠 알림 영역(45차 — 앱 원본 규칙)', () => {
   const src = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
   /** `const <이름> = h(` 호출 하나의 원본(괄호 짝까지) */
