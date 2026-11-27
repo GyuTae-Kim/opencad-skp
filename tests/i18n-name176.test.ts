@@ -88,8 +88,9 @@ describe('제목 막대·도구 막대 버튼의 이름이 다섯 언어 모두 
     expect(app).toContain(`'${START}'`);
     expect(infotab).toContain(`'${INFO}'`);
     const segments: [key: string, lang: Lang, has: string][] = [
-      [START, 'ja', ' · F：全体を表示 · '],
-      [START, 'zh-CN', ' · F 适合窗口 · '],
+      // 처음 화면 키 줄은 F 줄부터 끝까지(뒤 두 줄의 띄어쓰기 · 낱말이 그대로인지 함께)
+      [START, 'ja', ' · F：全体を表示 · 1～7：標準ビュー · F7：グリッド'],
+      [START, 'zh-CN', ' · F 适合窗口 · 1~7 标准视图 · F7 网格'],
       [INFO, 'en', 'F: Fit to view · '],
       [INFO, 'ja', 'F：全体を表示・'],
       [INFO, 'zh-CN', 'F：适合窗口 · '],
