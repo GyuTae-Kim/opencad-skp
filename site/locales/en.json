@@ -50,7 +50,7 @@
   "DEFLATE: 저장 블록 머리가 잘렸습니다": "DEFLATE: stored block header is truncated",
   "DEFLATE: 저장 블록이 잘렸습니다": "DEFLATE: stored block is truncated",
   "Esc: 측정 점 지우기 → 한 번 더 누르면 측정 끄기 · 측정 중이 아니면 고른 것 지우기": "Esc: Clear measurement point → Press again to turn off measurement · Clear selection if not in measurement",
-  "F: 전체 보기 · 1~7: 앞·뒤·왼쪽·오른쪽·위·아래·등각 · F7: 격자 · Ctrl/⌘+O: 열기": "F: View all · 1~7: Front, back, left, right, top, bottom, isometric · F7: Grid · Ctrl/⌘+O: Open",
+  "F: 전체 보기 · 1~7: 앞·뒤·왼쪽·오른쪽·위·아래·등각 · F7: 격자 · Ctrl/⌘+O: 열기": "F: Fit to view · 1~7: Front, back, left, right, top, bottom, isometric · F7: Grid · Ctrl/⌘+O: Open",
   "GitHub 소스 코드": "GitHub source code",
   "GitHub 소스 코드(새 창)": "GitHub source code (new window)",
   "JavaScript와 WebGL2 지원 브라우저": "JavaScript and WebGL2 supported browsers",
