@@ -937,7 +937,8 @@ export class Panel {
     if (log.length) {
       const mm = mmPerSceneUnit(d.scene.units);
       const rows = log.map((m, i) => {
-        const b = h('button', { class: 'mini-btn ml-copy-btn', title: '이 결과 글 복사', 'aria-label': '이 결과 글 복사', html: icon('copy', 13) });
+        // data-key: 줄 버튼은 이름이 모두 같아 다시 그리면 첫 줄로 갔다 — 열쇠에 줄 차례(202차, 192차 측정 띠 기록과 같은 차례 줄로)
+        const b = h('button', { class: 'mini-btn ml-copy-btn', 'data-key': `ml-copy-${i}`, title: '이 결과 글 복사', 'aria-label': '이 결과 글 복사', html: icon('copy', 13) });
         b.addEventListener('click', () => this.host.copyMeasure(i));
         // "거리·각도"도 번역층이 옮긴다(값과 축 이름은 사전 틀이 그대로 끼운다 — 31차 전에는 다른 언어에서도 한국어로 남았다)
         return h('div', { class: 'ml-line' }, h('span', {}, measureLine(m, d.units, mm)), b);

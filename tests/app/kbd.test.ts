@@ -1515,3 +1515,85 @@ describe('여는 중 덮개 「취소」에 둔 초점을 덮개가 숨을 때 3
     expect(app.match(/keepBarFocus\(/g)).toHaveLength(3);
   });
 });
+
+describe('패널 아래 띠 최근 측정의 줄 복사 버튼에 둔 초점을 다시 그려도 같은 차례 줄로(202차 — 192·194차 남은 일, 151차 열쇠에 줄 차례, 192차 측정 띠 기록과 같게, WCAG 2.4.3)', () => {
+  // 151·156차 시험 꼴: 실제 패널·작은 모형, 최근 측정 세 줄(새것이 앞 — 앱 pushMeasure 차례)
+  const tape = (x: number): MeasureToolResult => ({ kind: 'tape', a: [0, 0, 0], b: [x, 0, 0], distance: x, dx: x, dy: 0, dz: 0 });
+  const stage = () => {
+    const d = rowDoc();
+    d.selection = { kind: 'node', index: 0 };
+    const view = html('<canvas tabindex="0"></canvas>').firstElementChild as HTMLElement;
+    let log: MeasureToolResult[] = [tape(3), tape(2), tape(1)];
+    const noop = (): void => {};
+    const host: PanelHost = {
+      setTagVisible: noop, setAllTagsVisible: noop, setOutlineVisible: noop, setNodeVisible: noop, setExpanded: noop, collapseAll: noop, setPickMode: noop,
+      setShowSoft: noop, setShowHidden: noop, setFolderVisible: noop, setAnnotationVisible: noop, setFileSection: noop, applyPage: noop,
+      hideSelection: noop, isolateSelection: noop, unhideAll: noop, isolated: false, measureHint: null,
+      get measureLogList() {
+        return log;
+      },
+      copyMeasure: noop,
+      // 앱 clearMeasureLog 꼴: 기록을 비우고 패널을 다시 그린다
+      clearMeasureLog: () => {
+        log = [];
+        panel.refreshSelection();
+      },
+      select: noop, selectPickedPart: noop, zoomToSelection: noop, closePanel: noop, measuring: false,
+      view,
+    };
+    const panel = new Panel(host);
+    document.body.append(panel.el);
+    panel.el.hidden = false;
+    panel.show(d);
+    const foot = panel.el.querySelector<HTMLElement>('.pfoot')!;
+    const rows = (): HTMLButtonElement[] => [...foot.querySelectorAll<HTMLButtonElement>('button.ml-copy-btn')];
+    const push = (m: MeasureToolResult): void => {
+      log = [m, ...log];
+    };
+    return { d, view, panel, foot, rows, push, host };
+  };
+
+  it('둘째 줄 아래 복사 버튼에 초점이 있을 때 띠를 다시 그리면(그 버튼에서 Esc로 고른 것 지우기·측정 끄기, 측정 안내, 언어 바꿈) 첫 줄이 아니라 같은 차례 줄의 새 복사 버튼으로', () => {
+    const { d, panel, rows, push } = stage();
+    // ① 둘째 줄에서 친 Esc(keys.ts — 고른 것이 있으면 고른 것 지우기) → 앱이 고른 것을 풀고 refreshSelection → 아래 띠를 통째로 다시 그림.
+    //    고치기 전: 줄 복사 버튼 열쇠가 모두 `button|이 결과 글 복사`라 첫 줄의 복사 버튼으로 갔다
+    const second = rows()[1]!;
+    second.focus();
+    d.selection = null;
+    panel.refreshSelection();
+    expect(second.isConnected).toBe(false);
+    expect(document.activeElement).toBe(rows()[1]);
+    // ② 셋째 줄 — 번역층이 이름을 옮긴 뒤(열쇠는 다시 그린 바로 뒤 적어 둔 것) 보이기 바뀜으로 다시 그려도 같은 줄
+    rows()[2]!.focus();
+    for (const b of rows()) b.setAttribute('aria-label', 'Copy this result');
+    panel.refreshVisibility();
+    expect(document.activeElement).toBe(rows()[2]);
+    // ③ 새 측정이 앞에 붙어 다시 그려도 같은 차례(한 칸 밀린 줄 — 192차 측정 띠 기록의 focusSpot 차례와 같음)
+    rows()[1]!.focus();
+    push(tape(4));
+    panel.refreshSelection();
+    expect(rows()).toHaveLength(4);
+    expect(document.activeElement).toBe(rows()[1]);
+  });
+
+  it('첫 줄은 그대로 첫 줄, 띠 밖 초점은 그대로, 기록 지우기로 줄이 없어지면 3D 보기 — 줄 복사 버튼 이름·풀이는 그대로이고 열쇠(data-key)만 줄 차례', () => {
+    const { panel, view, foot, rows, host } = stage();
+    rows()[0]!.focus();
+    panel.refreshSelection();
+    expect(document.activeElement).toBe(rows()[0]);
+    // 띠 밖(3D 보기)은 다시 그려도 그대로
+    view.focus();
+    panel.refreshSelection();
+    expect(document.activeElement).toBe(view);
+    // 둘째 줄에서 기록 지우기 길(기록째 없어짐 — 같은 차례 줄도 반대 동작도 없음) → 3D 보기(151차와 같은 곳)
+    rows()[1]!.focus();
+    host.clearMeasureLog();
+    expect(foot.querySelector('.measure-history')).toBeNull();
+    expect(document.activeElement).toBe(view);
+    // 이름·풀이는 모두 같은 「이 결과 글 복사」 그대로(줄 글이 문맥 — 156차), 열쇠는 줄 차례라 서로 다름, 버튼 줄 열쇠(151차 — 숨기기·분리)는 그대로
+    const again = stage();
+    expect(again.rows().map((b) => [b.getAttribute('aria-label'), b.title])).toEqual(Array(3).fill(['이 결과 글 복사', '이 결과 글 복사']));
+    expect(again.rows().map((b) => b.dataset.key)).toEqual(['ml-copy-0', 'ml-copy-1', 'ml-copy-2']);
+    expect([...again.foot.querySelectorAll<HTMLElement>('.foot-acts button')].map((b) => b.dataset.key)).toEqual(['hide', 'isolate']);
+  });
+});
