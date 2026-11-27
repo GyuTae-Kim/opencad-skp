@@ -441,7 +441,8 @@ describe('language URLs and UI presentation', () => {
     (document.querySelector('.language-list [data-language="ja"]') as HTMLButtonElement).click();
     for (let i=0;i<4;i++) await new Promise(resolve=>setTimeout(resolve,0));
     expect(msg(given.at(-1) as KeyboardSnapOptions, 'start')).toBe(translate('가상 커서를 켰습니다. {0}. {1}','ja'));
-    expect(kp.text).toBe('모서리 · Layer0');
+    // 216차: 언어를 바꾸면 앞 언어로 넣은 마지막 알림 글은 비운다(번역층 밖 칸이라 남으면 화면 읽기 프로그램의 읽기 모드가 앞 언어로 읽었다 — WCAG 3.1.2·4.1.3, 빈 글은 알리지 않는다)
+    expect(kp.text).toBe('');
     kp.set(false);
     expect(given.at(-1)).toBe(false);
     dispose(); dispose=undefined; dom.window.close();

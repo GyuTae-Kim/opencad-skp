@@ -245,8 +245,13 @@ export class KeyPick {
     this.setMode(!measure ? 'pick' : this.app.measureTool?.active ? measure : null);
   }
 
-  /** 화면 언어를 바꿨으면 새 언어 틀로(켜진 커서는 그 자리를 다시 구한다) */
+  /**
+   * 화면 언어를 바꿨으면 새 언어 틀로(켜진 커서는 그 자리를 다시 구한다).
+   * 216차: 알림 칸에 앞 언어로 넣은 마지막 글은 비운다 — 번역층 밖 칸이고 코어는 틀만 바꾸면 다시 알리지 않아, 화면 읽기 프로그램의 읽기 모드가 앞 언어 글을 읽었다
+   * (WCAG 3.1.2·4.1.3 — 빈 글은 알리지 않는다, 다음 키가 새 언어로 알린다)
+   */
   relocalize(): void {
+    this.live.textContent = '';
     if (this.mode) this.apply();
   }
 

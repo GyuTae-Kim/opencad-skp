@@ -11,11 +11,16 @@
  * 215차: 214차가 그리지 않은 화면 넷 — 측정 중 안내(줄자·각도기·측정 띠·최근 측정 기록), 뷰어가 있어야 여는 메뉴(표준 뷰·단면 보기·보기 설정), 그림 저장 창, 바로 가기 안내 창 —
  * 을 같은 걸음에 더한다. 측정 조각이 쓰는 뷰어 기능만 가진 가짜 뷰어(measure.test 꼴)와 실제 덧그림을 앱 자리에 넣고, 그 뒤는 앱의 길(도구 막대 버튼·앱 함수 — 조각 받기 포함) 그대로.
  * 이름도 정의 이름도 없는 그룹 아래 항목의 경로(상태 막대·고른 것 탭 「위치」·찾기 줄)와 해석기의 이름 없는 태그·정의 기본 이름(「#n」)도 본다.
+ * 216차: 커서·포인터가 있어야 뜨는 화면 셋 — 측정 툴팁(커서 옆 스냅 이름·값), 겹친 것 고르기 목록, 가상 커서 알림(키보드 붙잡기·고르기) — 을 같은 걸음에 더한다.
+ * 가짜 뷰어에 코어의 키보드 붙잡기 몫과 겹친 것 후보를 더하고 앱 ensureViewer처럼 KeyPick·PickList를 그 뷰어로 만들어, 캔버스에 보낸 포인터·키 사건이 앱 길(창 키 처리·측정 도구·목록) 그대로 띄운다.
+ * 그리고 언어를 바꾼 뒤 알림 영역(role=status·alert·aria-live)에 앞 언어로 넣은 글이 남지 않는지 본다(WCAG 3.1.2·4.1.3 — 번역층이 건너뛰는 칸은 앱이 그때 언어 글을 넣는다).
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import type { KeyboardSnapAnnouncement, KeyboardSnapOptions, Pick3d, PickGroupKey, Viewer3d } from 'opencad-viewer3d';
 import type { CameraState } from 'opencad-viewer3d/camera';
+import { keySnapHint, keySnapMessages, keySnapText, normalizeKeySnapKeys, orderedText, pointText, type KeySnapMessageKey, type KeySnapText } from 'opencad-viewer3d/keysnap';
 import type { Scene3d } from 'opencad-viewer3d/types';
 import { skpToScene } from '../../src/index';
 import { readLayers } from '../../src/vffroot';
@@ -25,9 +30,11 @@ import { SAMPLE_NAME, sampleSkpBytes } from '../../src/app/sample';
 import { installLocalization } from '../../src/app/i18n';
 import { SkpViewerApp } from '../../src/app/app';
 import type { Mixed } from '../../src/app/filetext';
+import { KEY_PICK_TEXT, KeyPick } from '../../src/app/keypick';
 import type { MeasureTool, MeasureViewer } from '../../src/app/measure';
 import { Overlay } from '../../src/app/overlay';
 import type { Panel } from '../../src/app/panel';
+import { PickList } from '../../src/app/picklist';
 import { nodeName } from '../../src/app/tree';
 import { unsupportedNotice } from '../../src/worker/notice';
 import { catalogs, sourceMessage, translate } from '../../site/i18n.mjs';
@@ -70,6 +77,10 @@ interface Inner {
   shortcutsClose: (() => void) | null;
   toggleMeasureLock(): void;
   toggleMeasureLog(): void;
+  // 216차: 가상 커서·겹친 것 목록(앱 ensureViewer가 코어 뷰어로 만든다)과 그 둘을 도구에 맞추는 도구 막대 갱신
+  keyPick: KeyPick | null;
+  pickList: PickList | null;
+  refreshToolbar(): void;
 }
 
 /** 215차 가짜 뷰어: 캔버스 한 변(CSS 화소)과 위에서 본 평행 투영(measure.test 꼴 — 화면 1화소 = 세계 1, 화면 (100 + X, 100 − Y)) */
@@ -77,42 +88,173 @@ const W = 200;
 const FOV = (40 * Math.PI) / 180;
 const TOP: CameraState = { target: [0, 0, 0], distance: W / 2 / Math.tan(FOV / 2), yaw: 0, pitch: Math.PI / 2, projection: 'orthographic', fovY: FOV };
 
+/** 216차 가짜 코어 가상 커서: 화살표 한 번에 옮기는 화소(코어 기본 5화소 대신 — 후보가 있는 곳과 빈 곳을 몇 번에 오가게) */
+const FAKE_STEP = 40;
+/** 216차 가짜 후보: 캔버스 이 x(CSS 화소)보다 오른쪽은 빈 곳(후보 없음) */
+const EMPTY_X = 160;
+/** 216차 가짜 뷰어(측정 도구 몫 + 코어 키보드 붙잡기·겹친 것 후보 몫) */
+type FakeCore = MeasureViewer & Pick<Viewer3d, 'setKeyboardSnap' | 'handleKey' | 'pickCandidates' | 'claimPointer' | 'setPickPreview' | 'viewCubeSize' | 'setViewCubeSize'>;
+
+/** 가짜 뷰어를 다루는 포인터·키(캔버스에 사건을 보낸다 — 앱 창 키 처리·측정 도구·겹친 것 목록이 듣는 길 그대로) */
+interface FakeView {
+  /** 누르기(마우스 — 누르고 떼기) */
+  press(x: number, y: number): void;
+  /** 216차: 마우스 옮기기(측정 툴팁) */
+  move(x: number, y: number): void;
+  /** 216차: 마우스 오른쪽 버튼을 끌지 않고 누르고 떼기(겹친 것 목록) */
+  right(x: number, y: number): void;
+  /** 216차: 키 누르기(keydown — 대상 el, 없으면 캔버스) */
+  key(k: string, el?: Element | null): void;
+  /** 216차: 가짜 코어 가상 커서가 켜졌는지 */
+  readonly cursor: boolean;
+}
+
 /**
  * 뷰어가 있어야 여는 화면(측정 도구·보기 메뉴·그림 저장 창)을 그리려고, 측정 조각이 쓰는 뷰어 기능만 가진 가짜 뷰어(누른 자리 밑 면 위 점 — 와이어프레임이라 가림 없음)와
- * 실제 덧그림을 앱 자리(3D 보기 칸)에 넣는다. 돌려주는 함수는 캔버스 누르기(마우스 — 누르고 떼기)
+ * 실제 덧그림을 앱 자리(3D 보기 칸)에 넣는다.
+ * 216차: 코어의 키보드 붙잡기(setKeyboardSnap·keyboardCursor·handleKey — 고르기 모드만, 앱은 코어 측정을 쓰지 않는다)와 겹친 것 후보(pickCandidates)도 갖고,
+ * 앱 ensureViewer처럼 가상 커서(KeyPick)·겹친 것 목록(PickList)을 이 뷰어로 만들어 앱 자리에 둔다(도구 막대 갱신이 도구에 맞춘다 — 3D 강조 미리 보기는 그래픽 길이라 뺀다).
+ * 가짜 코어 알림 글은 코어 keyAnnounce와 같은 차례로 코어 글 함수(keysnap — keySnapText·orderedText·pointText·keySnapHint)에 앱이 준 틀·이름·수 꼴을 넣어 만든다.
+ * 커서는 첫 화살표·Enter에 3D 보기 가운데에 켜고(옮기지 않음) 그 뒤 화살표마다 FAKE_STEP 화소 옮긴다. 후보는 빈 곳(EMPTY_X 오른쪽)이 아니면 예제 문서 메시에서 묶음 열쇠로 하나씩 셋까지
  */
-function fakeViewer(a: Inner): (x: number, y: number) => void {
+function fakeViewer(a: Inner): FakeView {
   const canvas = document.createElement('canvas');
   Object.defineProperty(canvas, 'clientWidth', { get: () => W });
   Object.defineProperty(canvas, 'clientHeight', { get: () => W });
   a.els.viewHost.append(canvas);
-  const viewer: MeasureViewer = {
+  let ks: KeyboardSnapOptions | null = null;
+  let cur: { x: number; y: number; index: number; picks: Pick3d[] } | null = null;
+  const candidates = (x: number, y: number, group?: PickGroupKey | null, max = 3): Pick3d[] => {
+    const d = a.doc;
+    const out: Pick3d[] = [];
+    if (!d || x > EMPTY_X) return out;
+    const seen = new Set<string | number>();
+    for (const m of d.scene.meshes) {
+      const p: Pick3d = { kind: 'mesh', id: m.id, index: 0, point: [x - W / 2, W / 2 - y, 0] };
+      const k = group?.(p, out.length) ?? m.id;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(p);
+      if (out.length >= Math.min(3, max)) break;
+    }
+    return out;
+  };
+  const messages = (): KeySnapText => (typeof ks!.messages === 'function' ? ks!.messages : keySnapMessages(ks!.messages));
+  const num = (v: number): string => {
+    const s = ks?.formatNumber?.(v, { kind: 'x', text: String(v), digits: 0, unit: '' });
+    return typeof s === 'string' && s ? s : String(v);
+  };
+  const pickText = (p: Pick3d, M: KeySnapText, index: number): string => {
+    const s = ks?.pickName?.(p, index);
+    const name = (typeof s === 'string' && s.trim()) || p.id;
+    return keySnapText(M, 'pickItem', [name, keySnapText(M, p.section ? 'pick.section' : (`pick.${p.kind}` as KeySnapMessageKey))]);
+  };
+  const say = (reason: KeyboardSnapAnnouncement['reason'], lead?: string): void => {
+    const c = cur;
+    if (!ks?.announce || !c) return;
+    const M = messages();
+    const p = c.picks[c.index] ?? null;
+    const n = c.picks.length;
+    const body = p ? orderedText(pickText(p, M, c.index), c.index, n, pointText(p.point, num, M), null, M) : keySnapText(M, 'noPick');
+    let text = lead ?? (reason === 'cycle' && n === 1 ? keySnapText(M, 'only', [body]) : body);
+    if (reason === 'start') text = keySnapText(M, 'start', [body, keySnapHint(normalizeKeySnapKeys(ks.keys), 'pick', !!ks.pickCycle, M)]);
+    ks.announce({ reason, mode: 'pick', x: c.x, y: c.y, snap: null, index: c.index, count: n, pick: p, text });
+  };
+  const at = (x: number, y: number): void => {
+    const pc = ks!.pickCycle;
+    cur = { x, y, index: 0, picks: pc ? candidates(x, y, typeof pc === 'object' ? pc.group : null) : [] };
+  };
+  const ARROWS: Record<string, readonly [number, number]> = { ArrowRight: [1, 0], ArrowLeft: [-1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+  const viewer: FakeCore = {
     canvas,
     pick: (x, y) => ({ kind: 'mesh', id: 'fake', index: 0, point: [x - W / 2, W / 2 - y, 0] }),
     getCamera: () => TOP,
     onCameraChange: () => () => {},
     getRenderMode: () => 'wireframe',
     section: null,
+    get keyboardCursor() {
+      const c = cur;
+      return c && { x: c.x, y: c.y, mode: 'pick' as const, index: c.index, count: c.picks.length };
+    },
+    // 코어처럼: 끄면 켜진 커서도 알리지 않고 끄고, 다시 주면 틀만 바꾼다(켜진 커서는 그대로 — 알리지 않는다)
+    setKeyboardSnap: (o) => {
+      if (!o) cur = null;
+      ks = !o ? null : o === true ? {} : { ...o };
+    },
+    // 코어 keyboardKey 꼴(대상이 3D 보기일 때만): 화살표 켜기·옮기기, Tab 후보 돌리기(고르기 모드), Enter 켜기·고르기, Esc 끄기
+    handleKey: (e) => {
+      const c = cur;
+      if (!ks || e.defaultPrevented || (e.target && e.target !== canvas) || e.ctrlKey || e.metaKey || e.altKey) return false;
+      const d = ARROWS[e.key];
+      if (d || (e.key === 'Enter' && !c)) {
+        if (c) at(c.x + d![0] * FAKE_STEP, c.y + d![1] * FAKE_STEP);
+        else at(W / 2, W / 2);
+        say(c ? 'move' : 'start');
+      } else if (e.key === 'Tab' && c && ks.pickCycle && c.picks.length) {
+        c.index = (c.index + (e.shiftKey ? c.picks.length - 1 : 1)) % c.picks.length;
+        say('cycle');
+      } else if (e.key === 'Enter' && c) {
+        const M = messages();
+        const p = c.picks[c.index];
+        say('commit', p ? keySnapText(M, 'picked', [pickText(p, M, c.index)]) : keySnapText(M, 'pickedNothing'));
+      } else if (e.key === 'Escape' && c) {
+        cur = null;
+        ks.announce?.({ reason: 'end', mode: 'pick', x: c.x, y: c.y, snap: null, index: 0, count: 0, pick: null, text: keySnapText(messages(), 'end') });
+      } else return false;
+      e.preventDefault();
+      return true;
+    },
+    pickCandidates: (x, y, o) => (typeof o === 'object' ? candidates(x, y, o.group, o.max) : candidates(x, y)),
+    claimPointer: () => false,
+    setPickPreview: () => {},
+    // 앱 languagechange가 뷰 큐브 글을 다시 그리게 부른다(216차 언어 바꾸기 걸음)
+    viewCubeSize: 0,
+    setViewCubeSize: () => {},
   };
   const overlay = new Overlay(a.els.viewHost);
   overlay.attach(viewer as never);
   a.viewer = viewer;
   a.overlay = overlay;
-  return (x, y) => {
-    for (const type of ['pointerdown', 'pointerup']) {
-      const e = new MouseEvent(type, { clientX: x, clientY: y, button: 0, buttons: type === 'pointerdown' ? 1 : 0, bubbles: true });
-      Object.defineProperty(e, 'pointerId', { value: 1 });
-      Object.defineProperty(e, 'pointerType', { value: 'mouse' });
-      canvas.dispatchEvent(e);
-    }
-    overlay.paintNow();
+  // 앱 ensureViewer와 같은 둘(겹친 것 목록은 측정·걷기가 아닐 때만 연다 — 고른 것은 이 시험이 보지 않는다)
+  a.keyPick = new KeyPick(viewer as unknown as Viewer3d, a.els.viewHost, () => a.doc, a as never);
+  a.pickList = new PickList(viewer as never, () => a.doc, { allowed: () => !!a.doc && !a.measureTool?.active, choose: () => {} });
+  a.refreshToolbar();
+  const ptr = (type: string, x: number, y: number, button = 0, buttons = 0): void => {
+    const e = new MouseEvent(type, { clientX: x, clientY: y, button, buttons, bubbles: true });
+    Object.defineProperty(e, 'pointerId', { value: 1 });
+    Object.defineProperty(e, 'pointerType', { value: 'mouse' });
+    canvas.dispatchEvent(e);
+  };
+  return {
+    press(x, y) {
+      ptr('pointerdown', x, y, 0, 1);
+      ptr('pointerup', x, y);
+      overlay.paintNow();
+    },
+    move(x, y) {
+      ptr('pointermove', x, y);
+      overlay.paintNow();
+    },
+    right(x, y) {
+      ptr('pointerdown', x, y, 2, 2);
+      ptr('pointerup', x, y, 2);
+    },
+    key(k, el) {
+      (el ?? canvas).dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+      overlay.paintNow();
+    },
+    get cursor() {
+      return !!cur;
+    },
   };
 }
+
+/** 요소 꼴 이름(태그 + 클래스) */
+const tag = (el: Element): string => el.localName + [...el.classList].map((c) => `.${c}`).join('');
 
 /** 한글이 든 자리: 「요소: 글」·「요소@속성: 값」(파일 글 칸 안이면 앞에 「[파일 칸] 」). 언어 메뉴(원어 이름)는 뺀다 */
 function hangulSpots(root: Element): string[] {
   const out: string[] = [];
-  const tag = (el: Element): string => el.localName + [...el.classList].map((c) => `.${c}`).join('');
   for (const el of [root, ...root.querySelectorAll('*')]) {
     if (el.closest('.language-control, .language-list, script, style')) continue;
     const mark = el.closest(FILE_CELLS) ? '[파일 칸] ' : '';
@@ -264,17 +406,44 @@ describe('214차: 다른 언어 화면에 앱 한국어가 남지 않는다(WCAG
     await tick();
     collect();
     // ── 215차: 뷰어가 있어야 여는 화면(가짜 뷰어·실제 덧그림을 앱 자리에) ──
-    const press = fakeViewer(a);
+    const fv = fakeViewer(a);
+    const press = fv.press;
     const key = (k: string): boolean => !!a.measureTool?.handleKey(new KeyboardEvent('keydown', { key: k, cancelable: true }));
     const settle = async (): Promise<void> => {
       await tick();
       collect();
+    };
+    // 216차: 측정 툴팁이 보이는지(커서 옆 — 글이 있고 숨기지 않음), 가상 커서 알림 칸의 지금 글
+    const tipShown = (): boolean => {
+      const t = document.querySelector<HTMLElement>('.measure-tip');
+      return !!t && t.style.display === 'block' && !!t.textContent;
+    };
+    const live = (): string => document.querySelector('.kp-live')?.textContent ?? '';
+    /** 216차: 키를 차례로 보내고 걸음마다 모은다(알림 칸에 글이 들었는지 — soft) */
+    const keys = async (list: readonly string[]): Promise<void> => {
+      for (const k of list) {
+        fv.key(k);
+        expect.soft(live(), `${code}: ${k}`).not.toBe('');
+        await settle();
+      }
+    };
+    /** 216차: 켜진 가상 커서를 Esc로 끈다(측정 도구가 지울 것 — 점·끌어온 점·평면 고정·결과 — 이 먼저, 다 지우면 커서 끄기. 커서가 꺼지면 더 보내지 않는다 — 측정을 끄지 않게) */
+    const escape = async (): Promise<void> => {
+      for (let i = 0; i < 6 && fv.cursor; i++) {
+        fv.key('Escape');
+        await settle();
+      }
+      expect.soft(fv.cursor, code).toBe(false);
     };
     // 측정 중 안내 — 줄자: 켬(측정 조각을 받아 도구를 만든 뒤 켠다 — 앱 길 그대로). 점 0: 안내·안내 두기 키
     app.toggleMeasure(true);
     await until(() => !!a.measureTool?.active);
     // 걸음 사이 확인은 soft로(어긋나도 뒤 걸음까지 다 모은 뒤 맨 아래에서 한 번에 견준다)
     expect.soft(a.measureTool?.mode, code).toBe('tape');
+    await settle();
+    // 216차 측정 툴팁(마우스 — 점 0: 커서 밑 추정 이름)
+    fv.move(120, 90);
+    expect.soft(tipShown(), code).toBe(true);
     await settle();
     // 안내 두기 켜고 끄기(측정 띠 버튼 — 안내 글·잠깐 알림)
     a.els.measureGuide.click();
@@ -288,8 +457,16 @@ describe('214차: 다른 언어 화면에 앱 한국어가 남지 않는다(WCAG
     a.toggleMeasureLock();
     expect.soft(document.querySelectorAll('.mb-lockpick').length, code).toBe(3);
     await settle();
+    // 216차: 시작점 뒤 툴팁(추정 이름 · 길이 — 시작점 빨강 축 위). 잠금 버튼 뒤에(먼저 옮기면 맞춘 방향이 생겨 버튼이 고르기 줄 대신 그 방향을 잠근다)
+    fv.move(150, 100);
+    expect.soft(tipShown(), code).toBe(true);
+    await settle();
     for (const k of ['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowRight']) {
       key(k);
+      await settle();
+      // 216차: 잠근 뒤 툴팁(추정 이름 · 잠금 · 길이)
+      fv.move(150, 130);
+      expect.soft(tipShown(), `${code}: ${k}`).toBe(true);
       await settle();
     }
     // 결과(거리·축 성분·복사)·최근 측정 기록(측정 띠 위 목록·패널)
@@ -300,6 +477,10 @@ describe('214차: 다른 언어 화면에 앱 한국어가 남지 않는다(WCAG
     await settle();
     a.panel.rerender();
     await settle();
+    // 216차 가상 커서 알림 — 줄자: 3D 보기 Enter로 켬(켬 틀 · 자리 글 · 키 안내) → 화살표(자리 글) → Enter 시작점 → 화살표(자리 글 · 길이) → Enter 결과 줄 → Esc로 결과 지우기·끄기
+    await keys(['Enter', 'ArrowRight', 'Enter', 'ArrowRight', 'Enter']);
+    expect.soft(d.measure?.kind, code).toBe('tape');
+    await escape();
     // 측정 안내의 모든 갈래(손가락 기기 갈래 포함 — measureHint)를 측정 띠·상태 막대에
     d.measure = null;
     const hints = new Set<string>();
@@ -320,7 +501,31 @@ describe('214차: 다른 언어 화면에 앱 한국어가 남지 않는다(WCAG
       key(k);
       await settle();
     }
+    // 216차 가상 커서 알림 — 각도기: Enter 켬 → Enter 중심 → 화살표 → Enter 기준 방향 → 화살표(자리 글 · 각도) → Enter 결과 줄 → Esc. 그리고 마우스 툴팁
+    await keys(['Enter', 'Enter', 'ArrowUp', 'Enter', 'ArrowRight', 'Enter']);
+    await escape();
+    fv.move(130, 80);
+    expect.soft(tipShown(), code).toBe(true);
+    await settle();
     app.toggleProtractor(false);
+    // 216차 가상 커서 알림 — 고르기(측정을 끄면 고르기 도구): 화살표로 켬(후보 셋 — 차례·수) → Tab 돌리기 → 화살표 둘로 빈 곳(고를 것 없음) → Enter(빈 곳) → 화살표 둘로 후보 자리 → Enter(고름) → Esc 끔
+    expect.soft(a.keyPick?.enabled, code).toBe(true);
+    await keys(['ArrowRight', 'Tab', 'ArrowRight', 'ArrowRight', 'Enter', 'ArrowLeft', 'ArrowLeft', 'Enter', 'Escape']);
+    expect.soft(fv.cursor, code).toBe(false);
+    // 216차 겹친 것 고르기 목록: 마우스 오른쪽 버튼으로 연 목록(후보 — 이름 · 종류)과 빈 곳 목록(고를 것 없음 한 줄), 목록 줄의 Esc로 닫기
+    for (const x of [100, 190]) {
+      fv.right(x, 100);
+      const rows = document.querySelectorAll('.pick-list .menu-item').length;
+      if (x > EMPTY_X) expect.soft(rows, code).toBe(1);
+      else expect.soft(rows, code).toBeGreaterThan(0);
+      await settle();
+      fv.key('Escape', document.activeElement);
+      expect.soft(document.querySelector('.pick-list'), code).toBeNull();
+    }
+    a.pickList?.set(false);
+    a.keyPick?.set(false);
+    a.pickList = null;
+    a.keyPick = null;
     // 뷰어가 있어야 여는 메뉴: 표준 뷰·단면 보기·보기 설정(넓은 화면 — 측정 조각의 안내 항목, 휴대폰 — 넓은 화면 도구 막대에만 있는 버튼까지)
     const phone = a.phoneQuery;
     for (const [btn, narrow] of [[a.els.viewBtn, false], [a.els.secMenuBtn, false], [a.els.moreBtn, false], [a.els.moreBtn, true]] as const) {
@@ -389,6 +594,73 @@ describe('214차: 다른 언어 화면에 앱 한국어가 남지 않는다(WCAG
     // 언어 메뉴 단추 이름은 화면 언어(원어 이름 목록은 위에서 뺐다)
     expect(document.querySelector('.language-trigger')!.getAttribute('aria-label'), code).not.toMatch(HANGUL);
     expect([...spots].sort(), code).toEqual([...LEFT[code]].sort());
+  });
+
+  it('216차: 언어를 바꾸면 알림 영역(role=status·alert·aria-live)에 앞 언어로 넣은 글이 남지 않는다 — 번역층 밖 가상 커서 알림 칸은 비운다(WCAG 3.1.2·4.1.3)', async () => {
+    const { app, a } = await mountApp('ko');
+    const bytes = sampleSkpBytes(undefined, (s) => s);
+    const d = createDoc(SAMPLE_NAME, bytes.length, { scene: skpToScene(bytes, { name: SAMPLE_NAME, outline: true }), ms: 12 });
+    a.doc = d;
+    a.refreshChrome();
+    const fv = fakeViewer(a);
+    const live = (): string => document.querySelector('.kp-live')?.textContent ?? '';
+    /** 보이는(숨기지 않은 — hidden·aria-hidden·display:none 조상 없음) 알림 영역의 「요소: 글」 */
+    const regions = (): string[] => {
+      const hidden = (el: Element): boolean => {
+        for (let e: Element | null = el; e; e = e.parentElement)
+          if (e.hasAttribute('hidden') || e.getAttribute('aria-hidden') === 'true' || (e as HTMLElement).style?.display === 'none') return true;
+        return false;
+      };
+      return [...document.querySelectorAll('[role="status"], [role="alert"], [aria-live]:not([aria-live="off"])')].filter((el) => !hidden(el)).map((el) => `${tag(el)}: ${el.textContent ?? ''}`);
+    };
+    /** 공용 언어 메뉴로 바꾼다(사전을 받은 뒤 앱 languagechange까지 한 차례), 측정 툴팁은 다음 그림에 다시 그린다(app.ts — overlay.invalidate) */
+    const choose = async (code: string): Promise<void> => {
+      (document.querySelector(`.language-list [data-language="${code}"]`) as HTMLButtonElement).click();
+      await until(() => document.documentElement.lang === code);
+      await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+      await tick();
+    };
+    const escape = (): void => {
+      for (let i = 0; i < 4 && fv.cursor; i++) fv.key('Escape');
+    };
+    const old = unsupportedNotice({ name: 'old.skp', units: 'unknown', meshes: [], lines: [], meta: { unsupported: true } } as unknown as Scene3d, 'old.skp')!;
+    app.toggleMeasure(true);
+    await until(() => !!a.measureTool?.active);
+    for (const code of CODES) {
+      // 한국어 화면에서 알림 영역마다 글을 넣는다: 가상 커서 알림(켜고 옮기고 끈 글), 측정 툴팁(마우스), 측정 띠 안내·잠깐 알림(안내 두기), 알림 상자
+      fv.key('Enter');
+      fv.key('ArrowRight');
+      escape();
+      expect(live(), code).toBe(KEY_PICK_TEXT.end);
+      fv.move(120, 90);
+      a.els.measureGuide.click();
+      a.showNotice('warn', old.title, old.text);
+      await tick();
+      const before = regions().filter((s) => HANGUL.test(s));
+      expect(before, code).toContain(`div.kp-live: ${KEY_PICK_TEXT.end}`);
+      expect(before.some((s) => s.startsWith('div.measure-tip: ')), code).toBe(true);
+      expect(before.length, code).toBeGreaterThanOrEqual(5);
+      await choose(code);
+      // 보이는 알림 영역에 한국어가 남지 않고(번역층이 옮기거나 앱이 다시 그림), 가상 커서 알림 칸은 비었다(빈 글 — 알리지 않는다)
+      expect.soft(regions().filter((s) => HANGUL.test(s)), code).toEqual([]);
+      expect.soft(live(), code).toBe('');
+      // 거꾸로: 그 언어로 넣은 알림 글도 한국어로 바꾸면 비운다
+      fv.key('Enter');
+      expect.soft(live(), code).not.toBe('');
+      expect.soft(live(), code).not.toMatch(HANGUL);
+      await choose('ko');
+      expect.soft(live(), `${code} → ko`).toBe('');
+      escape();
+    }
+    a.pickList?.set(false);
+    a.keyPick?.set(false);
+    a.pickList = null;
+    a.keyPick = null;
+    a.measureTool?.dispose();
+    a.measureTool = null;
+    a.overlay?.dispose();
+    a.overlay = null;
+    a.viewer = null;
   });
 
   it('새 열쇠는 같은 사전의 낱말이고 네 사전에서 하나뿐(거꾸로 찾기 제 원문) — 상태 막대 「좌표 {0}」·못 읽는 판 알림 제목', () => {
