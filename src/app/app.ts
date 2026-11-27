@@ -508,8 +508,9 @@ export class SkpViewerApp implements PanelHost {
     this.root.className = 'app';
     this.applyTheme();
 
-    const tbtn = (label: string, ico: string, title: string, run: () => void, cls = ''): HTMLButtonElement => {
-      const b = h('button', { class: `tbtn ${cls}`.trim(), title, 'aria-label': title, html: `${icon(ico)}<span class="lbl">${label}</span>` });
+    // named: 화면 읽기 이름을 보이는 글로(173차 — 풀이 글이 이름이면 보이는 글을 품지 않아 같은 기능의 처음 화면 버튼·메뉴·창과 이름이 달랐다. 풀이는 title로 남는다)
+    const tbtn = (label: string, ico: string, title: string, run: () => void, cls = '', named = false): HTMLButtonElement => {
+      const b = h('button', { class: `tbtn ${cls}`.trim(), title, 'aria-label': named ? label : title, html: `${icon(ico)}<span class="lbl">${label}</span>` });
       b.addEventListener('click', run);
       return b;
     };
@@ -528,7 +529,7 @@ export class SkpViewerApp implements PanelHost {
       docName,
       h('span', { class: 'spacer' }),
       tbtn('열기', 'open', 'SketchUp 파일 열기 (.skp)', () => this.chooseFile(), 'primary'),
-      tbtn('예제 열기', 'sample', '예제 모형 열기(브라우저에서 만든 집 모형)', () => void this.openSample()),
+      tbtn('예제 열기', 'sample', '예제 모형 열기(브라우저에서 만든 집 모형)', () => void this.openSample(), '', true),
       themeBtn,
       link('OpenCAD 도구', 'tools', TOOLS_URL, 'OpenCAD 도구 목록(새 창)'),
       link('GitHub', 'github', REPO_URL, 'GitHub 소스 코드(새 창)'),
@@ -562,7 +563,7 @@ export class SkpViewerApp implements PanelHost {
     const axesBtn = tbtn('좌표축', 'axes', '좌표축 보이기', () => this.toggleAxes());
     const measureBtn = tbtn('줄자', 'tape', '줄자 (T): 두 점 거리 — 끝점·중간점·모서리·면에 붙고, 축·모서리와 나란한 방향이면 그 선에 고정(Shift·화살표로 잠금) · Esc 지우기', () => this.toggleMeasure());
     const protractorBtn = tbtn('각도기', 'protractor', '각도기: 중심 → 기준 방향 → 잴 방향(Shift = 평면 고정·방향 잠금) · Esc 지우기', () => this.toggleProtractor());
-    const pngBtn = tbtn('그림 저장', 'image', '지금 화면을 그림으로 저장·공유·인쇄(크기·투명 배경·글과 측정 넣기)', () => this.savePng(), 'compact wide-only');
+    const pngBtn = tbtn('그림 저장', 'image', '지금 화면을 그림으로 저장·공유·인쇄(크기·투명 배경·글과 측정 넣기)', () => this.savePng(), 'compact wide-only', true);
     const panelBtn = tbtn('패널', 'panel', '패널 열기·닫기', () => this.setPanelOpen(!this.panelOpen));
     // 단면 보기: 끔·X·Y·Z, 위치 슬라이더(장면 범위 안 0~1), 뒤집기, 잘린 면 채우기(해석기가 닫힌 입체로 가린 그물만 — capGroup)
     const axisBtn = (axis: SectionAxis): HTMLButtonElement => {
