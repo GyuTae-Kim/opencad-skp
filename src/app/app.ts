@@ -524,9 +524,10 @@ export class SkpViewerApp implements PanelHost {
     const themeBtn = tbtn('테마', 'moon', '', () => this.toggleThemeMenu(), 'icon-only');
     themeBtn.setAttribute('aria-haspopup', 'menu');
     themeBtn.setAttribute('aria-expanded', 'false');
+    // 제목 막대(banner)가 바로 뒤 형제인 보기 도구 막대를 품는다(182차 — role=toolbar는 랜드마크가 아니라 도구 막대만 랜드마크 밖이었다, WCAG 1.3.1·2.4.1. DOM·모양·Tab 차례 그대로)
     const title = h(
       'header',
-      { class: 'titlebar' },
+      { class: 'titlebar', 'aria-owns': 'view-tools' },
       h('a', { class: 'brand', href: './', title: `${APP_TITLE} 처음 화면` }, h('span', { class: 'logo', html: icon('logo', 22) }), h('span', { class: 'brand-text' }, h('b', {}, 'OpenCAD'), h('span', { class: 'brand-sub' }, ' SketchUp 뷰어'))),
       docName,
       h('span', { class: 'spacer' }),
@@ -596,7 +597,7 @@ export class SkpViewerApp implements PanelHost {
     moreBtn.addEventListener('click', () => this.toggleMoreMenu());
     const toolbar = h(
       'div',
-      { class: 'toolbar', role: 'toolbar', 'aria-label': '보기 도구' },
+      { class: 'toolbar', role: 'toolbar', id: 'view-tools', 'aria-label': '보기 도구' },
       h('div', { class: 'tgroup' }, fitBtn, viewBtn, backBtn, fwdBtn),
       sep(),
       h('div', { class: 'tgroup seg wide-only', role: 'group', 'aria-label': '투영' }, ...projBtns.values()),
