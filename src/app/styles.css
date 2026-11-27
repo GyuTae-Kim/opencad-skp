@@ -33,6 +33,8 @@
   --info-bg: #1f3045;
   /* 3D 보기 배경(뷰어의 어두운 테마와 같은 색) */
   --stage-bg: #212830;
+  /* 끌어 놓기 덮개: 흰 카드 글이 처음 화면 흰 칸·3D 보기·앱 바탕 위 4.5:1(199차 — 밝은 테마 55%는 흰 칸 위 4.35:1이라 그 테마만 짙게) */
+  --drop-veil: rgba(8, 12, 18, 0.55);
   --shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
   --font: 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', system-ui, sans-serif;
   --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
@@ -67,6 +69,7 @@
   --danger-bg: #fdecec;
   --info-bg: #e8f1fd;
   --stage-bg: #f4f5f7;
+  --drop-veil: rgba(8, 12, 18, 0.57);
   --shadow: 0 10px 28px rgba(20, 30, 45, 0.16);
   color-scheme: light;
 }
@@ -796,7 +799,7 @@ input[type='checkbox'] {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(8, 12, 18, 0.55);
+  background: var(--drop-veil);
   pointer-events: none;
 }
 

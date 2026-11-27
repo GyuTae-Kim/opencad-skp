@@ -342,3 +342,38 @@ describe('상태 막대 경고 칩 글 대비(198차 — WCAG 1.4.3: 경고 글 
     });
   }
 });
+
+describe('끌어 놓기 카드 글 대비(199차 — WCAG 1.4.3: 덮개 토큰, 밝은 테마만 짙게)', () => {
+  const prop = (sel: string, p: string): string => new RegExp(`(?:^|[;\\s])${p}:\\s*([^;]+)`).exec(bodies(sel))?.[1]?.trim() ?? '';
+  /** 색 값(#fff 꼴 세 자리 포함) 또는 var(--이름) — 그 테마 색으로 */
+  const tok = (T: Record<string, string>, v: string): Rgba => {
+    const t = v.trim();
+    const m = /^var\((--[\w-]+)\)$/.exec(t);
+    if (m) return tok(T, T[m[1]!] ?? '');
+    return rgba(t.replace(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/i, '#$1$1$2$2$3$3'));
+  };
+  for (const [name, T] of THEMES) {
+    it(`${name}: 「놓으면 엽니다」 카드 흰 글(16px)은 덮개를 섞은 처음 화면 흰 칸·3D 보기·앱 바탕 위 4.5:1(밝은 테마 덮개 55%는 흰 칸 위 4.35:1)`, () => {
+      // 카드는 바탕이 없어 반투명 덮개가 곧 글 바탕 — 그 밑은 처음 화면 끌어 놓기 칸·3D 보기·처음 화면 바탕(카드는 창 가운데)
+      const veil = tok(T, prop('.dropcover', 'background'));
+      const fg = tok(T, prop('.dropcover-card', 'color'));
+      const bases: [string, string][] = [
+        ['처음 화면 흰 칸', prop('.dropzone', 'background')],
+        ['3D 보기', prop('.stage', 'background')],
+        ['앱 바탕', prop('.start', 'background')],
+      ];
+      expect(bases.map(([, v]) => v)).toEqual(['var(--bg-elev)', 'var(--stage-bg)', 'var(--bg)']);
+      const low = bases.map(([k, v]) => [k, contrast(fg, over(veil, tok(T, v)))] as const).filter(([, c]) => c < 4.5);
+      expect(low.map(([k, c]) => `${k} ${c.toFixed(2)}`)).toEqual([]);
+    });
+  }
+  it('덮개는 테마 토큰 — 어두운 테마는 그대로 검정 55%, 밝은 테마만 같은 색에서 불투명도를 가장 가까운 0.01 걸음으로(0.56은 흰 칸 위 4.4975:1)', () => {
+    expect(prop('.dropcover', 'background')).toBe('var(--drop-veil)');
+    expect(tok(DARK, 'var(--drop-veil)')).toEqual([8, 12, 18, 0.55]);
+    const light = tok(LIGHT, 'var(--drop-veil)');
+    expect(light.slice(0, 3)).toEqual([8, 12, 18]);
+    expect(light[3]).toBeGreaterThan(0.55);
+    expect(light[3]).toBeLessThanOrEqual(0.6);
+    expect(prop('.dropcover-card', 'color')).toBe('#fff');
+  });
+});
