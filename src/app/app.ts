@@ -124,7 +124,7 @@ import { cameraForBox, keepViewOnHeightChange } from './view';
 import { cssHex, isLightBackground, loadFileBackground, safeStorage, skyBackground, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
 import type { BackgroundOptions, Rgba } from 'opencad-viewer3d';
 import { DEFAULT_EDGE_COLOR, LineContrast, edgeLooks, lineColorOverrides } from './linecontrast';
-import { closeOutside, disclose, focusIfLost, focusSpot, leaveDisabled, listKeys, listRows, menuTab, refocus, setRange, toolbarKeys } from './kbd';
+import { closeOutside, disclose, focusIfLost, focusSpot, keepRowFocus, leaveDisabled, listKeys, listRows, menuTab, refocus, setRange, toolbarKeys } from './kbd';
 import type { Rgb, SkpEdgeColorMode, SkpShadowMeta, SkpStyleMeta } from '../meta';
 import { WalkStick } from './joystick';
 import { Vcb, vcbStartKey, type VcbKind } from './vcb';
@@ -940,8 +940,12 @@ export class SkpViewerApp implements PanelHost {
   private async refreshRecent(): Promise<void> {
     const list = await this.recent.list();
     const now = Date.now();
+    // 다시 그리면 누른 ✕·찾지 못해 지운 줄의 열기가 빠지고 「모두 지우기」는 숨는 카드에 남는다 — 초점이 카드 안이었으면 그 자리에 온 줄의 열기,
+    // 줄이 없으면 처음 화면 첫 버튼(「파일 열기」)으로(188차 — 초점이 문서로 빠졌다)
+    const back = keepRowFocus(this.recentCard, this.recentList, () => this.els.start.querySelector('button'));
     this.recentList.replaceChildren(...list.map((e) => this.recentRow(e, now)));
     this.recentCard.hidden = !list.length;
+    back();
   }
 
   private recentRow(e: RecentEntry, now: number): HTMLElement {

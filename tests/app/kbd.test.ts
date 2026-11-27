@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { closeOutside, disclose, focusIfLost, focusSpot, leaveDisabled, listKeys, listRows, lost, menuTab, moveIndex, refocus, rove, setRange, treeKeys } from '../../src/app/kbd';
+import { closeOutside, disclose, focusIfLost, focusSpot, keepRowFocus, leaveDisabled, listKeys, listRows, lost, menuTab, moveIndex, refocus, rove, setRange, treeKeys } from '../../src/app/kbd';
 import { PANEL_WIDTH_STEPS, SHEET_STEPS, clampSheetFraction, nextSize } from '../../src/app/layout';
 import type { MeasureToolResult } from '../../src/app/measure';
 import { Panel, type PanelHost } from '../../src/app/panel';
@@ -260,6 +260,94 @@ describe('누른 버튼이 숨으면 초점 옮기기(150차 — 148차 막힘�
     const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
     expect(app).toMatch(/this\.clearMeasureLog\(\);\n(?:\s*\/\/[^\n]*\n)*\s*leaveDisabled\(clear, this\.viewer\?\.canvas\);/);
     expect(app).toMatch(/\n\s*view: \(\) => this\.viewer\?\.canvas,\n/);
+  });
+});
+
+describe('줄 목록을 통째로 다시 그려도 초점을 가까운 줄로(188차 — 처음 화면 최근 문서 ✕·「모두 지우기」·없는 사본, STEP 142차 꼴, WCAG 2.4.3)', () => {
+  // 앱 처음 화면 꼴: 「파일 열기」(처음 화면 첫 버튼) 뒤 최근 문서 카드(머리의 「모두 지우기」 + 줄마다 열기·✕ — recentRow)
+  const start = (names: string[]): { home: HTMLElement; card: HTMLElement; list: HTMLElement; clear: HTMLElement; other: HTMLElement; draw: (names: string[]) => void } => {
+    const box = html(
+      '<button class="btn primary">파일 열기</button><button class="btn">예제 열기</button><section class="recent"><div class="recent-head"><button class="recent-clear">모두 지우기</button></div><ul class="recent-list"></ul></section>',
+    );
+    const card = box.querySelector<HTMLElement>('.recent')!;
+    const list = box.querySelector<HTMLElement>('.recent-list')!;
+    // refreshRecent 꼴: 줄을 모두 새로 만들고, 줄이 없으면 카드째 숨긴다
+    const draw = (next: string[]): void => {
+      list.innerHTML = next.map((n) => `<li class="recent-row"><button class="recent-open">${n}</button><button class="recent-del">✕</button></li>`).join('');
+      card.hidden = !next.length;
+    };
+    draw(names);
+    return { home: box.querySelector<HTMLElement>('.btn.primary')!, card, list, clear: box.querySelector<HTMLElement>('.recent-clear')!, other: box.querySelector<HTMLElement>('.btn:not(.primary)')!, draw };
+  };
+
+  it('초점이 카드 안이었으면 다시 그려 사라진 뒤 그 자리에 온 줄(끝 줄이었으면 앞 줄)의 열기 버튼, 줄이 없으면 처음 화면 「파일 열기」로 — 앱은 refreshRecent 한 자리에서', () => {
+    const { home, card, list, clear, draw } = start(['가', '나', '다']);
+    const redraw = (next: string[]): void => {
+      const back = keepRowFocus(card, list, () => home);
+      draw(next);
+      back();
+    };
+    const opens = (): HTMLElement[] => [...list.querySelectorAll<HTMLElement>('.recent-open')];
+    const dels = (): HTMLElement[] => [...list.querySelectorAll<HTMLElement>('.recent-del')];
+    // 가운데 줄 ✕(그 줄이 빠짐) → 그 자리에 온 줄(다)의 열기
+    dels()[1]!.focus();
+    redraw(['가', '다']);
+    expect(lost()).toBe(false);
+    expect(document.activeElement).toBe(opens()[1]);
+    expect(document.activeElement?.textContent).toBe('다');
+    // 끝 줄 ✕ → 앞 줄(가)의 열기
+    dels()[1]!.focus();
+    redraw(['가']);
+    expect(document.activeElement).toBe(opens()[0]);
+    // 저장한 사본이 없어 지운 줄의 열기(누른 열기 버튼이 빠짐) — 줄이 하나도 없으면 카드째 숨고 「파일 열기」로
+    opens()[0]!.focus();
+    redraw([]);
+    expect(card.hidden).toBe(true);
+    expect(document.activeElement).toBe(home);
+    // 「모두 지우기」(버튼은 남지만 숨은 카드 안) → 「파일 열기」
+    draw(['가', '나']);
+    clear.focus();
+    redraw([]);
+    expect(document.activeElement).toBe(home);
+    // 같은 줄로 다시 그리기만 했으면(열기 실패 뒤 등) 같은 자리 줄의 열기
+    draw(['가', '나']);
+    opens()[1]!.focus();
+    redraw(['가', '나']);
+    expect(document.activeElement).toBe(opens()[1]);
+    // 앱 원문: ✕·「모두 지우기」는 지운 뒤 refreshRecent, refreshRecent는 다시 그리기 앞에 부르고 그린 뒤 돌려준 함수를 부른다.
+    // 갈 곳이 없으면 처음 화면 첫 버튼(「파일 열기」 — 알림 ✕·새 판 「나중에」와 같은 자리)
+    const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
+    expect(app).toContain("del.addEventListener('click', () => void this.recent.remove(e.id).then(() => this.refreshRecent()));");
+    expect(app).toContain("clear.addEventListener('click', () => void this.recent.clear().then(() => this.refreshRecent()));");
+    expect(app).toMatch(
+      /const back = keepRowFocus\(this\.recentCard, this\.recentList, \(\) => this\.els\.start\.querySelector\('button'\)\);\n\s*this\.recentList\.replaceChildren\(\.\.\.list\.map\(\(e\) => this\.recentRow\(e, now\)\)\);\n\s*this\.recentCard\.hidden = !list\.length;\n\s*back\(\);/,
+    );
+    expect(app.slice(app.indexOf('private buildStart(')).match(/h\('button'[^\n]*/)?.[0]).toContain('파일 열기');
+  });
+
+  it('초점이 카드 밖이었으면(다른 버튼·문서 — 누르기로 초점을 받지 않는 기기) 다시 그려도 옮기지 않고, 카드 안이었어도 그 사이 다른 곳으로 옮겼으면 그대로', () => {
+    const { home, card, list, other, draw } = start(['가', '나']);
+    // 다른 버튼
+    other.focus();
+    let back = keepRowFocus(card, list, () => home);
+    draw(['나']);
+    back();
+    expect(document.activeElement).toBe(other);
+    // 문서(body) — 손가락·Safari로 ✕를 눌러 초점이 없던 때, 줄이 다 빠져 카드가 숨어도
+    other.blur();
+    expect(document.activeElement).toBe(document.body);
+    back = keepRowFocus(card, list, () => home);
+    draw([]);
+    back();
+    expect(document.activeElement).toBe(document.body);
+    // 카드 안(✕)이었지만 지우는 동안 다른 곳으로 옮김
+    draw(['가', '나']);
+    list.querySelector<HTMLElement>('.recent-del')!.focus();
+    back = keepRowFocus(card, list, () => home);
+    other.focus();
+    draw(['나']);
+    back();
+    expect(document.activeElement).toBe(other);
   });
 });
 

@@ -137,6 +137,21 @@ export function leaveDisabled(b: HTMLButtonElement, ...to: (HTMLElement | null |
 }
 
 /**
+ * 줄 목록 list를 통째로 다시 그리는 자리(188차 — 처음 화면 최근 문서: ✕로 지운 줄·숨는 카드 안 「모두 지우기」·저장한 사본이 없어 지운 줄의 열기, STEP 142차 꼴):
+ * 다시 그리기 앞에 부르고 돌려준 함수를 그린 뒤 부른다. 초점이 box 안이었고 사라졌으면(lost) 그 자리에 온 줄(끝 줄이었으면 앞 줄)의 첫 버튼, 줄이 없으면 home()으로.
+ * box 밖이었으면 그대로(누르기로 초점을 받지 않는 기기 등). 전에는 누른 버튼과 함께 초점이 문서로 빠져 다음 Tab이 처음부터였다(WCAG 2.4.3)
+ */
+export function keepRowFocus(box: Element, list: Element, home: () => HTMLElement | null): () => void {
+  const a = document.activeElement;
+  if (!a || !box.contains(a)) return () => {};
+  const at = Math.max(0, [...list.children].findIndex((r) => r.contains(a)));
+  return () => {
+    const rows = list.children;
+    focusIfLost(rows[Math.min(at, rows.length - 1)]?.querySelector('button') ?? home());
+  };
+}
+
+/**
  * 펼치고 접는 버튼 b와 그 목록 list(153차 — WAI-ARIA APG Disclosure): 목록을 보이거나 숨기고 b의 aria-expanded를 같은 값으로 둔다.
  * 목록을 펼치고 접는 길은 모두 이것을 부른다(화면 읽기 프로그램이 버튼에서 목록이 열렸는지 듣게 — 숨김만 바꾸면 상태가 어긋난다)
  */
