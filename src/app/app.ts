@@ -124,7 +124,7 @@ import { cameraForBox, keepViewOnHeightChange } from './view';
 import { cssHex, isLightBackground, loadFileBackground, safeStorage, skyBackground, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
 import type { BackgroundOptions, Rgba } from 'opencad-viewer3d';
 import { DEFAULT_EDGE_COLOR, LineContrast, edgeLooks, lineColorOverrides } from './linecontrast';
-import { closeOutside, disclose, focusIfLost, focusSpot, leaveDisabled, listKeys, listRows, menuTab, refocus, setRange } from './kbd';
+import { closeOutside, disclose, focusIfLost, focusSpot, leaveDisabled, listKeys, listRows, menuTab, refocus, setRange, toolbarKeys } from './kbd';
 import type { Rgb, SkpEdgeColorMode, SkpShadowMeta, SkpStyleMeta } from '../meta';
 import { WalkStick } from './joystick';
 import { Vcb, vcbStartKey, type VcbKind } from './vcb';
@@ -613,6 +613,8 @@ export class SkpViewerApp implements PanelHost {
       h('span', { class: 'spacer' }),
       h('div', { class: 'tgroup' }, panelBtn),
     );
+    // 막대 안 버튼 사이 ←·→·Home·End(183차 — APG Toolbar, 키만 더함: Tab 차례는 버튼마다 그대로)
+    toolbar.addEventListener('keydown', (e) => toolbarKeys(e, toolbar));
 
     // 가운데
     const viewHost = h('div', { class: 'view-host' });

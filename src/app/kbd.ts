@@ -43,6 +43,16 @@ export function listKeys(e: KeyboardEvent, all: readonly HTMLElement[], prev: st
 }
 
 /**
+ * 도구 막대(role=toolbar — 183차, WAI-ARIA APG Toolbar): 막대 안 버튼에서 ←·→는 앞·다음 버튼, Home·End는 처음·끝 버튼으로 초점만 옮긴다(끝에서 돈다).
+ * Tab 차례는 버튼마다 그대로 둔다(로빙을 두지 않음 — 익힌 Tab 차례를 바꾸지 않는다). 꺼진 버튼과 그려지지 않은 버튼(hidden·좁은 화면에서 숨는 넓은 화면 전용 등 —
+ * 그려진 칸이 없음, 측정 조각 32차와 같은 판정)은 건너뛴다. 화살표를 스스로 쓰는 단면 위치 막대(input)는 옮길 곳이 아니고 그 안의 키는 그 막대 것(목록에 없어 다루지 않음).
+ * 앱 창 키(캡처)가 먼저 쓴 화살표(걷기·줄자·각도기 방향 잠금 — 전파를 멈춤)는 그대로 그쪽 것. 다룬 키면 true
+ */
+export function toolbarKeys(e: KeyboardEvent, bar: HTMLElement): boolean {
+  return listKeys(e, [...bar.querySelectorAll('button')].filter((b) => b.getClientRects().length > 0), 'ArrowLeft', 'ArrowRight', true, 0);
+}
+
+/**
  * 메뉴 항목의 Tab·Shift+Tab(163차 — WAI-ARIA APG Menu Button 예제, NC 151차 꼴): 메뉴를 닫고 메뉴 버튼으로 초점. Tab은 기본 동작 그대로 버튼 다음 칸으로,
  * Shift+Tab은 기본 동작을 막아 버튼에 머문다(메뉴는 body 끝에 붙어 버튼에서 옮기면 버튼 앞 칸으로 건너뛰었다). 버튼이 없으면 막지 않는다. 다룬 키면 true
  */
