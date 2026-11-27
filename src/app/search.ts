@@ -50,9 +50,9 @@ export function definitionNodes(t: TreeData, name: string): number[] {
   return out;
 }
 
-/** 나무 노드의 경로 글(부모들, "집 › 1층") */
-export function parentPath(t: TreeData, i: number): string {
+/** 나무 노드의 경로 글(부모들, "집 › 1층"). name: 이름마다 바꾸기(215차 — 찾기 줄은 앱 자리 이름 「(이름 없음)」만 화면 언어로, 앱의 uiName) */
+export function parentPath(t: TreeData, i: number, name: (s: string) => string = (s) => s): string {
   const names: string[] = [];
-  for (let k = t.parent[i]!, n = 0; k >= 0 && n < 64; k = t.parent[k]!, n++) names.push(nodeName(t, k));
+  for (let k = t.parent[i]!, n = 0; k >= 0 && n < 64; k = t.parent[k]!, n++) names.push(name(nodeName(t, k)));
   return names.reverse().join(' › ');
 }

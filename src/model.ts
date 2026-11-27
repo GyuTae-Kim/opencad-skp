@@ -1413,7 +1413,8 @@ export class ModelParse {
       } catch {
         /* 이름 없이 */
       }
-      const def: SkpDefinition = { id, name: name ?? `정의 ${id}`, entities: readEntities(ctx, r, ents, clipped) };
+      // 이름 칸이 없으면 언어 없는 「#번호」(215차 — 이름이 정의 묶음 열쇠라 비우지 않는다)
+      const def: SkpDefinition = { id, name: name ?? `#${id}`, entities: readEntities(ctx, r, ents, clipped) };
       readDefinitionFields(r, n, def);
       this.definitions.set(id, def);
       if (clipped) ctx.damaged = true;

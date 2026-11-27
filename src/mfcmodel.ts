@@ -1059,7 +1059,8 @@ class Decoder {
     const block = s.bytes((su3 ? 35 : old ? 38 : 42) + (st.entityPids ? 1 : 0));
     rec.behavior = behavior(block, (st.entityPids ? 1 : 0) - (su3 ? 2 : 0), old, su3);
     const thumb = s.readObject(C.THUMBNAIL);
-    if (isDib(thumb)) this.image('component', rec.name || `정의 ${index + 1}`, thumb);
+    // 이름이 빈 정의는 아래 정의 이름과 같은 「#차례」(215차 — 그림은 이 이름으로 정의와 짝)
+    if (isDib(thumb)) this.image('component', rec.name || `#${index + 1}`, thumb);
     return index;
   }
 
@@ -1641,7 +1642,8 @@ function assemble(
   const definitions = new Map<number, SkpDefinition>();
   dec.defs.forEach((d, i) => {
     const kind = d.kinds.has('image') ? 'image' : d.kinds.has('group') && !d.kinds.has('component') ? 'group' : 'component';
-    const def: SkpDefinition = { id: i, name: d.name || `정의 ${i + 1}`, entities: built[d.coll.cid]!, kind };
+    // 이름이 빈 정의는 언어 없는 「#차례」(215차 — 이름이 정의 묶음 열쇠라 비우지 않는다)
+    const def: SkpDefinition = { id: i, name: d.name || `#${i + 1}`, entities: built[d.coll.cid]!, kind };
     if (d.guid && kind !== 'image') def.guid = d.guid;
     if (d.description) def.description = d.description;
     if (d.path) def.path = d.path;

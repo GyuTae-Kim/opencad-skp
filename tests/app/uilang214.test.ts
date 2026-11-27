@@ -8,20 +8,31 @@
  * 그 칸 안이면 「[파일 칸]」을 앞에 붙인다. 언어 메뉴(원어 이름 — 「한국어」)만 뺀다.
  * 지금 고치지 못한 자리는 「아직 둔 것」(LEFT) — 목록에 있는데 이제 한글이 없으면 실패한다(목록을 줄인다).
  * 그래픽(뷰어)은 문서를 처음 열 때 받는 조각이라 만들지 않고, 문서를 앱 자리에 바로 넣은 뒤 앱이 문서를 연 뒤 부르는 화면 갱신 함수를 부른다.
+ * 215차: 214차가 그리지 않은 화면 넷 — 측정 중 안내(줄자·각도기·측정 띠·최근 측정 기록), 뷰어가 있어야 여는 메뉴(표준 뷰·단면 보기·보기 설정), 그림 저장 창, 바로 가기 안내 창 —
+ * 을 같은 걸음에 더한다. 측정 조각이 쓰는 뷰어 기능만 가진 가짜 뷰어(measure.test 꼴)와 실제 덧그림을 앱 자리에 넣고, 그 뒤는 앱의 길(도구 막대 버튼·앱 함수 — 조각 받기 포함) 그대로.
+ * 이름도 정의 이름도 없는 그룹 아래 항목의 경로(상태 막대·고른 것 탭 「위치」·찾기 줄)와 해석기의 이름 없는 태그·정의 기본 이름(「#n」)도 본다.
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import type { CameraState } from 'opencad-viewer3d/camera';
 import type { Scene3d } from 'opencad-viewer3d/types';
 import { skpToScene } from '../../src/index';
+import { readLayers } from '../../src/vffroot';
+import { TlvReader } from '../../src/tlv';
 import { createDoc, type Selection, type SkpDoc } from '../../src/app/doc';
 import { SAMPLE_NAME, sampleSkpBytes } from '../../src/app/sample';
 import { installLocalization } from '../../src/app/i18n';
 import { SkpViewerApp } from '../../src/app/app';
 import type { Mixed } from '../../src/app/filetext';
+import type { MeasureTool, MeasureViewer } from '../../src/app/measure';
+import { Overlay } from '../../src/app/overlay';
 import type { Panel } from '../../src/app/panel';
+import { nodeName } from '../../src/app/tree';
 import { unsupportedNotice } from '../../src/worker/notice';
 import { catalogs, sourceMessage, translate } from '../../site/i18n.mjs';
+import { header, i32, tlv, u8 } from '../build';
+import { ID13, mfcFile, squareEntities } from '../mfcwrite';
 
 const CODES = ['en', 'ja', 'zh-CN', 'de'] as const;
 const HANGUL = /[가-힣]/;
@@ -33,11 +44,11 @@ const ATTRS = ['title', 'aria-label', 'aria-description', 'aria-valuetext', 'pla
 
 /**
  * 아직 둔 것(언어마다 — 이 시험이 그리는 화면 안): 없음.
- * 그리지 않는 둔 자리(해석기 기본 이름 「태그 n」·「정의 n」, 경로의 「(이름 없음)」 — 이름 칸이 없는 깨진 파일만)는 README 214차 줄
+ * 214차가 둔 해석기 기본 이름 「태그 n」·「정의 n」과 경로의 「(이름 없음)」은 215차에 고쳐 아래 걸음·시험이 본다
  */
 const LEFT: Record<(typeof CODES)[number], string[]> = { en: [], ja: [], 'zh-CN': [], de: [] };
 
-/** 시험에서 부르는 앱 안쪽(문서를 연 뒤 앱이 부르는 화면 갱신 함수·여는 중 덮개·알림 띠·메뉴) */
+/** 시험에서 부르는 앱 안쪽(문서를 연 뒤 앱이 부르는 화면 갱신 함수·여는 중 덮개·알림 띠·메뉴, 215차 — 뷰어 자리·측정 도구·창) */
 interface Inner {
   doc: SkpDoc | null;
   openSeq: number;
@@ -49,6 +60,53 @@ interface Inner {
   showNotice(kind: 'warn', title: Mixed, text: Mixed): boolean;
   toggleThemeMenu(): void;
   closeMenu(): void;
+  viewer: MeasureViewer | null;
+  overlay: Overlay | null;
+  measureTool: MeasureTool | null;
+  measureHint: string | null;
+  phoneQuery: { matches: boolean } | null;
+  els: { viewHost: HTMLElement; viewBtn: HTMLButtonElement; secMenuBtn: HTMLButtonElement; moreBtn: HTMLButtonElement; measureGuide: HTMLButtonElement };
+  exportDialog: { close(): void } | null;
+  shortcutsClose: (() => void) | null;
+  toggleMeasureLock(): void;
+  toggleMeasureLog(): void;
+}
+
+/** 215차 가짜 뷰어: 캔버스 한 변(CSS 화소)과 위에서 본 평행 투영(measure.test 꼴 — 화면 1화소 = 세계 1, 화면 (100 + X, 100 − Y)) */
+const W = 200;
+const FOV = (40 * Math.PI) / 180;
+const TOP: CameraState = { target: [0, 0, 0], distance: W / 2 / Math.tan(FOV / 2), yaw: 0, pitch: Math.PI / 2, projection: 'orthographic', fovY: FOV };
+
+/**
+ * 뷰어가 있어야 여는 화면(측정 도구·보기 메뉴·그림 저장 창)을 그리려고, 측정 조각이 쓰는 뷰어 기능만 가진 가짜 뷰어(누른 자리 밑 면 위 점 — 와이어프레임이라 가림 없음)와
+ * 실제 덧그림을 앱 자리(3D 보기 칸)에 넣는다. 돌려주는 함수는 캔버스 누르기(마우스 — 누르고 떼기)
+ */
+function fakeViewer(a: Inner): (x: number, y: number) => void {
+  const canvas = document.createElement('canvas');
+  Object.defineProperty(canvas, 'clientWidth', { get: () => W });
+  Object.defineProperty(canvas, 'clientHeight', { get: () => W });
+  a.els.viewHost.append(canvas);
+  const viewer: MeasureViewer = {
+    canvas,
+    pick: (x, y) => ({ kind: 'mesh', id: 'fake', index: 0, point: [x - W / 2, W / 2 - y, 0] }),
+    getCamera: () => TOP,
+    onCameraChange: () => () => {},
+    getRenderMode: () => 'wireframe',
+    section: null,
+  };
+  const overlay = new Overlay(a.els.viewHost);
+  overlay.attach(viewer as never);
+  a.viewer = viewer;
+  a.overlay = overlay;
+  return (x, y) => {
+    for (const type of ['pointerdown', 'pointerup']) {
+      const e = new MouseEvent(type, { clientX: x, clientY: y, button: 0, buttons: type === 'pointerdown' ? 1 : 0, bubbles: true });
+      Object.defineProperty(e, 'pointerId', { value: 1 });
+      Object.defineProperty(e, 'pointerType', { value: 'mouse' });
+      canvas.dispatchEvent(e);
+    }
+    overlay.paintNow();
+  };
 }
 
 /** 한글이 든 자리: 「요소: 글」·「요소@속성: 값」(파일 글 칸 안이면 앞에 「[파일 칸] 」). 언어 메뉴(원어 이름)는 뺀다 */
@@ -78,10 +136,15 @@ const until = async (ok: () => boolean, ms = 5000): Promise<void> => {
 };
 
 let dispose: (() => void) | undefined;
+let measure: typeof import('../../src/app/measure');
 beforeAll(async () => {
   // 패널이 기다리지 않고 받는 조각(정보 탭·속성 사전 — panel.ts void import)을 미리 받아 둔다(ci-guard 5 — 시험 파일이 끝난 뒤 모듈을 평가하지 않게)
   await import('../../src/app/infotab');
   await import('../../src/app/attrview');
+  // 215차: 앱이 처음 쓸 때 받는 조각(측정 도구 — core.ts loadMeasure, 그림 저장 창·바로 가기 안내 창 — app.ts void import)도 미리(셋 다 맨 위 곁효과 없음)
+  measure = await import('../../src/app/measure');
+  await import('../../src/app/exporter');
+  await import('../../src/app/shortcuts');
   // jsdom에는 scrollIntoView가 없다(장면 탭·패널이 고른 줄을 보이는 자리로 굴린다)
   if (typeof Element.prototype.scrollIntoView !== 'function') Element.prototype.scrollIntoView = () => {};
 });
@@ -126,7 +189,7 @@ describe('214차: 다른 언어 화면에 앱 한국어가 남지 않는다(WCAG
     expect(spots.some((s) => s.startsWith('[파일 칸] button.scene-tab'))).toBe(true);
   });
 
-  it.each(CODES)('%s: 처음 화면·도구 막대·측정 띠·상태 막대, 예제 문서의 장면 탭·패널 네 탭·앱 설정 메뉴, 여는 중 덮개·알림 띠', async (code) => {
+  it.each(CODES)('%s: 처음 화면·도구 막대·측정 띠·상태 막대, 예제 문서의 장면 탭·패널 네 탭·앱 설정 메뉴, 여는 중 덮개·알림 띠, 215차 측정 중 안내·뷰어 메뉴·그림 저장 창·바로 가기 안내 창·이름 없는 그룹 경로', async (code) => {
     const spots = new Set<string>();
     const collect = (): void => void hangulSpots(document.body).forEach((s) => spots.add(s));
     // 주소로 연 예제(?sample — main.ts는 launch 뒤에 번역층을 붙인다): 번역층이 서기 전에 그린 여는 중 제목
@@ -200,6 +263,129 @@ describe('214차: 다른 언어 화면에 앱 한국어가 남지 않는다(WCAG
     a.showNotice('warn', old.title, old.text);
     await tick();
     collect();
+    // ── 215차: 뷰어가 있어야 여는 화면(가짜 뷰어·실제 덧그림을 앱 자리에) ──
+    const press = fakeViewer(a);
+    const key = (k: string): boolean => !!a.measureTool?.handleKey(new KeyboardEvent('keydown', { key: k, cancelable: true }));
+    const settle = async (): Promise<void> => {
+      await tick();
+      collect();
+    };
+    // 측정 중 안내 — 줄자: 켬(측정 조각을 받아 도구를 만든 뒤 켠다 — 앱 길 그대로). 점 0: 안내·안내 두기 키
+    app.toggleMeasure(true);
+    await until(() => !!a.measureTool?.active);
+    // 걸음 사이 확인은 soft로(어긋나도 뒤 걸음까지 다 모은 뒤 맨 아래에서 한 번에 견준다)
+    expect.soft(a.measureTool?.mode, code).toBe('tape');
+    await settle();
+    // 안내 두기 켜고 끄기(측정 띠 버튼 — 안내 글·잠깐 알림)
+    a.els.measureGuide.click();
+    await settle();
+    a.els.measureGuide.click();
+    await settle();
+    // 시작점: 방향을 잡는 동안(잠금 안내·방향 잠금 버튼) → 잠글 방향 고르기 줄 → 화살표 잠금 셋(빨강·녹색·파랑, 끝에 빨강)
+    press(100, 100);
+    expect.soft(a.measureTool?.pointCount, code).toBe(1);
+    await settle();
+    a.toggleMeasureLock();
+    expect.soft(document.querySelectorAll('.mb-lockpick').length, code).toBe(3);
+    await settle();
+    for (const k of ['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowRight']) {
+      key(k);
+      await settle();
+    }
+    // 결과(거리·축 성분·복사)·최근 측정 기록(측정 띠 위 목록·패널)
+    press(150, 100);
+    expect.soft(d.measure?.kind, code).toBe('tape');
+    await settle();
+    a.toggleMeasureLog();
+    await settle();
+    a.panel.rerender();
+    await settle();
+    // 측정 안내의 모든 갈래(손가락 기기 갈래 포함 — measureHint)를 측정 띠·상태 막대에
+    d.measure = null;
+    const hints = new Set<string>();
+    for (const m of ['tape', 'protractor'] as const)
+      for (const n of [0, 1, 2]) for (const has of [false, true]) for (const t of [false, true]) for (const edge of [false, true]) for (const g of [false, true]) hints.add(measure.measureHint(m, n, has, t, edge, g)!);
+    // 마우스·키보드 갈래 12 + 손가락 갈래 11(i18n.test 213차와 같은 셈)
+    expect(hints.size).toBe(23);
+    for (const text of hints) {
+      a.measureHint = text;
+      a.refreshStatus();
+      await settle();
+    }
+    // 각도기: 켬(중심점 안내) → 화살표 평면 고정 셋
+    app.toggleProtractor(true);
+    expect.soft(a.measureTool?.mode, code).toBe('protractor');
+    await settle();
+    for (const k of ['ArrowRight', 'ArrowLeft', 'ArrowUp']) {
+      key(k);
+      await settle();
+    }
+    app.toggleProtractor(false);
+    // 뷰어가 있어야 여는 메뉴: 표준 뷰·단면 보기·보기 설정(넓은 화면 — 측정 조각의 안내 항목, 휴대폰 — 넓은 화면 도구 막대에만 있는 단추까지)
+    const phone = a.phoneQuery;
+    for (const [btn, narrow] of [[a.els.viewBtn, false], [a.els.secMenuBtn, false], [a.els.moreBtn, false], [a.els.moreBtn, true]] as const) {
+      a.phoneQuery = narrow ? { matches: true } : phone;
+      btn.click();
+      await tick();
+      expect.soft(document.querySelector('.menu'), code).not.toBeNull();
+      collect();
+      a.closeMenu();
+    }
+    a.phoneQuery = phone;
+    // 그림 저장 창(조각을 받아 창을 만든 뒤 연다 — 앱 길 그대로)
+    app.savePng();
+    await until(() => !!document.querySelector('.export-dialog'));
+    expect.soft(document.querySelector('.export-dialog'), code).not.toBeNull();
+    collect();
+    a.exportDialog?.close();
+    // 바로 가기 안내 창
+    app.openShortcuts();
+    await until(() => !!document.querySelector('.sc-box'));
+    expect.soft(document.querySelector('.sc-box'), code).not.toBeNull();
+    collect();
+    a.shortcutsClose?.();
+    a.measureTool?.dispose();
+    a.measureTool = null;
+    a.overlay?.dispose();
+    a.overlay = null;
+    a.viewer = null;
+    // (ㄴ) 이름도 정의 이름도 없는 그룹 아래 항목(깨진 파일 꼴 — 나무의 그 그룹 이름 칸을 비운다): 상태 막대·고른 것 탭 「위치」, 찾기 줄 경로·풀이
+    const t = d.tree!;
+    const c = Array.from({ length: t.count }, (_, i) => i).find((i) => t.parent[i]! >= 0 && t.definition[i] !== t.definition[t.parent[i]!] && !!nodeName(t, i));
+    expect(c, code).toBeDefined();
+    const p = t.parent[c!]!;
+    const was = [t.names[p]!, t.definitionNames[t.definition[p]!]!] as const;
+    t.names[p] = '';
+    t.definitionNames[t.definition[p]!] = '';
+    d.selection = { kind: 'node', index: c! };
+    d.panelTab = 'entity';
+    a.panel.rerender();
+    a.refreshStatus();
+    await until(() => !a.panel.el.querySelector('.pbody > div:empty'), 2000);
+    expect.soft(document.querySelector('.st-sel')!.textContent, code).toContain(cat['(이름 없음)']!);
+    collect();
+    d.panelTab = 'outline';
+    d.outlineQuery = nodeName(t, c!);
+    a.panel.rerender();
+    await tick();
+    expect.soft(a.panel.el.querySelector('.search-row .path')?.textContent, code).toContain(cat['(이름 없음)']!);
+    collect();
+    d.outlineQuery = '';
+    // 경로 두 단계(예제는 한 단계뿐이라 그 그룹의 부모를 다른 뿌리 항목으로 — 경로 글만 부모 사슬을 따른다): 고른 것 탭 「위치」 줄이 파일 이름과 앱 자리 이름이 섞인 값
+    // (한 단계면 값 전체가 앱 자리 이름이라 번역층이 옮기는 줄이었다)
+    const p0 = t.parent[p]!;
+    const q = Array.from({ length: t.count }, (_, i) => i).find((i) => i !== p && t.parent[i]! < 0 && !!nodeName(t, i))!;
+    t.parent[p] = q;
+    d.panelTab = 'entity';
+    a.panel.rerender();
+    a.refreshStatus();
+    await until(() => !a.panel.el.querySelector('.pbody > div:empty'), 2000);
+    const pos = [...a.panel.el.querySelectorAll('.prop-row')].find((r) => r.querySelector('.k')?.textContent === cat['위치']);
+    expect.soft(pos?.querySelector('.v')?.textContent, code).toBe(`${nodeName(t, q)} › ${cat['(이름 없음)']}`);
+    collect();
+    t.parent[p] = p0;
+    t.names[p] = was[0];
+    t.definitionNames[t.definition[p]!] = was[1];
     // 언어 메뉴 단추 이름은 화면 언어(원어 이름 목록은 위에서 뺐다)
     expect(document.querySelector('.language-trigger')!.getAttribute('aria-label'), code).not.toMatch(HANGUL);
     expect([...spots].sort(), code).toEqual([...LEFT[code]].sort());
@@ -222,5 +408,21 @@ describe('214차: 다른 언어 화면에 앱 한국어가 남지 않는다(WCAG
       const parts = ['SketchUp 2026 · 26.1.194', '단위 cm · 좌표 mm', '113 KB', '면 117 · 모서리 267', '읽기 12 ms'];
       for (const line of [parts.join('  |  '), parts.join(' · ')]) expect(translate(line, l), `${l}: ${line}`).not.toMatch(HANGUL);
     }
+  });
+
+  it('215차: 해석기가 이름 없는 태그·정의에 붙이는 기본 이름은 언어 없는 「#n」(이름이 묶음 열쇠라 비우지 않는다 — STEP 209차 꼴)', () => {
+    // model.dat 태그 항목(3c8c) 하나 — 이름 칸(3c8d)이 없다(번호 31)
+    const body = tlv(0x3a98, tlv(0x3a99, tlv(0x3c8c, header(31), tlv(0x3c8e, u8(0)), tlv(0x3c90, i32(0)))));
+    const set = readLayers(new TlvReader(body), { tag: 0x01f8, start: 0, end: body.length }, new Map(), () => {});
+    expect(set.layers.get(31)).toBe('#31');
+    expect(set.tags.map((x) => x.name)).toEqual(['#31']);
+    // 옛 형식(2020 이하) 정의 둘 — 이름이 빈 글: 나무 정의 이름이 한 줄로 합쳐지지 않고 차례 번호로
+    const s = skpToScene(
+      mfcFile({ schemas: 'v18', definitions: [{ name: '', entities: squareEntities() }, { name: '', entities: squareEntities() }], root: { instances: [{ def: 0, xform: ID13 }, { def: 1, xform: ID13 }] } }),
+      { outline: true },
+    );
+    const names = (s.meta as { tree: { definitionNames: string[] } }).tree.definitionNames;
+    expect(names).toEqual(expect.arrayContaining(['#1', '#2']));
+    expect(names.join(' ')).not.toMatch(HANGUL);
   });
 });

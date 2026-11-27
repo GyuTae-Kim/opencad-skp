@@ -9,7 +9,10 @@
 import type { SkpAttrDictsMeta, SkpAttrValueMeta, SkpTreeInfo } from '../meta';
 import { formatArea, formatLength, formatVolume, withLengthUnit, type UnitsDisplay } from './units';
 import { nodeDefinition, nodeName, nodePath, nodeTag, type TreeData } from './tree';
-import { isAppName } from './filetext';
+import { isAppName, namePath, plainText, type Mixed } from './filetext';
+
+/** 경로 값(뿌리 쪽부터 이름들): 앱 자리 이름이 끼면 섞은 글(그 조각만 화면 언어 — 215차), 아니면 이은 파일 글(예전과 같다) */
+export const pathValue = (names: readonly string[]): string | Mixed => (names.some(isAppName) ? namePath(names) : names.join(' › '));
 
 /** 속성 값 글은 이 글자 수에서 자른다 */
 export const ATTR_VALUE_CHARS = 2000;
@@ -45,8 +48,8 @@ export interface EntityInput {
   definition?: string | null;
   /** 그 정의가 모형에 놓인 수 */
   instances?: number | null;
-  /** 나무 경로("집 › 1층") */
-  path?: string | null;
+  /** 나무 경로("집 › 1층"). 이름이 없는 그룹(앱 자리 이름 「(이름 없음)」)이 끼면 섞은 글(215차 — pathValue) */
+  path?: string | Mixed | null;
   tag?: string | null;
   /** 재질 이름. 칸이 있고 null이면 "기본값" */
   material?: string | null;
@@ -88,6 +91,8 @@ export interface InfoRow {
   title?: string;
   /** 값이 파일 글(이름·정의·경로·태그·재질·설명·GUID — 화면 번역에서 뺀다, 52차) */
   file?: boolean;
+  /** 파일 글과 앱 자리 이름이 섞인 값(215차 — 경로의 「(이름 없음)」, 화면은 mixText로 그 조각만 옮긴다. value는 원문) */
+  parts?: Mixed;
 }
 
 export interface AttrDictView {
@@ -185,7 +190,8 @@ export function entityInfo(e: EntityInput, units: UnitsDisplay, mmPerUnit: numbe
   // 그룹 정의 이름("Group#3")은 SketchUp도 보이지 않는다
   if (definition && e.kind !== 'group' && (instance || definition !== name)) fileRow('정의', definition);
   if (e.kind === 'component' && isNum(e.instances) && e.instances >= 0) add('놓인 수', `${Math.floor(e.instances).toLocaleString('ko-KR')}개`);
-  fileRow('위치', text(e.path));
+  if (typeof e.path === 'object' && e.path) rows.push({ label: '위치', value: plainText(e.path), file: true, parts: e.path });
+  else fileRow('위치', text(e.path));
   fileRow('태그', text(e.tag));
   // 재질이 없으면 앱 글 "기본값"
   if ('material' in e && e.material !== undefined) {
@@ -276,7 +282,7 @@ export function nodeEntity(
     name: t.names[node] || '',
     definition,
     instances: o.instances?.get(definition) ?? null,
-    path: parent >= 0 ? nodePath(t, parent).map((n) => nodeName(t, n)).join(' › ') : null,
+    path: parent >= 0 ? pathValue(nodePath(t, parent).map((n) => nodeName(t, n))) : null,
     tag: nodeTag(t, node),
     faces: t.faces[node] ?? null,
     edges: t.edges[node] ?? null,

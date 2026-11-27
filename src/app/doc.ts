@@ -22,8 +22,8 @@ import type {
   SkpTreeInfo,
 } from '../meta';
 import { majorOf, releaseName } from './edition';
-import { nodeEntity, type EntityInput } from './entity';
-import { fileText, joinMixed, mix, nameText, plainText, type Mixed } from './filetext';
+import { nodeEntity, pathValue, type EntityInput } from './entity';
+import { fileText, joinMixed, mix, namePath, nameText, plainText, type Mixed } from './filetext';
 import { definitionNodes } from './search';
 import { edgeGeometry, faceBox, faceGeometry, faceOfTriangle, readFaceIndex, segmentsBox, triangleCount, type FaceIndex, type PartBox } from './faces';
 import type { MeasureToolResult } from './measure';
@@ -1141,12 +1141,9 @@ export function itemVisible(d: SkpDoc, item: number): boolean {
   return true;
 }
 
-/** 노드의 경로 글("집 › 의자 › 다리") */
-export function nodePathText(d: SkpDoc, node: number): string {
-  if (!d.tree) return '';
-  return nodePath(d.tree, node)
-    .map((n) => nodeName(d.tree!, n))
-    .join(' › ');
+/** 노드 경로의 이름들(뿌리 쪽부터 — 「집 › 의자 › 다리」. 215차: 한 글로 잇지 않고 namePath·pathValue로 — 이름 없는 그룹의 「(이름 없음)」을 화면 언어로) */
+export function nodePathNames(d: SkpDoc, node: number): string[] {
+  return d.tree ? nodePath(d.tree, node).map((n) => nodeName(d.tree!, n)) : [];
 }
 
 /** 고른 것 설명의 재질 조각: 재질이 없는 면(앱이 붙인 이름 "기본 재질")은 그 이름만("재질 기본 재질"로 겹치지 않고, 다른 언어에서도 바뀌게) */
@@ -1176,7 +1173,7 @@ export function selectionParts(d: SkpDoc, sel: Selection | null, pick: Pick3d | 
     const i = sel.index;
     const name = nodeName(t, i);
     const parts = [mix`${treeKindLabel(t.kind[i]!)} ${nameText(name)}${of(nodeDefinition(t, i), name)}`];
-    if (t.parent[i]! >= 0) parts.push(mix`위치 ${fileText(nodePathText(d, t.parent[i]!))}`);
+    if (t.parent[i]! >= 0) parts.push(mix`위치 ${namePath(nodePathNames(d, t.parent[i]!))}`);
     const tag = nodeTag(t, i);
     if (tag) parts.push(mix`태그 ${fileText(tag)}`);
     if (pickedMat) parts.push(materialPart(pickedMat));
@@ -1264,9 +1261,9 @@ function definitionPlacements(d: SkpDoc): Map<string, number> {
 }
 
 /** 고른 면·모서리를 낸 나무 노드의 경로(누른 자리가 있을 때) */
-function pickPath(d: SkpDoc): string | null {
+function pickPath(d: SkpDoc): string | Mixed | null {
   const n = d.pick ? pickDeepest(d, d.pick) : null;
-  return n !== null && n >= 0 ? nodePathText(d, n) : null;
+  return n !== null && n >= 0 ? pathValue(nodePathNames(d, n)) : null;
 }
 
 /** 지금 고른 것(없으면 모형) → 엔티티 정보 입력 */
