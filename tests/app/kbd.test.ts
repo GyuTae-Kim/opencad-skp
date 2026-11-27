@@ -5,10 +5,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { closeOutside, disclose, focusIfLost, focusSpot, keepBarFocus, keepRowFocus, leaveDisabled, listKeys, listRows, lost, menuTab, moveIndex, refocus, rove, setRange, treeKeys } from '../../src/app/kbd';
 import { PANEL_WIDTH_STEPS, SHEET_STEPS, clampSheetFraction, nextSize } from '../../src/app/layout';
 import type { MeasureToolResult } from '../../src/app/measure';
-import { Panel, type PanelHost } from '../../src/app/panel';
+import { CHILD_LIMIT, Panel, type PanelHost } from '../../src/app/panel';
 import { infoSections } from '../../src/app/infotab';
 import { entityInfo } from '../../src/app/entity';
 import { selectionEntity } from '../../src/app/doc';
+import type { TreeView } from '../../src/app/tree';
 import { mmPerSceneUnit } from '../../src/app/units';
 import { rowDoc } from './rowdoc';
 
@@ -1276,5 +1277,131 @@ describe('찾기 칸의 이름을 보이는 자리 글로(172차 — WCAG 2.5.3 
     expect(pan.match(/this\.searchBox\(d, fill\)/g)).toHaveLength(2);
     const en = JSON.parse(readFileSync(resolve(__dirname, '../../site/locales/en.json'), 'utf8')) as Record<string, string>;
     expect([en['이름·정의·태그로 찾기'], en['그룹·컴포넌트 찾기(이름·정의·태그)']]).toEqual(['Find by name·definition·tag', 'Find groups·components (name·definition·tag)']);
+  });
+});
+
+describe('나무 「더 보기」를 끝까지 펼쳐 그 버튼이 사라지면 초점을 새로 나온 첫 줄로(193차 — WAI-ARIA APG Tree View 로빙, 192차 감사 (2), WCAG 2.4.3)', () => {
+  // 넓은 나무(해석기 SkpTree 꼴 — 구성 탭 나무가 읽는 칸만 값을 둔다): 뿌리 아래 부모 kids.length개(1단계), 부모 p의 아이 kids[p]개(2단계 잎)가 차례로
+  const wide = (...kids: number[]): TreeView => {
+    const roots = kids.length;
+    const count = roots + kids.reduce((a, b) => a + b, 0);
+    const i32 = (v: number): Int32Array => new Int32Array(count).fill(v);
+    const t = {
+      count, rootCount: roots, names: Array.from({ length: count }, (_, i) => `노드 ${i}`), definitionNames: [] as string[], tagNames: [] as string[],
+      parent: i32(-1), depth: new Uint8Array(count).fill(2), kind: new Uint8Array(count), flags: new Uint8Array(count), definition: i32(-1), tag: i32(-1),
+      faces: new Uint32Array(count).fill(6), edges: new Uint32Array(count).fill(12), firstChild: i32(-1), childCount: new Uint32Array(count),
+      meshFirst: i32(-1), meshEnd: i32(-1), lineFirst: i32(-1), lineEnd: i32(-1), runsDropped: false, splitDepth: 9, listedDepth: 9, unlisted: false,
+      itemIndex: new Map<string, number>(), meshCount: 0,
+    };
+    let first = roots;
+    kids.forEach((n, p) => {
+      t.depth[p] = 1;
+      t.firstChild[p] = first;
+      t.childCount[p] = n;
+      t.parent.fill(p, first, first + n);
+      first += n;
+    });
+    return t as unknown as TreeView;
+  };
+  // 앱 꼴: 3D 보기(코어 캔버스 tabIndex 0)와 구성 탭을 연 패널(부모마다 펼침 — 아래 띠는 고른 것·숨긴 것·측정이 없어 버튼 없음)
+  const stage = (...kids: number[]) => {
+    const view = html('<canvas tabindex="0"></canvas>').firstElementChild as HTMLElement;
+    const d = rowDoc();
+    d.tree = wide(...kids);
+    d.panelTab = 'outline';
+    kids.forEach((_, p) => d.expanded.add(p));
+    const noop = (): void => {};
+    const host: PanelHost = {
+      setTagVisible: noop, setAllTagsVisible: noop, setOutlineVisible: noop, setNodeVisible: noop, setExpanded: noop, collapseAll: noop, setPickMode: noop,
+      setShowSoft: noop, setShowHidden: noop, setFolderVisible: noop, setAnnotationVisible: noop, setFileSection: noop, applyPage: noop,
+      hideSelection: noop, isolateSelection: noop, unhideAll: noop, isolated: false, measureHint: null, measureLogList: [],
+      copyMeasure: noop, clearMeasureLog: noop,
+      select: noop, selectPickedPart: noop, zoomToSelection: noop, closePanel: noop, measuring: false, view,
+    };
+    const panel = new Panel(host);
+    document.body.append(panel.el);
+    panel.el.hidden = false;
+    const tree = (): HTMLElement => panel.el.querySelector<HTMLElement>('[role=tree]')!;
+    const more = (): HTMLButtonElement[] => [...panel.el.querySelectorAll<HTMLButtonElement>('.more-btn')];
+    const items = (): HTMLElement[] => [...tree().querySelectorAll<HTMLElement>('[role=treeitem]')];
+    const row = (n: number): HTMLElement => tree().querySelector<HTMLElement>(`[data-node="${n}"]`)!;
+    // 나무의 Tab 차례(tabindex 0)는 el 하나, 줄 안 보이기 체크도 그 줄 것만(나무 상자 focusin의 rove — 줄 안 체크까지)
+    const roving = (el: HTMLElement): void => {
+      const on = items().filter((x) => x.tabIndex === 0);
+      expect(on).toHaveLength(1);
+      expect(on[0]).toBe(el);
+      const box = el.querySelector<HTMLInputElement>(':scope > input[type=checkbox]');
+      const boxes = [...tree().querySelectorAll<HTMLInputElement>('input[type=checkbox]')].filter((x) => x.tabIndex === 0);
+      expect(boxes).toHaveLength(box ? 1 : 0);
+      if (box) expect(boxes[0]).toBe(box);
+    };
+    return { view, d, panel, more, items, row, roving };
+  };
+  // 키보드로 누르기(Enter·Space는 버튼 기본 동작으로 click — 나무 키 treeKeys·앱 창 키는 막지 않음)
+  const press = (b: HTMLButtonElement): void => {
+    b.focus();
+    b.click();
+  };
+
+  it('「더 보기」에 초점이 있을 때 끝까지 펼쳐(또는 나무 줄 수 한도 4,000줄로) 그 버튼이 다시 그려지지 않으면 새로 나온 첫 줄(로빙 tabindex 0), 남으면 같은 버튼 그대로', () => {
+    expect(CHILD_LIMIT).toBe(200);
+    // 부모 P0(노드 0 — 아이 2~2201, 한 번 누른 꼴로 1,200개까지 보임)·P1(노드 1 — 아이 2202~5201)
+    const s = stage(2200, 3000);
+    s.d.childLimit.set(0, 1200);
+    s.panel.show(s.d);
+    // 처음: 줄 2 + 1,200 + 200과 「더 보기」 둘(P0 1,000개·P1 2,800개)
+    expect(s.items()).toHaveLength(2 + 1200 + 200 + 2);
+    expect(s.more()).toHaveLength(2);
+    // ① P0 「더 보기」: 끝(2,200 ≥ 2,200) → 버튼 사라짐 → 새로 나온 첫 줄 = P0의 1,201번째 아이(노드 2 + 1,200).
+    //    고치기 전: 패널 다시 그리기의 refocus가 버튼 차례 열쇠(button.mini-btn 1번)로 아래 P1 「더 보기」에 두었다(새 줄을 건너뜀)
+    press(s.more()[0]!);
+    expect(s.more()).toHaveLength(1);
+    expect(document.activeElement).toBe(s.row(1202));
+    s.roving(s.row(1202));
+    // ② P1 「더 보기」: 끝이 아님(1,200 < 3,000, 줄 3,402 < 4,000) → 같은 차례의 새 「더 보기」(1,800개) 그대로 — 패널 refocus
+    press(s.more()[0]!);
+    expect(s.more()).toHaveLength(1);
+    expect(document.activeElement).toBe(s.more()[0]);
+    expect(s.more()[0]!.textContent).toContain(`${(1800).toLocaleString('ko-KR')}개`);
+    s.roving(s.more()[0]!);
+    // ③ 다시 누름: 끝은 아니지만(2,200 < 3,000) P1 아이 앞 줄이 2,202라 1,798번째 아이에서 나무 줄 수 한도(4,000줄)에 걸려 「더 보기」를 그리지 않음 → 사라짐
+    //    → 새로 나온 첫 줄(노드 2202 + 1,200). 고치기 전: 뒤에 button.mini-btn이 없어 문서(body)로
+    press(s.more()[0]!);
+    expect(s.more()).toHaveLength(0);
+    expect(s.items()).toHaveLength(4000);
+    expect(document.activeElement).toBe(s.row(3402));
+    s.roving(s.row(3402));
+  });
+
+  it('초점이 「더 보기」에 없으면(3D 보기·다른 줄 — Safari 누르기는 버튼에 초점을 주지 않는다) 끝까지 펼쳐도 그 자리 그대로 — 앱은 「더 보기」 click 한 자리에서', () => {
+    // 부모 P0(노드 0 — 아이 1~1200)
+    const s = stage(1200);
+    s.panel.show(s.d);
+    // 3D 보기에 초점이 있는 채 누름 → 끝(1,200 ≥ 1,200) → 3D 보기 그대로
+    s.view.focus();
+    s.more()[0]!.click();
+    expect(s.more()).toHaveLength(0);
+    expect(document.activeElement).toBe(s.view);
+    // 다른 줄에 초점이 있는 채 누름 → 같은 줄 그대로(패널 refocus가 data-node 열쇠로 되찾음 — 새 첫 줄로 끌어오지 않음)
+    s.d.childLimit.clear();
+    s.panel.rerender();
+    expect(s.more()).toHaveLength(1);
+    s.row(6).focus();
+    s.more()[0]!.click();
+    expect(s.more()).toHaveLength(0);
+    expect(document.activeElement).toBe(s.row(6));
+    // 원문: 「더 보기」에 부모 열쇠 data-more(다시 그린 본문에 같은 부모의 「더 보기」가 있는지 — 끝 셈만으로는 줄 수 한도를 놓친다),
+    // click은 다시 그리기 앞에 초점이 그 버튼인지 보아 두고 뒤에 버튼이 없으면 새로 나온 첫 줄(누르기 전 limit 자리 아이)로 — 스크롤은 그대로
+    const pan = readFileSync(resolve(__dirname, '../../src/app/panel.ts'), 'utf8');
+    const add = pan.slice(pan.indexOf('    const addChildren = '), pan.indexOf('    // 찾는 글이 있으면'));
+    expect(add).toMatch(/\{ class: 'mini-btn more-btn', role: 'treeitem', 'aria-level': [^\n]*, 'data-more': String\(parent\), style: /);
+    expect(add).toMatch(
+      /more\.addEventListener\('click', \(\) => \{\n(\s*\/\/[^\n]*\n)*\s*const had = document\.activeElement === more;\n\s*d\.childLimit\.set\(parent, limit \+ CHILD_LIMIT \* 5\);\n\s*this\.rerender\(\);\n\s*if \(had && !this\.body\.querySelector\(`\[data-more="\$\{parent\}"\]`\)\) this\.body\.querySelector<HTMLElement>\(`\[data-node="\$\{kids\[limit\]\}"\]`\)\?\.focus\(\{ preventScroll: true \}\);\n\s*\}\);\n/,
+    );
+    expect(pan.match(/document\.activeElement === more/g)).toHaveLength(1);
+    expect(pan.match(/data-more/g)).toHaveLength(2);
+    // 새 가져오기 없음(나무 로빙은 나무 상자 focusin의 rove가 맞춘다)
+    expect(pan).toMatch(/\nimport \{ focusIfLost, focusSpot, listKeys, listRows, refocus, rove, treeKeys \} from '\.\/kbd';\n/);
+    expect(pan).toMatch(/box\.addEventListener\('focusin', \(e\) => \{\n\s*const it = \(e\.target as HTMLElement\)\.closest<HTMLElement>\('\[role=treeitem\]'\);\n\s*if \(it\) rove\(\[\.\.\.box\.querySelectorAll<HTMLElement>\('\[role=treeitem\]'\)\], it, true\);\n/);
   });
 });
