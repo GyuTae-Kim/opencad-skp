@@ -434,7 +434,7 @@ describe('상태 막대 경고 칩 글 대비(198차 — WCAG 1.4.3: 경고 글 
   }
 });
 
-describe('끌어 놓기 카드 글 대비(199차 — WCAG 1.4.3: 덮개 토큰, 밝은 테마만 짙게)', () => {
+describe('끌어 놓기 카드 글 대비(199·204차 — WCAG 1.4.3: 덮개 토큰, 199차 밝은 테마·204차 어두운 테마도 짙게)', () => {
   const prop = (sel: string, p: string): string => new RegExp(`(?:^|[;\\s])${p}:\\s*([^;]+)`).exec(bodies(sel))?.[1]?.trim() ?? '';
   /** 색 값(#fff 꼴 세 자리 포함) 또는 var(--이름) — 그 테마 색으로 */
   const tok = (T: Record<string, string>, v: string): Rgba => {
@@ -444,7 +444,7 @@ describe('끌어 놓기 카드 글 대비(199차 — WCAG 1.4.3: 덮개 토큰, 
     return rgba(t.replace(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/i, '#$1$1$2$2$3$3'));
   };
   for (const [name, T] of THEMES) {
-    it(`${name}: 「놓으면 엽니다」 카드 흰 글(16px)은 덮개를 섞은 처음 화면 흰 칸·3D 보기·앱 바탕 위 4.5:1(밝은 테마 덮개 55%는 흰 칸 위 4.35:1)`, () => {
+    it(`${name}: 「놓으면 엽니다」 카드 흰 글(16px)은 덮개를 섞은 처음 화면 흰 칸·3D 보기·앱 바탕·3D 보기 흰 모형 면 위 4.5:1(덮개 55%는 흰 칸·흰 면 위 4.35:1)`, () => {
       // 카드는 바탕이 없어 반투명 덮개가 곧 글 바탕 — 그 밑은 처음 화면 끌어 놓기 칸·3D 보기·처음 화면 바탕(카드는 창 가운데)
       const veil = tok(T, prop('.dropcover', 'background'));
       const fg = tok(T, prop('.dropcover-card', 'color'));
@@ -454,17 +454,24 @@ describe('끌어 놓기 카드 글 대비(199차 — WCAG 1.4.3: 덮개 토큰, 
         ['앱 바탕', prop('.start', 'background')],
       ];
       expect(bases.map(([, v]) => v)).toEqual(['var(--bg-elev)', 'var(--stage-bg)', 'var(--bg)']);
-      const low = bases.map(([k, v]) => [k, contrast(fg, over(veil, tok(T, v)))] as const).filter(([, c]) => c < 4.5);
+      // 204차: 3D 보기에서는 모형의 흰 면(가장 밝은 바탕)도 카드 밑에 온다 — 어두운 테마 덮개 55%는 그 위 4.35:1
+      bases.push(['3D 보기 흰 모형 면', '#fff']);
+      const low =bases.map(([k, v]) => [k, contrast(fg, over(veil, tok(T, v)))] as const).filter(([, c]) => c < 4.5);
       expect(low.map(([k, c]) => `${k} ${c.toFixed(2)}`)).toEqual([]);
     });
   }
-  it('덮개는 테마 토큰 — 어두운 테마는 그대로 검정 55%, 밝은 테마만 같은 색에서 불투명도를 가장 가까운 0.01 걸음으로(0.56은 흰 칸 위 4.4975:1)', () => {
+  it('덮개는 테마 토큰 — 두 테마 모두 같은 검정에서 불투명도를 흰 바탕 위 4.5:1을 처음 넘는 0.01 걸음으로(199차 밝은·204차 어두운, 0.56은 흰 바탕 위 4.4975:1)', () => {
     expect(prop('.dropcover', 'background')).toBe('var(--drop-veil)');
-    expect(tok(DARK, 'var(--drop-veil)')).toEqual([8, 12, 18, 0.55]);
-    const light = tok(LIGHT, 'var(--drop-veil)');
-    expect(light.slice(0, 3)).toEqual([8, 12, 18]);
-    expect(light[3]).toBeGreaterThan(0.55);
-    expect(light[3]).toBeLessThanOrEqual(0.6);
+    const white: Rgba = [255, 255, 255, 1];
+    for (const [name, T] of THEMES) {
+      const veil = tok(T, 'var(--drop-veil)');
+      expect(veil.slice(0, 3), name).toEqual([8, 12, 18]);
+      // 흰 바탕 위에서 4.5:1이면 덮개 밑이 어떤 색이어도 카드 흰 글이 4.5:1, 한 걸음 옅으면 미달(가장 작은 값)
+      expect(contrast(white, over(veil, white)), name).toBeGreaterThanOrEqual(4.5);
+      const lighter: Rgba = [8, 12, 18, Math.round(veil[3] * 100 - 1) / 100];
+      expect(contrast(white, over(lighter, white)), name).toBeLessThan(4.5);
+    }
+    expect([tok(DARK, 'var(--drop-veil)')[3], tok(LIGHT, 'var(--drop-veil)')[3]]).toEqual([0.57, 0.57]);
     expect(prop('.dropcover-card', 'color')).toBe('#fff');
   });
 });
