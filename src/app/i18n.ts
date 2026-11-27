@@ -48,6 +48,11 @@ export function mixNodes(parts: Mixed): (string | Node)[] {
     return el;
   });
 }
+/**
+ * 상태 막대 고른 것 칸의 title(181차 — 칸은 최대 폭·말줄임이라 잘린 글을 여기서 다시 본다, WCAG 1.4.12·1.4.10): 보이는 글 그대로.
+ * 측정 잠금 안내는 번역층이 따로 옮기는 마디라 따로 옮겨 " · "로 잇는다(한 글로 옮기면 통째 열쇠 대신 조각마다 옮겨져 보이는 글과 다르다)
+ */
+export const statusTitle = (parts: Mixed, lock?: string | null): string => mixText(parts) + (lock ? ` · ${uiText(lock)}` : '');
 /** 이름 칸 글: 앱 자리 글("(이름 없음)" 등)만 지금 언어로, 파일 글은 그대로(번역층이 건너뛰는 칸에 넣을 때) */
 export const uiName = (name: string): string => isAppName(name) ? uiText(name) : name;
 /**

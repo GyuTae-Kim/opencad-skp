@@ -89,7 +89,8 @@ describe('제목 막대·도구 막대 버튼의 이름이 다섯 언어 모두 
     expect(infotab).toContain(`'${INFO}'`);
     const segments: [key: string, lang: Lang, has: string][] = [
       // 처음 화면 키 줄은 F 줄부터 끝까지(뒤 두 줄의 띄어쓰기 · 낱말이 그대로인지 함께)
-      [START, 'ja', ' · F：全体を表示 · 1～7：標準ビュー · F7：グリッド'],
+      // F7 줄은 181차에 버튼의 보이는 글 格子로(아래 181차 시험)
+      [START, 'ja', ' · F：全体を表示 · 1～7：標準ビュー · F7：格子'],
       [START, 'zh-CN', ' · F 适合窗口 · 1~7 标准视图 · F7 网格'],
       [INFO, 'en', 'F: Fit to view · '],
       [INFO, 'ja', 'F：全体を表示・'],
@@ -104,5 +105,29 @@ describe('제목 막대·도구 막대 버튼의 이름이 다섯 언어 모두 
         expect(all.filter((v) => v === value).length, `${lang}: ${key}`).toBe(1);
         expect(sourceMessage(value), `${lang}: ${key}`).toBe(key);
       }
+  });
+
+  it('181차: 이름이 아닌 풀이(title)·통째 열쇠의 낱말도 그 버튼의 보이는 글 값 낱말 — 독일어 표준 뷰 풀이·영어 예제 열기 풀이·일본어 처음 화면 키 줄 F7 줄(3.2.4)', () => {
+    const VIEWS = '표준 뷰 (1 앞 · 2 뒤 · 3 왼쪽 · 4 오른쪽 · 5 위 · 6 아래 · 7 등각)';
+    const SAMPLE = '예제 모형 열기(브라우저에서 만든 집 모형)';
+    // 쓰는 자리: 표준 뷰 버튼 title(보이는 글 「표준 뷰」), 예제 열기 버튼 title(보이는 글 「예제 열기」 — 이름은 보이는 글), 처음 화면 키 줄(도구 막대 「격자」 버튼)
+    expect(app).toContain(`title: '${VIEWS}',`);
+    expect(app).toContain(`tbtn('예제 열기', 'sample', '${SAMPLE}', `);
+    expect(app).toContain("tbtn('격자', 'grid', '바닥 격자 (F7)', ");
+    // [열쇠, 언어, 고친 값, 근거 열쇠(그 버튼의 보이는 글), 옛 낱말]
+    const fixed: [key: string, lang: Lang, value: string, basis: string, old: RegExp][] = [
+      [VIEWS, 'de', 'Standardansichten (1 Vorderansicht · 2 Rückansicht · 3 Links · 4 Rechts · 5 Oben · 6 Unten · 7 Isometrisch)', '표준 뷰', /Standardansicht\b/],
+      [SAMPLE, 'en', 'Open sample model (house model created in the browser)', '예제 열기', /example/i],
+      [START, 'ja', '左ドラッグ：回転 · 右ドラッグ：移動 · ホイール：拡大 · F：全体を表示 · 1～7：標準ビュー · F7：格子', '격자', /グリッド/],
+    ];
+    const all = LANGS.flatMap((lang) => Object.values(catalogs[lang]!));
+    for (const [key, lang, value, basis, old] of fixed) {
+      expect(catalogs[lang]![key], `${lang}: ${key}`).toBe(value);
+      expect(norm(translate(key, lang)), `${lang}: ${key} 근거 ${basis}`).toContain(norm(translate(basis, lang)));
+      expect(value, `${lang}: ${key}`).not.toMatch(old);
+      expect(all.filter((v) => v === value).length, `${lang}: ${value}`).toBe(1);
+      expect(sourceMessage(value), `${lang}: ${value}`).toBe(key);
+    }
+    expect(catalogs.ja!['격자']).toBe('格子');
   });
 });
