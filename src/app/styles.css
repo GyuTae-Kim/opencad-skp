@@ -25,6 +25,8 @@
   /* 입력 칸 경계(1.4.11 — 3:1, 47차): 찾기 칸·측정값 칸 */
   --border-input: #737d8b;
   --warn: #f5b84c;
+  /* 경고 글(상태 막대 경고 칩): 경고 바탕 위 4.5:1(198차 — 밝은 테마 --warn은 3.38:1이라 같은 색상에서 짙게, 아이콘·테두리는 --warn 그대로 3:1) */
+  --warn-fg: var(--warn);
   --warn-bg: #3a3120;
   --danger: #ff7b72;
   --danger-bg: #3d2224;
@@ -59,6 +61,7 @@
   --group-fg: #185cb0;
   --border-input: #7a8390;
   --warn: #b7791f;
+  --warn-fg: #9b661a;
   --warn-bg: #fff6e0;
   --danger: #c62828;
   --danger-bg: #fdecec;
@@ -338,7 +341,7 @@ input[type='checkbox'] {
   border: 0;
   border-radius: 10px;
   background: var(--warn-bg);
-  color: var(--warn);
+  color: var(--warn-fg);
   font-size: 11.5px;
   font-weight: 600;
   cursor: pointer;

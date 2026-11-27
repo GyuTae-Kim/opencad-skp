@@ -321,3 +321,24 @@ describe('눌린 띠 버튼 글 대비(197차 — WCAG 1.4.3: 47차 짝 목록�
     });
   }
 });
+
+describe('상태 막대 경고 칩 글 대비(198차 — WCAG 1.4.3: 경고 글 전용 토큰, 경고 아이콘·테두리는 경고색 그대로)', () => {
+  const prop = (sel: string, p: string): string => new RegExp(`(?:^|[;\\s])${p}:\\s*([^;]+)`).exec(bodies(sel))?.[1]?.trim() ?? '';
+  /** 색 값 또는 var(--이름) — 토큰이 다른 토큰을 가리키면 그 테마에서 따라간다 */
+  const tok = (T: Record<string, string>, v: string): Rgba => {
+    const m = /^var\((--[\w-]+)\)$/.exec(v.trim());
+    return m ? tok(T, T[m[1]!] ?? '') : rgba(v);
+  };
+  for (const [name, T] of THEMES) {
+    it(`${name}: 「경고 N」 칩(11.5px 굵게) 글은 경고 바탕 위 4.5:1(밝은 테마 경고색 글은 3.38:1), 알림의 경고 아이콘·테두리는 경고색으로 3:1`, () => {
+      expect(prop('.st-warn', 'background')).toBe('var(--warn-bg)');
+      const bg = tok(T, prop('.st-warn', 'background'));
+      expect(contrast(tok(T, prop('.st-warn', 'color')), bg)).toBeGreaterThanOrEqual(4.5);
+      // 글 아닌 표시(1.4.11)는 --warn 그대로: 아이콘은 경고 바탕 위, 테두리는 3D 보기 배경 위
+      expect(bodies('.notice.warn .notice-icon')).toMatch(/color:\s*var\(--warn\)/);
+      expect(bodies('.notice.warn')).toMatch(/border-color:\s*var\(--warn\)/);
+      expect(contrast(rgba(T['--warn']), bg)).toBeGreaterThanOrEqual(3);
+      expect(contrast(rgba(T['--warn']), rgba(T['--stage-bg']))).toBeGreaterThanOrEqual(3);
+    });
+  }
+});
