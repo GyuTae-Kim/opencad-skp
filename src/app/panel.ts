@@ -641,11 +641,13 @@ export class Panel {
 
   /** 구성 찾기 칸: 이름·정의·태그로 거른다(글자를 칠 때마다 목록만 다시 그린다, Esc로 지운다) */
   private searchBox(d: SkpDoc, refill: () => void): HTMLElement {
+    // 이름은 보이는 이름표인 자리 글과 같은 글(172차 — WCAG 2.5.3: 이름이 「그룹·컴포넌트 찾기(이름·정의·태그)」라 자리 글을 품지 않았다), 무엇을 찾는지는 찾기 영역 이름으로
+    const find = '이름·정의·태그로 찾기';
     const input = h('input', {
       class: 'search-input',
       type: 'search',
-      placeholder: '이름·정의·태그로 찾기',
-      'aria-label': '그룹·컴포넌트 찾기(이름·정의·태그)',
+      placeholder: find,
+      'aria-label': find,
       value: d.outlineQuery,
       autocomplete: 'off',
       spellcheck: 'false',
@@ -664,7 +666,7 @@ export class Panel {
       d.outlineQuery = '';
       refill();
     });
-    return h('div', { class: 'search-box', role: 'search' }, input);
+    return h('div', { class: 'search-box', role: 'search', 'aria-label': '그룹·컴포넌트 찾기(이름·정의·태그)' }, input);
   }
 
   /** 찾은 노드 한 줄: 종류·이름(정의·태그)·위치 경로·면 수 — 누르면 고르고 조상을 펼친다, 두 번 누르면 확대 */
