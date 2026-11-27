@@ -2680,7 +2680,8 @@ html:lang(zh-CN) { --font: -apple-system, "PingFang SC", "Microsoft YaHei", sans
   padding: 0 6px;
 }
 
-/* 새 판 알림(서비스 워커) */
+/* 새 판 알림(서비스 워커). left 50%라 폭은 3D 보기 절반까지 — 400% 확대(3D 보기 320×143)에서 독일어 글 6줄·버튼 두 줄(195px)이 잘려
+ * 3D 보기(넘침 숨김) 안 남은 높이까지만 두고 그 안에서 굴린다(207차 — WCAG 1.4.10, 47차 알림·201차 그림 저장 창 꼴로 위아래 8px) */
 .update-bar {
   position: absolute;
   top: 8px;
@@ -2691,6 +2692,8 @@ html:lang(zh-CN) { --font: -apple-system, "PingFang SC", "Microsoft YaHei", sans
   gap: 8px;
   align-items: center;
   max-width: calc(100% - 24px);
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
   padding: 8px 10px 8px 14px;
   font-size: 13px;
   background: var(--bg-elev);

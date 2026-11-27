@@ -248,17 +248,17 @@ describe('다시 흐르기(47차 — 1.4.10, 1280px 창 400% = 320×256)', () =>
   });
 
   // 201차: 그림 저장 창(exporter.ts)은 3D 보기(.stage — 넘침 숨김) 안에 붙는데 높이 한도가 없어, 400% 확대(320×256 — 3D 보기 143px)에서 265px 창의 위(닫기 ✕·크기)가 잘렸다
+  const plain = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  /** @media 밖 규칙 본문(들여 쓰지 않은 그 선택자 한 줄) */
+  const top = (sel: string): string => new RegExp(`\\n${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`).exec(plain)?.[1] ?? '';
+  const cascade = (sel: string, w: number, ht: number): string => `${top(sel)};${fitting(sel, w, ht)}`;
+  /** 마지막으로 이기는 그 속성의 px 값(min-height는 height로 세지 않음) */
+  const px = (prop: string, s: string): number => Number([...s.matchAll(new RegExp(`(?:^|[;\\s])${prop}:\\s*([\\d.]+)px`, 'g'))].pop()?.[1]);
+  // 손셈(3D 보기 높이): 창 − 제목 막대(+ 아래 선 1) − 도구 막대 한 줄(위아래 여백 + 버튼 + 아래 선 1) − 상태 막대(+ 위 선 1)
+  const stage = (w: number, ht: number): number =>
+    ht - (px('height', cascade('.titlebar', w, ht)) + 1) - (2 * px('padding', cascade('.toolbar', w, ht)) + px('height', cascade('.tbtn', w, ht)) + 1) - (px('height', cascade('.statusbar', w, ht)) + 1);
+  const sizes: [number, number][] = [[320, 256], [320, 300], [320, 400], [1280, 300], [1280, 400], [1280, 800], [320, 568]];
   it('그림 저장 창은 3D 보기 안 남은 높이까지만 두고 그 안에서 굴린다(47차 알림 꼴 — 반대쪽 8px), 넓은 화면·높은 창은 한도에 닿지 않아 그대로', () => {
-    const plain = css.replace(/\/\*[\s\S]*?\*\//g, '');
-    /** @media 밖 규칙 본문(들여 쓰지 않은 그 선택자 한 줄) */
-    const top = (sel: string): string => new RegExp(`\\n${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`).exec(plain)?.[1] ?? '';
-    const cascade = (sel: string, w: number, ht: number): string => `${top(sel)};${fitting(sel, w, ht)}`;
-    /** 마지막으로 이기는 그 속성의 px 값(min-height는 height로 세지 않음) */
-    const px = (prop: string, s: string): number => Number([...s.matchAll(new RegExp(`(?:^|[;\\s])${prop}:\\s*([\\d.]+)px`, 'g'))].pop()?.[1]);
-    // 손셈(3D 보기 높이): 창 − 제목 막대(+ 아래 선 1) − 도구 막대 한 줄(위아래 여백 + 버튼 + 아래 선 1) − 상태 막대(+ 위 선 1)
-    const stage = (w: number, ht: number): number =>
-      ht - (px('height', cascade('.titlebar', w, ht)) + 1) - (2 * px('padding', cascade('.toolbar', w, ht)) + px('height', cascade('.tbtn', w, ht)) + 1) - (px('height', cascade('.statusbar', w, ht)) + 1);
-    const sizes: [number, number][] = [[320, 256], [320, 300], [320, 400], [1280, 300], [1280, 400], [1280, 800], [320, 568]];
     expect(sizes.map(([w, ht]) => stage(w, ht))).toEqual([143, 187, 287, 185, 285, 685, 455]);
     // 손셈(창 높이, 마우스): 테두리 둘 + 위아래 여백 + 머리(닫기 버튼 + 아래 사이) + 크기 묶음(이름 12px 한 줄 + 아래 사이, 라디오 둘, 아래 사이) + 확인 줄 둘 + 버튼 줄(위 사이 + 버튼) + 알림 줄(위 사이 + 1em)
     const d = top('.export-dialog');
@@ -289,6 +289,48 @@ describe('다시 흐르기(47차 — 1.4.10, 1280px 창 400% = 320×256)', () =>
       [true, 8],
       [false, 364],
       [false, 178],
+    ]);
+  });
+
+  // 207차: 새 판 띠(app.ts — 서비스 워커가 받은 새 판 알림)도 3D 보기 안 위 8px에 붙는데 높이 한도가 없었다. left 50%에 폭이 없어 띠는 shrink-to-fit이고 쓸 폭은
+  // 오른쪽을 0으로 둔 「3D 보기 − left」(CSS 2.1 10.3.7)라 3D 보기 절반까지 — 320px 3D 보기면 글 칸 134px에서 독일어가 글 6줄·버튼 두 줄로 143px 3D 보기를 넘어 버튼이 모두 잘렸다
+  it('새 판 띠는 3D 보기 안 남은 높이까지만 두고 그 안에서 굴린다(47차 알림 꼴 — 위아래 8px), 넓은 창·높은 창은 한도에 닿지 않아 그대로', () => {
+    const bar = top('.update-bar');
+    const pad = /padding:\s*(\d+)px (\d+)px (\d+)px (\d+)px/.exec(bar);
+    const [t, r, b, l] = [1, 2, 3, 4].map((i) => Number(pad?.[i]));
+    const at = px('top', bar);
+    // 손셈(글 칸 폭): 3D 보기 폭 × (1 − left) − 테두리 둘 − 왼오른 여백 — 좁은 화면(패널은 시트) 3D 보기 320px면 134, 1280 창(패널 330 열림 — 3D 보기 950)이면 449
+    const left = Number(/left:\s*(\d+)%/.exec(bar)?.[1]) / 100;
+    const inner = (sw: number): number => sw * (1 - left) - 2 * px('border', bar) - r! - l!;
+    expect([inner(320), inner(950)]).toEqual([134, 449]);
+    // 손셈(글 칸 134px의 [글 줄, 버튼 줄] — 라틴은 Helvetica 폭표 13px, 한중일은 한 글자 1em, 띄어쓰기·글자 사이에서 끊음, 버튼은 12px 글 + 여백 9 둘 + 테두리 둘):
+    //   글 한 줄 폭 ko 437(한글 30·띄어쓰기 11)·en 483·zh-CN 299(23자)·de 646·ja 585(45자), 버튼 둘 + 사이 8은 ko 135.3·en 113.3·zh-CN 96·de 138.1·ja 132(134를 넘으면 두 줄).
+    //   넓은 창(글 칸 449)은 다섯 언어 모두 글 두 줄 안(가장 긴 독일어 646)·버튼 한 줄
+    const narrow: Record<string, [number, number]> = { ko: [4, 2], en: [5, 1], 'zh-CN': [3, 1], de: [6, 2], ja: [5, 1] };
+    const lh = px('font-size', bar) * Number(/font:\s*\d+px\/([\d.]+)/.exec(plain)?.[1]);
+    const H = ([lines, rows]: [number, number]): number => 2 * px('border', bar) + t! + b! + lines * lh + rows * (px('gap', bar) + px('min-height', top('.mini-btn')));
+    expect(Object.values(narrow).map((n) => Math.round(H(n) * 100) / 100)).toEqual([157.4, 144.25, 106.55, 195.1, 144.25]);
+    // 한도가 없으면 320×256(3D 보기 143)에서 위 8 + 띠가 넘는 언어 — 독일어는 60px 넘어 버튼 두 줄이 모두 밖
+    expect(Object.keys(narrow).filter((k) => at + H(narrow[k]) > stage(320, 256))).toEqual(['ko', 'en', 'de', 'ja']);
+    expect(Math.round(stage(320, 256) - at - H(narrow.de))).toBe(-60);
+    // 창(마우스)마다 [한도에 닿는지, 띠 아래 남는 높이]
+    const place = (w: number, ht: number, h: number): [boolean, number] => {
+      const cut = [...cascade('.update-bar', w, ht).matchAll(/max-height:\s*calc\(100% - (\d+)px\)/g)].pop()?.[1];
+      const limit = cut === undefined ? Infinity : stage(w, ht) - Number(cut);
+      return [h > limit, Math.round(stage(w, ht) - at - Math.min(h, limit))];
+    };
+    expect(/overflow-y:\s*auto/.test(bar)).toBe(true);
+    // 320×256: 넘던 넷은 한도(127px)까지 줄고 아래 8px을 남겨 그 안에서 굴린다 — 중국어는 한도에 닿지 않아 그대로
+    expect(Object.values(narrow).map((n) => place(320, 256, H(n)))).toEqual([[true, 8], [true, 8], [false, 28], [true, 8], [true, 8]]);
+    // 창마다 가장 높은 띠(좁은 창 독일어, 넓은 창 글 두 줄·버튼 한 줄): 320×300도 굴리고, 320×400·넓은 창·320×568은 한도에 닿지 않아 그대로
+    expect(sizes.map(([w, ht]) => place(w, ht, w === 320 ? H(narrow.de) : H([2, 1])))).toEqual([
+      [true, 8],
+      [true, 8],
+      [false, 84],
+      [false, 89],
+      [false, 189],
+      [false, 589],
+      [false, 252],
     ]);
   });
 });

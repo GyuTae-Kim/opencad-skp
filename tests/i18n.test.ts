@@ -197,8 +197,9 @@ describe('language URLs and UI presentation', () => {
     expect(shortcuts).toContain(`{ keys: ['Shift'], label: '${LINE}' }`);
     expect(app).toContain(`tbtn('각도기', 'protractor', '${TITLE}', `);
     expect(measureHint('protractor', 0, false)).toBe(HINT);
-    // 원문 셋 모두 평면은 「고정」 — 언어마다 한 낱말(독일어는 평면 fixieren·방향 sperren으로 가른다: 화살표 줄·상태 글과 같게)
-    const word: Record<string, RegExp> = { en: /\block\b/i, de: /\bfixier/, ja: /固定/, 'zh-CN': /锁定/ };
+    // 원문 셋 모두 평면은 「고정」 — 언어마다 한 낱말(독일어는 평면 fixieren·방향 sperren으로 가른다: 화살표 줄·상태 글과 같게,
+    // 중국어도 207차에 평면 固定·방향 锁定으로 — 아래 207차)
+    const word: Record<string, RegExp> = { en: /\block\b/i, de: /\bfixier/, ja: /固定/, 'zh-CN': /固定/ };
     for (const [code, re] of Object.entries(word))
       for (const k of [LINE, TITLE, HINT]) expect(catalogs[code][k], `${code}: ${k}`).toMatch(re);
     // 고친 값: 평면은 fixieren, 방향은 그대로 sperren — 네 사전에서 하나뿐이라 거꾸로 찾기가 제 원문으로
@@ -208,6 +209,41 @@ describe('language URLs and UI presentation', () => {
     const all = Object.keys(word).flatMap((code) => Object.values(catalogs[code]));
     expect(all.filter((v) => v === value).length).toBe(1);
     expect(sourceMessage(value)).toBe(TITLE);
+  });
+  it('207차: 중국어는 원문 「고정」(각도기 평면·축 따라가기)을 固定, 「잠금」(방향)을 锁定으로 가른다 — 각도기 Shift 셋·정보 탭 축 고정만 锁定이라 화살표 평면 고정 줄·상태 글·줄자 풍선의 固定과 달랐다(3.2.4)', () => {
+    const zh = catalogs['zh-CN'];
+    const read = (f: string) => readFileSync(resolve(__dirname, `../src/app/${f}`), 'utf8');
+    const TITLE = '각도기: 중심 → 기준 방향 → 잴 방향(Shift = 평면 고정·방향 잠금) · Esc 지우기';
+    const HINT = '각도기: 중심점을 누르세요 · Shift를 누르고 있으면 평면 고정';
+    const AXES = '줄자·각도기의 축 고정·기본 평면과 줄자 결과의 dx·dy·dz는 옮긴 그리기 축을 따릅니다.';
+    // 쓰는 자리(원문): 바로 가기 안내 Shift 줄, 각도기 버튼 풍선(화면 읽기 이름), 측정 띠·상태 막대 첫 안내, 정보 탭(그리기 축을 옮긴 모형)
+    expect(read('shortcuts.ts')).toContain(`{ keys: ['Shift'], label: '각도기: 지금 평면에 고정' }`);
+    expect(read('app.ts')).toContain(`tbtn('각도기', 'protractor', '${TITLE}', `);
+    expect(measureHint('protractor', 0, false)).toBe(HINT);
+    expect(read('infotab.ts')).toContain(`hint('${AXES}')`);
+    // 원문 가름: 고정 = 붙잡아 둠(평면 고정·축 따라가기), 잠금·잠그기·잠글·잠김 = 방향 잠금(「잠시」 같은 다른 낱말은 셈 밖) — 열쇠 26개, 섞인 셋은 두 낱말 모두
+    const fix = /고정/;
+    const lock = /잠[금그글김]/;
+    const keys = Object.keys(zh).filter((k) => fix.test(k) || lock.test(k));
+    expect(keys.length).toBe(26);
+    for (const k of keys) {
+      expect(/固定/.test(zh[k]), `固定: ${k}`).toBe(fix.test(k));
+      expect(/锁定/.test(zh[k]), `锁定: ${k}`).toBe(lock.test(k));
+    }
+    expect(Object.entries(zh).filter(([k, v]) => !keys.includes(k) && /锁定|固定/.test(v))).toEqual([]);
+    // 고친 값 넷: 네 사전에서 하나뿐이라 거꾸로 찾기가 제 원문으로
+    const fixed: Record<string, string> = {
+      '각도기: 지금 평면에 고정': '量角器：固定到当前平面',
+      [TITLE]: '量角器：中心 → 参考方向 → 测量方向（Shift = 固定平面或锁定方向）· Esc清除',
+      [HINT]: '量角器：按下中心点 · 按住 Shift 键固定平面',
+      [AXES]: '卷尺·量角器的轴固定和默认平面，以及卷尺结果的 dx·dy·dz，都遵循移动后的绘图轴。',
+    };
+    const all = ['en', 'zh-CN', 'de', 'ja'].flatMap((code) => Object.values(catalogs[code]));
+    for (const [k, v] of Object.entries(fixed)) {
+      expect(zh[k], k).toBe(v);
+      expect(all.filter((x) => x === v).length, v).toBe(1);
+      expect(sourceMessage(v)).toBe(k);
+    }
   });
   it('translates the select-tool guide selection (status, card)', () => {
     const hangul = /[가-힣]/;
