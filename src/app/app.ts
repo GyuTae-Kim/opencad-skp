@@ -3844,6 +3844,8 @@ export class SkpViewerApp implements PanelHost {
     // 키보드로 누른 「다시 재기」가 지워 막히면 초점을 3D 보기로(148차 — 다시 재는 키보드 길이 3D 보기의 가상 커서, 측정값 칸 returnFocus와 같은 곳)
     leaveDisabled(e.measureClear, this.viewer?.canvas);
     e.measureCopy.disabled = !d.measure;
+    // 복사 버튼에서 친 Esc가 결과를 지워 그 버튼이 꺼지면 초점을 3D 보기로(203차 — 148차 「다시 재기」와 같은 곳, 측정을 끄면 띠째 숨어 위에서 끝나 189차 길), 초점이 그 버튼 밖이면 그대로
+    leaveDisabled(e.measureCopy, this.viewer?.canvas);
     // 방향을 잡는 동안은 복사(결과가 없다) 자리에 잠금 단추
     const directing = tool.directing;
     const locked = !!tool.inferenceLock;

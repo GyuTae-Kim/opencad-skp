@@ -2626,8 +2626,9 @@ export class MeasureTool {
     // 앱(setMeasureMode)은 이 뒤 같은 차례에 카드·도구 막대·목록을 맞추므로 그 뒤(마이크로태스크)에 본다
     if (mode && a && a !== document.body) queueMicrotask(() => this.refocusOn(a));
     const same = mode === this.modeValue;
-    if (!same) this.reset();
+    // 도구 값을 먼저 바꾼 뒤 지운다(203차 — 지우며 알리는 결과 null을 앱이 바뀐 도구로 받는다: 끄면 측정 띠가 숨는 차례가 먼저라 띠 안 초점은 189차대로 끈 도구 버튼)
     this.modeValue = mode;
+    if (!same) this.reset();
     this.viewer.canvas.style.cursor = mode ? 'crosshair' : '';
     // 끄면 결과·표식은 바로 지우고, 보이는 안내가 있으면 그것만 다시 그린다(안내는 도구를 끈 뒤에도 보인다)
     this.syncPainter();
