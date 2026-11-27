@@ -587,12 +587,16 @@ export class Panel {
           // 나무 안 줄이라 treeitem(단추라 Enter·Space는 그대로 누르기)
           const more = h(
             'button',
-            { class: 'mini-btn more-btn', role: 'treeitem', 'aria-level': String(t.depth[kids[k]!]!), style: `margin-left:${indent(t.depth[kids[k]!]!) + 22}px` },
+            { class: 'mini-btn more-btn', role: 'treeitem', 'aria-level': String(t.depth[kids[k]!]!), 'data-more': String(parent), style: `margin-left:${indent(t.depth[kids[k]!]!) + 22}px` },
             `… ${fmtCount(kids.length - k)}개 더 보기`,
           );
           more.addEventListener('click', () => {
+            // 키보드로 누른 이 버튼이 끝까지 펼쳐(또는 나무 줄 수 한도로) 다시 그려지지 않으면 새로 나온 첫 줄로(193차 — APG Tree View 로빙은 나무 상자 focusin, WCAG 2.4.3:
+            // 패널 다시 그리기의 refocus는 버튼 차례 열쇠라 아래 다른 부모의 버튼·아래 띠 버튼·문서로 갔다). 초점이 이 버튼에 없었거나 같은 부모의 버튼이 남으면 그대로
+            const had = document.activeElement === more;
             d.childLimit.set(parent, limit + CHILD_LIMIT * 5);
             this.rerender();
+            if (had && !this.body.querySelector(`[data-more="${parent}"]`)) this.body.querySelector<HTMLElement>(`[data-node="${kids[limit]}"]`)?.focus({ preventScroll: true });
           });
           list.append(more);
           return;
