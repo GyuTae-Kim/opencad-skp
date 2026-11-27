@@ -526,6 +526,113 @@ describe('측정 띠·고른 것 카드를 띠 안 버튼에서 친 Esc·T로 �
   });
 });
 
+describe('고른 것 카드 「면만」을 눌러 그 버튼만 숨어도 초점을 같은 카드의 다음 버튼으로(190차 — 150차 leaveDisabled 꼴, 카드째 숨으면 189차 길, WCAG 2.4.3)', () => {
+  // 앱 꼴: 3D 보기(코어 캔버스 tabIndex 0), 패널 버튼, 고른 것 카드(면만 — 모서리면 「모서리만」, 같은 버튼 · 자세히 · ✕)
+  const stage = () => {
+    const box = html(
+      '<canvas tabindex="0"></canvas><button class="panel">패널</button>' +
+        '<div class="sel-bar" hidden><button class="part" hidden>면만</button><button class="more">자세히</button><button class="close">선택 해제</button></div>',
+    );
+    const $ = (s: string): HTMLElement => box.querySelector<HTMLElement>(s)!;
+    const card = $('.sel-bar');
+    const part = box.querySelector<HTMLButtonElement>('.part')!;
+    const st = { sel: null as 'group' | 'face' | null, measuring: false };
+    // refreshSelBar 꼴: 카드째 숨김 줄 앞뒤 keepBarFocus(189차 — 숨었으면 끝), 「면만」은 그룹을 고르고 누른 자리가 있을 때만(partOfPick — 면을 고르면 null)
+    const refresh = (): void => {
+      const on = !!st.sel && !st.measuring;
+      const back = keepBarFocus(card, $('canvas'));
+      card.hidden = !on;
+      back();
+      if (!on) return;
+      part.hidden = st.sel !== 'group';
+      leaveDisabled(part, $('.more'), $('canvas'));
+    };
+    // applySelection 꼴, 「면만」 누르기는 selectPickedPart → applySelection(면)
+    const select = (sel: 'group' | 'face' | null): void => {
+      st.sel = sel;
+      refresh();
+    };
+    part.addEventListener('click', () => select('face'));
+    return { $, card, part, st, refresh, select };
+  };
+  const appSource = (): { app: string; bar: string } => {
+    const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
+    return { app, bar: app.slice(app.indexOf('  private refreshSelBar('), app.indexOf('  private placeVcb(')) };
+  };
+
+  it('초점이 「면만」에 있을 때 눌러(Enter·Space도 click) 면을 골라 그 버튼만 숨으면 같은 카드의 「자세히」로, 카드째 숨으면 189차 길(3D 보기) — 앱은 refreshSelBar의 숨는 줄 바로 뒤에서', () => {
+    const { $, card, part, st, refresh, select } = stage();
+    select('group');
+    expect([card.hidden, part.hidden]).toEqual([false, false]);
+    // jsdom은 focus fixup을 하지 않아 고치기 전에는 숨은 버튼에 초점이 남는다(브라우저는 문서로)
+    part.focus();
+    part.click();
+    expect([card.hidden, part.hidden]).toEqual([false, true]);
+    expect(lost()).toBe(false);
+    expect(document.activeElement).toBe($('.more'));
+    // 「자세히」를 쓸 수 없으면 끝 대비로 3D 보기
+    select('group');
+    part.focus();
+    ($('.more') as HTMLButtonElement).disabled = true;
+    part.click();
+    expect(document.activeElement).toBe($('canvas'));
+    ($('.more') as HTMLButtonElement).disabled = false;
+    // 「면만」에 초점을 둔 채 카드째 숨으면(측정을 켬 — T) 189차 길 그대로 3D 보기(「자세히」가 아님)
+    select('group');
+    part.focus();
+    st.measuring = true;
+    refresh();
+    expect(card.hidden).toBe(true);
+    expect(document.activeElement).toBe($('canvas'));
+    // 앱 원문: 숨는 줄 바로 뒤에서 같은 카드의 「자세히」(els.selMore), 끝 대비 3D 보기. 카드째 숨으면 그 앞에서 끝(189차 keepBarFocus만)
+    const { app, bar } = appSource();
+    expect(bar).toMatch(/e\.selPart\.hidden = !part;\n(?:\s*\/\/[^\n]*\n)*\s*leaveDisabled\(e\.selPart, e\.selMore, this\.viewer\?\.canvas\);\n/);
+    expect(bar.indexOf('if (!on || !d) return;')).toBeGreaterThan(bar.indexOf('back();'));
+    expect(bar.indexOf('if (!on || !d) return;')).toBeLessThan(bar.indexOf('leaveDisabled(e.selPart'));
+    expect(app).toContain("selPart.addEventListener('click', () => this.selectPickedPart());");
+    expect(app).toMatch(/selectPickedPart\(\): void \{\n[^}]*this\.applySelection\(part, false\);\n\s*\}/);
+    expect(app).toMatch(/const selMore = h\('button', \{ class: 'mb-btn sel-more'/);
+    expect(app).toMatch(/\n\s*selPart,\n\s*selMore,\n/);
+  });
+
+  it('초점이 「면만」 밖이면(3D 보기·자세히·패널 버튼·문서) 그 버튼이 숨어도 옮기지 않고, 「면만」에 있어도 그대로 보이는 다시 맞춤이면 그대로', () => {
+    const { $, card, part, refresh, select } = stage();
+    // 3D 보기·패널 목록에서 면을 고름(3D 보기 초점)
+    select('group');
+    $('canvas').focus();
+    select('face');
+    expect([card.hidden, part.hidden]).toEqual([false, true]);
+    expect(document.activeElement).toBe($('canvas'));
+    // 「자세히」·패널 버튼
+    select('group');
+    $('.more').focus();
+    select('face');
+    expect(document.activeElement).toBe($('.more'));
+    select('group');
+    $('.panel').focus();
+    select('face');
+    expect(document.activeElement).toBe($('.panel'));
+    // 문서(body — 손가락·Safari 누르기는 버튼에 초점을 주지 않음)는 끌어오지 않는다
+    select('group');
+    $('.panel').blur();
+    expect(document.activeElement).toBe(document.body);
+    part.click();
+    expect(part.hidden).toBe(true);
+    expect(document.activeElement).toBe(document.body);
+    // 「면만」에 초점이 있어도 그대로 보이는 다시 맞춤(같은 고른 것)이면 그대로
+    select('group');
+    part.focus();
+    refresh();
+    expect(part.hidden).toBe(false);
+    expect(document.activeElement).toBe(part);
+    // 앱 원문: 카드를 다시 맞추는 동안 초점을 옮기는 곳은 189차 keepBarFocus와 이번 leaveDisabled 하나뿐(초점이 그 버튼에 있을 때만 옮긴다 — 148차 시험)
+    const { bar } = appSource();
+    expect(bar.match(/leaveDisabled\(/g)?.length).toBe(1);
+    expect(bar.match(/keepBarFocus\(/g)?.length).toBe(1);
+    expect(bar).not.toMatch(/focusIfLost\(|\.focus\(/);
+  });
+});
+
 describe('패널 아래 띠를 통째로 다시 그려도 초점을 같은 열쇠 칸으로(151차 — NC 137차 꼴, 없어진 버튼은 150차 차례)', () => {
   it('같은 열쇠(태그|data-key ?? aria-label ?? 글 — 다시 그린 바로 뒤 원문)의 첫 칸, 없어졌으면 반대 동작(숨기기 ↔ 모두 보이기) → 3D 보기. 띠 밖 초점은 그대로', () => {
     const d = rowDoc();

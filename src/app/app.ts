@@ -332,6 +332,7 @@ interface Els {
   selBar: HTMLElement;
   selText: HTMLElement;
   selPart: HTMLButtonElement;
+  selMore: HTMLButtonElement;
   camBar: HTMLElement;
   camText: HTMLElement;
   fovRange: HTMLInputElement;
@@ -845,6 +846,7 @@ export class SkpViewerApp implements PanelHost {
       selBar,
       selText,
       selPart,
+      selMore,
       camBar,
       camText,
       fovRange,
@@ -3764,6 +3766,8 @@ export class SkpViewerApp implements PanelHost {
     e.selText.replaceChildren(head, ...(facts.length ? [h('span', { class: 'mb-sub' }, ...facts)] : []));
     const part = partOfPick(d);
     e.selPart.hidden = !part;
+    // 키보드로 누른 「면만」이 면을 골라 스스로 숨으면 같은 카드의 「자세히」로(190차 — 150차 꼴, 카드째 숨으면 위 189차 길), 초점이 그 버튼 밖이면 그대로
+    leaveDisabled(e.selPart, e.selMore, this.viewer?.canvas);
     const label = e.selPart.querySelector('.mb-part');
     if (label) label.textContent = part === 'edge' ? '모서리만' : '면만';
     e.selPart.title = part === 'edge' ? '누른 모서리 하나의 길이(곡선이면 곡선 전체)만 보기' : '누른 면 하나의 넓이만 보기';
