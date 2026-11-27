@@ -867,7 +867,7 @@ describe('213차: 기기를 가리지 않는 「누르다」 원문의 번역은
       [LEFT[1]!, {
         en: 'Because there are many nodes, levels from {0} on are not listed (pressing inside selects the level-{1} item).',
         ja: 'ノードが多いため、{0}段階以降はリストに含めていません（その箇所を押すと、{1}段階の項目が選択されます）。',
-        'zh-CN': '由于节点数量庞大，列表中未包含从 {0} 开始的层级（按下列表项将选中 {1} 层级）。',
+        'zh-CN': '由于节点数量庞大，列表中未包含从 {0} 开始的层级（在其中按下将选中 {1} 层级的项目）。',
         de: 'Wegen vieler Knoten sind Ebenen ab {0} nicht in der Liste (ein Drücken darin wählt das Element der Ebene {1}).',
       }],
       [LEFT[2]!, {
@@ -935,5 +935,24 @@ describe('213차: 기기를 가리지 않는 「누르다」 원문의 번역은
       ['안내 두기 켬: 누르면 안내점·안내선을 둡니다', 'de', 'Auswählen setzt'],
     ];
     for (const [key, lang, has] of basis) expect(catalogs[lang][key], `${lang}: ${key}`).toContain(has);
+  });
+
+  // 215차: 중국어 「노드가 많아 …(그 안을 누르면 {1}단계 항목을 고릅니다)」가 「그 안」(목록에 넣지 않은 깊은 단계 — 3D에서 그 안을 누름)을 목록 줄 列表项으로,
+  // 「{1}단계 항목」을 단계(层级)로만 옮겼다 — 같은 구성 탭 풀이 「› 버튼으로 펼치면 … 그 안의 항목을 고릅니다」의 其中的项目(그 안·항목) 낱말로(누르기 낱말 按下는 214차 그대로)
+  it('215차: 중국어 「노드가 많아 …」의 「그 안」은 같은 구성 탭 풀이의 其中, 「항목」은 项目이고 목록 줄 낱말이 없다', () => {
+    const key = LEFT[1]!;
+    const zh = catalogs['zh-CN'][key];
+    expect(zh).toBe('由于节点数量庞大，列表中未包含从 {0} 开始的层级（在其中按下将选中 {1} 层级的项目）。');
+    expect(zh).not.toContain('列表项');
+    expect(zh).not.toMatch(DEVICE['zh-CN']);
+    expect(Object.values(catalogs['zh-CN']).filter((v) => v === zh)).toHaveLength(1);
+    expect(sourceMessage(zh)).toBe(key);
+    // 근거 줄: 같은 구성 탭 풀이(그 안의 항목 — 其中的项目)·누르기
+    expect(catalogs['zh-CN']['› 버튼으로 펼치면 3D에서 누를 때도 그 안의 항목을 고릅니다. 누르면 강조, 두 번 누르면 확대합니다.']).toContain('其中的项目');
+    expect(catalogs['zh-CN']['누르면 이 단면을 끕니다']).toContain('按下');
+    // 다른 세 언어는 「그 안」 뜻 그대로(214차 값)
+    expect(catalogs.en[key]).toContain('pressing inside');
+    expect(catalogs.ja[key]).toContain('その箇所を押すと');
+    expect(catalogs.de[key]).toContain('ein Drücken darin');
   });
 });

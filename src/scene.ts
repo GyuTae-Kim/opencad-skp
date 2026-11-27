@@ -3442,7 +3442,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     const defOfIndex: (SkpDefinition | undefined)[] = [];
     const defIdx = (inst: SkpInstance): number => {
       const def = model.definitions.get(inst.definition);
-      const i = idx(defIndex, definitionNames, def?.name ?? `정의 ${inst.definition}`);
+      // 정의를 못 찾은 인스턴스는 언어 없는 「#번호」(215차 — 해석기의 이름 없는 정의와 같은 꼴)
+      const i = idx(defIndex, definitionNames, def?.name ?? `#${inst.definition}`);
       if (defOfIndex.length <= i) defOfIndex[i] = def;
       return i;
     };

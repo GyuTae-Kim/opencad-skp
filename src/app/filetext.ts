@@ -63,3 +63,9 @@ export const isAppName = (name: string): boolean =>
 
 /** 이름 → 섞은 글 조각(앱 자리 글이면 그것만 화면 언어로 옮긴다) */
 export const nameText = (name: string): FileText => (isAppName(name) ? { file: name, ui: true } : fileText(name));
+
+/**
+ * 이름을 이은 경로(「집 › 1층」 — 뿌리 쪽부터): 이름마다 nameText 조각이라 이름도 정의 이름도 없는 그룹의 「(이름 없음)」만 화면 언어로(215차 —
+ * 한 파일 글로 이으면 다른 언어 화면의 위치 칸·찾기 줄에 한국어로 남았다)
+ */
+export const namePath = (names: readonly string[]): Mixed => joinMixed(names.map((n) => [nameText(n)]), ' › ');

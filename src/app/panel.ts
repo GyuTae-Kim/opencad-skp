@@ -683,7 +683,7 @@ export class Panel {
     const name = nodeName(t, n);
     const def = nodeDefinition(t, n);
     const tag = nodeTag(t, n);
-    const path = parentPath(t, n);
+    const path = parentPath(t, n, uiName);
     const kind = t.kind[n] === 0 ? 'group' : t.kind[n] === 2 ? 'image' : 'component';
     const sub = [def && def !== name ? def : null, tag].filter(Boolean).join(' · ');
     const cb = keep(h('input', { type: 'checkbox', 'aria-label': mixText(mix`${nameText(name)} 보이기`), title: '보이기·숨기기' }), 'aria-label');
@@ -828,7 +828,8 @@ export class Panel {
   private renderEntity(d: SkpDoc): void {
     const e = entityInfo(selectionEntity(d), d.units, mmPerSceneUnit(d.scene.units));
     const rows = e.rows.map((r) => {
-      const el = row(r.label, r.value, r.file);
+      // 앱 자리 이름이 낀 값(경로의 「(이름 없음)」 — 215차)은 그 조각만 지금 언어로 옮겨 넣는다(파일 글 줄이라 번역층은 건너뛴다 — 언어를 바꾸면 다시 그린다)
+      const el = row(r.label, r.parts ? mixText(r.parts) : r.value, r.file);
       if (r.title) el.querySelector('.v')?.setAttribute('title', r.title);
       return el;
     });

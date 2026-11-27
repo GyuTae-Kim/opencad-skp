@@ -200,7 +200,8 @@ export function readLayers(r: TlvReader, sec: TlvNode, lineStyles: Map<number, s
         const header = r.first(n, TAG.ID_BOX);
         const id = header && r.uint(r.first(header, TAG.ID));
         if (id === undefined) return;
-        const name = r.str(r.first(n, TAG.LAYER_NAME)) ?? `태그 ${id}`;
+        // 이름 칸이 없으면 언어 없는 「#번호」(215차 — 이름이 태그 묶음 열쇠라 비우지 않는다. 「태그 n」은 다른 언어 화면에 한국어로 남았다)
+        const name = r.str(r.first(n, TAG.LAYER_NAME)) ?? `#${id}`;
         const t: SkpTag = { id, name, visible: !r.flag(r.first(n, TAG.LAYER_HIDDEN)), sceneHidden: false };
         const colorN = r.first(n, TAG.LAYER_COLOR);
         const mat = colorN && r.first(colorN, TAG.MAT);
