@@ -294,11 +294,21 @@ describe('다시 흐르기(47차 — 1.4.10, 1280px 창 400% = 320×256)', () =>
 
   // 207차: 새 판 띠(app.ts — 서비스 워커가 받은 새 판 알림)도 3D 보기 안 위 8px에 붙는데 높이 한도가 없었다. left 50%에 폭이 없어 띠는 shrink-to-fit이고 쓸 폭은
   // 오른쪽을 0으로 둔 「3D 보기 − left」(CSS 2.1 10.3.7)라 3D 보기 절반까지 — 320px 3D 보기면 글 칸 134px에서 독일어가 글 6줄·버튼 두 줄로 143px 3D 보기를 넘어 버튼이 모두 잘렸다
+  // (208차부터 1.4.10 창은 아래 폭 규칙이 이겨 반 폭이 아니다 — 207차 셈은 반 폭 띠도 높이 한도가 막는지 본다)
+  const bar = top('.update-bar');
+  const pad = /padding:\s*(\d+)px (\d+)px (\d+)px (\d+)px/.exec(bar);
+  const [t, r, b, l] = [1, 2, 3, 4].map((i) => Number(pad?.[i]));
+  const at = px('top', bar);
+  const lh = px('font-size', bar) * Number(/font:\s*\d+px\/([\d.]+)/.exec(plain)?.[1]);
+  /** 띠 높이: [글 줄, 버튼 줄] — 테두리 둘 + 위아래 여백 + 글 줄 × 줄 높이 + 버튼 줄마다 (사이 + 작은 버튼 높이) */
+  const H = ([lines, rows]: [number, number]): number => 2 * px('border', bar) + t! + b! + lines * lh + rows * (px('gap', bar) + px('min-height', top('.mini-btn')));
+  /** 창(마우스)마다 [한도에 닿는지, 띠 아래 남는 높이] */
+  const place = (w: number, ht: number, h: number): [boolean, number] => {
+    const cut = [...cascade('.update-bar', w, ht).matchAll(/max-height:\s*calc\(100% - (\d+)px\)/g)].pop()?.[1];
+    const limit = cut === undefined ? Infinity : stage(w, ht) - Number(cut);
+    return [h > limit, Math.round(stage(w, ht) - at - Math.min(h, limit))];
+  };
   it('새 판 띠는 3D 보기 안 남은 높이까지만 두고 그 안에서 굴린다(47차 알림 꼴 — 위아래 8px), 넓은 창·높은 창은 한도에 닿지 않아 그대로', () => {
-    const bar = top('.update-bar');
-    const pad = /padding:\s*(\d+)px (\d+)px (\d+)px (\d+)px/.exec(bar);
-    const [t, r, b, l] = [1, 2, 3, 4].map((i) => Number(pad?.[i]));
-    const at = px('top', bar);
     // 손셈(글 칸 폭): 3D 보기 폭 × (1 − left) − 테두리 둘 − 왼오른 여백 — 좁은 화면(패널은 시트) 3D 보기 320px면 134, 1280 창(패널 330 열림 — 3D 보기 950)이면 449
     const left = Number(/left:\s*(\d+)%/.exec(bar)?.[1]) / 100;
     const inner = (sw: number): number => sw * (1 - left) - 2 * px('border', bar) - r! - l!;
@@ -307,18 +317,10 @@ describe('다시 흐르기(47차 — 1.4.10, 1280px 창 400% = 320×256)', () =>
     //   글 한 줄 폭 ko 437(한글 30·띄어쓰기 11)·en 483·zh-CN 299(23자)·de 646·ja 585(45자), 버튼 둘 + 사이 8은 ko 135.3·en 113.3·zh-CN 96·de 138.1·ja 132(134를 넘으면 두 줄).
     //   넓은 창(글 칸 449)은 다섯 언어 모두 글 두 줄 안(가장 긴 독일어 646)·버튼 한 줄
     const narrow: Record<string, [number, number]> = { ko: [4, 2], en: [5, 1], 'zh-CN': [3, 1], de: [6, 2], ja: [5, 1] };
-    const lh = px('font-size', bar) * Number(/font:\s*\d+px\/([\d.]+)/.exec(plain)?.[1]);
-    const H = ([lines, rows]: [number, number]): number => 2 * px('border', bar) + t! + b! + lines * lh + rows * (px('gap', bar) + px('min-height', top('.mini-btn')));
     expect(Object.values(narrow).map((n) => Math.round(H(n) * 100) / 100)).toEqual([157.4, 144.25, 106.55, 195.1, 144.25]);
     // 한도가 없으면 320×256(3D 보기 143)에서 위 8 + 띠가 넘는 언어 — 독일어는 60px 넘어 버튼 두 줄이 모두 밖
     expect(Object.keys(narrow).filter((k) => at + H(narrow[k]) > stage(320, 256))).toEqual(['ko', 'en', 'de', 'ja']);
     expect(Math.round(stage(320, 256) - at - H(narrow.de))).toBe(-60);
-    // 창(마우스)마다 [한도에 닿는지, 띠 아래 남는 높이]
-    const place = (w: number, ht: number, h: number): [boolean, number] => {
-      const cut = [...cascade('.update-bar', w, ht).matchAll(/max-height:\s*calc\(100% - (\d+)px\)/g)].pop()?.[1];
-      const limit = cut === undefined ? Infinity : stage(w, ht) - Number(cut);
-      return [h > limit, Math.round(stage(w, ht) - at - Math.min(h, limit))];
-    };
     expect(/overflow-y:\s*auto/.test(bar)).toBe(true);
     // 320×256: 넘던 넷은 한도(127px)까지 줄고 아래 8px을 남겨 그 안에서 굴린다 — 중국어는 한도에 닿지 않아 그대로
     expect(Object.values(narrow).map((n) => place(320, 256, H(n)))).toEqual([[true, 8], [true, 8], [false, 28], [true, 8], [true, 8]]);
@@ -331,6 +333,40 @@ describe('다시 흐르기(47차 — 1.4.10, 1280px 창 400% = 320×256)', () =>
       [false, 189],
       [false, 589],
       [false, 252],
+    ]);
+  });
+
+  // 208차: 반 폭은 폭이 없는 shrink-to-fit 탓이라 띠 규칙의 max-width(3D 보기 − 24px — 알림 상자와 같은 값)가 어느 창에서도 닿지 않았다. 같은 꼴(left 50% + translateX)로
+  // 가운데 두는 측정 띠·잠깐 알림은 width: max-content, 알림 상자는 폭을 준다. 1.4.10 창(200차 측정 띠 두 줄 블록 — 폭 360px 아래·낮고 좁은 창)만 max-content로 넓혀
+  // 다섯 언어 모두 굴리지 않고 버튼까지 보이게 — 넓은 창·360~479px 휴대폰은 반 폭 그대로(넓히면 긴 언어가 오른쪽 위 뷰 큐브를 새로 덮어 상한을 정해야 함 — 설계 결정)
+  it('1.4.10 창의 새 판 띠는 3D 보기 폭(− 24px)까지 넓어져 다섯 언어 모두 한도 안에 든다 — 넓은 창·360px 넘는 휴대폰은 반 폭 그대로', () => {
+    expect(top('.measure-bar')).toMatch(/(?:^|[;\s])width:\s*max-content/);
+    expect(bar).not.toMatch(/(?:^|[;\s])width:/);
+    const grown = (w: number, ht: number): boolean => /(?:^|[;\s])width:\s*max-content/.test(fitting('.update-bar', w, ht));
+    expect(sizes.map(([w, ht]) => grown(w, ht))).toEqual([true, true, true, false, false, false, true]);
+    expect([grown(359, 800), grown(400, 300), grown(375, 667), grown(414, 896), grown(768, 1024)]).toEqual([true, true, false, false, false]);
+    // 손셈(글 칸): 다섯 언어 모두 max-content(글 한 줄 + 사이 8 + 버튼 둘·사이 + 테두리·여백 26)가 296보다 넓어 띠 = 3D 보기 320 − 24 → 글 칸 270
+    const cut = Number(/max-width:\s*calc\(100% - (\d+)px\)/.exec(bar)?.[1]);
+    const side = 2 * px('border', bar) + r! + l!;
+    const text = [437, 483.4, 299, 646, 585];
+    const btns = [135.3, 113.3, 96, 138.1, 132];
+    expect(text.map((x, i) => Math.round(x + px('gap', bar) + btns[i]! + side))).toEqual([606, 631, 429, 818, 751]);
+    expect(320 - cut - side).toBe(270);
+    // [글 줄, 버튼 줄] — 글 칸 270: ko 2(437)·en 2(483 — 10% 넓은 글꼴 532도 2)·zh-CN 2(23자, 20자 줄)·de 3(646 — 711도 3)·ja 3(45자 — 。、 앞에서 끊지 않아 19·20·6자), 버튼 둘은 270 안 한 줄
+    expect(btns.every((x) => x <= 270)).toBe(true);
+    const grownLines: [number, number][] = [[2, 1], [2, 1], [2, 1], [3, 1], [3, 1]];
+    expect(grownLines.map((n) => Math.round(H(n) * 100) / 100)).toEqual([87.7, 87.7, 87.7, 106.55, 106.55]);
+    // 320×256: 다섯 모두 한도(127px) 안이라 굴리지 않고 버튼까지 보인다(207차 반 폭이면 넷이 한도에서 굴렸다 — 위 [true, 8])
+    expect(grownLines.map((n) => place(320, 256, H(n)))).toEqual([[false, 47], [false, 47], [false, 47], [false, 28], [false, 28]]);
+    // 창마다 가장 높은 띠(1.4.10 창은 넓힌 독일어, 넓은 창은 반 폭의 글 두 줄·버튼 한 줄): 모두 한도에 닿지 않는다
+    expect(sizes.map(([w, ht]) => place(w, ht, grown(w, ht) ? H([3, 1]) : H([2, 1])))).toEqual([
+      [false, 28],
+      [false, 72],
+      [false, 172],
+      [false, 89],
+      [false, 189],
+      [false, 589],
+      [false, 340],
     ]);
   });
 });
