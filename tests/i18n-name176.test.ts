@@ -7,6 +7,7 @@
  * 이름 열쇠 값에 같은 사전의 보이는 글 값을 넣었다(원문·코드 그대로 — README 개발 절 176차 문단). 처음 화면 키 줄·정보 탭 조작 줄
  * (통째 열쇠)의 「F 전체 보기」 낱말도 버튼의 보이는 글 값으로 맞췄다(en View all, ja 全体表示, zh 查看全部).
  * 판정은 대소문자·붙임표(-)·띄어쓰기를 가리지 않는다(175차 표와 같은 셈 — 음성 조작은 붙임표를 낱말 사이로 듣는다).
+ * 204차: 바로 가기 안내 F7 줄(ja 床グリッドの表示切替)만 남은 グリッド를 같은 기능 값 넷의 格子로(床の格子の表示切替).
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -129,5 +130,32 @@ describe('제목 막대·도구 막대 버튼의 이름이 다섯 언어 모두 
       expect(sourceMessage(value), `${lang}: ${value}`).toBe(key);
     }
     expect(catalogs.ja!['격자']).toBe('格子');
+  });
+
+  it('204차: 바닥 격자(F7)를 부르는 일본어 값 다섯은 모두 같은 낱말 格子 — 바로 가기 안내 F7 줄도 버튼 이름 「床の格子」(3.2.4·2.5.3)', () => {
+    const shortcuts = readFileSync(resolve(__dirname, '../src/app/shortcuts.ts'), 'utf8');
+    const TOGGLE = '바닥 격자 켜고 끄기';
+    // 쓰는 자리: 바로 가기 안내 F7 줄, 도구 막대 「격자」 버튼(보이는 글·이름)과 휴대폰 보기 설정 메뉴 항목, 처음 화면 키 줄, 정보 탭 조작 줄
+    expect(shortcuts).toContain(`{ keys: ['F7'], label: '${TOGGLE}' }`);
+    expect(app).toContain("tbtn('격자', 'grid', '바닥 격자 (F7)', ");
+    expect(app).toContain("{ label: '격자', checked: this.gridOn, ");
+    expect(app).toContain(`'${START}'`);
+    expect(infotab).toContain(`'${INFO}'`);
+    const keys = ['격자', '바닥 격자 (F7)', TOGGLE, START, INFO].sort();
+    // 일본어 사전에서 격자를 부르는 열쇠·값은 이 다섯뿐(다른 격자 기능은 없음)이고 모두 格子 — グリッド는 사전에 남지 않는다
+    const ja = catalogs.ja!;
+    expect(Object.keys(ja).filter((k) => k.includes('격자')).sort()).toEqual(keys);
+    expect(Object.entries(ja).filter(([, v]) => /格子|グリッド/.test(v)).map(([k]) => k).sort()).toEqual(keys);
+    for (const k of keys) expect(ja[k], k).toContain('格子');
+    expect(Object.values(ja).filter((v) => v.includes('グリッド'))).toEqual([]);
+    // 고친 값: 버튼 이름 床の格子 (F7)의 낱말 그대로 — 네 사전에서 하나뿐이라 거꾸로 찾기가 제 원문으로
+    const value = '床の格子の表示切替';
+    expect(ja[TOGGLE]).toBe(value);
+    expect(value).toContain(ja['바닥 격자 (F7)']!.replace(' (F7)', ''));
+    const all = LANGS.flatMap((lang) => Object.values(catalogs[lang]!));
+    expect(all.filter((v) => v === value).length).toBe(1);
+    expect(sourceMessage(value)).toBe(TOGGLE);
+    // 원문·다른 언어는 그대로
+    expect(LANGS.filter((lang) => lang !== 'ja').map((lang) => catalogs[lang]![TOGGLE])).toEqual(['Toggle ground grid', '显示或隐藏地面网格', 'Bodenraster ein/aus']);
   });
 });
