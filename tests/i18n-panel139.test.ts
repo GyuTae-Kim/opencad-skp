@@ -77,8 +77,9 @@ describe('패널·그림 저장·보기 설정·시작 화면 글의 네 언어 
       ['치수', 'de', 'Bemaßung'],
       ['컴포넌트', 'de', 'Komponente'],
       ['글·치수·측정 넣기', 'de', 'Texte·Bemaßungen·Messungen einschließen'],
-      ['누른 면 하나의 넓이만 보기', 'de', 'Nur den Flächeninhalt der angetippten Fläche zeigen'],
-      ['3D에서 누른 면 하나(넓이)나 모서리 하나(길이)만 고릅니다', 'de', 'Wählt nur die in 3D angetippte Fläche (Flächeninhalt) oder Kante (Länge)'],
+      // 213차: 누른(angetippt — 손가락 낱말) → gedrückt(기기를 가리지 않는 「누른」 — i18n.test 213차)
+      ['누른 면 하나의 넓이만 보기', 'de', 'Nur den Flächeninhalt der gedrückten Fläche zeigen'],
+      ['3D에서 누른 면 하나(넓이)나 모서리 하나(길이)만 고릅니다', 'de', 'Wählt nur die in 3D gedrückte Fläche (Flächeninhalt) oder Kante (Länge)'],
       ['부드러운 모서리 보기', 'de', 'Weiche Kanten anzeigen'],
       ['전체 보기 (F)', 'de', 'Gesamtansicht (F)'],
     ];
@@ -120,18 +121,19 @@ describe('「분리해서 보기」 풀이는 누르기 전 할 일, 눌린 뒤 
   it('새 할 일 원문은 네 사전에서 할 일 꼴·하나뿐(거꾸로 찾기 제 원문), 지금 상태 원문은 그대로, 근거 줄은 같은 사전의 「…만 보기」', () => {
     const TODO = '고른 것만 보기 — 다시 누르면 모두 보입니다';
     const NOW = '고른 것만 보입니다 — 다시 누르면 모두 보입니다';
+    // 213차: 「다시 누르면」의 기기 낱말(click again·もう一度クリック·再次点击·erneut klicken)은 기기를 가리지 않는 낱말로(i18n.test 213차) — 꼴은 그대로
     const todo: Record<Lang, string> = {
-      en: 'Show only what you selected — click again to see them all',
-      ja: '選んだものだけを表示 — もう一度クリックするとすべて表示します',
-      'zh-CN': '只显示所选项 — 再次点击显示全部',
-      de: 'Nur die Auswahl zeigen – erneut klicken, um alle anzuzeigen',
+      en: 'Show only what you selected — press again to see them all',
+      ja: '選んだものだけを表示 — もう一度押すとすべて表示します',
+      'zh-CN': '只显示所选项 — 再按一次显示全部',
+      de: 'Nur die Auswahl zeigen – erneut drücken, um alle anzuzeigen',
     };
-    // 눌린 뒤(지금 상태) — 옛 값 그대로
+    // 눌린 뒤(지금 상태) — 211차 옛 값 꼴 그대로(동사만 213차)
     const now: Record<Lang, string> = {
-      en: 'You only see what you selected — click again to see them all',
-      ja: '選んだものだけを表示しています — もう一度クリックするとすべて表示します',
-      'zh-CN': '仅显示所选项 — 再次点击显示全部',
-      de: 'Sie sehen nur das, was Sie ausgewählt haben – klicken Sie erneut, um alle anzuzeigen',
+      en: 'You only see what you selected — press again to see them all',
+      ja: '選んだものだけを表示しています — もう一度押すとすべて表示します',
+      'zh-CN': '仅显示所选项 — 再按一次显示全部',
+      de: 'Sie sehen nur das, was Sie ausgewählt haben – drücken Sie erneut, um alle anzuzeigen',
     };
     const all = LANGS.flatMap((lang) => Object.values(catalogs[lang]!));
     for (const lang of LANGS) {
@@ -142,13 +144,13 @@ describe('「분리해서 보기」 풀이는 누르기 전 할 일, 눌린 뒤 
       expect(sourceMessage(todo[lang]), todo[lang]).toBe(TODO);
       expect(sourceMessage(now[lang]), now[lang]).toBe(NOW);
     }
-    // 할 일 꼴(누르면 그렇게 됨): 영어 명령형·일본어 「…だけを表示」(진행 「しています」 없음)·중국어 只显示·독일어 「Nur … zeigen –」(부정형 + 「Klicken, um …」)
+    // 할 일 꼴(누르면 그렇게 됨): 영어 명령형·일본어 「…だけを表示」(진행 「しています」 없음)·중국어 只显示·독일어 「Nur … zeigen –」(부정형 + 「Drücken, um …」 — 213차 전 Klicken)
     expect(todo.en).toMatch(/^Show only /);
     expect(todo.en).not.toMatch(/^You /);
     expect(todo.ja).toMatch(/^選んだものだけを表示 — /);
     expect(todo.ja).not.toMatch(/しています/);
     expect(todo['zh-CN']).toMatch(/^只显示/);
-    expect(todo.de).toMatch(/^Nur die Auswahl zeigen – erneut klicken, um /);
+    expect(todo.de).toMatch(/^Nur die Auswahl zeigen – erneut drücken, um /);
     expect(todo.de).not.toMatch(/Sie sehen/);
     // 근거 줄: 같은 사전의 할 일 꼴 「…만 보기」(고른 것 카드 「면만」 풀이)·독일어 「누르면 …」 풀이·「고른 것」을 이르는 낱말
     const basis: [key: string, lang: Lang, has: string][] = [
@@ -157,7 +159,7 @@ describe('「분리해서 보기」 풀이는 누르기 전 할 일, 눌린 뒤 
       ['누른 면 하나의 넓이만 보기', 'zh-CN', '只显示'],
       ['누른 면 하나의 넓이만 보기', 'de', 'Nur '],
       ['누른 면 하나의 넓이만 보기', 'de', ' zeigen'],
-      ['누르면 이 단면을 끕니다', 'de', 'Klicken, um '],
+      ['누르면 이 단면을 끕니다', 'de', 'Drücken, um '],
       ['고른 것을 보기에서 숨깁니다(파일은 그대로)', 'de', 'die Auswahl'],
     ];
     for (const [key, lang, has] of basis) expect(catalogs[lang]![key], `${lang}: ${key}`).toContain(has);

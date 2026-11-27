@@ -661,3 +661,154 @@ describe('language URLs and UI presentation', () => {
   });
 
 });
+
+/**
+ * 213차(212차 꼴 — WCAG 3.3.2, 입력 방식과 상관없는 안내): 원문이 기기를 가리지 않는 「누르다」(누르면·눌러서·누르세요·누른·누를·두 번 누르면)인데
+ * 네 언어 값에 한 기기 낱말(마우스 Click·Klicken·クリック·点击·双击·Doppelklick, 손가락 Tap·Tippen·angetippt·タップ·点按)이 섞여 마우스·손가락·키보드(Enter·Space)
+ * 가운데 한쪽만 말하던 풀이·안내를 212차 근거(같은 사전의 「눌러서 …」 Press·押して·按下·drücken)와 같은 사전의 두 번 누름 낱말(double-press·2回押す·按两次·
+ * zweimal drücken)로 맞췄다(사전만 — README 개발 절 213차 문단). 정말 한 기기만 되는 자리(손가락 기기 측정 안내·걷기 줄·마우스 스냅·수식 키 누르기)와
+ * 화면에 안 쓰이는 옛 열쇠는 두고, 독일어 40곳 한도로 드물게 보는 여덟 열쇠는 네 언어 모두 남겼다(213차에 보고 둔 것).
+ */
+describe('213차: 기기를 가리지 않는 「누르다」 원문의 번역은 기기를 가리지 않는 낱말(WCAG 3.3.2)', () => {
+  const LANGS = ['en', 'ja', 'zh-CN', 'de'] as const;
+  type Lang = (typeof LANGS)[number];
+  // 한 기기 낱말(영어 Tape·독일어 eintippen(글 치기)은 셈 밖)
+  const DEVICE: Record<Lang, RegExp> = {
+    en: /\b(?:taps?|tapped|tapping|click\w*|double[- ]tap\w*|touch\w*)\b/i,
+    ja: /タップ|クリック|タッチ/,
+    'zh-CN': /点按|点击|单击|双击|触碰|轻点|轻触/,
+    de: /(?<!ein)tipp|klick|berühr/i,
+  };
+  const PRESS = /누르|눌러|누른|누를|눌렀/;
+  /** 손가락 기기만(measureHint touch 갈래 — 앱이 (pointer: coarse)일 때 넘김) */
+  const TOUCH_ONLY = [
+    '각도기: 기준 방향의 점을 누르세요', '각도기: 다시 누르면 새로 잽니다', '각도기: 안내선을 둘 방향의 점을 누르세요', '각도기: 잴 방향의 점을 누르세요',
+    '각도기: 중심점을 누르세요 · 길게 누르면 정밀 조준', '줄자: 끝점을 누르세요', '줄자: 다시 누르면 새로 잽니다', '줄자: 모서리와 나란한 안내선을 둘 곳을 누르세요',
+    '줄자: 안내를 둘 시작점을 누르세요 · 길게 누르면 정밀 조준', '줄자: 안내점을 둘 곳을 누르세요', '줄자: 잴 시작점을 누르세요 · 길게 누르면 정밀 조준',
+  ];
+  /** 정말 한 기기만 되는 자리: 손가락·손가락 아닌 걷기 줄(끌기·두 손가락과 한 줄), 마우스 스냅, 수식 키 + 누르기·끌기 상자, 기기를 밝힌 원문, 정보 탭 데스크톱 줄·Alt+누르기 */
+  const ONE_DEVICE = [
+    '한 손가락 끌기: 둘러보기 · 조이스틱: 걷기 · 두 손가락: 벌려 앞으로·끌어 옆/위아래 · 두 번 누르기: 그 자리에 서기',
+    '끌기: 둘러보기 · W/S·↑/↓: 앞뒤 · A/D: 옆 · ←/→: 돌기 · Q/E: 위아래 · Shift: 빠르게 · 두 번 누르기: 그 자리에 서기 · Esc: 끝내기',
+    '끌기: 둘러보기 · W/S·↑/↓: 앞뒤 · A/D: 옆 · ←/→: 돌기 · Shift: 빠르게 · 두 번 누르기: 그 자리에 서기 · Esc: 끝내기(중력을 끄면 Q/E로 위아래)',
+    '줄자·각도기 마우스 스냅: 커서 자리에 겹친 스냅 후보가 둘 이상이면 다음·앞 후보(누르면 그 후보를 찍고, Esc는 돌리기만 풀기 — 그 밖에는 초점 이동)',
+    '줄자·각도기를 끈 동안 안내를 누르거나 끌기: Ctrl(Mac은 Option)은 더하기, Shift는 넣고 빼기, Shift+Ctrl(Shift+Option)은 빼기 — 끌면 고르기 상자(오른쪽으로 끌면 다 든 것, 왼쪽은 걸친 것까지)',
+    '패널 크기 가르개: 다음 크기 단계 · 가장 작게 · 가장 크게(화살표는 조금씩, 마우스·손가락은 한 번 누르기)',
+    '누르기: 고르기(펼친 단계) · Alt+누르기: 가장 안쪽 · 두 번 누르기: 한 단계 들어가기',
+    '누른 곳을 품은 가장 안쪽 그룹·컴포넌트를 바로 고릅니다(Alt+누르기도 같음)',
+  ];
+  /** 화면에 안 쓰이는 옛 열쇠(지우기는 정적 소개·check:i18n 대조와 함께 볼 일) */
+  const UNUSED = [
+    '{0}{1} — 누르면 강조, 두 번 누르면 확대{2}', '각도기: 잴 방향의 점을 누르세요 · Esc 취소', '누르면 단면을 끕니다', '누르면 이 단면으로 모형을 자릅니다',
+    '줄자: 끝점을 누르세요 · Esc 취소', '3D에서 누를 때 고르는 단계',
+  ];
+  /** 213차에 보고 둔 것(독일어 40곳 한도 — 아주 큰 모형 알림·바로 가기 안내 창 줄·장면이 있는 파일·정보 탭 조작 줄) */
+  const LEFT = [
+    '그룹·컴포넌트가 너무 많아 깊은 단계는 3D에서 눌러 고를 수 없습니다(목록에서는 고를 수 있습니다)',
+    '노드가 많아 {0}단계부터는 목록에 넣지 않았습니다(그 안을 누르면 {1}단계 항목을 고릅니다).',
+    '항목이 너무 많아 3D에서 깊은 단계를 눌러 고르지는 못합니다.',
+    '눌러서 고른 안내점·안내선 지우기(여럿이면 함께, 줄자·각도기를 끈 동안에도)',
+    '줄자·각도기: 안내 두기 켜고 끄기(그 키만 눌렀다 떼기, Mac은 Option) — 줄자 둘째·각도기 셋째 누르기로 안내점·안내선',
+    '장면 재생: 장면을 전환 시간과 지연 시간마다 차례로 넘깁니다(3D를 누르거나 장면을 고르면 멈춤)',
+    '누르면 그 장면으로 바꿉니다(카메라·숨긴 태그·숨긴 개체·단면·스타일·그림자·그리기 축 중 장면이 기억하는 것). PageUp·PageDown으로도 넘깁니다.',
+    '패널 가장자리를 끌면 폭(좁은 화면은 높이)이 바뀝니다. 두 번 누르면 처음 크기로',
+  ];
+  const keep = [...TOUCH_ONLY, ...ONE_DEVICE, ...UNUSED, ...LEFT];
+  const hasDevice = (k: string): boolean => LANGS.some((l) => DEVICE[l].test(catalogs[l][k] ?? ''));
+
+  it('「누르다」 원문 열쇠 가운데 기기 낱말이 남은 것은 둔 자리·보고 둔 것뿐이고, 나머지는 네 언어 모두 기기를 가리지 않는 값·하나뿐(거꾸로 찾기 제 원문)', () => {
+    const keys = Object.keys(catalogs.en).filter((k) => PRESS.test(k));
+    for (const k of keep) expect(keys, k).toContain(k);
+    // 목록 밖 열쇠가 기기 낱말을 들고 오면(새 열쇠·되돌린 값) 여기서 걸린다
+    expect(keys.filter(hasDevice).sort()).toEqual([...keep].sort());
+    const all = LANGS.flatMap((l) => Object.values(catalogs[l]));
+    for (const k of keys.filter((x) => !keep.includes(x)))
+      for (const l of LANGS) {
+        const v = catalogs[l][k];
+        expect(v, `${l}: ${k}`).not.toMatch(DEVICE[l]);
+        expect(all.filter((x) => x === v).length, `${l}: ${v}`).toBe(1);
+        expect(sourceMessage(v), v).toBe(k);
+      }
+  });
+
+  it('쓰는 곳: 측정 안내는 손가락 기기 갈래만 손가락 낱말이고 마우스·키보드 갈래는 네 언어 모두 기기를 가리지 않는다, 둔 옛 열쇠는 화면에 안 쓰인다', () => {
+    const touch = new Set<string>();
+    const fine = new Set<string>();
+    for (const mode of ['tape', 'protractor'] as const)
+      for (const n of [0, 1, 2]) for (const has of [false, true]) for (const t of [false, true]) for (const edge of [false, true]) for (const guide of [false, true])
+        (t ? touch : fine).add(measureHint(mode, n, has, t, edge, guide)!);
+    expect([...touch].sort()).toEqual([...TOUCH_ONLY].sort());
+    expect(fine.size).toBe(12);
+    for (const k of fine) for (const l of LANGS) expect(translate(k, l), `${l}: ${k}`).not.toMatch(DEVICE[l]);
+    // 화면에 안 쓰이는 옛 열쇠: 앱 원문·코어(뷰 큐브 풀이를 넣는 곳)에 그 글 리터럴이 없다
+    const src = ['src/app/app.ts', 'src/app/panel.ts', 'src/app/measure.ts', 'src/app/infotab.ts', 'src/app/shortcuts.ts', 'src/scene.ts', 'node_modules/opencad-viewer3d/src/viewer.ts']
+      .map((f) => readFileSync(resolve(__dirname, '..', f), 'utf8'))
+      .join('\n');
+    for (const k of UNUSED) expect(src.includes(`'${k}'`), k).toBe(false);
+    // 쓰이는 자리 둘: 뷰 큐브 풀이는 코어가 넣고(번역층이 옮김), 구성 나무 줄 title은 통째 열쇠 둘(틀 열쇠 {0}{1}…{2}는 안 씀)
+    expect(src).toContain(`cube.title = '뷰 큐브: 면·모서리·구석을 누르면 그 방향으로 봅니다';`);
+    expect(src).toContain(`uiText(hasKids ? '누르면 강조, 두 번 누르면 확대, › 펼치기' : '누르면 강조, 두 번 누르면 확대')`);
+  });
+
+  it('고친 값(자주 보는 것)은 네 언어 새 값 그대로이고, 근거는 같은 사전의 기기를 가리지 않는 한 번·두 번 누름 낱말', () => {
+    const want: [key: string, values: Record<Lang, string>][] = [
+      ['누르면 강조, 두 번 누르면 확대', { en: 'Press to highlight, double-press to zoom in', ja: '押すと強調、2回押すと拡大', 'zh-CN': '按一下高亮显示，按两次放大', de: 'Zum Hervorheben drücken, zum Vergrößern zweimal drücken' }],
+      ['누르면 강조, 두 번 누르면 확대, › 펼치기', { en: 'Press to highlight, double-press to zoom in, › to expand', ja: '押すと強調、2回押すと拡大、›で展開', 'zh-CN': '按一下高亮显示，按两次放大，按 › 展开', de: 'Zum Hervorheben drücken, zum Vergrößern zweimal drücken, › zum Aufklappen' }],
+      ['그룹 {0} · 컴포넌트 {1}. 누르면 강조하고, 두 번 누르면 그쪽으로 확대합니다.', {
+        en: 'Group {0} · Component {1}. Press to highlight it, double-press to zoom in on it.',
+        ja: 'グループ {0} · コンポーネント {1}。押すと強調表示され、2回押すとその箇所にズームします。',
+        'zh-CN': '组 {0} · 组件 {1}。按一下高亮显示，按两次放大。',
+        de: 'Gruppe {0} · Komponente {1}. Drücken Sie, um es hervorzuheben, und drücken Sie zweimal, um es zu vergrößern.',
+      }],
+      ['줄자: 잴 시작점을 누르세요 · 모서리를 두 번 누르면 그 위에 안내선', {
+        en: 'Tape Measure: Press the starting point for measurement · Double-press an edge to place a guide line on it',
+        ja: 'メジャー: 計測の始点を押してください · エッジを2回押すとその上にガイド線',
+        'zh-CN': '卷尺：按下起点进行测量 · 按两次边线可在其上放置参考线',
+        de: 'Maßband: Startpunkt drücken, um zu messen · Zweimaliges Drücken auf eine Kante setzt eine Hilfslinie darauf',
+      }],
+      ['각도기: 중심점을 누르세요 · Shift를 누르고 있으면 평면 고정', {
+        en: 'Protractor: press the center point · hold Shift to lock the plane',
+        ja: '分度器: 中心点を押してください · Shiftキーを押している間は平面を固定',
+        'zh-CN': '量角器：按下中心点 · 按住 Shift 键固定平面',
+        de: 'Winkelmesser: Mittelpunkt drücken · Umschalttaste gedrückt halten, um die Ebene zu fixieren',
+      }],
+      ['누르면 이 단면으로 자릅니다(같은 그룹의 다른 단면은 꺼짐)', {
+        en: 'Press to cut with this section (other sections in the same group turn off)',
+        ja: '押すとこの断面で切断します(同じグループの他の断面はオフ)',
+        'zh-CN': '按下用此剖面剖切(同一组中的其他剖面将关闭)',
+        de: 'Drücken, um mit diesem Schnitt zu schneiden (andere Schnitte derselben Gruppe werden ausgeschaltet)',
+      }],
+      ['누르면 이 단면을 끕니다', { en: 'Press to turn this section off', ja: '押すとこの断面をオフにします', 'zh-CN': '按下关闭此剖面', de: 'Drücken, um diesen Schnitt auszuschalten' }],
+      ['뷰 큐브: 면·모서리·구석을 누르면 그 방향으로 봅니다', {
+        en: 'View Cube: Press a face, edge, or corner to view in that direction.',
+        ja: 'ビューキューブ: 面、エッジ、または角を押すと、その方向からの表示に切り替わります。',
+        'zh-CN': '视图立方体：在面、边或角上按下即可朝该方向查看',
+        de: 'Ansichtswürfel: Drücken Sie auf eine Fläche, Kante oder Ecke, um in diese Richtung zu sehen.',
+      }],
+      ['3D 누르기', { en: 'Press in 3D', ja: '3Dで押す', 'zh-CN': '3D 按下', de: 'Drücken in 3D' }],
+      ['안내 두기: 누르기로 안내점·안내선 두기(다시 누르면 재기만)', {
+        en: 'Place guides: pressing places guide points and guide lines (press again to only measure)',
+        ja: 'ガイド配置: 押してガイド点・ガイド線を置く（もう一度押すと計測のみ）',
+        'zh-CN': '放置参考：按下放置参考点和参考线（再按一次只测量）',
+        de: 'Hilfslinien setzen: Drücken setzt Hilfspunkte und Hilfslinien (erneut drücken = nur messen)',
+      }],
+    ];
+    for (const [key, values] of want)
+      for (const l of LANGS) {
+        expect(catalogs[l][key], `${l}: ${key}`).toBe(values[l]);
+        expect(translate(key, l), `${l}: ${key}`).toBe(values[l]);
+      }
+    // 근거 줄: 같은 사전이 기기를 가리지 않는 누름을 이 낱말로 부른다(212차 「눌러서 이 결과 복사」·측정 안내, 두 번 누름은 구성 나무 안내·정의 줄 안내)
+    const basis: [key: string, lang: Lang, has: string][] = [
+      ['눌러서 이 결과 복사', 'en', 'Press to copy this result'],
+      ['눌러서 이 결과 복사', 'ja', '押してこの結果をコピー'],
+      ['눌러서 이 결과 복사', 'zh-CN', '按下复制此结果'],
+      ['측정: 점을 누르세요', 'de', 'Messen: Punkt drücken'],
+      ['› 버튼으로 펼치면 3D에서 누를 때도 그 안의 항목을 고릅니다. 누르면 강조, 두 번 누르면 확대합니다.', 'en', 'double-press to zoom'],
+      ['› 버튼으로 펼치면 3D에서 누를 때도 그 안의 항목을 고릅니다. 누르면 강조, 두 번 누르면 확대합니다.', 'de', 'zum Zoomen zweimal drücken'],
+      ['줄을 누르면 그 정의의 인스턴스를 모두 고르고, 두 번 누르면 그것들에 맞춰 봅니다.', 'ja', '2回押すと'],
+      ['줄을 누르면 그 정의의 인스턴스를 모두 고르고, 두 번 누르면 그것들에 맞춰 봅니다.', 'zh-CN', '按两次'],
+    ];
+    for (const [key, lang, has] of basis) expect(catalogs[lang][key], `${lang}: ${key}`).toContain(has);
+  });
+});
