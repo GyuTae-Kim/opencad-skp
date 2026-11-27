@@ -14,6 +14,7 @@ import { chunkFailText } from '../src/app/core';
 import { CONTEXT_LOST_TEXT, CONTEXT_LOST_TITLE, RESTORE_FAIL_TEXT, RESTORE_FAIL_TITLE, RESTORE_TEXT, RESTORE_TITLE } from '../src/app/release';
 import { catalogs, currentLanguage, languageUrl, languages, sourceMessage, translate } from '../site/i18n.mjs';
 import { DEFAULT_UNITS, unitsLabel } from '../src/app/units';
+import { THEME_CHOICES } from '../src/app/theme';
 import { KeyPick } from '../src/app/keypick';
 import type { KeyboardSnapOptions, Viewer3d } from 'opencad-viewer3d';
 import type { KeySnapMessageFn, KeySnapMessageKey } from 'opencad-viewer3d/keysnap';
@@ -576,6 +577,87 @@ describe('language URLs and UI presentation', () => {
     dispose();dispose=undefined;
     expect(faces.map(f=>f.label)).toEqual(['앞','뒤','오른쪽','왼쪽','위','아래']);
     dom.window.close();
+  });
+
+  // 212차: 앱 설정(테마) 버튼 title — 밝은·어두운 테마일 때는 통째 열쇠가 없어 틀 「앱 설정 · 테마: {0}{1} — 눌러서 바꾸기」로 옮겨지고, 번역층은 틀 자리 글을
+  // 그대로 끼워(「밝은 테마」·「어두운 테마」) 네 언어 title에 한국어가 남았다(WCAG 3.1.2). 시스템 상태 둘처럼 상태마다 통째 열쇠로, 끝 낱말은 상태마다
+  // Click ↔ Tap으로 갈리던 것을 같은 사전의 기기를 가리지 않는 「눌러서」 낱말 하나로(키보드로 눌러도 맞는 말)
+  it.each(['en', 'ja', 'zh-CN', 'de'])('212차: 테마 버튼 title은 네 상태 모두 %s 글(한국어 남지 않음)이고 끝 낱말이 하나다', async code => {
+    const app = readFileSync(resolve(__dirname, '../src/app/app.ts'), 'utf8');
+    // 앱이 넣는 원문(applyTheme — 고른 상태 이름, 시스템이면 지금 밝기를 덧붙임)
+    expect(app).toContain("b.title = `앱 설정 · 테마: ${label}${choice === 'system' ? `(지금 ${this.theme === 'dark' ? '어두움' : '밝음'})` : ''} — 눌러서 바꾸기`;");
+    const label = (choice: string): string => THEME_CHOICES.find((c) => c.choice === choice)!.label;
+    const source = (choice: string, now?: string): string => `앱 설정 · 테마: ${label(choice)}${now ? `(지금 ${now})` : ''} — 눌러서 바꾸기`;
+    const states = [source('light'), source('dark'), source('system', '어두움'), source('system', '밝음')];
+    expect(states).toEqual([
+      '앱 설정 · 테마: 밝은 테마 — 눌러서 바꾸기',
+      '앱 설정 · 테마: 어두운 테마 — 눌러서 바꾸기',
+      '앱 설정 · 테마: 시스템 설정 따르기(지금 어두움) — 눌러서 바꾸기',
+      '앱 설정 · 테마: 시스템 설정 따르기(지금 밝음) — 눌러서 바꾸기',
+    ]);
+    const want: Record<string, string[]> = {
+      en: [
+        'App settings · Theme: Light theme — Press to change',
+        'App settings · Theme: Dark theme — Press to change',
+        'App settings · Theme: Follow system (currently dark) — Press to change',
+        'App settings · Theme: Follow system (currently light) — Press to change',
+      ],
+      ja: [
+        'アプリ設定 · テーマ: 明るいテーマ — 押して変更',
+        'アプリ設定 · テーマ: ダークテーマ — 押して変更',
+        'アプリ設定 · テーマ: システム設定に従う（現在はダーク） — 押して変更',
+        'アプリ設定 · テーマ: システム設定に従う（現在はライト） — 押して変更',
+      ],
+      'zh-CN': [
+        '应用设置 · 主题：亮色主题 — 按下切换',
+        '应用设置 · 主题：深色主题 — 按下切换',
+        '应用设置 · 主题：跟随系统（当前为深色） — 按下切换',
+        '应用设置 · 主题：跟随系统（当前为浅色） — 按下切换',
+      ],
+      de: [
+        'App-Einstellungen · Design: Helles Design — Zum Ändern drücken',
+        'App-Einstellungen · Design: Dunkles Design — Zum Ändern drücken',
+        'App-Einstellungen · Design: Systemeinstellung (aktuell dunkel) — Zum Ändern drücken',
+        'App-Einstellungen · Design: Systemeinstellung (aktuell hell) — Zum Ändern drücken',
+      ],
+    };
+    // 기기를 가리지 않는 끝 낱말 — 근거: 같은 사전의 「눌러서 이 결과 복사」·「끌거나 눌러서 패널 크기 바꾸기」
+    const end: Record<string, string> = { en: ' — Press to change', ja: ' — 押して変更', 'zh-CN': ' — 按下切换', de: ' — Zum Ändern drücken' };
+    const basis: Record<string, [string, string]> = {
+      en: ['눌러서 이 결과 복사', 'Press to '],
+      ja: ['눌러서 이 결과 복사', '押して'],
+      'zh-CN': ['눌러서 이 결과 복사', '按下'],
+      de: ['끌거나 눌러서 패널 크기 바꾸기 · 두 번 누르면 처음 크기', 'Drücken'],
+    };
+    expect(catalogs[code][basis[code][0]]).toContain(basis[code][1]);
+    const dom = new JSDOM(`<!doctype html><html><head><title>OpenCAD</title></head><body><div id="app"><header class="titlebar"><button id="theme" class="tbtn icon-only" title="${states[0]}" aria-label="앱 설정"><span class="lbl">설정</span></button></header></div></body></html>`, {url:languageUrl(metadataForLanguage('ko').url,code)});
+    for (const name of ['window','document','Node','Element','HTMLAnchorElement','MutationObserver','location','history','localStorage','CustomEvent']) vi.stubGlobal(name,(dom.window as unknown as Record<string,unknown>)[name]);
+    const root = document.getElementById('app')!;
+    dispose = await installLocalization(root);
+    const theme = root.querySelector<HTMLButtonElement>('#theme')!;
+    // 앱처럼 상태가 바뀔 때마다 한국어 원문을 다시 넣는다(번역층이 title 바뀜을 보고 옮긴다)
+    const got: string[] = [];
+    for (const [i, text] of states.entries()) {
+      if (i) { theme.title = text; await new Promise(resolve=>setTimeout(resolve,0)); }
+      got.push(theme.title);
+    }
+    expect(got).toEqual(want[code]);
+    for (const t of got) { expect(t).not.toMatch(/[가-힣]/); expect(t.endsWith(end[code])).toBe(true); }
+    // 이름(aria-label)·보이는 글은 그대로 옮겨진다
+    expect(theme.getAttribute('aria-label')).toBe(translate('앱 설정', code));
+    expect(theme.textContent).toBe(translate('설정', code));
+    // 사전: 상태마다 통째 열쇠 — 네 사전에서 하나뿐이라 거꾸로 찾기가 제 원문으로(언어를 바꿀 때 번역층이 되찾는다), 틀 값도 같은 끝 낱말
+    const all = ['en', 'ja', 'zh-CN', 'de'].flatMap((c) => Object.values(catalogs[c]));
+    states.forEach((text, i) => {
+      expect(catalogs[code][text], text).toBe(want[code][i]);
+      expect(all.filter((v) => v === want[code][i]).length, want[code][i]).toBe(1);
+      expect(sourceMessage(want[code][i])).toBe(text);
+    });
+    expect(catalogs[code]['앱 설정 · 테마: {0}{1} — 눌러서 바꾸기'].endsWith(end[code])).toBe(true);
+    // 상태 이름은 테마 메뉴 항목 값 그대로(메뉴와 title이 같은 이름 — 3.2.4)
+    expect(want[code][0]).toContain(translate('밝은 테마', code));
+    expect(want[code][1]).toContain(translate('어두운 테마', code));
+    dispose(); dispose=undefined; dom.window.close();
   });
 
 });
