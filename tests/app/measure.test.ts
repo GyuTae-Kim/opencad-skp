@@ -3088,6 +3088,94 @@ describe('측정 도구: 잠글 방향 고르기(한 손 잠금 — 22차, Sketc
     vi.advanceTimersByTime(1000);
     expect(menu.hidden).toBe(false);
   });
+
+  it('187차: 줄을 펼치는 버튼(앱 측정 띠의 방향 잠금 버튼)은 줄이 펼쳐졌는지를 aria-expanded로 내고 줄을 여닫는 모든 길에서 함께 바꾸며, 버튼 바로 뒤가 아닌 줄을 aria-controls로 가리킨다(WCAG 4.1.2, APG Disclosure)', () => {
+    const r = rig({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 10, 0, 0]]), lines('h', [[50, -50, 0, 80, -50, 0]])] });
+    // 앱 측정 띠 꼴: 잠금 버튼은 버튼 줄 안(뒤에 다른 버튼), 줄은 띠 끝에 붙는다
+    const band = document.createElement('div');
+    const acts = document.createElement('div');
+    const lockBtn = document.createElement('button');
+    lockBtn.setAttribute('aria-pressed', 'false');
+    acts.append(lockBtn, document.createElement('button'));
+    band.append(acts);
+    document.body.append(band);
+    r.tool.mountLockMenu(band, lockBtn);
+    const menu = band.querySelector('.mb-lockmenu') as HTMLElement;
+    const state = (): [string | null, boolean] => [lockBtn.getAttribute('aria-expanded'), menu.hidden === true];
+    // 붙이면 접힘, 줄은 id로 잇는다(그 id가 문서에 있다)
+    expect(state()).toEqual(['false', true]);
+    expect(menu.id).toBe('measure-lockmenu');
+    expect(lockBtn.getAttribute('aria-controls')).toBe('measure-lockmenu');
+    expect(document.getElementById('measure-lockmenu')).toBe(menu);
+    r.tool.setMode('tape');
+    // 고를 방향이 없으면(점을 찍기 전) 열지 않고 접힘 그대로
+    expect(r.tool.toggleLockMenu(true)).toBe(false);
+    expect(state()).toEqual(['false', true]);
+    // 같은 버튼으로 열고 닫기(앱 toggleMeasureLock — 누르기·Enter·Space가 모두 이 길)
+    r.click(101, 100);
+    r.move(165, 150);
+    expect(r.tool.toggleLockMenu()).toBe(true);
+    expect(state()).toEqual(['true', false]);
+    expect(r.tool.toggleLockMenu()).toBe(false);
+    expect(state()).toEqual(['false', true]);
+    // 마우스·키보드로 방향을 고르면(click) 잠그고 접힘 — 잠금 눌림은 앱 refreshMeasureBar 몫이라 그대로
+    r.tool.toggleLockMenu(true);
+    (menu.querySelector('[data-lock="x"]') as HTMLElement).click();
+    expect([r.tool.inferenceLock?.axis, ...state()]).toEqual(['x', 'false', true]);
+    expect(lockBtn.getAttribute('aria-pressed')).toBe('false');
+    // 다른 길(화살표 축 잠금)로 잠가도 접힘
+    r.tool.setInferenceLock(false);
+    expect(r.tool.toggleLockMenu(true)).toBe(true);
+    expect(state()).toEqual(['true', false]);
+    expect(r.tool.setInferenceLock('z')).toBe(true);
+    expect([r.tool.inferenceLock?.axis, ...state()]).toEqual(['z', 'false', true]);
+    // 손가락: 잠금은 누르는 순간, 줄은 그 탭의 click까지 펼친 채(141차) — 그동안 펼침, click·1초 뒤에 접힘
+    const tap = (x: number, y: number): void => {
+      r.ptr('pointerdown', x, y, { pointerType: 'touch', buttons: 1 });
+      r.ptr('pointerup', x, y, { pointerType: 'touch' });
+      r.overlay.paintNow();
+    };
+    const open = (): void => {
+      r.tool.setInferenceLock(false);
+      r.tool.clear();
+      tap(101, 100);
+      expect(r.tool.toggleLockMenu(true)).toBe(true);
+      expect(state()).toEqual(['true', false]);
+    };
+    open();
+    press(menu.querySelector('[data-lock="y"]'), 'touch');
+    expect([r.tool.inferenceLock?.axis, ...state()]).toEqual(['y', 'true', false]);
+    (menu.querySelector('[data-lock="y"]') as HTMLElement).click();
+    expect([r.tool.inferenceLock?.axis, ...state()]).toEqual(['y', 'false', true]);
+    vi.useFakeTimers();
+    open();
+    press(menu.querySelector('[data-lock="x"]'), 'touch');
+    vi.advanceTimersByTime(999);
+    expect(state()).toEqual(['true', false]);
+    vi.advanceTimersByTime(1);
+    expect([r.tool.inferenceLock?.axis, ...state()]).toEqual(['x', 'false', true]);
+    vi.useRealTimers();
+    // 열어 둔 채 점을 찍거나, 다시 재기·도구 끄기로 방향을 잡지 않게 되면 접힘
+    open();
+    tap(165, 150);
+    expect(r.results.at(-1)?.kind).toBe('tape');
+    expect(state()).toEqual(['false', true]);
+    open();
+    r.tool.clear();
+    expect(state()).toEqual(['false', true]);
+    open();
+    r.tool.setMode(null);
+    expect(state()).toEqual(['false', true]);
+    // 도구를 버리면 줄을 떼고 버튼의 펼침·가리킴도 거둔다(없는 id를 가리키지 않게)
+    r.tool.dispose();
+    expect([menu.isConnected, document.getElementById('measure-lockmenu')]).toEqual([false, null]);
+    expect([lockBtn.hasAttribute('aria-expanded'), lockBtn.hasAttribute('aria-controls')]).toEqual([false, false]);
+  });
+
+  it('187차: 앱은 측정 띠 방향 잠금 버튼을 줄을 펼치는 버튼으로 넘긴다(펼침 상태는 측정 조각이 줄을 여닫는 자리에서 — 첫 화면 조각에는 인자 하나)', () => {
+    const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
+    expect(app).toContain('tool.mountLockMenu(this.els.measureBar, this.els.measureLock);');
+  });
 });
 
 describe('측정 도구: 지나간 모서리는 그 선분 묶음이 숨거나 단면이 바뀌면 버린다(106차 — 코어 0.99.0과 같은 규칙)', () => {

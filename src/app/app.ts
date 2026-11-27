@@ -1491,7 +1491,8 @@ export class SkpViewerApp implements PanelHost {
     // 측정 띠의 안내 되돌리기·다시 하기 단추(측정값 칸 줄)
     tool.mountUndo(this.vcb.el);
     // 측정 띠 위의 잠글 방향 고르기 줄(한 손 잠금 — 잠금 단추를 눌렀는데 맞춘 방향이 없을 때)
-    tool.mountLockMenu(this.els.measureBar);
+    // 줄을 펼치는 방향 잠금 버튼도 넘긴다(187차 — 펼침 aria-expanded·aria-controls는 측정 조각이 줄을 여닫는 자리에서)
+    tool.mountLockMenu(this.els.measureBar, this.els.measureLock);
     // 고른 것 카드의 고른 안내 지우기 단추(고르기 도구로 고른 안내 — 선택 해제 ✕ 앞)
     const selActs = this.els.selBar.querySelector<HTMLElement>('.mb-acts');
     if (selActs) tool.mountGuideDelete(selActs);
