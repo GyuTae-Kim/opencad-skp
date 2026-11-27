@@ -321,7 +321,7 @@ describe('214차: 다른 언어 화면에 앱 한국어가 남지 않는다(WCAG
       await settle();
     }
     app.toggleProtractor(false);
-    // 뷰어가 있어야 여는 메뉴: 표준 뷰·단면 보기·보기 설정(넓은 화면 — 측정 조각의 안내 항목, 휴대폰 — 넓은 화면 도구 막대에만 있는 단추까지)
+    // 뷰어가 있어야 여는 메뉴: 표준 뷰·단면 보기·보기 설정(넓은 화면 — 측정 조각의 안내 항목, 휴대폰 — 넓은 화면 도구 막대에만 있는 버튼까지)
     const phone = a.phoneQuery;
     for (const [btn, narrow] of [[a.els.viewBtn, false], [a.els.secMenuBtn, false], [a.els.moreBtn, false], [a.els.moreBtn, true]] as const) {
       a.phoneQuery = narrow ? { matches: true } : phone;
