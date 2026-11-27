@@ -99,7 +99,7 @@ import {
 } from './doc';
 import { MAX_FILE_BYTES, SKP_ACCEPT, baseName, fmtCount, formatBytes, formatMs, rgbCss } from './format';
 import type { AnnotationMarks } from './dimmarks';
-import { VIEW_MENU, inList, inModal, isEditableTarget, isViewKey, keyAction, menuKey } from './keys';
+import { VIEW_MENU, charKeyOutside, inList, inModal, isEditableTarget, isViewKey, keyAction, loadCharKeysAnywhere, menuKey, storeCharKeysAnywhere } from './keys';
 import type { LaunchRequest } from './launch';
 import {
   PANEL_WIDTH_DEFAULT,
@@ -399,6 +399,8 @@ export class SkpViewerApp implements PanelHost {
   private curveCenters = new Map<string, [number, number, number] | null>();
   /** 파일·장면 스타일 배경 쓰기(사용자 설정)와 지금 스타일의 배경 색 */
   private fileBg = loadFileBackground(safeStorage());
+  /** 178차: 한 글자 단축키(F·1~7·T·?·걷기·측정값 칸 숫자)를 3D 보기 밖 초점에서도 받기(앱 설정 — 기억, 기본 켬 = 177차까지와 같음) */
+  private charKeysAnywhere = loadCharKeysAnywhere(safeStorage());
   private styleBg: Rgb | null = null;
   /** 스타일의 하늘·지면(코어 하늘·땅 기울기 바탕, 없으면 null) */
   private styleSky: BackgroundOptions | null = null;
@@ -3232,9 +3234,17 @@ export class SkpViewerApp implements PanelHost {
         checked: c.choice === cur,
         run: () => this.setThemeChoice(c.choice),
       })), { label: '키보드 바로 가기', icon: 'keyboard', kbd: '?', sep: true, run: () => this.openShortcuts() },
+      // 178차: 한 글자 단축키를 끄는 길(WCAG 2.1.4 — 음성 입력이 친 글자가 명령으로 가지 않게). 끄면 3D 보기 밖 초점의 글자 키는 브라우저 몫
+      { label: '3D 보기 밖에서도 한 글자 단축키(F·1~7·T·? 등)', checked: this.charKeysAnywhere, toggle: true, run: () => this.setCharKeysAnywhere(!this.charKeysAnywhere) },
       // 다른 웹페이지에 넣은 화면(iframe)에서는 방문 통계를 켜지 않으므로 그 설정도 두지 않는다
       ...(isFramed() ? [] : [{ label: '방문 통계 설정', icon: 'lock', run: showAnalyticsSettings }])],
     );
+  }
+
+  /** 178차: 한 글자 단축키를 3D 보기 밖 초점에서도 받을지(기억한다) */
+  setCharKeysAnywhere(on: boolean): void {
+    this.charKeysAnywhere = on;
+    storeCharKeysAnywhere(safeStorage(), on);
   }
 
   /** 키보드 바로 가기 안내(닫으면 연 곳에 초점) */
@@ -3366,6 +3376,8 @@ export class SkpViewerApp implements PanelHost {
     // 158차: 대화 상자(그림 저장 창 — role=dialog) 안의 Esc도 그 창 것(잰 결과를 지우거나 걷기를 끝내고 창은 열린 채였다).
     // 164차: 메뉴 안의 글자·숫자 키(조합 키 없이)도 메뉴 것(F·1~7·T·걷기·?·측정값 칸 숫자로 가져가 메뉴가 열린 채 뒤 3D 보기·도구가 바뀌었다)
     if (menuKey(ev.target, ev.key, ev.ctrlKey || ev.metaKey || ev.altKey)) return;
+    // 178차: 앱 설정 「3D 보기 밖에서도 한 글자 단축키」를 껐으면 3D 보기 밖 초점의 글자·숫자·기호 키(수정 키 없이)는 받지 않는다(WCAG 2.1.4 — 브라우저 몫, 기본 동작도 그대로)
+    if (!this.charKeysAnywhere && charKeyOutside(ev, this.els.viewHost)) return;
     const v = this.viewer;
     const tool = this.measureTool;
     // 안내 되돌리기·다시 하기(Ctrl·⌘+Z, Ctrl+Y·Ctrl·⌘+Shift+Z — 도구를 끈 동안에도, 입력 칸은 브라우저 몫)

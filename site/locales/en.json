@@ -1181,5 +1181,6 @@
   "깨진 보조선을 건너뛰었습니다": "Skipped a broken auxiliary line",
   "깨진 보조점을 건너뛰었습니다": "Skipped a broken auxiliary point",
   "깨진 단면을 건너뛰었습니다": "Skipped a broken section",
-  "3D 보기 문맥이 없어 그림을 만들 수 없습니다": "Cannot create the picture because there is no 3D view context"
+  "3D 보기 문맥이 없어 그림을 만들 수 없습니다": "Cannot create the picture because there is no 3D view context",
+  "3D 보기 밖에서도 한 글자 단축키(F·1~7·T·? 등)": "Single-character shortcuts outside the 3D view (F, 1–7, T, ?, etc.)"
 }

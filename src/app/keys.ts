@@ -144,3 +144,34 @@ export function inModal(t: EventTarget | null): boolean {
   const el = t as Element | null;
   return !!el && typeof el.closest === 'function' && !!el.closest('[aria-modal="true"]');
 }
+
+/** 178차: 앱 설정 「3D 보기 밖에서도 한 글자 단축키」를 기억하는 열쇠('0' = 끔) */
+export const CHAR_KEYS_KEY = 'opencad-skp.charKeysAnywhere';
+
+/**
+ * 178차(WCAG 2.1.4 문자 키 단축키): 수정 키(Ctrl·⌘·Alt) 없이 글자·숫자·기호 하나로 되는 키(Shift 글자 ?·대문자, 한글 입력기 글자 포함 — 입력기가 받은 글자 키는 Process.
+ * Space·Esc·Enter·화살표·F1~F12 등 이름 있는 키는 아님)이고 대상이 3D 보기(view — 캔버스와 감싸개) 밖인지. 앱 설정에서 그 항목을 끄면 앱 창 키(app.ts onKey)는 이 키를 받지 않는다:
+ * 문서 몸·도구 막대·패널에 초점이 있을 때 친 글자(음성 입력이 친 글자 등)가 F 전체 보기·1~7 표준 뷰·T 줄자·? 안내·걷기·측정값 칸으로 가지 않는다.
+ * 3D 보기 안은 그대로(코어도 캔버스에 초점이 있을 때만 키를 받는다 — Viewer3d keyboard 기본)
+ */
+export function charKeyOutside(e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey' | 'target'>, view: Element | null | undefined): boolean {
+  const t = e.target as Node | null;
+  return (e.key.length === 1 ? e.key !== ' ' : e.key === 'Process') && !e.ctrlKey && !e.metaKey && !e.altKey && !(view && t && typeof t.nodeType === 'number' && view.contains(t));
+}
+
+/** 기억한 「3D 보기 밖에서도 한 글자 단축키」(없거나 못 읽으면 켬 — 177차까지와 같음) */
+export function loadCharKeysAnywhere(s: Pick<Storage, 'getItem'> | null): boolean {
+  try {
+    return s?.getItem(CHAR_KEYS_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
+export function storeCharKeysAnywhere(s: Pick<Storage, 'setItem'> | null, on: boolean): void {
+  try {
+    s?.setItem(CHAR_KEYS_KEY, on ? '1' : '0');
+  } catch {
+    /* 비공개 창 등 — 이번만 */
+  }
+}
