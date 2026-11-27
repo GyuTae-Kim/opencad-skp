@@ -2,6 +2,7 @@ import { siteLocalization } from 'opencad-site-kit/i18n/localization-plugin';
 import { siteMetadata } from 'opencad-site-kit/seo/site-plugin';
 import { serviceWorker } from 'opencad-site-kit/pwa/sw-plugin';
 import { defineConfig } from 'vitest/config';
+import { WeightedSequencer } from './tests/weighted-sequencer';
 import { offline, site } from './tools/site.mjs';
 
 /**
@@ -30,5 +31,7 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
     testTimeout: 120_000,
+    // CI 8차: --shard 조각을 파일 무게(tests/shard-weights.json)로 고르게 나눈다(tests/weighted-sequencer.ts)
+    sequence: { sequencer: WeightedSequencer },
   },
 });
