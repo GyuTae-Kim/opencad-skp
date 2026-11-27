@@ -1719,7 +1719,11 @@ export class SkpViewerApp implements PanelHost {
       leaveDisabled(clear, this.viewer?.canvas);
     });
     // 줄은 목록으로 묶는다(156차 — 화면 읽기 프로그램이 줄 수·차례를 읽게, 머리·버튼 줄은 목록 밖)
+    // 통째로 바꿔도 키보드 초점은 같은 차례 줄의 복사 버튼·같은 버튼으로(192차 — 패널·장면 탭과 같은 44차 꼴, 목록 요소째 새로 만들어 keepRowFocus는 맞지 않음).
+    // 안내 글·점 취소 Esc·Shift 잠금·안내 두기 등 다른 길의 refreshStatus마다 다시 그려 줄 안 버튼의 초점이 문서로 빠졌다(WCAG 2.4.3). 기록 밖 초점은 그대로
+    const spot = focusSpot(el);
     el.replaceChildren(h('div', { class: 'ml-head' }, h('b', {}, `최근 측정 ${fmtCount(this.measureLog.length)}개`)), listRows(rows), h('div', { class: 'pbar ml-acts' }, all, clear));
+    refocus(el, spot);
   }
 
   /** 목록에서 고르기(PanelHost) */

@@ -633,6 +633,109 @@ describe('고른 것 카드 「면만」을 눌러 그 버튼만 숨어도 초�
   });
 });
 
+describe('측정 띠 최근 측정 기록을 통째로 다시 그려도 초점을 같은 차례 줄의 같은 버튼으로(192차 — 44차 focusSpot·refocus 꼴, 패널·장면 탭과 같게, WCAG 2.4.3)', () => {
+  // 앱 꼴: 3D 보기(코어 캔버스 tabIndex 0), 측정 띠(최근 측정 기록 버튼 · 기록 목록 — 머리 · 줄마다 복사 버튼(listRows) · 「모두 복사」·「기록 지우기」)
+  const stage = () => {
+    const box = html('<canvas tabindex="0"></canvas><div class="measure-bar"><button class="mb-btn icon">최근 측정 기록</button><div class="measure-log" id="measure-log"></div></div>');
+    const $ = (s: string): HTMLElement => box.querySelector<HTMLElement>(s)!;
+    const el = $('.measure-log');
+    const button = (cls: string, text: string): HTMLButtonElement => {
+      const b = document.createElement('button');
+      b.className = cls;
+      b.textContent = text;
+      return b;
+    };
+    // renderMeasureLog 꼴: 머리·줄·버튼 줄을 모두 새 요소로 바꾼다(fix면 앞뒤에 focusSpot·refocus, mid는 그리는 사이 다른 길)
+    const draw = (lines: string[], fix = true, mid?: () => void): void => {
+      const head = document.createElement('div');
+      head.className = 'ml-head';
+      head.textContent = `최근 측정 ${lines.length}개`;
+      const acts = document.createElement('div');
+      acts.className = 'pbar ml-acts';
+      acts.append(button('mini-btn', '모두 복사'), button('mini-btn', '기록 지우기'));
+      const spot = fix ? focusSpot(el) : null;
+      mid?.();
+      el.replaceChildren(head, listRows(lines.map((t) => button('ml-row', t))), acts);
+      refocus(el, spot);
+    };
+    const rows = (): HTMLElement[] => [...el.querySelectorAll<HTMLElement>('button.ml-row')];
+    const mini = (t: string): HTMLElement => [...el.querySelectorAll<HTMLElement>('button.mini-btn')].find((b) => b.textContent === t)!;
+    return { $, el, draw, rows, mini };
+  };
+  const logSource = (): { app: string; log: string } => {
+    const app = readFileSync(resolve(__dirname, '../../src/app/app.ts'), 'utf8');
+    return { app, log: app.slice(app.indexOf('  private renderMeasureLog('), app.indexOf('  /** 목록에서 고르기(PanelHost) */')) };
+  };
+
+  it('초점이 기록 안이면 다른 길의 갱신(안내 글·점 취소 Esc·Shift 잠금·안내 두기 — refreshStatus)으로 다시 그려도 같은 차례 줄의 복사 버튼, 「모두 복사」·「기록 지우기」는 같은 버튼으로 — 앱은 renderMeasureLog 한 자리에서', () => {
+    const { el, draw, rows, mini } = stage();
+    draw(['거리 1', '거리 2', '거리 3']);
+    // 고치기 전 꼴: 통째로 다시 그리면 떼어진 버튼과 함께 초점이 빠진다(브라우저는 문서로 — 다음 Tab이 문서 처음부터)
+    rows()[1]!.focus();
+    draw(['거리 1', '거리 2', '거리 3'], false);
+    expect(lost()).toBe(true);
+    // 같은 기록(안내 글·잠금만 바뀜) → 같은 차례 줄의 새 복사 버튼
+    rows()[1]!.focus();
+    draw(['거리 1', '거리 2', '거리 3']);
+    expect(lost()).toBe(false);
+    expect(document.activeElement).toBe(rows()[1]);
+    expect(document.activeElement?.textContent).toBe('거리 2');
+    // 새 결과가 앞에 듦 → 같은 차례(그 자리에 한 칸 밀린 줄 — 188차 keepRowFocus와 같은 「같은 차례」, 기록은 보이는 동안 줄지 않음)
+    draw(['거리 0', '거리 1', '거리 2', '거리 3']);
+    expect(document.activeElement).toBe(rows()[1]);
+    expect(document.activeElement?.textContent).toBe('거리 1');
+    // 끝 줄
+    rows()[3]!.focus();
+    draw(['거리 0', '거리 1', '거리 2', '거리 3']);
+    expect(document.activeElement).toBe(rows()[3]);
+    // 목록 밖 버튼 줄(156차 — 머리·버튼 줄은 목록 밖)도 같은 버튼으로(keepRowFocus면 첫 줄로 갔다)
+    for (const t of ['모두 복사', '기록 지우기']) {
+      mini(t).focus();
+      draw(['거리 0', '거리 1']);
+      expect(el.contains(document.activeElement)).toBe(true);
+      expect(document.activeElement).toBe(mini(t));
+    }
+    // 앱 원문: 통째로 바꾸는 줄 앞뒤에 focusSpot·refocus(새 가져오기 없음 — 이미 가져온 짝), 줄 버튼·버튼 줄의 첫 이름표가 차례 열쇠(열쇠 속성 없음), 띠 맞춤 끝에서 부른다
+    const { app, log } = logSource();
+    expect(log).toMatch(
+      /const spot = focusSpot\(el\);\n\s*el\.replaceChildren\(h\('div', \{ class: 'ml-head' \}, [^\n]*\), listRows\(rows\), h\('div', \{ class: 'pbar ml-acts' \}, all, clear\)\);\n\s*refocus\(el, spot\);\n\s*\}\n/,
+    );
+    expect(log).toMatch(/const b = h\('button', \{ class: 'ml-row', title: [^\n]*\}, h\('span'/);
+    expect(log.match(/h\('button', \{ class: 'mini-btn' \}/g)).toHaveLength(2);
+    expect(log).not.toMatch(/(?:\bid|'id'|'data-[a-z-]+'): /);
+    expect(app).toMatch(/import \{[^}]*\bfocusSpot\b[^}]*\brefocus\b[^}]*\} from '\.\/kbd';/);
+    expect(app).toMatch(/if \(!this\.measureLog\.length\) disclose\(e\.measureLogBtn, e\.measureLog, false\);\n\s*this\.renderMeasureLog\(\);\n\s*\}\n/);
+  });
+
+  it('초점이 기록 밖이면(3D 보기·기록 버튼·문서) 다시 그려도 옮기지 않고, 안이었어도 그리는 사이 다른 곳으로 옮겼으면 그대로', () => {
+    const { $, draw, rows } = stage();
+    draw(['거리 1', '거리 2']);
+    // 3D 보기(가상 커서·누르기로 새 결과)·기록 버튼(펼침 — toggleMeasureLog)
+    for (const s of ['canvas', '.mb-btn']) {
+      $(s).focus();
+      draw(['거리 0', '거리 1', '거리 2']);
+      expect(document.activeElement).toBe($(s));
+    }
+    // 문서(body — 손가락·Safari 누르기는 버튼에 초점을 주지 않음)는 끌어오지 않는다
+    $('.mb-btn').blur();
+    expect(document.activeElement).toBe(document.body);
+    draw(['거리 1']);
+    expect(document.activeElement).toBe(document.body);
+    // 기록 안이었지만 그리는 사이 3D 보기로 옮겼으면 그대로
+    draw(['거리 1', '거리 2']);
+    rows()[1]!.focus();
+    draw(['거리 0', '거리 1', '거리 2'], true, () => $('canvas').focus());
+    expect(document.activeElement).toBe($('canvas'));
+    // 앱 원문: 기록을 그리는 동안 초점을 옮기는 곳은 refocus 하나뿐(목록 안 초점만 적는 focusSpot — 44차 시험), 접혀 있으면 그리지 않아 그대로(150차 「기록 지우기」 길)
+    const { log } = logSource();
+    expect(log.match(/focusSpot\(/g)?.length).toBe(1);
+    expect(log.match(/refocus\(/g)?.length).toBe(1);
+    expect(log).not.toMatch(/focusIfLost\(|\.focus\(|keepRowFocus\(/);
+    expect(log.indexOf('if (!d || el.hidden) return;')).toBeGreaterThan(-1);
+    expect(log.indexOf('if (!d || el.hidden) return;')).toBeLessThan(log.indexOf('focusSpot(el)'));
+  });
+});
+
 describe('패널 아래 띠를 통째로 다시 그려도 초점을 같은 열쇠 칸으로(151차 — NC 137차 꼴, 없어진 버튼은 150차 차례)', () => {
   it('같은 열쇠(태그|data-key ?? aria-label ?? 글 — 다시 그린 바로 뒤 원문)의 첫 칸, 없어졌으면 반대 동작(숨기기 ↔ 모두 보이기) → 3D 보기. 띠 밖 초점은 그대로', () => {
     const d = rowDoc();
