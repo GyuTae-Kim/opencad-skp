@@ -193,6 +193,8 @@ export async function installLocalization(root: HTMLElement): Promise<() => void
     mountSelector();
   });
   metadata(); update(presentationRoot); mountSelector();
+  // 처음 알림(languagechange)에 앱이 다시 그린 글도 옮기게 보기 시작한 뒤에 알린다(214차 — 보기 전에 알려 처음 화면 상태 막대 글이 다른 언어에서 한국어로 남았다, STEP 꼴)
+  observer.observe(presentationRoot,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['title','aria-label','aria-description','placeholder','alt','href']});
   root.dispatchEvent(new CustomEvent('languagechange',{detail:language}));
   const title = document.querySelector('title');
   const titleObserver = new MutationObserver(() => {
@@ -205,7 +207,6 @@ export async function installLocalization(root: HTMLElement): Promise<() => void
     else document.title=translate(current,language);
   });
   if (title) titleObserver.observe(title,{childList:true,subtree:true,characterData:true});
-  observer.observe(presentationRoot,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['title','aria-label','aria-description','placeholder','alt','href']});
   return () => {
     active = 'ko';
     observer.disconnect(); titleObserver.disconnect(); control.dispose();

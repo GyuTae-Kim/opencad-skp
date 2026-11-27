@@ -703,7 +703,7 @@ describe('213차: 기기를 가리지 않는 「누르다」 원문의 번역은
     '{0}{1} — 누르면 강조, 두 번 누르면 확대{2}', '각도기: 잴 방향의 점을 누르세요 · Esc 취소', '누르면 단면을 끕니다', '누르면 이 단면으로 모형을 자릅니다',
     '줄자: 끝점을 누르세요 · Esc 취소', '3D에서 누를 때 고르는 단계',
   ];
-  /** 213차에 보고 둔 것(독일어 40곳 한도 — 아주 큰 모형 알림·바로 가기 안내 창 줄·장면이 있는 파일·정보 탭 조작 줄) */
+  /** 213차에 보고 둔 것(독일어 40곳 한도 — 아주 큰 모형 알림·바로 가기 안내 창 줄·장면이 있는 파일·정보 탭 조작 줄) — 214차에 213차 근거 낱말로 고쳐 둔 자리에서 뺐다(아래 214차 시험) */
   const LEFT = [
     '그룹·컴포넌트가 너무 많아 깊은 단계는 3D에서 눌러 고를 수 없습니다(목록에서는 고를 수 있습니다)',
     '노드가 많아 {0}단계부터는 목록에 넣지 않았습니다(그 안을 누르면 {1}단계 항목을 고릅니다).',
@@ -714,7 +714,7 @@ describe('213차: 기기를 가리지 않는 「누르다」 원문의 번역은
     '누르면 그 장면으로 바꿉니다(카메라·숨긴 태그·숨긴 개체·단면·스타일·그림자·그리기 축 중 장면이 기억하는 것). PageUp·PageDown으로도 넘깁니다.',
     '패널 가장자리를 끌면 폭(좁은 화면은 높이)이 바뀝니다. 두 번 누르면 처음 크기로',
   ];
-  const keep = [...TOUCH_ONLY, ...ONE_DEVICE, ...UNUSED, ...LEFT];
+  const keep = [...TOUCH_ONLY, ...ONE_DEVICE, ...UNUSED];
   const hasDevice = (k: string): boolean => LANGS.some((l) => DEVICE[l].test(catalogs[l][k] ?? ''));
 
   it('「누르다」 원문 열쇠 가운데 기기 낱말이 남은 것은 둔 자리·보고 둔 것뿐이고, 나머지는 네 언어 모두 기기를 가리지 않는 값·하나뿐(거꾸로 찾기 제 원문)', () => {
@@ -849,6 +849,90 @@ describe('213차: 기기를 가리지 않는 「누르다」 원문의 번역은
       [PANEL, 'ja', 'マテリアルを選択すると'],
       [PANEL, 'zh-CN', '在 3D 或结构列表中选择'],
       ['3D에서 누를 때 고르는 것', 'de', 'in 3D auswählt'],
+    ];
+    for (const [key, lang, has] of basis) expect(catalogs[lang][key], `${lang}: ${key}`).toContain(has);
+  });
+
+  // 214차: 213차가 독일어 40곳 한도로 남긴 여덟을 213차 근거 낱말로 — 버튼·키·토글·손잡이(장면 카드·장면 재생을 멈추는 3D 누름·패널 가장자리 두 번 누름)는 누르기,
+  // 3D에서 대상을 가리키는 누름(깊은 단계 고르기·안내 고르기·안내를 두는 점)은 고르기 낱말(문장 동사가 이미 「고르다」면 누름 낱말만 뺌 — 「눌러 고를 수 없음」 → 「고를 수 없음」).
+  // 「그 안을 누르면 …항목을 고릅니다」는 같은 구성 탭 풀이의 「› 버튼으로 펼치면 3D에서 누를 때도 …」(when you press in 3D)와 같은 누르기(고르기 낱말이면 「고르면 고릅니다」로 겹침)
+  it('214차: 213차가 남긴 여덟(아주 큰 모형 알림 셋·바로 가기 안내 창 줄 둘·장면 재생·장면 카드·정보 탭 패널 가장자리 줄)은 네 언어 모두 213차 근거 낱말이고 기기 낱말이 없다', () => {
+    const want: [key: string, values: Record<Lang, string>][] = [
+      [LEFT[0]!, {
+        en: 'There are too many groups/components to select deep levels in 3D (you can select them from a list)',
+        ja: 'グループ・コンポーネントが多すぎるため、深い階層の要素は3Dビュー上で選択できません（リストからは選択可能です）',
+        'zh-CN': '组/组件过多，无法在 3D 中选择深层级（可在列表中选择）。',
+        de: 'Es gibt zu viele Gruppen/Komponenten, um tiefe Ebenen in 3D auszuwählen (Sie können sie aus einer Liste auswählen)',
+      }],
+      [LEFT[1]!, {
+        en: 'Because there are many nodes, levels from {0} on are not listed (pressing inside selects the level-{1} item).',
+        ja: 'ノードが多いため、{0}段階以降はリストに含めていません（その箇所を押すと、{1}段階の項目が選択されます）。',
+        'zh-CN': '由于节点数量庞大，列表中未包含从 {0} 开始的层级（按下列表项将选中 {1} 层级）。',
+        de: 'Wegen vieler Knoten sind Ebenen ab {0} nicht in der Liste (ein Drücken darin wählt das Element der Ebene {1}).',
+      }],
+      [LEFT[2]!, {
+        en: 'There are too many items to select by drilling down in 3D.',
+        ja: '要素が多すぎるため、3Dの深い階層から選択することはできません。',
+        'zh-CN': '项目过多，无法在 3D 中选择深层级。',
+        de: 'Zu viele Elemente, um tiefe Ebenen in 3D auszuwählen.',
+      }],
+      [LEFT[3]!, {
+        en: 'Delete the selected guide points and guide lines (together if there are several; also while Tape Measure and Protractor are off)',
+        ja: '選択したガイド点・ガイド線を消去（複数ならまとめて、メジャー・分度器がオフのときも）',
+        'zh-CN': '删除选中的参考点和参考线（多个时一起删除，卷尺·量角器关闭时也可以）',
+        de: 'Die ausgewählten Hilfspunkte und Hilfslinien löschen (mehrere gemeinsam, auch wenn Maßband und Winkelmesser aus sind)',
+      }],
+      [LEFT[4]!, {
+        en: 'Tape Measure and Protractor: turn guide placing on or off (press and release that key alone; Option on Mac) — selecting the second Tape Measure point or third Protractor point places a guide point or guide line',
+        ja: 'メジャー・分度器: ガイド配置のオン・オフ（そのキーだけを押して離す、MacはOption）— メジャーの2回目・分度器の3回目の選択でガイド点・ガイド線',
+        'zh-CN': '卷尺·量角器：开启或关闭放置参考（单独按下并松开该键，Mac 为 Option）— 卷尺第二次、量角器第三次选择位置即放置参考点或参考线',
+        de: 'Maßband und Winkelmesser: Hilfslinien setzen ein/aus (nur diese Taste drücken und loslassen, am Mac Option) — das zweite Maßband- bzw. dritte Winkelmesser-Auswählen setzt einen Hilfspunkt oder eine Hilfslinie',
+      }],
+      [LEFT[5]!, {
+        en: 'Play scenes: steps through the scenes after each transition and delay time (stops when you press in the 3D view or choose a scene)',
+        ja: 'シーンを再生: 切り替え時間と待機時間ごとに順にシーンを進めます（3Dを押すかシーンを選ぶと停止）',
+        'zh-CN': '播放场景：按过渡时间和延迟时间依次切换场景（按下 3D 视图或选择场景时停止）',
+        de: 'Szenen abspielen: wechselt nach Übergangs- und Verzögerungszeit zur nächsten Szene (stoppt beim Drücken in der 3D-Ansicht oder bei Szenenwahl)',
+      }],
+      [LEFT[6]!, {
+        en: 'Press to switch to that scene (whatever the scene remembers among camera, hidden tags, hidden objects, sections, style, shadows and drawing axes). PageUp and PageDown also switch scenes.',
+        ja: '押すとそのシーンに切り替わります（カメラ、非表示タグ、非表示オブジェクト、断面、スタイル、影、描画軸など、シーンに記録されている情報が反映されます）。PageUpキーやPageDownキーでも切り替え可能です。',
+        'zh-CN': '按下切换到该场景（场景记住的相机、隐藏标签、隐藏对象、剖面、样式、阴影、绘图轴）。也可以用 PageUp·PageDown 切换。',
+        de: 'Drücken, um zu dieser Szene zu wechseln (was die Szene speichert: Kamera, ausgeblendete Tags, ausgeblendete Objekte, Schnitte, Stil, Schatten, Zeichenachsen). Auch PageUp und PageDown wechseln die Szene.',
+      }],
+      [LEFT[7]!, {
+        en: 'Drag the edge of the panel to change its width (or height, on narrow screens). Double-press to reset to original size',
+        ja: 'パネルの端をドラッグすると、幅（画面が狭い場合は高さ）が変更されます。2回押すと元のサイズに',
+        'zh-CN': '拖动面板边缘可更改宽度（窄屏幕上可更改高度）。按两次恢复原尺寸',
+        de: 'Ziehen Sie am Rand des Bedienfelds, um die Breite (bzw. Höhe auf schmalen Bildschirmen) zu ändern. Zweimal drücken, um zur Originalgröße zurückzukehren',
+      }],
+    ];
+    expect(want.map(([k]) => k)).toEqual(LEFT);
+    for (const [key, values] of want)
+      for (const l of LANGS) {
+        expect(catalogs[l][key], `${l}: ${key}`).toBe(values[l]);
+        expect(values[l], `${l}: ${key}`).not.toMatch(DEVICE[l]);
+        expect(sourceMessage(values[l]), values[l]).toBe(key);
+      }
+    // 쓰는 곳(원문 그대로 — 사전만): 해석기 경고·구성 탭 풀이 둘·바로 가기 안내 둘·장면 재생 버튼·정보 탭 장면 카드·조작 줄
+    const src = ['src/scene.ts', 'src/app/panel.ts', 'src/app/shortcuts.ts', 'src/app/app.ts', 'src/app/infotab.ts'].map((f) => readFileSync(resolve(__dirname, '..', f), 'utf8')).join('\n');
+    for (const k of LEFT) expect(src.includes(k.replace('{0}단계', '${t.listedDepth + 1}단계').replace('{1}단계', '${t.listedDepth}단계')), k).toBe(true);
+    // 근거 줄(같은 사전): 누르기 — 단면 줄·패널 크기 손잡이·같은 구성 탭 풀이, 고르기 — 안내 두기 켬
+    const PANEL_NOTE = '› 버튼으로 펼치면 3D에서 누를 때도 그 안의 항목을 고릅니다. 누르면 강조, 두 번 누르면 확대합니다.';
+    const basis: [key: string, lang: Lang, has: string][] = [
+      ['누르면 이 단면을 끕니다', 'en', 'Press to '],
+      ['누르면 이 단면을 끕니다', 'ja', '押すと'],
+      ['누르면 이 단면을 끕니다', 'zh-CN', '按下'],
+      ['누르면 이 단면을 끕니다', 'de', 'Drücken, um '],
+      ['끌거나 눌러서 패널 크기 바꾸기 · 두 번 누르면 처음 크기', 'en', 'Double-press'],
+      ['끌거나 눌러서 패널 크기 바꾸기 · 두 번 누르면 처음 크기', 'ja', '2回押すと'],
+      ['끌거나 눌러서 패널 크기 바꾸기 · 두 번 누르면 처음 크기', 'zh-CN', '按两次'],
+      ['끌거나 눌러서 패널 크기 바꾸기 · 두 번 누르면 처음 크기', 'de', 'Zweimal drücken'],
+      [PANEL_NOTE, 'en', 'when you press in 3D'],
+      [PANEL_NOTE, 'de', 'wenn Sie in 3D darauf drücken'],
+      ['안내 두기 켬: 누르면 안내점·안내선을 둡니다', 'en', 'selecting a point places'],
+      ['안내 두기 켬: 누르면 안내점·안내선을 둡니다', 'zh-CN', '选择位置即放置'],
+      ['안내 두기 켬: 누르면 안내점·안내선을 둡니다', 'de', 'Auswählen setzt'],
     ];
     for (const [key, lang, has] of basis) expect(catalogs[lang][key], `${lang}: ${key}`).toContain(has);
   });
