@@ -2659,8 +2659,9 @@ export class SkpViewerApp implements PanelHost {
         ),
       );
     }
-    // 조이스틱은 카메라 띠 위에(띠 높이는 화면 폭·글 줄 수에 따라 다르다 — 글을 바꾼 뒤에 잰다)
+    // 조이스틱은 카메라 띠 위에(띠 높이는 화면 폭·글 줄 수에 따라 다르다 — 글을 바꾼 뒤에 잰다). 넓은 화면 측정값 칸도(184차 — vcb.ts liftAbove)
     if (this.stick && !this.stick.el.hidden) this.stick.el.style.bottom = `${(e.camBar.hidden ? 0 : e.camBar.offsetHeight) + 22}px`;
+    this.vcb.liftAbove(e.camBar);
   }
 
   // ───────────────────────── 해 조명·그림자·안개 ─────────────────────────
@@ -3782,6 +3783,8 @@ export class SkpViewerApp implements PanelHost {
     this.vcb.setGuides(tool?.guides.length ?? 0, tool?.guideLines.length ?? 0);
     this.vcb.setSelected(mode ? (tool?.selectedGuide ?? null) : null);
     this.els.measureBar.classList.toggle('has-vcb', band && show);
+    // 넓은 화면 칸은 카메라 띠가 열린 동안 띠 위에(184차 — 띠가 칸을 덮었다, vcb.ts liftAbove)
+    this.vcb.liftAbove(this.els.camBar);
   }
 
   /** 측정값 칸에 친 값(길이 mm · 각도 도) 넣기 → 못 넣었으면 알릴 글 */

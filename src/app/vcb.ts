@@ -144,6 +144,15 @@ export class Vcb {
     }
   }
 
+  /**
+   * 카메라 띠(bar)가 열린 동안 띠 위에 둔다(184차 — 넓은 화면은 칸이 3D 보기 오른쪽 아래, 띠는 아래 가운데라 같은 높이에서 겹쳐, 띠가 DOM 뒤면 칸에 친 값·초점이
+   * 통째로 가려졌다 — WCAG 2.4.11. app.ts 조이스틱처럼 띠 높이를 재어 띠 위 6px). 칸이 숨었거나 측정 띠 안(띠를 쓰는 화면)이거나 띠가 닫히면 인라인 자리를 지워 styles.css 자리
+   */
+  liftAbove(bar: HTMLElement): void {
+    const on = this.shown && !bar.hidden && !this.el.closest('.measure-bar');
+    this.el.style.bottom = on ? `${bar.offsetHeight + 16}px` : '';
+  }
+
   /** 받는 값(줄자 길이 · 각도기 각도) */
   get kind(): VcbKind {
     return this.kindValue;
