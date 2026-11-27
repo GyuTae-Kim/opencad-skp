@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 const { JSDOM } = createRequire(import.meta.url)('jsdom');
 import { installLocalization, localizeCubeFaces, uiText } from '../src/app/i18n';
 import { reopenMenu } from '../src/app/dom';
-import { GUIDE_CLEAR_FILE_LABEL, GUIDE_DELETE_KEY_HINT, GUIDE_DELETE_TEXT, GUIDE_KIND_NAMES, GUIDE_REDO_LABEL, GUIDE_UNDO_LABEL, GUIDES_SHOWN_LABEL, LOCK_HINTS, LOCK_MENU_LABEL, guideKeyHint, lockHint, measureHint, trackHint } from '../src/app/measure';
+import { GUIDE_CLEAR_FILE_LABEL, GUIDE_DELETE_KEY_HINT, GUIDE_DELETE_TEXT, GUIDE_KIND_NAMES, GUIDE_REDO_LABEL, GUIDE_UNDO_LABEL, GUIDES_SHOWN_LABEL, LOCK_HINTS, LOCK_MENU_LABEL, LOCK_PICK_LABELS, guideKeyHint, lockHint, measureHint, trackHint } from '../src/app/measure';
 import { GUIDE_HIDE_LABEL, GUIDE_HIDE_TEXT, GUIDE_SELECT_ALL_LABEL, GUIDE_SELECT_ALL_TEXT, GUIDE_UNHIDE_LABEL, guideCountText, guideDeleteLabel } from '../src/app/measure';
 import { AXIS_LABELS, FACE_PERPENDICULAR_LABEL, GUIDE_LINE_LABEL, SNAP_LABELS, TRACK_ALIGN_LABEL, TRACK_AXIS_LABELS, TRACK_PAIR_LABELS } from '../src/app/snap';
 import { SHORTCUTS } from '../src/app/shortcuts';
@@ -123,8 +123,8 @@ describe('language URLs and UI presentation', () => {
       for (const n of [0, 1, 2]) for (const lock of locks) for (const plane of [null, 'x', 'y', 'z'] as const) for (const touch of [false, true]) texts.add(lockHint(mode, n, lock, plane, touch) ?? '');
     for (const t of ['모서리와 나란히 · 50 mm', '빨강 축에 · 잠금 · 60 mm', '녹색 축에 · 잠금', '파랑 축에 · 잠금 · 30 mm', '모서리와 나란히 · 잠금 · 78 mm', '면에 수직 · 잠금 · 12 mm',
       '지금 방향 잠그기(다시 누르면 풀기)', '방향 잠금', '방향 잠금 풀기',
-      // 22차 한 손 잠금: 측정 띠 위 잠글 방향 고르기 줄(이름과 단추 — 단추 글은 잠금 안내와 같다)
-      LOCK_MENU_LABEL, ...Object.values(LOCK_HINTS),
+      // 22차 한 손 잠금: 측정 띠 위 잠글 방향 고르기 줄(이름과 버튼 — 210차부터 버튼 글은 할 일 「…잠그기」로 잠금 안내 「…잠금」과 원문이 다르다)
+      LOCK_MENU_LABEL, ...Object.values(LOCK_PICK_LABELS), ...Object.values(LOCK_HINTS),
       '줄자 (T): 두 점 거리 — 끝점·중간점·모서리·면에 붙고, 축·모서리와 나란한 방향이면 그 선에 고정(Shift·화살표로 잠금) · Esc 지우기',
       '각도기: 중심 → 기준 방향 → 잴 방향(Shift = 평면 고정·방향 잠금) · Esc 지우기']) texts.add(t);
     // 다른 점에서 끌어온 축: 툴팁(끌어온 점의 축 · 시작점 축 위 줄 맞춘 자리 · 길이)과 상태 줄·측정 띠의 끌어온 점 수(잠금 안내 뒤에 " · "로)
@@ -222,10 +222,11 @@ describe('language URLs and UI presentation', () => {
     expect(measureHint('protractor', 0, false)).toBe(HINT);
     expect(read('infotab.ts')).toContain(`hint('${AXES}')`);
     // 원문 가름: 고정 = 붙잡아 둠(평면 고정·축 따라가기), 잠금·잠그기·잠글·잠김 = 방향 잠금(「잠시」 같은 다른 낱말은 셈 밖) — 열쇠 26개, 섞인 셋은 두 낱말 모두
+    // (210차: 잠글 방향 줄 버튼의 할 일 원문 넷 「…잠그기」 — 锁定 — 이 더해져 30개)
     const fix = /고정/;
     const lock = /잠[금그글김]/;
     const keys = Object.keys(zh).filter((k) => fix.test(k) || lock.test(k));
-    expect(keys.length).toBe(26);
+    expect(keys.length).toBe(30);
     for (const k of keys) {
       expect(/固定/.test(zh[k]), `固定: ${k}`).toBe(fix.test(k));
       expect(/锁定/.test(zh[k]), `锁定: ${k}`).toBe(lock.test(k));

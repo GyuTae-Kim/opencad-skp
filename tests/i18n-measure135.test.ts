@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { catalogs, sourceMessage, translate } from '../site/i18n.mjs';
-import { measureHint } from '../src/app/measure';
+import { LOCK_HINTS, LOCK_PICK_LABELS, measureHint } from '../src/app/measure';
 import { SHORTCUTS } from '../src/app/shortcuts';
 
 const LANGS = ['en', 'ja', 'zh-CN', 'de'] as const;
@@ -140,5 +140,76 @@ describe('측정 묶음의 같은 기능 같은 낱말·뜻 맞춤(209차)', () 
     // 화면 글(바로 가기 안내·측정 안내)이 고친 값으로 옮겨진다
     expect(translate(measureHint('tape', 1, false)!, 'en')).toBe(fixed[0]![2]);
     expect(translate(ESC, 'ja')).toBe(fixed[5]![2]);
+  });
+});
+
+/**
+ * 210차: 잠글 방향 줄(측정 띠 위 — 방향 잠금 버튼이 펼친다)의 버튼 넷이 지금 상태인 잠금 안내 열쇠(LOCK_HINTS — 「빨강 축으로 잠금」)를 함께 써서,
+ * 번역에서 누를 버튼이 「잠갔음」 꼴(en Locked to red axis·zh 已锁定到红色轴·de Auf rote Achse gesperrt)이었다(WCAG 2.4.6·3.3.2 — 버튼 이름은 할 일, 안내는 지금 상태).
+ * 번역층은 원문 글 그대로가 열쇠라 같은 원문은 늘 한 번역이다 — 버튼만 할 일 꼴 원문(LOCK_PICK_LABELS 「…잠그기」 — 띠 잠금 버튼 풀이 「지금 방향 잠그기」의 낱말)을 두고
+ * 네 사전에 할 일 꼴 값을 더했다(같은 사전의 바로 가기 화살표·↓ 줄 낱말). 측정 띠·상태 막대의 잠금 안내는 그대로다(README 개발 절 210차 문단).
+ */
+describe('잠글 방향 줄 버튼은 할 일, 잠금 안내는 지금 상태(210차)', () => {
+  it('버튼 원문 넷은 잠금 안내와 다른 할 일 꼴이고, 네 사전 값도 할 일 꼴·하나뿐이라 거꾸로 찾기가 제 원문으로 돌아오며, 안내 쪽 값은 그대로다', () => {
+    expect(LOCK_PICK_LABELS).toEqual({ x: '빨강 축으로 잠그기', y: '녹색 축으로 잠그기', z: '파랑 축으로 잠그기', parallel: '모서리와 나란히 잠그기' });
+    const choices = ['x', 'y', 'z', 'parallel'] as const;
+    for (const c of choices) expect(LOCK_PICK_LABELS[c], c).not.toBe(LOCK_HINTS[c]);
+    // 쓰는 곳: 잠글 방향 줄 버튼은 새 원문, 측정 띠·상태 막대의 잠금 안내(lockHint)는 LOCK_HINTS
+    const src = readFileSync(resolve(__dirname, '../src/app/measure.ts'), 'utf8');
+    expect(src).toContain('b.append(sw, LOCK_PICK_LABELS[c]);');
+    expect(src).toContain('return lock ? LOCK_HINTS[lock] :');
+    const pick: Record<Lang, Record<(typeof choices)[number], string>> = {
+      en: { x: 'Lock to red axis', y: 'Lock to green axis', z: 'Lock to blue axis', parallel: 'Lock parallel to edge' },
+      ja: { x: '赤軸にロックする', y: '緑軸にロックする', z: '青軸にロックする', parallel: 'エッジに平行でロックする' },
+      'zh-CN': { x: '锁定到红色轴', y: '锁定到绿色轴', z: '锁定到蓝色轴', parallel: '锁定为平行于边线' },
+      de: { x: 'Auf rote Achse sperren', y: 'Auf grüne Achse sperren', z: 'Auf blaue Achse sperren', parallel: 'Parallel zur Kante sperren' },
+    };
+    // 안내 쪽(LOCK_HINTS 여섯 — 축 셋·모서리와 나란히·모서리에 수직·면에 수직)은 지금 상태 꼴 그대로
+    const state: Record<Lang, string[]> = {
+      en: ['Locked to red axis', 'Locked to green axis', 'Locked to blue axis', 'Locked parallel to edge', 'Locked perpendicular to edge', 'Locked perpendicular to face'],
+      ja: ['赤軸にロック', '緑軸にロック', '青軸にロック', 'エッジに平行でロック', 'エッジに垂直でロック', '面に垂直でロック'],
+      'zh-CN': ['已锁定到红色轴', '已锁定到绿色轴', '已锁定到蓝色轴', '已锁定为平行于边线', '已锁定为垂直于边线', '已锁定为垂直于面'],
+      de: ['Auf rote Achse gesperrt', 'Auf grüne Achse gesperrt', 'Auf blaue Achse gesperrt', 'Parallel zur Kante gesperrt', 'Senkrecht zur Kante gesperrt', 'Senkrecht zur Fläche gesperrt'],
+    };
+    const all = LANGS.flatMap((lang) => Object.values(catalogs[lang]!));
+    for (const lang of LANGS) {
+      for (const c of choices) {
+        const v = pick[lang][c];
+        expect(catalogs[lang]![LOCK_PICK_LABELS[c]], `${lang}: ${c}`).toBe(v);
+        expect(translate(LOCK_PICK_LABELS[c], lang)).toBe(v);
+        expect(all.filter((x) => x === v).length, `${lang}: ${v}`).toBe(1);
+        expect(sourceMessage(v), v).toBe(LOCK_PICK_LABELS[c]);
+      }
+      expect(Object.values(LOCK_HINTS).map((k) => catalogs[lang]![k]), lang).toEqual(state[lang]);
+    }
+    // 할 일 꼴: 버튼 값에 상태 꼴(Locked·已锁定·gesperrt)이 없고 안내 값에는 있다 — 일본어 버튼은 동사 ロックする(안내는 명사 끝 ロック)
+    for (const c of choices) {
+      const k = LOCK_PICK_LABELS[c];
+      expect(catalogs.en![k]).toMatch(/^Lock (to|parallel) /);
+      expect(catalogs.en![LOCK_HINTS[c]]).toMatch(/^Locked /);
+      expect(catalogs['zh-CN']![k]).toMatch(/^锁定/);
+      expect(catalogs['zh-CN']![LOCK_HINTS[c]]).toMatch(/^已锁定/);
+      expect(catalogs.de![k]).toMatch(/ sperren$/);
+      expect(catalogs.de![LOCK_HINTS[c]]).toMatch(/ gesperrt$/);
+      expect(catalogs.ja![k]).toMatch(/ロックする$/);
+      expect(catalogs.ja![LOCK_HINTS[c]]).toMatch(/ロック$/);
+    }
+    // 근거 줄: 같은 사전이 같은 할 일(축·모서리와 나란히 잠그기)을 이 낱말로 부른다 — 바로 가기 화살표·↓ 줄, 띠 잠금 버튼 풀이, 줄 이름
+    const ARROWS = '줄자 끝점·각도기 방향을 잡는 동안: 빨강·녹색·파랑 축으로 잠금(다시 누르면 풀기), 각도기 중심 전에는 그 축 평면에 고정';
+    const DOWN = '줄자 끝점·각도기 방향을 잡는 동안: 모서리와 나란히·수직으로 잠금(다시 누르면 풀기)';
+    const shortcutLabels = SHORTCUTS.flatMap((g) => g.items.map((s) => s.label));
+    for (const t of [ARROWS, DOWN]) expect(shortcutLabels, t).toContain(t);
+    const basis: [key: string, lang: Lang, has: string][] = [
+      [ARROWS, 'en', 'lock to the red, green or blue axis'],
+      [DOWN, 'en', 'lock parallel or perpendicular to an edge'],
+      ['지금 방향 잠그기(다시 누르면 풀기)', 'en', 'Lock the current direction'],
+      [ARROWS, 'zh-CN', '锁定到红、绿、蓝轴'],
+      [DOWN, 'zh-CN', '锁定为平行或垂直于边线'],
+      [ARROWS, 'de', 'auf rote, grüne oder blaue Achse sperren'],
+      [DOWN, 'de', 'parallel oder senkrecht zur Kante sperren'],
+      ['잠글 방향 고르기', 'ja', 'ロックする'],
+      [DOWN, 'ja', 'エッジに平行・垂直でロック'],
+    ];
+    for (const [key, lang, has] of basis) expect(catalogs[lang]![key], `${lang}: ${key}`).toContain(has);
   });
 });

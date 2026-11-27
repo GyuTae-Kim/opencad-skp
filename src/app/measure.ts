@@ -176,6 +176,17 @@ export const PLANE_HINTS: Readonly<Record<Axis, string>> = Object.freeze({ x: '�
 /** 잠글 방향 고르기(22차 한 손 잠금): 축 이름 · 모서리와 나란히 */
 export type LockChoice = Axis | 'parallel';
 
+/**
+ * 잠글 방향 고르기 줄의 버튼 글(할 일 — 210차). 지금 상태인 잠금 안내(LOCK_HINTS "빨강 축으로 잠금")와 원문을 나눈다:
+ * 번역은 원문 글 그대로가 열쇠라 같은 원문이면 누를 버튼도 「잠갔음」 꼴(Locked to red axis)로 옮겨졌다(WCAG 2.4.6·3.3.2)
+ */
+export const LOCK_PICK_LABELS: Readonly<Record<LockChoice, string>> = Object.freeze({
+  x: '빨강 축으로 잠그기',
+  y: '녹색 축으로 잠그기',
+  z: '파랑 축으로 잠그기',
+  parallel: '모서리와 나란히 잠그기',
+});
+
 /** 측정 띠의 잠글 방향 고르기 줄 이름(접근성) */
 export const LOCK_MENU_LABEL = '잠글 방향 고르기';
 
@@ -1593,7 +1604,7 @@ export class MeasureTool {
 
   /**
    * 측정 띠에 잠글 방향 고르기 줄을 붙인다(앱이 띠를 만든 뒤 한 번 — mountUndo처럼). 줄은 띠 위에 뜨고(.mb-lockmenu),
-   * 단추마다 잠금 안내 글(LOCK_HINTS — "빨강 축으로 잠금")과 축 색 견본. 손가락·펜은 누르는 순간에 받는다(정밀 조준 중 둘째 손가락도 되게)
+   * 버튼마다 할 일 글(LOCK_PICK_LABELS — "빨강 축으로 잠그기", 210차)과 축 색 견본. 손가락·펜은 누르는 순간에 받는다(정밀 조준 중 둘째 손가락도 되게)
    * owner는 줄을 펼치는 버튼(앱 측정 띠의 방향 잠금 버튼 — 187차): 펼쳤는지를 aria-expanded로 내고(여닫는 길은 모두 toggleLockMenu),
    * 줄은 버튼 바로 뒤가 아니라 띠 끝에 붙어 aria-controls로 잇는다(WCAG 4.1.2, APG Disclosure)
    */
@@ -1677,7 +1688,7 @@ export class MeasureTool {
           const sw = document.createElement('span');
           sw.className = 'mb-lockswatch';
           sw.style.background = c === 'parallel' ? SNAP_COLORS.parallel : AXIS_COLORS[c];
-          b.append(sw, LOCK_HINTS[c]);
+          b.append(sw, LOCK_PICK_LABELS[c]);
           return b;
         }),
       );

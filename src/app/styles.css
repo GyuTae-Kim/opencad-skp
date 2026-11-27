@@ -2621,7 +2621,7 @@ html:lang(zh-CN) { --font: -apple-system, "PingFang SC", "Microsoft YaHei", sans
   display: none;
 }
 
-/* 다른 언어의 긴 이름(독일어 "Parallel zur Kante gesperrt" 등)은 잘리지 않고 두 줄로(한 줄이면 띠 단추와 같은 38px) */
+/* 다른 언어의 긴 이름(독일어 "Parallel zur Kante sperren" 등)은 잘리지 않고 두 줄로(한 줄이면 띠 버튼과 같은 38px) */
 .mb-lockpick {
   justify-content: flex-start;
   min-width: 0;
