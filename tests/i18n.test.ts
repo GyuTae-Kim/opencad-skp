@@ -21,6 +21,25 @@ import type { KeySnapMessageFn, KeySnapMessageKey } from 'opencad-viewer3d/keysn
 
 let dispose: (() => void) | undefined;
 afterEach(() => { dispose?.(); vi.unstubAllGlobals(); });
+/**
+ * 언어 고르기 뒤 번역층이 바꾸기를 마칠 때까지(CI 14차 SKP 남은 몫, 224차 — 공용 규칙 13번·223차 i18n-collide174 tick 꼴: setTimeout(0) 네 번 → 조건과 마감 시간):
+ * 문서 언어가 next가 되고(번역층 changeLanguage는 사전 조각을 받은 뒤 바꾸고, 같은 차례에 다시 옮기고 languagechange를 알린다 — 바뀌기 전 조용함은 세지 않는다)
+ * DOM이 매크로 작업 네 차례 잇달아 조용할 때까지(MutationObserver — 앞 네 번보다 짧지 않다), 마감 5초
+ */
+const switched = async (next: string): Promise<void> => {
+  let changed = false;
+  const watch = new MutationObserver(() => { changed = true; });
+  watch.observe(document, { subtree: true, childList: true, characterData: true, attributes: true });
+  try {
+    for (let quiet = 0, end = Date.now() + 5_000; quiet < 4 && Date.now() < end; ) {
+      changed = false;
+      await new Promise((r) => setTimeout(r, 0));
+      quiet = document.documentElement.lang === next && !changed ? quiet + 1 : 0;
+    }
+  } finally {
+    watch.disconnect();
+  }
+};
 describe('language URLs and UI presentation', () => {
   it.each(['en', 'ja', 'zh-CN', 'de'])('localizes scene playback controls and redraws without translating scene names in %s', async code => {
     const dom = new JSDOM('<!doctype html><html><head><title>OpenCAD</title></head><body><div id="app"><header class="titlebar"></header><div class="scene-tabs" role="tablist" aria-label="장면"><button class="scene-play" title="장면 재생" aria-label="장면 재생"></button><button class="scene-tab" role="tab" title="장면 재생">장면 재생</button></div></div></body></html>', {url:languageUrl(metadataForLanguage('ko').url,code)});
@@ -43,7 +62,7 @@ describe('language URLs and UI presentation', () => {
     expect(scene.title).toBe('장면 재생');
     // Changing language must traverse the toolbar while keeping model-authored names intact.
     (document.querySelector('.language-list [data-language="ko"]') as HTMLButtonElement).click();
-    for (let i=0;i<4;i++) await new Promise(resolve=>setTimeout(resolve,0));
+    await switched('ko');
     expect(replacement.getAttribute('aria-label')).toBe('장면 재생 멈추기');
     expect(scene.textContent).toBe('장면 재생');
     dispose(); dispose=undefined; dom.window.close();
@@ -430,7 +449,7 @@ describe('language URLs and UI presentation', () => {
     await new Promise(resolve=>setTimeout(resolve,0));
     expect(tip.textContent).toBe('Zentrum'); expect(plain.textContent).toBe('Zentrum');
     (document.querySelector('.language-list [data-language="ja"]') as HTMLButtonElement).click();
-    for (let i=0;i<4;i++) await new Promise(resolve=>setTimeout(resolve,0));
+    await switched('ja');
     expect(uiText('끝점')).toBe(translate('끝점','ja'));
     // 건너뛴 요소는 앱이 다시 그릴 때 새 언어로(측정 도구는 languagechange에 다시 그린다)
     expect(tip.textContent).toBe('Zentrum'); expect(plain.textContent).toBe(translate('중심','ja'));
@@ -461,7 +480,7 @@ describe('language URLs and UI presentation', () => {
     await new Promise(resolve=>setTimeout(resolve,0));
     expect(plain.textContent).toBe('Edge · Layer0');
     (document.querySelector('.language-list [data-language="ja"]') as HTMLButtonElement).click();
-    for (let i=0;i<4;i++) await new Promise(resolve=>setTimeout(resolve,0));
+    await switched('ja');
     expect(msg(given.at(-1) as KeyboardSnapOptions, 'start')).toBe(translate('가상 커서를 켰습니다. {0}. {1}','ja'));
     // 216차: 언어를 바꾸면 앞 언어로 넣은 마지막 알림 글은 비운다(번역층 밖 칸이라 남으면 화면 읽기 프로그램의 읽기 모드가 앞 언어로 읽었다 — WCAG 3.1.2·4.1.3, 빈 글은 알리지 않는다)
     expect(kp.text).toBe('');
@@ -495,7 +514,7 @@ describe('language URLs and UI presentation', () => {
     trigger.focus();
     const first = menu;
     (document.querySelector('.language-list [data-language="ja"]') as HTMLButtonElement).click();
-    for (let i=0;i<4;i++) await new Promise(resolve=>setTimeout(resolve,0));
+    await switched('ja');
     expect(reopened).toBe(1);
     expect(menu).not.toBe(first); expect(first!.isConnected).toBe(false);
     expect(texts()).toEqual(labels.map((l) => translate(l,'ja')));
@@ -511,13 +530,13 @@ describe('language URLs and UI presentation', () => {
     expect(document.activeElement).toBe(menu!.querySelectorAll('.menu-item')[0]);
     expect(menu!.scrollTop).toBe(40);
     (document.querySelector('.language-list [data-language="ko"]') as HTMLButtonElement).click();
-    for (let i=0;i<4;i++) await new Promise(resolve=>setTimeout(resolve,0));
+    await switched('ko');
     expect(reopened).toBe(2);
     expect(texts()).toEqual(labels);
     // 메뉴가 닫혀 있으면 아무것도 열지 않는다
     close();
     (document.querySelector('.language-list [data-language="en"]') as HTMLButtonElement).click();
-    for (let i=0;i<4;i++) await new Promise(resolve=>setTimeout(resolve,0));
+    await switched('en');
     expect(reopened).toBe(2); expect(document.querySelector('.menu')).toBeNull();
     // 다시 열지 못하면(단추가 꺼짐 등) null — 앞 메뉴는 닫힌 채
     open();
@@ -574,7 +593,7 @@ describe('language URLs and UI presentation', () => {
     for (const code of ['en','de','ko'] as const) {
       if (code!=='en') {
         (document.querySelector(`.language-list [data-language="${code}"]`) as HTMLButtonElement).click();
-        for (let i=0;i<4;i++) await new Promise(resolve=>setTimeout(resolve,0));
+        await switched(code);
       }
       const image = code==='ko' ? korean.image.url : `https://gyutae-kim.github.io/assets/i18n/${code}/og/opencad.jpg`;
       for (const selector of ['meta[property="og:image"]','meta[property="og:image:secure_url"]','meta[name="twitter:image"]']) expect(document.querySelector(selector)!.getAttribute('content')).toBe(image);
@@ -596,7 +615,7 @@ describe('language URLs and UI presentation', () => {
     localizeCubeFaces(faces);
     expect(faces.map(f=>f.label)).toEqual(['Front','Back','Right','Left','Top','Bottom']);
     (document.querySelector('.language-list [data-language="de"]') as HTMLButtonElement).click();
-    for (let i=0;i<4;i++) await new Promise(resolve=>setTimeout(resolve,0));
+    await switched('de');
     expect(faces.map(f=>f.label)).toEqual(['Vorne','Hinten','Rechts','Links','Oben','Unten']);
     dispose();dispose=undefined;
     expect(faces.map(f=>f.label)).toEqual(['앞','뒤','오른쪽','왼쪽','위','아래']);
