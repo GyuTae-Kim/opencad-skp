@@ -14,6 +14,9 @@
  * 216차: 커서·포인터가 있어야 뜨는 화면 셋 — 측정 툴팁(커서 옆 스냅 이름·값), 겹친 것 고르기 목록, 가상 커서 알림(키보드 붙잡기·고르기) — 을 같은 걸음에 더한다.
  * 가짜 뷰어에 코어의 키보드 붙잡기 몫과 겹친 것 후보를 더하고 앱 ensureViewer처럼 KeyPick·PickList를 그 뷰어로 만들어, 캔버스에 보낸 포인터·키 사건이 앱 길(창 키 처리·측정 도구·목록) 그대로 띄운다.
  * 그리고 언어를 바꾼 뒤 알림 영역(role=status·alert·aria-live)에 앞 언어로 넣은 글이 남지 않는지 본다(WCAG 3.1.2·4.1.3 — 번역층이 건너뛰는 칸은 앱이 그때 언어 글을 넣는다).
+ * 232차: 219~221차가 더한 잠금 상태 — 가상 커서를 켠 동안 X·Y·Z·L 방향 잠금과 풂(알림 칸·측정 띠·상태 줄), 각도기 중심 전 X·Y·Z 평면 고정과 풂,
+ * 잠글 것이 없는 ↓(커서 끔)·L(커서 켬)의 「잠글 방향이 없습니다」(축 잠금 중이면 그 뒤에)와 같은 자리 거듭 누름(한 프레임 비웠다 다시 넣음) — 을 같은 걸음에 더한다.
+ * 받기 실패 화면(228·229차)은 가짜 import 실패가 들어 uilang232.test.ts가 본다.
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -437,6 +440,22 @@ describe('214차: 다른 언어 화면에 앱 한국어가 남지 않는다(WCAG
       return !!t && t.style.display === 'block' && !!t.textContent;
     };
     const live = (): string => document.querySelector('.kp-live')?.textContent ?? '';
+    /** 232차: 측정 띠 잠금 안내 글(상태 줄 .st-lock과 같은 lockHintText), 한 프레임 넘기기(측정 도구의 거듭 누름 다시 넣기 — 221차 requestAnimationFrame) */
+    const lockHint = (): string => document.querySelector('.mb-lock-hint')?.textContent ?? '';
+    const frame = (): Promise<void> => new Promise((r) => requestAnimationFrame(() => r()));
+    /**
+     * 232차(219~221차 칸): 가상 커서를 켠 동안 X·Y·Z·L — 키마다 기대: 글이면 알림 칸이 그 글(잠금·풂 — 측정 도구 keyLock이 화면 언어로 옮긴 글),
+     * none이면 잠글 것이 없어 알림 칸은 그대로·측정 띠 잠금 안내에 「잠글 방향이 없습니다」, again이면 같은 자리 거듭 L(한 프레임 비웠다 다시 넣은 뒤 그 글)
+     */
+    const lockKeys = async (list: readonly (readonly [string, string])[]): Promise<void> => {
+      for (const [k, want] of list) {
+        fv.key(k);
+        if (want === 'again') await frame();
+        await settle();
+        if (want === 'none' || want === 'again') expect.soft(lockHint(), `${code}: ${k} ${want}`).toContain(cat['잠글 방향이 없습니다']!);
+        else expect.soft(live(), `${code}: ${k}`).toBe(want);
+      }
+    };
     /** 216차: 키를 차례로 보내고 걸음마다 모은다(알림 칸에 글이 들었는지 — soft) */
     const keys = async (list: readonly string[]): Promise<void> => {
       for (const k of list) {
@@ -487,6 +506,14 @@ describe('214차: 다른 언어 화면에 앱 한국어가 남지 않는다(WCAG
       expect.soft(tipShown(), `${code}: ${k}`).toBe(true);
       await settle();
     }
+    // 232차(220·221차 칸): 커서를 끈 동안 ↓ — 가짜 뷰어 면에는 모서리가 없어 잠글 것이 없다: 빨강 축 잠금 뒤에 「잠글 방향이 없습니다」(측정 띠·상태 줄),
+    // 같은 자리 거듭 ↓는 그 조각만 한 프레임 비웠다 다시 넣는다(다음 프레임 뒤에 모은다)
+    for (const n of [1, 2]) {
+      key('ArrowDown');
+      await frame();
+      await settle();
+      expect.soft(lockHint(), `${code}: ↓ ${n}`).toContain(cat['잠글 방향이 없습니다']!);
+    }
     // 결과(거리·축 성분·복사)·최근 측정 기록(측정 띠 위 목록·패널)
     press(150, 100);
     expect.soft(d.measure?.kind, code).toBe('tape');
@@ -496,7 +523,18 @@ describe('214차: 다른 언어 화면에 앱 한국어가 남지 않는다(WCAG
     a.panel.rerender();
     await settle();
     // 216차 가상 커서 알림 — 줄자: 3D 보기 Enter로 켬(켬 틀 · 자리 글 · 키 안내) → 화살표(자리 글) → Enter 시작점 → 화살표(자리 글 · 길이) → Enter 결과 줄 → Esc로 결과 지우기·끄기
-    await keys(['Enter', 'ArrowRight', 'Enter', 'ArrowRight', 'Enter']);
+    // 232차: 시작점을 찍은 뒤(끝점 방향을 잡는 동안) X·Y·Z·L — 빨강 축 잠금·풂, 파랑 축 잠금 뒤 L(잠글 것 없음 — 축 잠금 뒤에)·거듭 L, 풂 뒤 L(잠금 없이)
+    await keys(['Enter', 'ArrowRight', 'Enter']);
+    await lockKeys([
+      ['x', cat['빨강 축으로 잠금']!],
+      ['x', cat['방향 잠금을 풀었습니다']!],
+      ['z', cat['파랑 축으로 잠금']!],
+      ['l', 'none'],
+      ['l', 'again'],
+      ['z', cat['방향 잠금을 풀었습니다']!],
+      ['l', 'none'],
+    ]);
+    await keys(['ArrowRight', 'Enter']);
     expect.soft(d.measure?.kind, code).toBe('tape');
     await escape();
     // 측정 안내의 모든 갈래(손가락 기기 갈래 포함 — measureHint)를 측정 띠·상태 막대에
@@ -520,7 +558,20 @@ describe('214차: 다른 언어 화면에 앱 한국어가 남지 않는다(WCAG
       await settle();
     }
     // 216차 가상 커서 알림 — 각도기: Enter 켬 → Enter 중심 → 화살표 → Enter 기준 방향 → 화살표(자리 글 · 각도) → Enter 결과 줄 → Esc. 그리고 마우스 툴팁
-    await keys(['Enter', 'Enter', 'ArrowUp', 'Enter', 'ArrowRight', 'Enter']);
+    // 232차: 중심 전 X·Y·Z 평면 고정(화살표 걸음이 파랑으로 고정해 둠 — 빨강·풂 뒤 파랑으로 되돌림), 기준 방향을 찍은 뒤 녹색 축 잠금·풂·L(잠글 것 없음)
+    await keys(['Enter']);
+    await lockKeys([
+      ['x', cat['빨강 각도기로 고정']!],
+      ['x', cat['각도기 평면 고정을 풀었습니다']!],
+      ['z', cat['파랑 각도기로 고정']!],
+    ]);
+    await keys(['Enter', 'ArrowUp', 'Enter']);
+    await lockKeys([
+      ['y', cat['녹색 축으로 잠금']!],
+      ['y', cat['방향 잠금을 풀었습니다']!],
+      ['l', 'none'],
+    ]);
+    await keys(['ArrowRight', 'Enter']);
     await escape();
     fv.move(130, 80);
     expect.soft(tipShown(), code).toBe(true);

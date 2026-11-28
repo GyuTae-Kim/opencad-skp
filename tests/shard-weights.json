@@ -60,6 +60,7 @@
   "tests/app/tree.test.ts": 364,
   "tests/app/ui.test.ts": 50,
   "tests/app/uilang214.test.ts": 26049,
+  "tests/app/uilang232.test.ts": 10971,
   "tests/app/units.test.ts": 6,
   "tests/app/vcb.test.ts": 259,
   "tests/app/walkkeys.test.ts": 61,
