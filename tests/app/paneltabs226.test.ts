@@ -6,6 +6,9 @@
  * 228차: 받지 못하면 몸통이 빈 칸으로 남던 것을 몸통 안 알림 글(role=alert — 「{0}을(를) 불러오지 못했습니다.」)과 「다시 시도」로 바꿨다(WCAG 3.3.1·4.1.3, NC 211·212차 꼴).
  * 받는 중 깃발은 내리고, 실패 뒤 거듭 그리기는 다시 받지 않으며(알림이 되풀이되지 않게) 다시 시도가 초점을 지금 탭 버튼에 두고 다시 받는다. 선택 탭의 속성 사전 칸(attrview)도 같은 꼴.
  * 이 파일은 패널 모듈을 처음 부르는 시험이라 조각을 받지 않은 패널로 시작한다(다른 시험 파일은 beforeAll에서 loadPanelTabs로 미리 받는다 — ci-guard 5).
+ * 229차: 다시 시도를 누른 뒤 또 받지 못하면 몸통(칸) 버튼이 「새로 고침」(알림 글은 그대로 하나 — 새 판과 옛 캐시가 엇갈리면 다시 시도도 받지 못할 수 있다).
+ * 초점은 다시 시도가 맡긴 지금 탭 버튼 그대로(받는 동안 몸통을 비워 눌린 버튼은 없어진다 — 새로 고침이 생길 때 초점은 그 버튼에 없다), 거듭 그려도 새로 고침 그대로,
+ * 새로 고침은 다시 받지 않는다(jsdom은 탐색하지 않는다).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Panel, loadPanelTabs, type PanelHost } from '../../src/app/panel';
@@ -20,6 +23,13 @@ afterEach(() => {
 });
 
 const noop = (): void => {};
+/** 몸통 안 버튼(글로 고름) */
+const button = (body: HTMLElement, label: string): HTMLButtonElement | undefined => [...body.querySelectorAll('button')].find((b) => b.textContent === label);
+/** 패널이 콘솔에 남긴 받기 실패(오류 객체) 수 — jsdom이 새로 고침(탐색 없음)에 남기는 글은 빼고 센다 */
+const ours = (err: { mock: { calls: unknown[][] } }): number => err.mock.calls.filter(([e]) => typeof e !== 'string').length;
+const chunkFail = (name: string) => (): never => {
+  throw new TypeError(`Failed to fetch dynamically imported module: http://x/assets/${name}-x.js`);
+};
 const host: PanelHost = {
   setTagVisible: noop, setAllTagsVisible: noop, setOutlineVisible: noop, setNodeVisible: noop, setExpanded: noop, collapseAll: noop, setPickMode: noop,
   setShowSoft: noop, setShowHidden: noop, setFolderVisible: noop, setAnnotationVisible: noop, setFileSection: noop, applyPage: noop,
@@ -71,15 +81,13 @@ describe('패널 탭 몸통 조각 받기(226차)', () => {
     expect(b.body().querySelectorAll('section.psec').length).toBeGreaterThan(0);
   });
 
-  it('228차: 받지 못하면 받는 중 깃발을 내리고 몸통에 알림 글(role=alert)과 다시 시도 — 거듭 그려도 다시 받지 않고, 다시 시도가 지금 탭 버튼에 초점을 두고 다시 받아 그 탭을 그린다', async () => {
+  it('228차: 받지 못하면 받는 중 깃발을 내리고 몸통에 알림 글(role=alert)과 다시 시도 — 거듭 그려도 다시 받지 않고, 다시 시도가 지금 탭 버튼에 초점을 두고 다시 받아 그 탭을 그린다. 229차: 다시 시도도 받지 못하면 새로 고침', async () => {
     vi.resetModules();
-    vi.doMock('../../src/app/infotab', () => {
-      throw new TypeError('Failed to fetch dynamically imported module: http://x/assets/infotab-x.js');
-    });
+    vi.doMock('../../src/app/infotab', chunkFail('infotab'));
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
     const fresh = await import('../../src/app/panel');
     const { d, panel, body } = mount(fresh.Panel);
-    const again = (): HTMLButtonElement => [...body().querySelectorAll('button')].find((b) => b.textContent === '다시 시도')!;
+    const again = (): HTMLButtonElement => button(body(), '다시 시도')!;
     // 문서를 보인 패널의 미리 받기가 받지 못함(console.error 한 번 — 까닭 글은 콘솔에만). 태그 탭은 첫 화면 조각이라 그대로
     await vi.waitFor(() => expect(err).toHaveBeenCalledTimes(1));
     expect(body().querySelector('[role=alert]')).toBeNull();
@@ -94,36 +102,68 @@ describe('패널 탭 몸통 조각 받기(226차)', () => {
     expect(again()).toBeTruthy();
     await new Promise((r) => setTimeout(r, 20));
     expect(err).toHaveBeenCalledTimes(1);
-    // 다시 시도: 이번에도 받지 못함 — 초점은 지금 탭 버튼(눌린 버튼은 다시 그리며 없어진다), 알림 글은 하나(새로 넣음)
+    // 받을 수 있게 되면 다시 시도가 지금 탭 버튼에 초점을 두고(눌린 버튼은 다시 그리며 없어진다) 받아 그 탭을 그린다(받는 중 깃발이 실패 뒤에도 막지 않는다)
+    vi.doUnmock('../../src/app/infotab');
     again().focus();
     again().click();
     expect(document.activeElement).toBe(panel.el.querySelector('#ptab-outline'));
-    await vi.waitFor(() => expect(err).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(body().querySelectorAll('[role=alert]')).toHaveLength(1));
-    expect(document.activeElement).toBe(panel.el.querySelector('#ptab-outline'));
-    // 받을 수 있게 되면 다시 시도가 받아 그 탭을 그린다(받는 중 깃발이 실패 뒤에도 막지 않는다)
-    vi.doUnmock('../../src/app/infotab');
-    again().click();
     await vi.waitFor(() => expect(body().querySelector('[role=tree]')).not.toBeNull());
     expect(body().querySelector('[role=alert]')).toBeNull();
     expect(document.activeElement).toBe(panel.el.querySelector('#ptab-outline'));
-    expect(err).toHaveBeenCalledTimes(2);
+    expect(err).toHaveBeenCalledTimes(1);
+
+    // 229차: 새 패널 모듈 — 다시 시도도 받지 못하면(브라우저가 실패한 받기를 기억함) 알림 글은 하나(새로 넣음), 몸통 버튼은 새로 고침
+    document.body.innerHTML = '';
+    vi.resetModules();
+    vi.doMock('../../src/app/infotab', chunkFail('infotab'));
+    const next = await import('../../src/app/panel');
+    const b = mount(next.Panel);
+    await vi.waitFor(() => expect(err).toHaveBeenCalledTimes(2));
+    b.d.panelTab = 'outline';
+    b.panel.rerender();
+    const tab = (): HTMLElement => b.panel.el.querySelector<HTMLElement>('#ptab-outline')!;
+    button(b.body(), '다시 시도')!.focus();
+    button(b.body(), '다시 시도')!.click();
+    expect(document.activeElement).toBe(tab());
+    await vi.waitFor(() => expect(err).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(button(b.body(), '새로 고침')).toBeTruthy());
+    const shown = b.body().querySelectorAll('[role=alert]');
+    expect(shown).toHaveLength(1);
+    expect(shown[0]!.textContent).toBe('구성을(를) 불러오지 못했습니다.');
+    expect(button(b.body(), '다시 시도')).toBeUndefined();
+    // 초점은 다시 시도가 맡긴 탭 버튼 그대로
+    expect(document.activeElement).toBe(tab());
+    // 그 뒤 거듭 그리기도 새로 고침 그대로(셈은 받을 때까지 — 다시 받지 않음)
+    b.panel.rerender();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(button(b.body(), '새로 고침')).toBeTruthy();
+    expect(button(b.body(), '다시 시도')).toBeUndefined();
+    expect(ours(err)).toBe(3);
+    expect(document.activeElement).toBe(tab());
+    // 새로 고침은 다시 받지 않는다(되풀이 고리 없음)
+    button(b.body(), '새로 고침')!.click();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(ours(err)).toBe(3);
+    expect(b.body().querySelectorAll('[role=alert]')).toHaveLength(1);
   });
 
-  it('228차: 선택 탭의 속성 사전 칸 조각을 받지 못하면 칸 자리에 알림 글과 다시 시도(전에는 말없이 칸을 뺐다) — 다시 시도가 다시 받아 칸을 그린다', async () => {
-    vi.resetModules();
-    vi.doMock('../../src/app/attrview', () => {
-      throw new TypeError('Failed to fetch dynamically imported module: http://x/assets/attrview-x.js');
-    });
+  it('228차: 선택 탭의 속성 사전 칸 조각을 받지 못하면 칸 자리에 알림 글과 다시 시도(전에는 말없이 칸을 뺐다) — 다시 시도가 다시 받아 칸을 그린다. 229차: 다시 시도도 받지 못하면 새로 고침', async () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const fresh = await import('../../src/app/panel');
-    await fresh.loadPanelTabs();
-    const { d, panel, body } = mount(fresh.Panel);
-    // 모형 속성 사전 하나(고른 것이 없으면 선택 탭이 모형 정보와 그 사전을 보인다)
-    d.attributes = [{ Render: { mode: 'fast' } }] as unknown as typeof d.attributes;
-    d.modelAttrs = 0;
-    d.panelTab = 'entity';
-    panel.rerender();
+    /** 새 패널 모듈(탭 몸통 조각은 받아 둠)로 모형 속성 사전 하나를 선택 탭에 그린다 — 속성 사전 칸 조각은 받지 못한다 */
+    const open = async (): Promise<ReturnType<typeof mount>> => {
+      vi.resetModules();
+      vi.doMock('../../src/app/attrview', chunkFail('attrview'));
+      const fresh = await import('../../src/app/panel');
+      await fresh.loadPanelTabs();
+      const m = mount(fresh.Panel);
+      // 모형 속성 사전 하나(고른 것이 없으면 선택 탭이 모형 정보와 그 사전을 보인다)
+      m.d.attributes = [{ Render: { mode: 'fast' } }] as unknown as typeof m.d.attributes;
+      m.d.modelAttrs = 0;
+      m.d.panelTab = 'entity';
+      m.panel.rerender();
+      return m;
+    };
+    const { panel, body } = await open();
     await vi.waitFor(() => expect(body().querySelector('[role=alert]')).not.toBeNull());
     expect(body().querySelector('[role=alert]')!.textContent).toBe('속성 사전을(를) 불러오지 못했습니다.');
     expect(err).toHaveBeenCalledTimes(1);
@@ -135,11 +175,30 @@ describe('패널 탭 몸통 조각 받기(226차)', () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(err).toHaveBeenCalledTimes(1);
     vi.doUnmock('../../src/app/attrview');
-    const again = [...body().querySelectorAll('button')].find((b) => b.textContent === '다시 시도')!;
+    const again = button(body(), '다시 시도')!;
     again.focus();
     again.click();
     expect(document.activeElement).toBe(panel.el.querySelector('#ptab-entity'));
     await vi.waitFor(() => expect(body().querySelector('.attr-dict')).not.toBeNull());
     expect(body().querySelector('[role=alert]')).toBeNull();
+
+    // 229차: 새 패널 모듈 — 다시 시도도 받지 못하면 칸 자리 알림 글 하나, 버튼은 새로 고침(초점은 다시 시도가 맡긴 탭 버튼 그대로)
+    document.body.innerHTML = '';
+    const b = await open();
+    await vi.waitFor(() => expect(button(b.body(), '다시 시도')).toBeTruthy());
+    expect(ours(err)).toBe(2);
+    button(b.body(), '다시 시도')!.focus();
+    button(b.body(), '다시 시도')!.click();
+    expect(document.activeElement).toBe(b.panel.el.querySelector('#ptab-entity'));
+    await vi.waitFor(() => expect(button(b.body(), '새로 고침')).toBeTruthy());
+    expect(document.activeElement).toBe(b.panel.el.querySelector('#ptab-entity'));
+    expect(ours(err)).toBe(3);
+    expect(b.body().querySelectorAll('[role=alert]')).toHaveLength(1);
+    expect(b.body().querySelector('[role=alert]')!.textContent).toBe('속성 사전을(를) 불러오지 못했습니다.');
+    expect(button(b.body(), '다시 시도')).toBeUndefined();
+    // 새로 고침은 다시 받지 않는다
+    button(b.body(), '새로 고침')!.click();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(ours(err)).toBe(3);
   });
 });

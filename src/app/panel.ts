@@ -9,6 +9,7 @@
  * 226차: 처음 탭(태그·재질 — 문서를 열면 곧바로 보임) 밖 탭 몸통(구성·선택·정보)은 정보 탭 조각(infotab.ts)에 두어 첫 화면 JS에서 뗐다(NC 210차 꼴).
  * 문서를 보인 패널이 그 조각을 미리 받고(show), 받기 전에 그 탭을 그리면 몸통을 비운 채 한 번만 받은 뒤 그 탭이면 다시 그린다(받지 못하면 console.error — 다음에 그릴 때 다시).
  * 228차: 받지 못하면 몸통 안에 알림 글과 다시 시도(loadFail — 빈 칸으로 남지 않게, WCAG 3.3.1·4.1.3). 거듭 그리기는 다시 받지 않고 다시 시도가 다시 받는다.
+ * 229차: 다시 시도를 누른 뒤 또 받지 못하면 그 버튼이 새로 고침(reloadButton — 알림 상자 쪽 app.ts retryNote와 같은 규칙).
  */
 import { onceImport } from './core';
 import { h, icon } from './dom';
@@ -107,20 +108,27 @@ export const loadFailText = (name: string): Mixed => {
   const n: FileText = { file: name, ui: true };
   return mix`${n}을(를) 불러오지 못했습니다.`;
 };
-/** 228차: 다시 시도 버튼(알림 상자 — app.ts loadFailed — 와 탭 몸통 알림 글이 함께 쓴다). f는 누름 사건을 받지 않는 함수 */
-export function retryButton(f: () => unknown): HTMLButtonElement {
-  const b = h('button', { class: 'mini-btn' }, '다시 시도');
+/** 228차: 다시 시도 버튼(알림 상자 — app.ts loadFailed — 와 탭 몸통 알림 글이 함께 쓴다). f는 누름 사건을 받지 않는 함수. 229차: 글을 받는다(새로 고침) */
+export function retryButton(f: () => unknown, label = '다시 시도'): HTMLButtonElement {
+  const b = h('button', { class: 'mini-btn' }, label);
   b.addEventListener('click', f);
   return b;
 }
 /**
- * 228차: 탭 몸통·그 안 칸 조각을 받지 못함 — 몸통 안 알림 글(role=alert — 지금 언어로 옮겨 넣는다: 옮긴 글은 번역층이 다시 바꾸지 않고, 언어를 바꾸면 패널이 다시 그린다)과 다시 시도.
- * 이름은 name(그 안 칸) 또는 지금 탭 버튼 글. 다시 시도는 초점을 지금 탭 버튼에 두고(눌린 버튼은 다시 그리며 없어진다) again(다시 받아 그 탭을 그림)을 부른다
+ * 229차: 다시 시도를 누른 뒤 또 받지 못한 자리의 버튼 — 새로 고침(새 판과 옛 캐시가 엇갈리면 브라우저가 같은 문서에서 실패한 모듈 받기를 기억해
+ * 다시 시도도 받지 못할 수 있다. 다시 읽으면 서비스 워커가 새 판을 준다). 다시 시도를 부르지 않는다(되풀이 고리 없음)
  */
-export function loadFail(body: HTMLElement, again: () => void, name?: string): Node[] {
+export const reloadButton = (): HTMLButtonElement => retryButton(() => location.reload(), '새로 고침');
+/**
+ * 228차: 탭 몸통·그 안 칸 조각을 받지 못함 — 몸통 안 알림 글(role=alert — 지금 언어로 옮겨 넣는다: 옮긴 글은 번역층이 다시 바꾸지 않고, 언어를 바꾸면 패널이 다시 그린다)과 다시 시도.
+ * 이름은 name(그 안 칸) 또는 지금 탭 버튼 글. 다시 시도는 초점을 지금 탭 버튼에 두고(눌린 버튼은 다시 그리며 없어진다) again(다시 받아 그 탭을 그림)을 부른다.
+ * 229차: again이 null이면(다시 시도를 누른 뒤 또 받지 못함) 글은 그대로 두고 버튼만 새로 고침. 초점은 다시 시도가 맡긴 탭 버튼 그대로다
+ * (받는 동안 몸통을 비워 눌린 버튼이 없어지므로 새로 고침이 생길 때 초점은 그 버튼에 없다)
+ */
+export function loadFail(body: HTMLElement, again: (() => void) | null, name?: string): Node[] {
   // 몸통은 늘 지금 탭 버튼을 가리킨다(render — aria-labelledby)
   const tab = document.getElementById(body.getAttribute('aria-labelledby')!)!;
-  return [h('p', { class: 'hint', role: 'alert' }, mixText(loadFailText(name ?? tab.textContent!))), retryButton(() => (tab.focus(), again()))];
+  return [h('p', { class: 'hint', role: 'alert' }, mixText(loadFailText(name ?? tab.textContent!))), again ? retryButton(() => (tab.focus(), again())) : reloadButton()];
 }
 
 /** 탭 몸통(infotab.ts)이 쓰는 패널 몫(226차 — 옮기기 전 패널 메서드가 쓰던 this의 것) */
@@ -158,8 +166,11 @@ export class Panel {
   private readonly footKeys = new WeakMap<Element, string>();
   /** 탭 몸통 조각을 받는 중인지(받는 중 깃발 — 거듭 그려도 받기·받은 뒤 다시 그리기는 한 번, 226차) */
   private tabsWait = false;
-  /** 228차: 탭 몸통 조각을 받지 못했는지(받는 중 깃발은 내리고 몸통에 알림 글 — 거듭 그려도·문서를 다시 보여도 다시 받지 않고, 다시 시도가 다시 받는다) */
-  private tabsFail = false;
+  /**
+   * 228차: 탭 몸통 조각을 받지 못했는지(받는 중 깃발은 내리고 몸통에 알림 글 — 거듭 그려도·문서를 다시 보여도 다시 받지 않고, 다시 시도가 다시 받는다).
+   * 229차: 0 받지 못한 적 없음·1 받지 못함(다시 시도)·2 다시 시도를 누른 뒤 또 받지 못함(새로 고침)·-1 다시 시도로 받는 중. 받으면 조각이 서서 더 읽지 않는다
+   */
+  private tabsFail = 0;
   /** 탭 몸통(infotab.ts)에 넘기는 패널 몫 */
   private readonly tabView: TabPanel;
 
@@ -195,14 +206,14 @@ export class Panel {
    * 228차: 받지 못하면 받는 중 깃발을 내리고 실패 깃발(까닭은 console.error) — 지금 탭이 그 조각의 탭이면 몸통을 알림 글로 다시 그린다(전에는 빈 칸)
    */
   private needTabs(): void {
-    if (tabs || this.tabsWait || this.tabsFail) return;
+    if (tabs || this.tabsWait || this.tabsFail > 0) return;
     this.tabsWait = true;
     const done = (): void => {
       this.tabsWait = false;
       if (this.doc && this.doc.panelTab !== 'tags') this.render(true);
     };
     loadPanelTabs().then(done, (e: unknown) => {
-      this.tabsFail = true;
+      this.tabsFail = this.tabsFail < 0 ? 2 : 1;
       console.error(e);
       done();
     });
@@ -295,11 +306,11 @@ export class Panel {
 
   /**
    * 지금 탭 몸통: 태그·재질은 여기서, 구성·선택·정보는 탭 몸통 조각이(받기 전이면 몸통을 비운 채 받는다 — 226차).
-   * 받지 못했으면 알림 글과 다시 시도(228차 — 누르면 실패 깃발을 풀고 다시 그려 다시 받는다)
+   * 받지 못했으면 알림 글과 다시 시도(228차 — 누르면 실패 깃발을 풀고 다시 그려 다시 받는다). 다시 시도 뒤 또 받지 못했으면 새로 고침(229차)
    */
   private renderBody(d: SkpDoc): void {
     if (d.panelTab === 'tags') this.renderTags(d);
-    else if (!tabs && this.tabsFail) this.body.append(...loadFail(this.body, () => ((this.tabsFail = false), this.render(true))));
+    else if (!tabs && this.tabsFail > 0) this.body.append(...loadFail(this.body, this.tabsFail > 1 ? null : () => ((this.tabsFail = -1), this.render(true))));
     else if (!tabs) this.needTabs();
     else if (d.panelTab === 'outline') tabs.renderOutline(this.tabView, d);
     else if (d.panelTab === 'entity') tabs.renderEntity(this.tabView, d);

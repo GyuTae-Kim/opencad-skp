@@ -6,6 +6,8 @@
  * 다시 시도는 알림을 닫고(초점은 ✕와 같은 곳) 다시 받는다 — 또 받지 못하면 알림 하나가 다시 뜨고, 받을 수 있게 되면 그 창이 열린다.
  * 언어 사전: 바꾸기를 받지 못하면 바꾸기 전 화면 언어로 알리고(메뉴·문서 언어는 앞 언어 그대로), 첫 사전을 받지 못하면 한국어로 세우고 언어 메뉴는 둔다.
  * 조각마다 한 시험 앱만 받는다(같은 조각을 두 앱이 동시에 받지 않게 — vitest가 둘째를 self-import로 봄, NC 211차). 기다림은 조건과 마감 시간(vi.waitFor — 공용 규칙 13번).
+ * 229차: 다시 시도를 누른 뒤 또 받지 못하면 그 알림 버튼만 「새로 고침」(글은 그대로 하나 — 새 판과 옛 캐시가 엇갈리면 브라우저가 실패한 모듈 받기를 기억해 다시 시도도 받지 못할 수 있다),
+ * 새로 고침은 다시 시도를 부르지 않고(jsdom은 탐색하지 않는다 — 콘솔 글은 앱이 남긴 오류 객체만 센다), 다른 길(메뉴·언어 메뉴)로 받으면 떠 있는 그 실패 알림을 닫는다.
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -64,6 +66,10 @@ it('main.ts가 번역층에 앱 loadFailed를 넘긴다(사전을 받지 못한 
 });
 
 const retries = (n: HTMLElement): HTMLButtonElement[] => [...n.querySelectorAll('button')].filter((b) => b.textContent === '다시 시도' || b.textContent === 'Try again');
+/** 229차: 다시 시도 뒤 또 받지 못한 알림의 새로 고침 버튼 */
+const reloads = (n: HTMLElement): HTMLButtonElement[] => [...n.querySelectorAll('button')].filter((b) => b.textContent === '새로 고침');
+/** 앱이 콘솔에 남긴 받기 실패(오류 객체) 수 — jsdom이 새로 고침(탐색 없음)에 남기는 글은 빼고 센다 */
+const ours = (err: { mock: { calls: unknown[][] } }): number => err.mock.calls.filter(([e]) => typeof e !== 'string').length;
 const title = (n: HTMLElement): string => n.querySelector('.notice-text b')!.textContent ?? '';
 /** 알림 글(제목 b 다음 span — 제목 안 이름 조각 span(translate="no")은 빼고 자식으로 고른다) */
 const text = (n: HTMLElement): string => n.querySelector('.notice-text > span')!.textContent ?? '';
@@ -78,7 +84,7 @@ describe('228차: 창·예제 조각을 받지 못하면 알림 하나와 다시
     mod = await import('../../src/app/app');
   });
 
-  it('키보드 바로 가기 창: 알림(까닭 글은 콘솔에만)·다시 시도, 받는 중 깃발이 남지 않고, 다시 시도가 다시 받는다 — 받을 수 있게 되면 창이 열린다', async () => {
+  it('키보드 바로 가기 창: 알림(까닭 글은 콘솔에만)·다시 시도, 받는 중 깃발이 남지 않고, 다시 시도가 다시 받는다 — 229차: 또 받지 못하면 버튼만 새로 고침(다시 시도를 부르지 않음), 다른 길(메뉴)로 받으면 창이 열리고 실패 알림을 닫는다', async () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
     const a = await mount(mod);
     const n = a.els.notice;
@@ -101,11 +107,21 @@ describe('228차: 창·예제 조각을 받지 못하면 알림 하나와 다시
     await vi.waitFor(() => expect(n.hidden).toBe(false));
     expect(err).toHaveBeenCalledTimes(2);
     expect(document.querySelectorAll('.notice')).toHaveLength(1);
-    expect(retries(n)).toHaveLength(1);
+    // 229차: 다시 시도를 누른 뒤 또 받지 못함 — 글은 그대로 하나, 버튼만 새로 고침(✕는 끝 그대로)
+    expect(retries(n)).toHaveLength(0);
+    expect(reloads(n)).toHaveLength(1);
+    expect(n.lastElementChild!.getAttribute('aria-label')).toBe('알림 닫기');
     expect(title(n)).toBe('키보드 바로 가기을(를) 불러오지 못했습니다.');
-    // 받을 수 있게 되면 다시 시도가 창을 연다(알림은 닫힘)
+    expect(text(n)).toBe('');
+    // 새로 고침은 다시 시도를 부르지 않는다(되풀이 고리 없음 — 다시 받지 않아 콘솔 오류 그대로, 알림 그대로)
+    reloads(n)[0]!.click();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(ours(err)).toBe(2);
+    expect(a.shortcutsLoading).toBe(false);
+    expect(n.hidden).toBe(false);
+    // 다른 길(메뉴·? — openShortcuts)로 받을 수 있게 되면 창이 열리고 떠 있던 실패 알림은 닫힌다
     vi.doUnmock('../../src/app/shortcuts');
-    retries(n)[0]!.click();
+    a.openShortcuts();
     await vi.waitFor(() => expect(document.querySelector('.sc-box')).not.toBeNull());
     expect(n.hidden).toBe(true);
     await vi.waitFor(() => expect(a.shortcutsLoading).toBe(false));
@@ -125,12 +141,16 @@ describe('228차: 창·예제 조각을 받지 못하면 알림 하나와 다시
     expect(err).toHaveBeenCalledTimes(1);
     expect(retries(n)).toHaveLength(1);
     await vi.waitFor(() => expect(a.exportLoading).toBe(false));
-    // 다시 시도도 받지 못하면 알림 하나가 다시 뜬다
+    // 다시 시도도 받지 못하면 알림 하나가 다시 뜬다 — 229차: 버튼만 새로 고침(글 그대로)
     retries(n)[0]!.click();
     expect(n.hidden).toBe(true);
     await vi.waitFor(() => expect(n.hidden).toBe(false));
     expect(err).toHaveBeenCalledTimes(2);
-    expect(retries(n)).toHaveLength(1);
+    expect(document.querySelectorAll('.notice')).toHaveLength(1);
+    expect(retries(n)).toHaveLength(0);
+    expect(reloads(n)).toHaveLength(1);
+    expect(title(n)).toBe('그림 저장을(를) 불러오지 못했습니다.');
+    await vi.waitFor(() => expect(a.exportLoading).toBe(false));
     a.viewer = null;
     a.doc = null;
   });
@@ -150,7 +170,14 @@ describe('228차: 창·예제 조각을 받지 못하면 알림 하나와 다시
     await vi.waitFor(() => expect(err).toHaveBeenCalledTimes(2));
     expect(n.hidden).toBe(false);
     expect(a.els.busy.hidden).toBe(true);
-    expect(retries(n)).toHaveLength(1);
+    // 229차: 다시 시도 뒤 또 받지 못함 — 버튼만 새로 고침(글 그대로), 새로 고침은 예제를 다시 열지 않는다
+    expect(retries(n)).toHaveLength(0);
+    expect(reloads(n)).toHaveLength(1);
+    expect(title(n)).toBe('예제 모형을(를) 불러오지 못했습니다.');
+    reloads(n)[0]!.click();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(ours(err)).toBe(2);
+    expect(a.els.busy.hidden).toBe(true);
   });
 });
 
@@ -188,7 +215,7 @@ describe('228차: 언어 사전을 받지 못하면 바꾸기 전 화면 언어�
     expect(n.hidden).toBe(true);
   });
 
-  it('첫 사전: 받지 못하면 한국어로 세우고 언어 메뉴는 둔다 — 한국어 알림과 다시 시도가 그 언어를 다시 받는다', async () => {
+  it('첫 사전: 받지 못하면 한국어로 세우고 언어 메뉴는 둔다 — 한국어 알림과 다시 시도. 229차: 다른 길(언어 메뉴로 그 언어)로 받으면 떠 있는 실패 알림을 닫는다', async () => {
     vi.resetModules();
     vi.doMock('../../site/locales/en.json', fail('en'));
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -205,10 +232,12 @@ describe('228차: 언어 사전을 받지 못하면 바꾸기 전 화면 언어�
     expect(err).toHaveBeenCalledTimes(1);
     expect(retries(n).map((b) => b.textContent)).toEqual(['다시 시도']);
     vi.doUnmock('../../site/locales/en.json');
-    retries(n)[0]!.click();
+    // 다시 시도 대신 언어 메뉴로 같은 언어를 고른다(다른 길 — 알림은 그대로 떠 있다가 받으면 닫힌다)
+    document.querySelector<HTMLButtonElement>('[data-language="en"]')!.click();
     await vi.waitFor(() => expect(document.documentElement.lang).toBe('en'));
     expect(document.querySelector('[data-language="en"]')!.getAttribute('aria-checked')).toBe('true');
     expect(n.hidden).toBe(true);
+    expect(err).toHaveBeenCalledTimes(1);
   });
 });
 
