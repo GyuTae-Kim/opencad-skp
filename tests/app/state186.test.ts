@@ -5,11 +5,15 @@
  * 두 줄은 누르면 고르고 다시 누르면 푸는 토글이라 버튼의 aria-pressed로(같은 패널의 단면 줄·3D 누르기 방식 버튼과 같은 꼴),
  * 표 줄(tr — 표는 grid가 아니라 aria-selected가 뜻이 없음)에는 붙이지 않는다. 고름이 바뀌는 모든 길(누르기·다시 누르기·다른 줄·풀기·다시 그리기)에서 함께 바뀌는지 본다.
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { MaterialRow, Selection } from '../../src/app/doc';
-import { Panel, type PanelHost } from '../../src/app/panel';
+import { Panel, loadPanelTabs, type PanelHost } from '../../src/app/panel';
 import { rowDoc } from './rowdoc';
 
+// 226차: 구성 탭 몸통(정의 표)은 탭 몸통 조각(infotab.ts)이라 패널을 그리기 전에 받아 둔다(받은 뒤 그리기는 옮기기 전과 같다, ci-guard 5)
+beforeAll(async () => {
+  await loadPanelTabs();
+});
 afterEach(() => {
   document.body.innerHTML = '';
 });

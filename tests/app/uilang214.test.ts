@@ -297,8 +297,9 @@ const until = async (ok: () => boolean, ms = 5000): Promise<void> => {
 let dispose: (() => void) | undefined;
 let measure: typeof import('../../src/app/measure');
 beforeAll(async () => {
-  // 패널이 기다리지 않고 받는 조각(정보 탭·속성 사전 — panel.ts void import)을 미리 받아 둔다(ci-guard 5 — 시험 파일이 끝난 뒤 모듈을 평가하지 않게)
-  await import('../../src/app/infotab');
+  // 패널이 기다리지 않고 받는 조각(탭 몸통 — panel.ts loadPanelTabs, 226차부터 정보 탭에 구성·선택 탭 몸통도·속성 사전 — infotab.ts void import)을
+  // 미리 받아 둔다(ci-guard 5 — 시험 파일이 끝난 뒤 모듈을 평가하지 않게. 탭 몸통은 패널이 받은 조각을 쥐어야 곧바로 그리므로 패널의 받기로)
+  await (await import('../../src/app/panel')).loadPanelTabs();
   await import('../../src/app/attrview');
   // 215차: 앱이 처음 쓸 때 받는 조각(측정 도구 — core.ts loadMeasure, 그림 저장 창·바로 가기 안내 창 — app.ts void import)도 미리(셋 다 맨 위 곁효과 없음)
   measure = await import('../../src/app/measure');

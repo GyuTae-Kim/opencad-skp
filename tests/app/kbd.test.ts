@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { closeOutside, disclose, focusIfLost, focusSpot, keepBarFocus, keepRowFocus, leaveDisabled, listKeys, listRows, lost, menuTab, moveIndex, refocus, rove, setRange, treeKeys } from '../../src/app/kbd';
 import { PANEL_WIDTH_STEPS, SHEET_STEPS, clampSheetFraction, nextSize } from '../../src/app/layout';
 import type { MeasureToolResult } from '../../src/app/measure';
-import { CHILD_LIMIT, Panel, type PanelHost } from '../../src/app/panel';
+import { CHILD_LIMIT, Panel, loadPanelTabs, type PanelHost } from '../../src/app/panel';
 import { infoSections } from '../../src/app/infotab';
 import { entityInfo } from '../../src/app/entity';
 import { selectionEntity } from '../../src/app/doc';
@@ -26,6 +26,10 @@ const html = (s: string): HTMLElement => {
   return box;
 };
 
+// 226차: 패널 구성·선택·정보 탭 몸통은 탭 몸통 조각(infotab.ts)이라 패널을 그리기 전에 받아 둔다(앱은 문서를 보인 패널이 미리 받음 — 받은 뒤 그리기는 옮기기 전과 같다, ci-guard 5)
+beforeAll(async () => {
+  await loadPanelTabs();
+});
 afterEach(() => {
   document.body.innerHTML = '';
 });
@@ -1272,9 +1276,11 @@ describe('찾기 칸의 이름을 보이는 자리 글로(172차 — WCAG 2.5.3 
     expect(field().value).toBe('Near');
     check();
     // 원문: 찾기 칸은 하나(나무·한 단계 목록 두 곳이 같은 searchBox), 두 글은 사전에 있던 글
-    const pan = readFileSync(resolve(__dirname, '../../src/app/panel.ts'), 'utf8');
+    // (226차: 구성 탭 몸통은 탭 몸통 조각 infotab.ts로 옮겨 패널 메서드 this.searchBox가 모듈 함수 searchBox가 됨 — panel.ts에는 찾기 칸이 없다)
+    const pan = readFileSync(resolve(__dirname, '../../src/app/infotab.ts'), 'utf8');
+    expect(readFileSync(resolve(__dirname, '../../src/app/panel.ts'), 'utf8')).not.toMatch(/type: 'search'/);
     expect(pan.match(/type: 'search'/g)).toHaveLength(1);
-    expect(pan.match(/this\.searchBox\(d, fill\)/g)).toHaveLength(2);
+    expect(pan.match(/[^.\w]searchBox\(d, fill\)/g)).toHaveLength(2);
     const en = JSON.parse(readFileSync(resolve(__dirname, '../../site/locales/en.json'), 'utf8')) as Record<string, string>;
     expect([en['이름·정의·태그로 찾기'], en['그룹·컴포넌트 찾기(이름·정의·태그)']]).toEqual(['Find by name·definition·tag', 'Find groups·components (name·definition·tag)']);
   });
@@ -1392,16 +1398,19 @@ describe('나무 「더 보기」를 끝까지 펼쳐 그 버튼이 사라지면
     expect(document.activeElement).toBe(s.row(6));
     // 원문: 「더 보기」에 부모 열쇠 data-more(다시 그린 본문에 같은 부모의 「더 보기」가 있는지 — 끝 셈만으로는 줄 수 한도를 놓친다),
     // click은 다시 그리기 앞에 초점이 그 버튼인지 보아 두고 뒤에 버튼이 없으면 새로 나온 첫 줄(누르기 전 limit 자리 아이)로 — 스크롤은 그대로
-    const pan = readFileSync(resolve(__dirname, '../../src/app/panel.ts'), 'utf8');
-    const add = pan.slice(pan.indexOf('    const addChildren = '), pan.indexOf('    // 찾는 글이 있으면'));
+    // (226차: 구성 탭 나무는 탭 몸통 조각 infotab.ts로 옮겼다 — 패널 메서드의 this.rerender·this.body가 패널 몫 p.rerender·p.body, 들여쓰기 한 단계 얕음.
+    // 나무 상자·로빙 가져오기(rove·treeKeys)도 함께 옮겨 panel.ts의 kbd 가져오기에서 빠짐)
+    const pan = readFileSync(resolve(__dirname, '../../src/app/infotab.ts'), 'utf8');
+    const add = pan.slice(pan.indexOf('  const addChildren = '), pan.indexOf('  // 찾는 글이 있으면'));
     expect(add).toMatch(/\{ class: 'mini-btn more-btn', role: 'treeitem', 'aria-level': [^\n]*, 'data-more': String\(parent\), style: /);
     expect(add).toMatch(
-      /more\.addEventListener\('click', \(\) => \{\n(\s*\/\/[^\n]*\n)*\s*const had = document\.activeElement === more;\n\s*d\.childLimit\.set\(parent, limit \+ CHILD_LIMIT \* 5\);\n\s*this\.rerender\(\);\n\s*if \(had && !this\.body\.querySelector\(`\[data-more="\$\{parent\}"\]`\)\) this\.body\.querySelector<HTMLElement>\(`\[data-node="\$\{kids\[limit\]\}"\]`\)\?\.focus\(\{ preventScroll: true \}\);\n\s*\}\);\n/,
+      /more\.addEventListener\('click', \(\) => \{\n(\s*\/\/[^\n]*\n)*\s*const had = document\.activeElement === more;\n\s*d\.childLimit\.set\(parent, limit \+ CHILD_LIMIT \* 5\);\n\s*p\.rerender\(\);\n\s*if \(had && !p\.body\.querySelector\(`\[data-more="\$\{parent\}"\]`\)\) p\.body\.querySelector<HTMLElement>\(`\[data-node="\$\{kids\[limit\]\}"\]`\)\?\.focus\(\{ preventScroll: true \}\);\n\s*\}\);\n/,
     );
     expect(pan.match(/document\.activeElement === more/g)).toHaveLength(1);
     expect(pan.match(/data-more/g)).toHaveLength(2);
     // 새 가져오기 없음(나무 로빙은 나무 상자 focusin의 rove가 맞춘다)
-    expect(pan).toMatch(/\nimport \{ focusIfLost, focusSpot, listKeys, listRows, refocus, rove, treeKeys \} from '\.\/kbd';\n/);
+    expect(pan).toMatch(/\nimport \{ rove, treeKeys \} from '\.\/kbd';\n/);
+    expect(readFileSync(resolve(__dirname, '../../src/app/panel.ts'), 'utf8')).toMatch(/\nimport \{ focusIfLost, focusSpot, listKeys, listRows, refocus \} from '\.\/kbd';\n/);
     expect(pan).toMatch(/box\.addEventListener\('focusin', \(e\) => \{\n\s*const it = \(e\.target as HTMLElement\)\.closest<HTMLElement>\('\[role=treeitem\]'\);\n\s*if \(it\) rove\(\[\.\.\.box\.querySelectorAll<HTMLElement>\('\[role=treeitem\]'\)\], it, true\);\n/);
   });
 });

@@ -441,11 +441,13 @@ describe('제목 막대·도구 막대 버튼의 화면 읽기 이름(173차 —
 
 describe('색만으로 전하지 않음(185차 — WCAG 1.4.1 색 사용: 밝기 차가 3:1 아래면 모양·글·굵기가 함께)', () => {
   const panel = readFileSync(resolve(__dirname, '../../src/app/panel.ts'), 'utf8');
+  // 226차: 구성 탭 나무 줄(nodeRow — 빈 줄 클래스)은 탭 몸통 조각 infotab.ts로 옮겼다(흐림을 맞추는 refreshVisibility는 패널에 남음)
+  const tabs = readFileSync(resolve(__dirname, '../../src/app/infotab.ts'), 'utf8');
   for (const [name, T] of THEMES) {
     it(`${name}: 숨긴 폴더·그룹 아래 줄·그릴 것이 없는 줄은 흐린 글 색이 보통 글과 3:1 아래라 이름을 기울인다 — 모형에서 숨긴 줄과 같은 꼴`, () => {
       // 흐린 줄은 제 보이기 체크가 켠 그대로이고 위 단계가 숨음(refreshVisibility), 빈 줄은 면·모서리 0(수 글은 「면 0」뿐 — 모서리만 있는 줄과 같음)
       expect(panel).toMatch(/el\.classList\.toggle\('dimmed', /);
-      expect(panel).toContain("t.faces[n] || t.edges[n] ? '' : ' empty'");
+      expect(tabs).toContain("t.faces[n] || t.edges[n] ? '' : ' empty'");
       expect(bodies('.prow.dimmed')).toMatch(/color:\s*var\(--text-dim\)/);
       expect(contrast(rgba(T['--text']), rgba(T['--text-dim']))).toBeLessThan(3);
       for (const s of ['.prow.model-hidden .name', '.prow.dimmed .name', '.prow.empty .name']) expect(bodies(s), s).toMatch(/font-style:\s*italic/);

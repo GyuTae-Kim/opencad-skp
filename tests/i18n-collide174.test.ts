@@ -320,8 +320,8 @@ describe('218차: 쓰는 곳 없는 사전 열쇠를 지웠다 — 다시 쓰이
     expect(usedFiles('아직 못 읽음')).toContain('src/app/app.ts');
     // index.html 링크 글·여러 줄 소개 글(빈칸을 모은 글)
     expect(usedFiles('GitHub 소스 코드')).toContain('index.html');
-    // 틀: 패널 찾기 결과 수 글
-    expect(usedFiles('찾은 항목 {0}개 중 처음 {1}개')).toContain('src/app/panel.ts');
+    // 틀: 패널 찾기 결과 수 글(226차: 구성 탭 몸통과 함께 탭 몸통 조각 infotab.ts로 옮김)
+    expect(usedFiles('찾은 항목 {0}개 중 처음 {1}개')).toContain('src/app/infotab.ts');
     for (const k of ['GitHub 소스 코드', '찾은 항목 {0}개 중 처음 {1}개', 'SketchUp 뷰어', '아직 못 읽음']) expect(catalogs.en![k], k).toBeTruthy();
   });
 });

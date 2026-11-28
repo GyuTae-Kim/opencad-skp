@@ -8,7 +8,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { skpToScene } from '../../src/index';
 import { createDoc, selectionParts, selectionText, type Selection, type SkpDoc } from '../../src/app/doc';
 import { entityInfo, type EntityInput } from '../../src/app/entity';
@@ -18,7 +18,7 @@ import { warningParts } from '../../src/app/warntext';
 import { errorParts, installLocalization, mixNodes, mixText, uiName } from '../../src/app/i18n';
 import { infoSections } from '../../src/app/infotab';
 import { readPages } from '../../src/app/pages';
-import { Panel, type PanelHost } from '../../src/app/panel';
+import { Panel, loadPanelTabs, type PanelHost } from '../../src/app/panel';
 import { catalogs, registerCatalog, sourceMessage, translate } from '../../site/i18n.mjs';
 import { dimPoint, edge, entities, face, f64, instance, materialXml, modelDat, sectionPlanes, skpFile, texts, tlv, utf8, val, vertex } from '../build';
 
@@ -191,6 +191,10 @@ function host(d: SkpDoc, panel: () => Panel): PanelHost {
 }
 
 let dispose: (() => void) | undefined;
+// 226차: 패널 구성·선택·정보 탭 몸통은 탭 몸통 조각(infotab.ts)이라 패널을 그리기 전에 받아 둔다(앱은 문서를 보인 패널이 미리 받음 — 받은 뒤 그리기는 옮기기 전과 같다, ci-guard 5)
+beforeAll(async () => {
+  await loadPanelTabs();
+});
 afterEach(() => {
   dispose?.();
   dispose = undefined;
