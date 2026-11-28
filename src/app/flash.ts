@@ -25,9 +25,12 @@ export class FlashNote {
     });
   }
 
-  /** 글을 ms 동안 보인다(떠 있던 알림은 바꾼다 — 포인터가 위에 있으면 떠날 때까지) */
+  /**
+   * 글을 ms 동안 보인다(떠 있던 알림은 바꾼다 — 포인터가 위에 있으면 떠날 때까지).
+   * 222차: 띄우는 길은 모두 사용자 동작(복사·안내 두기 버튼)이라, 떠 있거나 숨은 칸에 남은 같은 글이면 한 프레임 비웠다 다시 넣는다(sayLive — 거듭 복사도 다시 읽힘)
+   */
   show(text: string, ms = 1600, kind: string | null = null): void {
-    this.el.textContent = text;
+    sayLive(this.el, text, true);
     this.el.hidden = false;
     this.kind = kind;
     this.ms = ms;
@@ -73,3 +76,27 @@ export const barShown = (bar: HTMLElement, band: MediaQueryList | null): boolean
  * 159차: 앱 showNotice가 모든 가벼운 글(복사 결과·2점 투시 거절·문맥 잃음·되찾는 중 안내)에 이 판정을 쓴다 — own은 「떠 있는 글이 가벼운 글」
  */
 export const noticeFree = (box: HTMLElement, kind: string | undefined, own: boolean): boolean => !!box.hidden || own || kind === 'info';
+
+/** 222차: 알림 칸마다 마지막으로 넣은 글(넣은 원문 — 번역층이 옮긴 칸도 이것으로 견준다)과 다시 넣을 프레임(0이면 없음) */
+const lastSaid = new WeakMap<HTMLElement, { text: string; frame: number }>();
+
+/**
+ * 222차 다시 알리기(221차 측정 띠 꼴을 칸 하나로 묶음 — WCAG 4.1.3): 알림 칸(role=status·aria-live)에 글을 넣는다. aria-live는 같은 글로 바뀌면 다시 알리지 않으므로
+ * again(사용자가 같은 동작을 거듭함 — 같은 자리 Enter·거듭 복사·같은 값 거듭 넣기)이고 앞서 넣은 글과 같으면 칸을 비웠다 다음 프레임에 다시 넣는다.
+ * 앱이 스스로 넣는 글(again 없음 — 가라앉은 자리 글·언어 바꿈·거두기)은 같아도 그대로 둔다(알림이 늘어 시끄러워지지 않게).
+ * 어느 쪽이든 앞서 비운 프레임은 거둔다(그 사이 넣은 글·비움을 덮지 않는다 — 한 프레임 안 거듭은 한 번). requestAnimationFrame이 없으면 그대로 넣는다.
+ * 측정 띠·상태 줄의 221차 「잠글 방향이 없습니다」는 다시 그리는 조립 글의 한 조각이라 측정 도구 상태(noLockAgain)로 같은 규칙을 따른다
+ */
+export function sayLive(el: HTMLElement, text: string, again = false): void {
+  const last = lastSaid.get(el);
+  if (last?.frame) cancelAnimationFrame(last.frame);
+  let frame = 0;
+  if (again && text && last?.text === text && typeof requestAnimationFrame === 'function') {
+    el.textContent = '';
+    frame = requestAnimationFrame(() => {
+      lastSaid.set(el, { text, frame: 0 });
+      el.textContent = text;
+    });
+  } else el.textContent = text;
+  lastSaid.set(el, { text, frame });
+}

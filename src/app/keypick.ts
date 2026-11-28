@@ -29,6 +29,7 @@
 import type { IndexRange, KeyboardSnapAnnouncement, KeyPickCycleOptions, Pick3d, PickGroupKey, Viewer3d } from 'opencad-viewer3d';
 import { formatKeySnapMessage, keySnapMessages, type KeySnapMessageFn, type KeySnapMessageKey, type KeySnapMessages } from 'opencad-viewer3d/keysnap';
 import { selectionForPick, selectionParts, type SkpDoc } from './doc';
+import { sayLive } from './flash';
 import { mixText, uiText } from './i18n';
 import { isEditableTarget } from './keys';
 import { selKey } from './panel';
@@ -232,6 +233,14 @@ export class KeyPick {
     return this.live.textContent ?? '';
   }
 
+  /**
+   * 알림 칸에 글 넣기(222차 — flash.ts sayLive): again은 사용자가 같은 동작을 거듭한 때(같은 자리 Enter — 줄자·각도기 찍기, 고르기 도구 'commit')만 —
+   * 같은 글이면 한 프레임 비웠다 다시 넣어 다시 읽힌다. 앱·코어가 스스로 넣는 글(가라앉은 자리 글·언어 바꿈·끄기)은 같아도 그대로
+   */
+  private write(text: string, again = false): void {
+    sayLive(this.live, text, again);
+  }
+
   /** 고르기 도구면 켜고(true) 끈다(false — 켜진 커서는 알리지 않고 끈다). 같으면 그대로 */
   set(on: boolean): void {
     this.setMode(on ? 'pick' : null);
@@ -263,7 +272,7 @@ export class KeyPick {
    * (WCAG 3.1.2·4.1.3 — 빈 글은 알리지 않는다, 다음 키가 새 언어로 알린다)
    */
   relocalize(): void {
-    this.live.textContent = '';
+    this.write('');
     if (this.mode) this.apply();
   }
 
@@ -284,7 +293,8 @@ export class KeyPick {
     if (on && !list && this.v.keyboardCursor) {
       if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.altKey && e.target === this.v.canvas) {
         e.preventDefault();
-        this.live.textContent = h.keyPlace(e.shiftKey);
+        // 222차: 같은 자리 Enter 거듭(찍을 점이 없음·같은 점)은 같은 글 — 다시 알린다
+        this.write(h.keyPlace(e.shiftKey), true);
         return true;
       }
       if (arrow) return this.v.handleKey(e);
@@ -292,7 +302,7 @@ export class KeyPick {
       if (e.key === 'Tab' || e.key === 'Escape') {
         const t = h.keyCycle(e);
         if (t !== null) {
-          this.live.textContent = t;
+          this.write(t);
           return true;
         }
       }
@@ -300,7 +310,7 @@ export class KeyPick {
       // 219차: X·Y·Z·L 방향 잠금(측정 도구 keyLock — 받으면 그 글을 알리고, 바뀐 것이 없는 빈 글이면 알림 칸 그대로)
       const lt = h.keyLock?.(e) ?? null;
       if (lt !== null) {
-        if (lt) this.live.textContent = lt;
+        if (lt) this.write(lt);
         return true;
       }
     }
@@ -320,13 +330,13 @@ export class KeyPick {
     const cv = this.v.canvas;
     // 127차: 줄자·각도기면 키 밖의 변화 뒤 가라앉은 커서 자리 글을 측정 도구가 이 알림 칸에 쓰게 하고(코어 커서가 켜졌을 때만), 아니면 거둔다
     const say = (t: string): void => {
-      if (this.v.keyboardCursor) this.live.textContent = t;
+      if (this.v.keyboardCursor) this.write(t);
     };
     this.app.measureTool?.keyWatch?.(this.mode && this.mode !== 'pick' ? say : null);
     if (!this.mode) {
       this.v.setKeyboardSnap(false);
       cv.removeAttribute('aria-keyshortcuts');
-      this.live.textContent = '';
+      this.write('');
       return;
     }
     if (this.mode === 'pick') {
@@ -344,9 +354,8 @@ export class KeyPick {
           const d = this.doc();
           return d && formatLength(v * mmPerSceneUnit(d.scene.units), d.units);
         },
-        announce: (a) => {
-          this.live.textContent = a.text;
-        },
+        // 222차: 같은 후보를 Enter로 거듭 고른 것('commit')만 같은 글이면 다시 알린다
+        announce: (a) => this.write(a.text, a.reason === 'commit'),
       });
     } else {
       // 줄자·각도기: 코어는 고르기 모드(후보 돌리기 없음 — 코어는 Tab을 넘긴다), 자리만 받아 측정 도구가 추정한다(Tab 후보 돌리기도 측정 도구 — 125차 handleKey)
@@ -365,10 +374,10 @@ export class KeyPick {
     if (a.reason === 'end') {
       // 초점이 측정값 칸 등으로 갔으면(그 칸에 친 길이의 방향) 표식을 그 자리에 둔다 — Esc·포인터로 끄면 거둔다
       h.keyEnd(document.activeElement !== this.v.canvas);
-      this.live.textContent = M.end;
+      this.write(M.end);
       return;
     }
     const body = h.keyHover(a.x, a.y);
-    this.live.textContent = a.reason === 'start' ? formatKeySnapMessage(M.start, [body, hint]) : body;
+    this.write(a.reason === 'start' ? formatKeySnapMessage(M.start, [body, hint]) : body);
   }
 }

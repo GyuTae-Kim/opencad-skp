@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Vcb, vcbStartKey, type VcbKind } from '../../src/app/vcb';
 import { DEFAULT_UNITS, parseAngle, parseLength, usesDecimalComma, type UnitsDisplay } from '../../src/app/units';
 
@@ -417,5 +417,65 @@ describe('측정값 칸 각도 읽기(parseAngle → 도)', () => {
 
   it('못 읽는 글은 null', () => {
     for (const t of ['', 'abc', '0:0', '1:2:3', '12 mm', '1/2', ':6', '--5']) expect(parseAngle(t), t).toBeNull();
+  });
+});
+
+describe('222차: 고치지 않고 Enter를 거듭해 같은 알림이 나오면 알림 칸만 한 프레임 비웠다 다시 넣는다(role=status는 같은 글로 바뀌면 다시 알리지 않음 — WCAG 4.1.3), 칸이 스스로 거두는 알림은 다시 넣지 않는다', () => {
+  /** 다음 프레임 목록(requestAnimationFrame — 시험이 넘긴다) */
+  const frames = new Map<number, FrameRequestCallback>();
+  let ids = 0;
+  const flush = (): void => {
+    const list = [...frames.values()];
+    frames.clear();
+    for (const cb of list) cb(0);
+  };
+  beforeEach(() => {
+    frames.clear();
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => (frames.set(++ids, cb), ids));
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => void frames.delete(id));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('못 읽은 값·넣지 못한 값·친 것이 없음을 거듭 Enter하면 비웠다 다음 프레임에(칸은 보이고 aria-invalid 그대로) — 종류 바꿈·Esc로 거두면 다시 넣지 않고, 글을 고친 뒤는 곧바로', () => {
+    const vcb = new Vcb({ onSubmit: vi.fn(() => '커서를 잴 방향으로 옮긴 뒤 치세요'), onClearGuides: vi.fn(), returnFocus: vi.fn() });
+    document.body.append(vcb.el);
+    vcb.show(true);
+    const msg = vcb.el.querySelector<HTMLElement>('.vcb-msg')!;
+    vcb.setLive('100 mm');
+    vcb.begin('x');
+    vcb.submit();
+    expect([msg.textContent, msg.hidden, frames.size]).toEqual(['길이를 읽지 못했습니다', false, 0]);
+    // 고치지 않고 Enter 거듭: 같은 알림 — 비우고 다음 프레임에 다시(고치기 전에는 글이 그대로라 읽히지 않았다)
+    vcb.submit();
+    expect([msg.textContent, msg.hidden, vcb.input.getAttribute('aria-invalid'), frames.size]).toEqual(['', false, 'true', 1]);
+    flush();
+    expect(msg.textContent).toBe('길이를 읽지 못했습니다');
+    // 읽었지만 넣지 못한 까닭(측정 도구가 돌려준 글)도 처음은 곧바로, 거듭은 같은 꼴
+    vcb.input.value = '250';
+    vcb.submit();
+    expect([msg.textContent, frames.size]).toEqual(['커서를 잴 방향으로 옮긴 뒤 치세요', 0]);
+    vcb.submit();
+    expect([msg.textContent, frames.size]).toEqual(['', 1]);
+    // 비운 사이 칸이 스스로 거두면(각도기로 바꿈) 그 프레임도 거둔다 — 각도 칸에 길이 알림을 다시 넣지 않는다
+    vcb.setKind('angle');
+    flush();
+    expect([msg.textContent, msg.hidden, frames.size]).toEqual(['', true, 0]);
+    // 거둔 뒤 같은 틀린 글은 곧바로(앞 글은 빈 글), 글을 고치면(input — 거둠) 다시 곧바로
+    vcb.begin('x');
+    vcb.submit();
+    expect([msg.textContent, frames.size]).toEqual(['각도를 읽지 못했습니다', 0]);
+    vcb.input.dispatchEvent(new Event('input'));
+    expect(msg.hidden).toBe(true);
+    vcb.submit();
+    expect([msg.textContent, msg.hidden, frames.size]).toEqual(['각도를 읽지 못했습니다', false, 0]);
+    // 친 것이 없음(「각도를 치세요」)도 거듭은 같은 꼴, 비운 사이 Esc(입력 그만두기)로 거두면 다시 넣지 않는다
+    vcb.input.value = '';
+    vcb.submit();
+    expect([msg.textContent, frames.size]).toEqual(['각도를 치세요', 0]);
+    vcb.submit();
+    expect([msg.textContent, frames.size]).toEqual(['', 1]);
+    vcb.cancel();
+    flush();
+    expect([msg.textContent, msg.hidden, vcb.input.hasAttribute('aria-invalid'), frames.size]).toEqual(['', true, false, 0]);
   });
 });
