@@ -183,6 +183,14 @@ export function formatLength(mm: number, d: UnitsDisplay = DEFAULT_UNITS, o: For
   return ATTACHED.has(unit) ? `${mark}${text}${symbol}` : `${mark}${text} ${symbol}`;
 }
 
+/**
+ * 240차: 가상 커서 자리 글 틀(네 언어 사전 열쇠) — 「추정 이름: X 좌표, Y 좌표, Z 좌표」. 측정 도구 자리 글(measure.ts keyAtText)과
+ * 고르기 도구 후보 글(keypick.ts keyCandidateText — 코어 candidate 틀 대신)이 함께 쓴다. 이름 뒤 쌍점은 언어마다 사전 값이 정하고
+ * (중국어 「：」 — 같은 알림 칸·상태 줄 묶음의 사전 다수 꼴, 232차), 좌표 꼴은 코어 점 글(keysnap point)과 같은 수 꼴이라 네 언어 값도 그 꼴로 끝난다.
+ * 자리 밖에 한글이 없는 틀이지만 자리 밖 글자가 좌표 꼴(': X '·', Y '·', Z ')이라 화면 번역층은 좌표 꼴 글만 잡는다 — 그 글은 번역층 밖 알림 칸에만 넣는다
+ */
+export const KEY_AT_TEXT = '{0}: X {1}, Y {2}, Z {3}';
+
 /** 단위를 숨긴 모형에서도 복사·도움말에는 단위를 붙인 글(decimal 숫자 글만 바꾼다) */
 export function withLengthUnit(text: string, d: UnitsDisplay = DEFAULT_UNITS): string {
   const value = text.trim();

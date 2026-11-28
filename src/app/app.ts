@@ -122,7 +122,7 @@ import type { Rgb, SkpEdgeColorMode, SkpShadowMeta, SkpStyleMeta } from '../meta
 import { WalkStick } from './joystick';
 import { Vcb, vcbStartKey, type VcbKind } from './vcb';
 import { FlashNote, barShown, noticeFree } from './flash';
-import { errorParts, mixNodes, statusTitle, uiName, uiReady, uiText } from './i18n';
+import { errorParts, frameNodes, mixNodes, statusTitle, uiName, uiReady, uiText } from './i18n';
 import { fileText, mix, plainText, type FileText, type Mixed } from './filetext';
 
 export const APP_TITLE = 'OpenCAD SketchUp 뷰어';
@@ -3807,9 +3807,10 @@ export class SkpViewerApp implements PanelHost {
     }
     // 측정 잠금 안내는 안내 글과 따로 둔다(번역이 안내 글 전체를 한 덩어리로 찾게)
     const lock = this.measuring ? this.measureLockHint() : null;
-    // "고른 것"과 설명은 따로 둔다: 한 글로 두면 다른 언어에서 "고른 것: {0}"이 설명 전체를 그대로 잡아 한국어로 남는다.
-    // 설명의 이름·태그 같은 파일 글은 그대로, 앱 글만 지금 언어로(52차 — 언어를 바꾸면 다시 그린다)
-    if (picked.length) e.stSel.replaceChildren(h('span', {}, '고른 것'), ': ', h('span', { 'data-i18n-skip': '' }, ...mixNodes(picked)));
+    // "고른 것"과 설명은 따로 옮긴다: 한 글로 두면 다른 언어에서 "고른 것: {0}"이 설명 전체를 그대로 잡아 한국어로 남는다.
+    // 설명의 이름·태그 같은 파일 글은 그대로, 앱 글만 지금 언어로(52차 — 언어를 바꾸면 다시 그린다).
+    // 240차: 틀 머리(쌍점까지)도 사전 틀로 옮긴다 — 「고른 것」·「: 」 마디로 이으면 쌍점이 어느 언어든 반각(중국어 상태 줄 묶음은 「：」)
+    if (picked.length) e.stSel.replaceChildren(h('span', { 'data-i18n-skip': '' }, ...frameNodes('고른 것: {0}', picked)));
     else if (lock) e.stSel.replaceChildren(h('span', {}, sel), ' · ', h('span', { class: 'st-lock' }, lock));
     else e.stSel.textContent = sel;
     // title은 보이는 글 그대로 — 말줄임이면 잠금 안내도 여기서 본다(181차, 고른 것은 측정 중이 아닐 때만이라 잠금 안내와 함께 오지 않음)

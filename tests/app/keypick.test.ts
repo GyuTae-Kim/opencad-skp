@@ -45,7 +45,7 @@ import { walkKeyOf } from 'opencad-viewer3d/pointer';
 import { PICK_LIST_MAX, pickListItems } from '../../src/app/picklist';
 import { SHORTCUTS } from '../../src/app/shortcuts';
 import { childrenOf, nodeName } from '../../src/app/tree';
-import { formatLength, mmPerSceneUnit } from '../../src/app/units';
+import { KEY_AT_TEXT, formatLength, mmPerSceneUnit } from '../../src/app/units';
 import { type FakeElement, installDom } from '../fakegl/fakedom';
 import { rowDoc } from './rowdoc';
 
@@ -82,8 +82,10 @@ describe('알림 틀(네 언어 사전 열쇠)', () => {
     for (const t of free) expect(HANGUL.test(t), t).toBe(false);
     for (const code of CODES) {
       for (const t of free) expect(catalogs[code][t], `${code}: ${t}`).toBeUndefined();
-      // 사전의 모든 틀은 자리 밖에 한글이 있다(아무 글이나 잡는 틀이 없다)
-      for (const k of Object.keys(catalogs[code]).filter((x) => /\{\d+\}/.test(x))) expect(k.replace(/\{\d+\}/g, ''), `${code}: ${k}`).toMatch(HANGUL);
+      // 사전의 모든 틀은 자리 밖에 한글이 있다(아무 글이나 잡는 틀이 없다). 240차: 가상 커서 자리 글 틀 KEY_AT_TEXT 하나만 뺀다 — 자리 밖 글자가 좌표 꼴
+      // (': X '·', Y '·', Z ')이라 좌표 꼴 글만 잡고 그 글은 번역층 밖 알림 칸에만 넣는다(말뭉치에서 잡는 글이 없음은 punct240 시험). 한글이 든 틀로는 한국어 글을 바꾸지 않고 만들 수 없다
+      for (const k of Object.keys(catalogs[code]).filter((x) => /\{\d+\}/.test(x) && x !== KEY_AT_TEXT)) expect(k.replace(/\{\d+\}/g, ''), `${code}: ${k}`).toMatch(HANGUL);
+      expect(catalogs[code][KEY_AT_TEXT], `${code}: KEY_AT_TEXT`).toMatch(/^\{0\}[:：] ?X \{1\}, Y \{2\}, Z \{3\}$/);
     }
   });
 

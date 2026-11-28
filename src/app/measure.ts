@@ -113,7 +113,7 @@ import { digestHex, loadGuides, saveGuides, type GuideStorage } from './guidesto
 import { measureLine } from './doc';
 import { isEditableTarget } from './keys';
 import { screenPoint, screenSegment, svgEl, type Overlay } from './overlay';
-import { formatAngle, formatLength, mmPerSceneUnit, type UnitsDisplay } from './units';
+import { KEY_AT_TEXT, formatAngle, formatLength, mmPerSceneUnit, type UnitsDisplay } from './units';
 import {
   AIM_SNAP_RADIUS_PX,
   AXIS_COLORS,
@@ -1089,7 +1089,7 @@ export function cycleTipLabel(name: string, index: number, count: number, tr: (t
 
 /**
  * 59차 키보드 점 찍기 알림 글(가상 커서 — keypick.ts가 알림 칸에 넣는다, 네 언어 사전 열쇠 — 자리 밖에 한글).
- * 자리 글은 "추정 · 길이·각도: X …, Y …, Z …"(툴팁 글 + 좌표 — 이음 ': '와 좌표 틀은 한글이 없어 사전에 넣지 않는다), 다 잰 결과는 측정 기록 줄(measureLine)
+ * 자리 글은 "추정 · 길이·각도: X …, Y …, Z …"(툴팁 글 + 좌표 — 240차부터 이음 쌍점까지 사전 틀 KEY_AT_TEXT, keyAtText), 다 잰 결과는 측정 기록 줄(measureLine)
  */
 export const KEY_MEASURE_TEXT = {
   noSnap: '스냅할 점이 없습니다',
@@ -1098,6 +1098,17 @@ export const KEY_MEASURE_TEXT = {
   center: '중심을 찍었습니다. {0}',
   base: '기준 방향을 찍었습니다. {0}',
 } as const;
+
+/**
+ * 240차: 가상 커서 자리 알림 글 — 옮긴 툴팁 글(tip)과 좌표(xyz — 모형 단위 글)를 사전 틀 KEY_AT_TEXT(units.ts)로 잇는다(tr = 지금 언어 — 한국어면 그대로).
+ * 이름 뒤 쌍점이 지금 언어 꼴이다(중국어 「：」 — 전에는 코드가 반각 「: 」로 이어 붙여 같은 알림 칸의 「已选择：{0}」과 갈렸다, 238차 보고 둠). 툴팁 글이 없으면 좌표만
+ */
+export function keyAtText(tip: string, xyz: readonly [string, string, string], tr: (text: string) => string = (t) => t): string {
+  const at = `X ${xyz[0]}, Y ${xyz[1]}, Z ${xyz[2]}`;
+  if (!tip) return at;
+  const values = [tr(tip), ...xyz];
+  return tr(KEY_AT_TEXT).replace(/\{(\d)\}/g, (s, i: string) => values[Number(i)] ?? s);
+}
 
 /** 219차: 가상 커서 방향 잠금 키(keyLock)가 푼 것의 알림 글 — 잠근 것은 잠금 안내(LOCK_HINTS·PLANE_HINTS — 띠·상태 줄과 같은 글) 그대로 */
 export const KEY_LOCK_TEXT = {
@@ -2692,8 +2703,7 @@ export class MeasureTool {
     if (this.modeValue === 'tape' && a) value = len(Math.hypot(...sub((this.guideOn && this.startEdge ? edgeFoot(a, this.startEdge, p) : null) ?? p, a)));
     else if (a && base && this.normal) value = formatAngle(planeAngle(sub(base, a), sub(p, a), this.normal), units);
     const tip = joinTip(cycled ? this.tipLabel(snap) : snapTipLabel(snap), value);
-    const at = `X ${len(p[0])}, Y ${len(p[1])}, Z ${len(p[2])}`;
-    return tip ? `${tr(tip)}: ${at}` : at;
+    return keyAtText(tip, [len(p[0]), len(p[1]), len(p[2])], tr);
   }
 
   /**
