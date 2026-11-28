@@ -380,7 +380,8 @@ describe('language URLs and UI presentation', () => {
     expect(codes.map((code) => translate('단면', code))).toEqual(['Section', 'Schnitt', '断面', '剖面']);
     expect(codes.map((code) => translate('(원점)', code))).toEqual(['(origin)', '(Ursprung)', '(原点)', '（原点）']);
     expect(codes.map((code) => translate('숨긴 형상 보기', code))).toEqual(['Show hidden geometry', 'Ausgeblendete Geometrie anzeigen', '非表示のジオメトリを表示', '显示隐藏的几何体']);
-    expect(codes.map((code) => translate('3D에서 누를 때 고르는 단계', code))).toEqual(['Level selected by a click in 3D', 'Ebene, die ein Klick in 3D auswählt', '3Dでクリックしたときに選ぶ階層', '在 3D 中点击时选择的层级']);
+    // 218차: 옛 열쇠 「3D에서 누를 때 고르는 단계」는 쓰는 곳이 없어 지웠다(33fb552부터 패널 고르기 줄 이름은 이 열쇠 — i18n-collide174 REMOVED)
+    expect(codes.map((code) => translate('3D에서 누를 때 고르는 것', code))).toEqual(['What a press in 3D selects', 'Was ein Drücken in 3D auswählt', '3Dで押したときに選択するもの', '在 3D 中按下时选择的对象']);
     expect(translate('1.25초', 'zh-CN')).toBe('1.25 秒');
     expect(translate('허용', 'zh-CN')).toBe('允许');
     expect(translate('누르기: 고르기(펼친 단계) · Alt+누르기: 가장 안쪽 · 두 번 누르기: 한 단계 들어가기', 'zh-CN')).toBe('单击：选择（展开的层级）· Alt+单击：最内层 · 双击：进入下一级');
@@ -699,8 +700,8 @@ describe('213차: 기기를 가리지 않는 「누르다」 원문의 번역은
     '누르기: 고르기(펼친 단계) · Alt+누르기: 가장 안쪽 · 두 번 누르기: 한 단계 들어가기',
     '누른 곳을 품은 가장 안쪽 그룹·컴포넌트를 바로 고릅니다(Alt+누르기도 같음)',
   ];
-  /** 화면에 안 쓰이는 옛 열쇠(지우기는 정적 소개·check:i18n 대조와 함께 볼 일) */
-  const UNUSED = [
+  /** 화면에 안 쓰이는 옛 열쇠 — 218차에 정적 소개·check:i18n 대조와 함께 보고 네 사전에서 지웠다(i18n-collide174 REMOVED — 다시 쓰이면 그 시험이 잡는다) */
+  const GONE = [
     '{0}{1} — 누르면 강조, 두 번 누르면 확대{2}', '각도기: 잴 방향의 점을 누르세요 · Esc 취소', '누르면 단면을 끕니다', '누르면 이 단면으로 모형을 자릅니다',
     '줄자: 끝점을 누르세요 · Esc 취소', '3D에서 누를 때 고르는 단계',
   ];
@@ -715,12 +716,13 @@ describe('213차: 기기를 가리지 않는 「누르다」 원문의 번역은
     '누르면 그 장면으로 바꿉니다(카메라·숨긴 태그·숨긴 개체·단면·스타일·그림자·그리기 축 중 장면이 기억하는 것). PageUp·PageDown으로도 넘깁니다.',
     '패널 가장자리를 끌면 폭(좁은 화면은 높이)이 바뀝니다. 두 번 누르면 처음 크기로',
   ];
-  const keep = [...TOUCH_ONLY, ...ONE_DEVICE, ...UNUSED];
+  const keep = [...TOUCH_ONLY, ...ONE_DEVICE];
   const hasDevice = (k: string): boolean => LANGS.some((l) => DEVICE[l].test(catalogs[l][k] ?? ''));
 
   it('「누르다」 원문 열쇠 가운데 기기 낱말이 남은 것은 둔 자리·보고 둔 것뿐이고, 나머지는 네 언어 모두 기기를 가리지 않는 값·하나뿐(거꾸로 찾기 제 원문)', () => {
     const keys = Object.keys(catalogs.en).filter((k) => PRESS.test(k));
     for (const k of keep) expect(keys, k).toContain(k);
+    for (const k of GONE) expect(keys, k).not.toContain(k);
     // 목록 밖 열쇠가 기기 낱말을 들고 오면(새 열쇠·되돌린 값) 여기서 걸린다
     expect(keys.filter(hasDevice).sort()).toEqual([...keep].sort());
     const all = LANGS.flatMap((l) => Object.values(catalogs[l]));
@@ -733,7 +735,7 @@ describe('213차: 기기를 가리지 않는 「누르다」 원문의 번역은
       }
   });
 
-  it('쓰는 곳: 측정 안내는 손가락 기기 갈래만 손가락 낱말이고 마우스·키보드 갈래는 네 언어 모두 기기를 가리지 않는다, 둔 옛 열쇠는 화면에 안 쓰인다', () => {
+  it('쓰는 곳: 측정 안내는 손가락 기기 갈래만 손가락 낱말이고 마우스·키보드 갈래는 네 언어 모두 기기를 가리지 않는다, 지운 옛 열쇠는 화면에 안 쓰인다', () => {
     const touch = new Set<string>();
     const fine = new Set<string>();
     for (const mode of ['tape', 'protractor'] as const)
@@ -746,7 +748,7 @@ describe('213차: 기기를 가리지 않는 「누르다」 원문의 번역은
     const src = ['src/app/app.ts', 'src/app/panel.ts', 'src/app/measure.ts', 'src/app/infotab.ts', 'src/app/shortcuts.ts', 'src/scene.ts', 'node_modules/opencad-viewer3d/src/viewer.ts']
       .map((f) => readFileSync(resolve(__dirname, '..', f), 'utf8'))
       .join('\n');
-    for (const k of UNUSED) expect(src.includes(`'${k}'`), k).toBe(false);
+    for (const k of GONE) expect(src.includes(`'${k}'`), k).toBe(false);
     // 쓰이는 자리 둘: 뷰 큐브 풀이는 코어가 넣고(번역층이 옮김), 구성 나무 줄 title은 통째 열쇠 둘(틀 열쇠 {0}{1}…{2}는 안 씀)
     expect(src).toContain(`cube.title = '뷰 큐브: 면·모서리·구석을 누르면 그 방향으로 봅니다';`);
     expect(src).toContain(`uiText(hasKids ? '누르면 강조, 두 번 누르면 확대, › 펼치기' : '누르면 강조, 두 번 누르면 확대')`);
