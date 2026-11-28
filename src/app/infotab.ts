@@ -602,8 +602,11 @@ function countKind(t: TreeView, kind: number): number {
 
 /** 받아 둔 속성 사전 칸 조각(attrview.ts — 47차) */
 let attrView: typeof import('./attrview') | null = null;
-/** 228차: 속성 사전 칸 조각을 받지 못했는지(거듭 그려도 다시 받지 않고 칸 자리에 알림 글 — 다시 시도가 풀고 다시 받는다) */
-let attrFail = false;
+/**
+ * 228차: 속성 사전 칸 조각을 받지 못했는지(거듭 그려도 다시 받지 않고 칸 자리에 알림 글 — 다시 시도가 풀고 다시 받는다).
+ * 229차: 패널 tabsFail과 같은 셈 — 0 받지 못한 적 없음·1 받지 못함(다시 시도)·2 다시 시도 뒤 또 받지 못함(새로 고침)·-1 다시 시도로 받는 중
+ */
+let attrFail = 0;
 /**
  * 228차: 속성 사전 칸 조각 받기(한 번만 — 선택 탭은 한 번 그릴 때 몸통을 두 번 그려(render·refreshSelection) 받는 동안 거듭 부르면 같은 약속, core.ts onceImport 꼴 —
  * 그것을 가져오면 첫 화면 조각의 내보내기가 하나 는다). 받지 못하면 까닭은 콘솔에 한 번·실패 깃발, 약속은 비워 다시 시도가 다시 받는다
@@ -614,7 +617,7 @@ const loadAttrView = (): Promise<typeof import('./attrview')> =>
     (m) => (attrView = m),
     (err: unknown) => {
       console.error(err);
-      attrFail = true;
+      attrFail = attrFail < 0 ? 2 : 1;
       attrLoad = null;
       throw err;
     },
@@ -660,9 +663,10 @@ export function renderEntity(p: TabPanel, d: SkpDoc): void {
     p.body.append(slot);
     const put = (m: typeof import('./attrview')): void => slot.replaceWith(m.attrSection(d, e));
     // 228차: 받지 못하면 칸 자리에 알림 글과 다시 시도(전에는 말없이 칸을 빼 사전이 있는 것을 몰랐다 — WCAG 3.3.1). 까닭 글은 콘솔에만
-    const fail = (): void => slot.replaceWith(...loadFail(p.body, () => ((attrFail = false), p.rerender()), '속성 사전'));
+    // 229차: 다시 시도 뒤 또 받지 못했으면 칸 버튼이 새로 고침
+    const fail = (): void => slot.replaceWith(...loadFail(p.body, attrFail > 1 ? null : () => ((attrFail = -1), p.rerender()), '속성 사전'));
     if (attrView) put(attrView);
-    else if (attrFail) fail();
+    else if (attrFail > 0) fail();
     else void loadAttrView().then(put, fail);
   }
 }

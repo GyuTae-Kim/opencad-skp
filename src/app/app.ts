@@ -108,7 +108,7 @@ import {
   storeLayout,
   type StoredLayout,
 } from './layout';
-import { Panel, loadFailText, retryButton, type PanelHost } from './panel';
+import { Panel, loadFailText, reloadButton, retryButton, type PanelHost } from './panel';
 import { RecentStore, canKeepRecent, nameOfRecentId, recentTimeText, type RecentEntry } from './recent';
 import { sceneHasGeometry } from './protocol';
 import { deviceHints, textureLimitsFor, type TextureLimits } from './texlimits';
@@ -435,6 +435,9 @@ export class SkpViewerApp implements PanelHost {
   /** 그래픽 문맥 잃음·되찾음 안내와 놓은 것 다시 주기(release.ts — 조각을 받으면 뷰어마다 하나), 그 안내로 띄운 알림 */
   private ctxWatch: ContextWatch | null = null;
   private ctxNotice: NoticeState | null = null;
+  /** 229차: 떠 있는 다시 시도 알림의 열쇠(다른 길로 받으면 loadDone이 닫는다 — 없으면 ''), 다시 시도를 누른 뒤 아직 받지 못한 열쇠(또 받지 못하면 새로 고침) */
+  private failKey = '';
+  private readonly retried = new Set<string>();
   /** 측정 도구를 받기 전에 켰을 때: 받는 동안 마지막으로 누른 도구를 받은 뒤에 켠다(다시 누르면 거둔다, 받지 못하면 알린다) */
   private readonly measureFirstUse = new FirstUse<MeasureMode>(
     () => this.ensureMeasureTool(),
@@ -480,7 +483,9 @@ export class SkpViewerApp implements PanelHost {
   mount(): void {
     // 언어를 바꾸면 뷰 큐브 글을 다시 그리고, 측정 툴팁(측정 도구가 옮겨 넣어 번역층이 건너뜀 — uiText)도 새 언어로 다시 그린다.
     // 열린 도구 막대 메뉴(같은 까닭으로 번역층이 건너뜀)는 그 단추로 다시 열어 새 언어로(32차 — 닫을 때까지 앞 언어였다)
-    this.root.addEventListener('languagechange', () => {
+    this.root.addEventListener('languagechange', (ev) => {
+      // 229차: 그 언어 사전을 받았다(다시 시도·언어 메뉴 — 자세히는 언어 코드): 다시 시도 셈을 지우고 떠 있는 그 사전의 실패 알림을 닫는다
+      this.loadDone((ev as CustomEvent<string>).detail);
       if (this.viewer) this.viewer.setViewCubeSize(this.viewer.viewCubeSize);
       this.keyPick?.relocalize();
       // 열린 겹친 것 목록은 앞 언어로 옮겨 넣은 글이라 닫는다(다시 열면 새 언어)
@@ -972,7 +977,7 @@ export class SkpViewerApp implements PanelHost {
       void this.refreshRecent();
       return;
     }
-    await this.openBlob(got.entry.name, got.data, seq, attempt);
+    await this.openBlob(got.entry.name, got.data, seq, attempt, () => this.openRecent(e));
     void this.refreshRecent();
   }
 
@@ -1089,7 +1094,7 @@ export class SkpViewerApp implements PanelHost {
       return;
     }
     if (seq !== this.openSeq) return;
-    await this.openBlob(name, file, seq, attempt);
+    await this.openBlob(name, file, seq, attempt, () => this.openUrl(url, name));
   }
 
   async openSample(): Promise<void> {
@@ -1103,6 +1108,8 @@ export class SkpViewerApp implements PanelHost {
     try {
       // 예제 만들기 도구는 누를 때만 받는다(첫 화면 묶음을 작게)
       sample = await import('./sample');
+      // 229차: 받았다(처음 화면 버튼·?sample·다시 시도) — 떠 있는 예제 받기 실패 알림을 닫는다
+      this.loadDone('예제 모형');
       // 53차: 예제는 앱이 만든 파일이라 안의 이름(태그·재질·장면 등)과 파일 이름도 화면 언어로 만든다(파일 글은 번역층이 옮기지 않으므로 — 52차).
       // 주소로 바로 열면(?sample) 화면 언어 사전을 받기 전일 수 있어 기다린다
       await uiReady();
@@ -1119,7 +1126,7 @@ export class SkpViewerApp implements PanelHost {
       return;
     }
     if (seq !== this.openSeq) return;
-    await this.openBlob(name, new Blob([bytes as BlobPart]), seq, attempt);
+    await this.openBlob(name, new Blob([bytes as BlobPart]), seq, attempt, () => this.openSample());
   }
 
   /** 여는 중인 파일을 그만 연다(해석 중이면 워커를 끝낸다). 열려 있던 문서는 그대로 둔다 */
@@ -1132,8 +1139,11 @@ export class SkpViewerApp implements PanelHost {
 
   private parsingSeq = 0;
 
-  /** 파일 해석(Blob·File은 복사 없이 워커로 넘어간다). seq가 더 새 요청에 밀리면 결과를 버린다. 열어 보였으면 true */
-  private async openBlob(name: string, file: Blob, seq: number, attempt: OpenAttempt): Promise<boolean> {
+  /**
+   * 파일 해석(Blob·File은 복사 없이 워커로 넘어간다). seq가 더 새 요청에 밀리면 결과를 버린다. 열어 보였으면 true.
+   * again(229차): 그 열기를 처음부터 다시 하는 함수(예제·최근 문서·주소 — 3D 보기 조각을 받지 못한 알림의 다시 시도). 고르거나 끌어 놓은 파일은 바이트를 쥐지 않아 없다
+   */
+  private async openBlob(name: string, file: Blob, seq: number, attempt: OpenAttempt, again?: () => unknown): Promise<boolean> {
     const size = file.size;
     this.setBusy(name, 0.01, '해석 준비 중');
     // 앞 파일을 아직 해석 중이면 멈추고(동기 해석이라 기다리면 늦어진다) 새 파일을 읽는다
@@ -1178,7 +1188,7 @@ export class SkpViewerApp implements PanelHost {
       await new Promise<void>((r) => requestAnimationFrame(() => setTimeout(r, 0)));
       if (seq !== this.openSeq) return false;
       // 코어를 아직 못 받았으면 기다린다(받지 못하면 '3D 보기를 열 수 없습니다' 알림, 열려 있던 문서는 그대로)
-      if (!(await this.ensureViewer()) || seq !== this.openSeq) return false;
+      if (!(await this.ensureViewer(again)) || seq !== this.openSeq) return false;
       // 큰 모형은 푼 무늬 그림을 올린 뒤 놓는다(색 바꾼 무늬는 원래 바이트를 쥐었다가 문맥을 되찾으면 다시 손질한다 — release.ts, 29차부터 파일을 다시 읽지 않아 주소로 받은 파일도)
       const rel = isBigScene(res) ? await loadRelease().catch(() => null) : null;
       if (seq !== this.openSeq) return false;
@@ -1346,8 +1356,11 @@ export class SkpViewerApp implements PanelHost {
     return done;
   }
 
-  /** 뷰어를 한 번 만든다(코어 입구를 처음에 받는다). 받지 못했거나 WebGL2를 쓸 수 없으면 알리고 false */
-  private async ensureViewer(): Promise<boolean> {
+  /**
+   * 뷰어를 한 번 만든다(코어 입구를 처음에 받는다). 받지 못했거나 WebGL2를 쓸 수 없으면 알리고 false.
+   * 229차: 조각을 받지 못했고 다시 열 길(again — openBlob)이 있으면 그 알림에 다시 시도(누르면 그 열기를 처음부터). 만들면 떠 있는 3D 보기 실패 알림을 닫는다(다른 길로 받음)
+   */
+  private async ensureViewer(again?: () => unknown): Promise<boolean> {
     if (this.viewer) return true;
     try {
       const { Viewer3d, dragStartPx } = await loadViewerCore();
@@ -1410,9 +1423,13 @@ export class SkpViewerApp implements PanelHost {
         (m) => this.watchContext(m, v),
         () => undefined,
       );
+      this.loadDone('viewer');
       return true;
     } catch (e) {
-      this.showNotice('error', '3D 보기를 열 수 없습니다', isChunkLoadError(e) ? chunkFailText('viewer', navigator.onLine !== false) : errorParts(e));
+      const chunk = isChunkLoadError(e);
+      this.showNotice('error', '3D 보기를 열 수 없습니다', chunk ? chunkFailText('viewer', navigator.onLine !== false) : errorParts(e));
+      // 다시 해도 같은 오류(WebGL2 없음 등)와 다시 열 길이 없는 파일(고르기·끌어 놓기 — 글이 「파일을 다시 여세요」)은 글만
+      if (chunk && again) this.retryNote('viewer', again);
       return false;
     }
   }
@@ -1449,6 +1466,8 @@ export class SkpViewerApp implements PanelHost {
   private async ensureMeasureTool(): Promise<MeasureTool | null> {
     if (this.measureTool) return this.measureTool;
     const { MeasureTool } = await loadMeasure();
+    // 229차: 받았다(버튼·다시 시도·뷰어를 만들 때) — 떠 있는 측정 도구 실패 알림을 닫는다
+    this.loadDone('measure');
     const v = this.viewer;
     const o = this.overlay;
     if (this.measureTool || !v || !o) return this.measureTool;
@@ -2889,10 +2908,15 @@ export class SkpViewerApp implements PanelHost {
     back();
   }
 
-  /** 처음 켤 때 받던 측정 도구 조각이 왔다(또는 받지 못했다): 그때까지 바란 도구를 켜고, 받지 못했으면 바랐을 때만 알린다 */
+  /**
+   * 처음 켤 때 받던 측정 도구 조각이 왔다(또는 받지 못했다): 그때까지 바란 도구를 켜고, 받지 못했으면 바랐을 때만 알린다.
+   * 229차: 조각을 받지 못했으면 그 알림에 다시 시도(그 버튼 동작을 다시 — 받은 뒤 그 도구를 켠다)
+   */
   private measureArrived(want: MeasureMode | null, error: unknown): void {
     if (error) {
-      if (want) this.showNotice('error', '측정 도구를 열 수 없습니다', isChunkLoadError(error) ? chunkFailText('measure', navigator.onLine !== false) : errorParts(error));
+      const chunk = isChunkLoadError(error);
+      if (want) this.showNotice('error', '측정 도구를 열 수 없습니다', chunk ? chunkFailText('measure', navigator.onLine !== false) : errorParts(error));
+      if (want && chunk) this.retryNote('measure', () => this.setMeasureMode(want));
     } else if (want && this.measureTool && this.doc) {
       this.setMeasureMode(want);
       return;
@@ -3118,6 +3142,8 @@ export class SkpViewerApp implements PanelHost {
       void import('./exporter')
         .then(
           (m) => {
+            // 229차: 받았다(메뉴·다시 시도) — 떠 있는 그림 저장 받기 실패 알림을 닫는다
+            this.loadDone('그림 저장');
             this.exportDialog ??= new m.ExportDialog({ docName: () => this.doc?.name ?? 'model', context: () => this.exportContext(), notify, track: () => trackExport('png') }, stage);
             if (this.viewer && this.doc) this.savePng();
           },
@@ -3284,6 +3310,8 @@ export class SkpViewerApp implements PanelHost {
     void import('./shortcuts')
       .then(
         (m) => {
+          // 229차: 받았다(메뉴·?·다시 시도) — 떠 있는 바로 가기 받기 실패 알림을 닫는다
+          this.loadDone('키보드 바로 가기');
           if (!this.shortcutsClose) this.shortcutsClose = m.openShortcutsDialog(document.body, () => (this.shortcutsClose = null));
         },
         // 228차: 받지 못하면 알림과 다시 시도(전에는 콘솔에만 남아 창이 말없이 열리지 않았다)
@@ -3615,6 +3643,8 @@ export class SkpViewerApp implements PanelHost {
     const n = this.els.notice;
     if (light && !noticeFree(n, this.notice?.kind, !!this.notice?.light)) return false;
     this.notice = { kind, title: typeof title === 'string' ? [title] : title, text: typeof text === 'string' ? [text] : text, light };
+    // 229차: 새 알림은 다시 시도 알림이 아니다(retryNote가 띄운 뒤 다시 적는다 — loadDone이 남의 알림을 닫지 않게)
+    this.failKey = '';
     n.className = `notice ${kind}`;
     n.innerHTML = '';
     const close = h('button', { class: 'icon-btn', title: '알림 닫기', 'aria-label': '알림 닫기', html: icon('close') });
@@ -3629,6 +3659,9 @@ export class SkpViewerApp implements PanelHost {
       close,
     );
     this.noticeText();
+    // 229차(WCAG 4.1.3): 떠 있는 알림을 바꿔 띄우면 상자(role=alert)를 떼고 그 자리에 새로 붙인다(NC 211차 같은 글 하나 규칙 — 알림은 하나).
+    // 같은 버튼을 거듭 눌러 같은 글이면 안 마디만 바꿔서는 화면 읽기 프로그램이 다시 읽지 않을 수 있다(다른 글은 붙여도 같게 읽힌다). 숨었다 뜨는 알림은 뜰 때 읽힌다
+    if (!n.hidden) n.before(n);
     n.hidden = false;
     return true;
   }
@@ -3653,11 +3686,27 @@ export class SkpViewerApp implements PanelHost {
    * 알림 「{0}을(를) 불러오지 못했습니다.」(무거운 글)와 ✕ 앞 다시 시도 — 까닭 글(브라우저의 영어 오류 글)은 콘솔에만.
    * 다시 시도는 ✕처럼 닫고(초점도 ✕와 같은 곳) 다시 받는다 — 또 받지 못하면 숨은 상자가 다시 떠 새로 알린다
    */
-  loadFailed(name: string, retry: () => unknown, error: unknown): void {
+  loadFailed(name: string, retry: () => unknown, error: unknown, key = name): void {
     console.error(error);
     this.showNotice('error', loadFailText(name), '');
+    this.retryNote(key, retry);
+  }
+
+  /**
+   * 229차: 막 띄운 받기 실패 알림의 ✕ 앞에 다시 시도(누르면 ✕처럼 닫고 retry — 228차). 다시 시도를 누른 열쇠가 또 받지 못했으면 버튼만 새로 고침(글은 그대로 —
+   * 새 판과 옛 캐시가 엇갈리면 브라우저가 같은 문서에서 실패한 모듈 받기를 기억해 다시 시도도 받지 못할 수 있다, 새로 고침은 다시 시도를 부르지 않는다).
+   * 셈은 사용자가 누른 다시 시도뿐이고 받으면 지운다(loadDone). 열쇠를 쥐어 다른 길로 받으면 loadDone이 그 알림을 닫는다(다른 알림을 띄우면 showNotice가 비움)
+   */
+  private retryNote(key: string, retry: () => unknown): void {
+    this.failKey = key;
     const x = this.els.notice.lastElementChild as HTMLElement;
-    x.before(retryButton(() => (x.click(), retry())));
+    x.before(this.retried.has(key) ? reloadButton() : retryButton(() => (this.retried.add(key), x.click(), retry())));
+  }
+
+  /** 229차: 그 열쇠의 조각·사전을 받았다(다시 시도·다른 길 — 메뉴·다시 열기·버튼): 다시 시도 셈을 지우고, 떠 있는 그 실패 알림이면 ✕처럼 닫는다(초점도 ✕와 같은 곳) */
+  private loadDone(key: string): void {
+    this.retried.delete(key);
+    if (this.failKey === key && this.notice) (this.els.notice.lastElementChild as HTMLElement).click();
   }
 
   private refreshChrome(): void {

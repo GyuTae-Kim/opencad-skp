@@ -86,11 +86,12 @@ const SKIP = '[data-static-languages], [translate="no"], [data-i18n-skip], scrip
 /**
  * onFail(228차 — main.ts가 앱 loadFailed를 넘긴다): 사전을 받지 못함(오프라인에서 새 판 등 — WCAG 3.3.1·4.1.3). 앱이 바꾸기 전 화면 언어로 「{0}을(를) 불러오지 못했습니다.」
  * ({0} 언어 원어 이름 — 언어 메뉴 글과 같게)와 다시 시도(그 언어를 다시 받는다)를 알린다 — 까닭 글(브라우저 오류)은 콘솔에만.
- * 첫 사전이면 한국어로 세운다(언어 메뉴는 둔다 — NC 212차 꼴, 전에는 번역층이 서지 않아 메뉴도 없었다)
+ * 첫 사전이면 한국어로 세운다(언어 메뉴는 둔다 — NC 212차 꼴, 전에는 번역층이 서지 않아 메뉴도 없었다).
+ * 229차: 넷째 인자는 언어 코드(다시 시도 셈·실패 알림의 열쇠 — 다른 길(언어 메뉴)로 받으면 languagechange의 코드로 앱이 그 알림을 닫는다)
  */
-export async function installLocalization(root: HTMLElement, onFail?: (name: string, retry: () => unknown, error: unknown) => void): Promise<() => void> {
+export async function installLocalization(root: HTMLElement, onFail?: (name: string, retry: () => unknown, error: unknown, key: string) => void): Promise<() => void> {
   let language = currentLanguage(location.href);
-  const fail = (code: string, error: unknown): void => onFail?.(languages.find(l => l.code === code)!.label, () => changeLanguage(code), error);
+  const fail = (code: string, error: unknown): void => onFail?.(languages.find(l => l.code === code)!.label, () => changeLanguage(code), error, code);
   await (installed = loadLanguage(language).then(() => { active = language; }, (e: unknown) => { fail(language, e); language = 'ko'; }));
   const originalViews = Object.entries(VIEW_LABELS);
   function canvasLabels(): void {
