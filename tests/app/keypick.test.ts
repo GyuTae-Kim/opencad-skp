@@ -1158,3 +1158,90 @@ describe('223차 가상 커서 알림 칸: 3D 보기 끝에 닿아 옮겨지지 
     kp.setMode(null);
   });
 });
+
+describe('224차 가상 커서 알림 칸: 도구를 바꿔 커서를 알림 없이 끈 뒤(setKeyboardSnap(false)) 같은 자리로 다시 켜 같은 켜기 글이 나와도 한 프레임 비웠다 다시 넣고(사용자 거듭 — 코어 start는 키로만 켠다), 칸을 비웠거나 끈 글이 든 뒤의 켜기는 곧바로', () => {
+  /** 다음 프레임 목록(requestAnimationFrame — 시험이 넘긴다, 222차 꼴) */
+  const frames = new Map<number, FrameRequestCallback>();
+  let ids = 0;
+  const flush = (): void => {
+    const list = [...frames.values()];
+    frames.clear();
+    for (const cb of list) cb(0);
+  };
+  beforeEach(() => {
+    frames.clear();
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => (frames.set(++ids, cb), ids));
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => void frames.delete(id));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+  /** 측정 도구 꼴(실제 추정·글은 tests/app/measure.test.ts가 본다) — 자리 글은 커서 자리라 줄자·각도기가 같은 자리면 같은 글 */
+  const measureHost = (): KeyMeasureHost => ({
+    active: true,
+    handleKey: () => false,
+    keyHover: (x, y) => `끝점: ${x},${y}`,
+    keyEnd: () => undefined,
+    keyPlace: () => KEY_MEASURE_TEXT.noPoint,
+    keyCycle: () => null,
+  });
+
+  it('고르기 도구: 줄자로 바꿔 켜진 커서를 알림 없이 끈 뒤 돌아와 화살표로 다시 켜면(코어는 늘 가운데에서 켠다 — 같은 켜기 글) 비웠다 다음 프레임에, Esc로 끈 뒤(끈 글)의 켜기는 곧바로', () => {
+    const { v, cv, d, host: el } = setup();
+    const kp = new KeyPick(v, el as unknown as HTMLElement, () => d, { measureTool: measureHost() });
+    kp.follow(null);
+    key(cv, 'ArrowLeft');
+    const on = kp.text;
+    expect(on).toMatch(/^가상 커서를 켰습니다\. 그룹 Row의 면 1\/3: /);
+    // 줄자로 바꾸면 켜진 커서는 알리지 않고 끈다 — 알림 칸에는 켜기 글이 남는다(고르기 도구로 돌아와도 그대로)
+    kp.follow('tape');
+    expect(v.keyboardCursor).toBeNull();
+    kp.follow(null);
+    expect(kp.enabled).toBe(true);
+    expect(kp.text).toBe(on);
+    // 같은 자리로 다시 켬: 같은 글 — 비웠다 다음 프레임에(고치기 전에는 글이 그대로라 다시 읽히지 않았다)
+    key(cv, 'ArrowLeft');
+    expect([v.keyboardCursor!.x, v.keyboardCursor!.y]).toEqual([400, 300]);
+    expect(kp.text).toBe('');
+    flush();
+    expect(kp.text).toBe(on);
+    // Esc로 끄면(코어가 알림 — 끈 글) 다음 켜기는 앞 글과 달라 곧바로
+    key(cv, 'Escape');
+    expect(kp.text).toBe('가상 커서를 껐습니다');
+    key(cv, 'ArrowLeft');
+    expect(kp.text).toBe(on);
+    kp.setMode(null);
+  });
+
+  it('줄자·각도기: 각도기로 바꿔 알림 없이 끈 뒤 Enter로 켜 측정 도구가 같은 켜기 글을 돌려주면 비웠다 다음 프레임에(한 프레임 안 거듭은 한 번) — 끔(setMode(null) — 칸을 비움)을 거친 켜기는 곧바로', () => {
+    const { v, cv, d, host: el } = setup();
+    const kp = new KeyPick(v, el as unknown as HTMLElement, () => d, { measureTool: measureHost() });
+    kp.follow('tape');
+    key(cv, 'Enter');
+    const on = kp.text;
+    expect(on).toBe('가상 커서를 켰습니다. 끝점: 400,300. 옮기기 ←→↑↓ · 찍기 Enter · 방향 잠금 Shift·X·Y·Z·L · 끄기 Esc');
+    // 각도기로 바꾸면 알리지 않고 끈다(칸에 켜기 글이 남는다) — 각도기의 켜기 글도 같은 자리면 같은 글(키 안내는 두 도구 같음)
+    kp.follow('protractor');
+    expect(v.keyboardCursor).toBeNull();
+    expect(kp.text).toBe(on);
+    key(cv, 'Enter');
+    expect(v.keyboardCursor).not.toBeNull();
+    expect(kp.text).toBe('');
+    flush();
+    expect(kp.text).toBe(on);
+    // 줄자로 되돌아와 켜도 같은 꼴, 한 프레임 안에 바꿔 거듭 켜면 한 번(비운 채 다음 프레임에 한 번 넣는다)
+    kp.follow('tape');
+    key(cv, 'Enter');
+    expect(kp.text).toBe('');
+    kp.follow('protractor');
+    key(cv, 'Enter');
+    expect(kp.text).toBe('');
+    flush();
+    expect(kp.text).toBe(on);
+    // 끔을 거치면 칸을 비우므로(apply) 다음 켜기는 곧바로
+    kp.setMode(null);
+    expect(kp.text).toBe('');
+    kp.follow('tape');
+    key(cv, 'Enter');
+    expect(kp.text).toBe(on);
+    kp.setMode(null);
+  });
+});
