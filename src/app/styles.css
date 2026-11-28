@@ -1630,6 +1630,18 @@ button.scene-card.sel {
   transform: rotate(90deg);
 }
 
+/* 나무 줄 펼치기(18px — 고르는 줄 안 작은 대상)의 누르는 자리를 마우스 화면에서도 24×24로: 투명 ::after를 줄 안쪽 3px·옆 보이기 체크와 사이 6px 틈의 반까지
+ * (WCAG 2.5.8, 235차 — 보이는 꼴·자리 그대로). 손가락 화면은 아래 43차 규칙이 위아래를 더 넓힌다 */
+.trow .twisty {
+  position: relative;
+}
+
+.trow .twisty::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+}
+
 /* 숨긴 폴더·그룹 아래 줄, 그릴 것이 없는 줄: 반투명(글 1.9~3.1:1) 대신 흐린 글 색(47차 — 칩·확인 칸은 흐리지 않음) */
 .prow.dimmed,
 .prow.empty {
