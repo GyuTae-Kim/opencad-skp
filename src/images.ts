@@ -151,7 +151,7 @@ function mfcImages(bytes: Uint8Array, refs: readonly MfcImageRef[], out: SkpImag
     } else if (ref.kind === 'component') out.components.push(img);
     else out.scenes.push(img);
   }
-  if (out.skipped) out.warnings.push(`그림 ${out.skipped}개는 너무 크거나 많거나 모르는 꼴이라 건너뛰었습니다`);
+  if (out.skipped) out.warnings.push(`그림 ${out.skipped.toLocaleString('en-US')}개는 너무 크거나 많거나 모르는 꼴이라 건너뛰었습니다`);
   return out;
 }
 
@@ -402,7 +402,7 @@ export function* zipImageReads(
   if (plan) plan(planWants(first, 0, 0, !!out.model, limits));
   const at = yield* readWants(first, 0, 0, limits, out);
   if (deferPbr) deferPbr({ want: want.filter((w) => w.kind === 'pbr'), count: at.count, total: at.total, limits });
-  if (out.skipped) out.warnings.push(`그림 ${out.skipped}개는 너무 크거나 많거나 모르는 꼴이라 건너뛰었습니다`);
+  if (out.skipped) out.warnings.push(`그림 ${out.skipped.toLocaleString('en-US')}개는 너무 크거나 많거나 모르는 꼴이라 건너뛰었습니다`);
   return out;
 }
 

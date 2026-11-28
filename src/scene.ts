@@ -2908,7 +2908,7 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
   cache.clear();
   localBoxes.clear();
   if (billboardsSkipped)
-    warnings.push(`"항상 카메라 보기" 컴포넌트가 너무 많아(${MAX_BILLBOARDS}개 한도) ${billboardsSkipped}개는 저장된 방향 그대로 둡니다`);
+    warnings.push(`"항상 카메라 보기" 컴포넌트가 너무 많아(${MAX_BILLBOARDS}개 한도) ${billboardsSkipped.toLocaleString('en-US')}개는 저장된 방향 그대로 둡니다`);
   report(placementsTotal);
 
   // 통계: 태그는 모형 차례로 미리 넣는다(그릴 것이 없는 태그도 목록에 보이게)
@@ -3324,9 +3324,9 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     cache.delete(e);
     freePrepared(p);
   }
-  if (counter.failed) warnings.push(`삼각형으로 나누지 못한 면 ${counter.failed}개를 건너뛰었습니다(면적이 0인 면 등)`);
-  if (missingDefs) warnings.push(`정의를 찾지 못한 인스턴스 ${missingDefs}개를 건너뛰었습니다`);
-  if (cycles) warnings.push(`자기 자신을 품거나 너무 깊은 인스턴스 ${cycles}개를 건너뛰었습니다`);
+  if (counter.failed) warnings.push(`삼각형으로 나누지 못한 면 ${counter.failed.toLocaleString('en-US')}개를 건너뛰었습니다(면적이 0인 면 등)`);
+  if (missingDefs) warnings.push(`정의를 찾지 못한 인스턴스 ${missingDefs.toLocaleString('en-US')}개를 건너뛰었습니다`);
+  if (cycles) warnings.push(`자기 자신을 품거나 너무 깊은 인스턴스 ${cycles.toLocaleString('en-US')}개를 건너뛰었습니다`);
   if (truncated)
     warnings.push(`형상이 너무 커서(펼친 면 정점 ${MAX_OUTPUT_VERTICES.toLocaleString('en-US')}개 한도) 일부만 그렸습니다`);
   if (linesTruncated)
@@ -3337,8 +3337,8 @@ export function buildSceneParts(model: SkpModel, materials: Map<string, SkpMater
     );
   if (extrasTruncated) warnings.push('부드러운 모서리·숨긴 형상이 너무 많아 일부만 담았습니다');
   if (uvLimited) warnings.push(`무늬를 입힐 면이 너무 많아(정점 ${maxUv.toLocaleString('en-US')}개 한도) 일부 면은 무늬 없이 평균색으로 그렸습니다`);
-  if (prepTex?.singular) warnings.push(`무늬 위치 행렬을 뒤집을 수 없는 면 ${prepTex.singular}개는 기본 투영으로 칠했습니다`);
-  if (prepTex?.flat) warnings.push(`원근으로 일그러뜨린 무늬 중 ${prepTex.flat}개 면은 원근 없이 칠했습니다(투영이 면 위에서 뒤집힘)`);
+  if (prepTex?.singular) warnings.push(`무늬 위치 행렬을 뒤집을 수 없는 면 ${prepTex.singular.toLocaleString('en-US')}개는 기본 투영으로 칠했습니다`);
+  if (prepTex?.flat) warnings.push(`원근으로 일그러뜨린 무늬 중 ${prepTex.flat.toLocaleString('en-US')}개 면은 원근 없이 칠했습니다(투영이 면 위에서 뒤집힘)`);
 
   const parts: SceneParts = {
     meshes,

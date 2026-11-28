@@ -1722,7 +1722,7 @@ function assemble(
     model.pages = finishPages(dec, view.pages, final, animation);
     if (view.activePage !== undefined) model.activePage = view.activePage;
   }
-  model.warnings = [...st.warn].map(([m, k]) => (k > 1 ? `${m} (${k}개)` : m));
+  model.warnings = [...st.warn].map(([m, k]) => (k > 1 ? `${m} (${k.toLocaleString('en-US')}개)` : m));
   // 읽는 동안 쓴 면·모서리 객체를 표로 옮기고 놓는다(큰 모형에서 객체가 heap을 크게 잡는다).
   // 고쳐 읽기에서 면 평면과 맞지 않은 면(drop)은 장면 마무리(숨긴 개체 찾기)가 끝난 여기서 뺀다
   st.collections.forEach((c, i) => {
@@ -1805,7 +1805,7 @@ function finishPages(dec: Decoder, raws: MfcPage[], final: Int32Array, animation
     if (p.delay === undefined && animation?.sceneDelay !== undefined) p.delay = animation.sceneDelay;
     return p;
   });
-  if (unresolved) st.note(`장면이 숨긴 개체 ${unresolved}개를 찾지 못했습니다`);
+  if (unresolved) st.note(`장면이 숨긴 개체 ${unresolved.toLocaleString('en-US')}개를 찾지 못했습니다`);
   return pages;
 }
 

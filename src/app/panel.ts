@@ -404,7 +404,7 @@ export class Panel {
       if (sk.limit) notes.push(`단면은 한 번에 ${MAX_FILE_SECTIONS}개까지라 ${fmtCount(sk.limit)}개는 적용하지 않았습니다.`);
       this.body.append(
         section(
-          `단면 평면 ${d.sectionPlanes.length}개`,
+          `단면 평면 ${fmtCount(d.sectionPlanes.length)}개`,
           list,
           d.fileSections.length
             ? h(
@@ -488,7 +488,7 @@ export class Panel {
       for (const t of tags) if (t.folder === i) list.append(tagRow(t, depth + 1));
     });
     this.body.append(
-      section(`태그 ${tags.length}개`, tags.length ? h('div', { class: 'pbar' }, allOn, allOff) : null, tags.length ? list : hint('태그가 없습니다.')),
+      section(`태그 ${fmtCount(tags.length)}개`, tags.length ? h('div', { class: 'pbar' }, allOn, allOff) : null, tags.length ? list : hint('태그가 없습니다.')),
     );
 
     const mats = d.materials;
@@ -526,9 +526,9 @@ export class Panel {
     }
     this.body.append(
       section(
-        `재질 ${mats.length}개`,
+        `재질 ${fmtCount(mats.length)}개`,
         mats.length ? mlist : hint('재질이 없습니다.'),
-        mats.length > LIST_LIMIT ? hint(`처음 ${LIST_LIMIT}개만 보입니다.`) : null,
+        mats.length > LIST_LIMIT ? hint(`처음 ${fmtCount(LIST_LIMIT)}개만 보입니다.`) : null,
       ),
     );
   }

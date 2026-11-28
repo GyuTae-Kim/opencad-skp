@@ -1213,7 +1213,7 @@ function resolvePending(ctx: Ctx, all: SkpEntities[], definitions: Map<number, S
     if (pos) p.set(pos);
     else unresolved++;
   }
-  if (unresolved) note(ctx, `붙은 치수 점 ${unresolved}개의 대상을 찾지 못해 저장된 위치를 씁니다`);
+  if (unresolved) note(ctx, `붙은 치수 점 ${unresolved.toLocaleString('en-US')}개의 대상을 찾지 못해 저장된 위치를 씁니다`);
   for (const a of ctx.pendingArcs) {
     const f = edgeAt.get(a.edge);
     const k = f ? f.ents.edges.curve[f.edge]! : -1;
@@ -1529,7 +1529,7 @@ export class ModelParse {
     // 경고: 묶음을 한 버퍼 읽기의 차례로 합친다
     const all = new Map<string, number>();
     for (const p of PHASES) for (const [m, k] of this.phaseWarn.get(p) ?? []) all.set(m, (all.get(m) ?? 0) + k);
-    const warnings = [...all].map(([m, k]) => (k > 1 ? `${m} (${k}개)` : m));
+    const warnings = [...all].map(([m, k]) => (k > 1 ? `${m} (${k.toLocaleString('en-US')}개)` : m));
     const model: SkpModel = { materials, layers: layerSet.layers, definitions, root: rootEnts, counts: ctx.counts, warnings };
     if (layerSet.defaultLayer !== undefined) model.defaultLayer = layerSet.defaultLayer;
     if (layerSet.activeLayer !== undefined) model.activeLayer = layerSet.activeLayer;

@@ -313,7 +313,7 @@ export async function prepareSceneTextures(
     const png = pngs[k];
     if (png) res.swatches.set(s.folder, png);
   });
-  if (res.dropped) (scene.warnings ??= []).push(`무늬 그림 ${res.dropped}개는 풀거나 색을 바꾸지 못해 평균색으로 그렸습니다`);
+  if (res.dropped) (scene.warnings ??= []).push(`무늬 그림 ${res.dropped.toLocaleString('en-US')}개는 풀거나 색을 바꾸지 못해 평균색으로 그렸습니다`);
   return res;
 }
 

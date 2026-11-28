@@ -199,7 +199,7 @@ export class MfcStream {
       } else if (n === 0xffff) n = this.u32();
     }
     const size = wide ? 2 * n : n;
-    if (this.pos + size > this.end) throw new MfcError('truncated', `${n}자 문자열이 파일 끝을 넘습니다(파일이 잘렸습니다)`, at);
+    if (this.pos + size > this.end) throw new MfcError('truncated', `${n.toLocaleString('en-US')}자 문자열이 파일 끝을 넘습니다(파일이 잘렸습니다)`, at);
     const p = this.pos;
     this.pos += size;
     if (!size) return '';

@@ -146,12 +146,12 @@ export function infoSections(d: SkpDoc, applyPage: (index: number) => void): HTM
       card.addEventListener('click', () => applyPage(i));
       grid.append(card);
     });
-    out.push(section(`장면 ${d.pages.length}개`, hint('누르면 그 장면으로 바꿉니다(카메라·숨긴 태그·숨긴 개체·단면·스타일·그림자·그리기 축 중 장면이 기억하는 것). PageUp·PageDown으로도 넘깁니다.'), grid));
+    out.push(section(`장면 ${fmtCount(d.pages.length)}개`, hint('누르면 그 장면으로 바꿉니다(카메라·숨긴 태그·숨긴 개체·단면·스타일·그림자·그리기 축 중 장면이 기억하는 것). PageUp·PageDown으로도 넘깁니다.'), grid));
   } else if (scenes.length) {
     const grid = h('div', { class: 'scene-grid' });
     for (const sc of scenes.slice(0, 100))
       grid.append(h('figure', { class: 'scene-card', title: sc.name, translate: 'no' }, h('img', { src: sc.url, alt: '', loading: 'lazy', decoding: 'async' }), h('figcaption', {}, sc.name)));
-    out.push(section(`장면 그림 ${scenes.length}개`, hint('파일 안의 장면 미리보기 그림입니다(장면 목록을 읽지 못한 파일).'), grid));
+    out.push(section(`장면 그림 ${fmtCount(scenes.length)}개`, hint('파일 안의 장면 미리보기 그림입니다(장면 목록을 읽지 못한 파일).'), grid));
   }
   const warns = s.warnings ?? [];
   // 54차: 3D 뷰어 코어가 장면을 받으며 빼거나 고쳐 그린 깨진 입력(코어 0.50.0 sceneIssues)을 해석기 경고 뒤로 잇는다
@@ -159,7 +159,7 @@ export function infoSections(d: SkpDoc, applyPage: (index: number) => void): HTM
   const count = warns.length + issues.length;
   out.push(
     section(
-      count ? `경고 ${count}개` : '경고',
+      count ? `경고 ${fmtCount(count)}개` : '경고',
       // 53차: 경고 끝의 꾸러미 항목 이름(재질·스타일 폴더)은 파일 글로 — 앱 글만 옮겨 넣고 번역층은 건너뛴다(언어를 바꾸면 패널이 다시 그린다)
       count
         ? h(
@@ -233,7 +233,7 @@ export function renderOutline(p: TabPanel, d: SkpDoc): void {
   // 나무가 없는 파일도 한 단계 나무로(줄 안 보이기 체크가 단추 안에 들지 않게 — 44차)
   const list = treeBox('plist', '그룹·컴포넌트');
   const found = h('p', { class: 'hint search-note', hidden: true, 'aria-live': 'polite' });
-  const cut = h('p', { class: 'hint', hidden: true }, `처음 ${LIST_LIMIT}개만 보입니다.`);
+  const cut = h('p', { class: 'hint', hidden: true }, `처음 ${fmtCount(LIST_LIMIT)}개만 보입니다.`);
   const fill = (): void => {
     list.innerHTML = '';
     const q = normalizeQuery(d.outlineQuery);

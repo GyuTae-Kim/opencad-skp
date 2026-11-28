@@ -838,7 +838,7 @@ function textureImages(
     if (out.size >= max) skipped++;
     else out.set(folder, img);
   }
-  if (skipped) warnings.push(`무늬 재질이 너무 많아(${max}개 한도) ${skipped}개는 평균색으로 그렸습니다`);
+  if (skipped) warnings.push(`무늬 재질이 너무 많아(${max}개 한도) ${skipped.toLocaleString('en-US')}개는 평균색으로 그렸습니다`);
   return out;
 }
 
