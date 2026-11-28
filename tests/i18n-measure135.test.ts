@@ -101,7 +101,8 @@ describe('측정 묶음의 같은 기능 같은 낱말·뜻 맞춤(209차)', () 
       [KEY_ESC, 'en', 'While the Tape Measure or Protractor virtual cursor is on: clear the placed points and the result first; if there are none, turn off the cursor'],
       [ESC, 'ja', '読み込み中ならキャンセル → 測定点を消去 → 測定をオフ → 選択を解除'],
       [INFO_ESC, 'ja', 'Esc：測定点を消去→もう一度押すと測定をオフ・測定中でなければ選択を解除'],
-      [PROTRACTOR, 'ja', '分度器：中心 → 基準方向 → 測定方向（Shift = 平面の固定・方向のロック）・Escキーで消去'],
+      // 231차: 도구 막대 풍선 글의 일본어 쌍점은 「: 」(풍선 글 묶음 17 : 13 — 도움말 INFO_ESC는 「：」 묶음, i18n.test 50차 규칙 표 231차 줄)
+      [PROTRACTOR, 'ja', '分度器: 中心 → 基準方向 → 測定方向（Shift = 平面の固定・方向のロック）・Escキーで消去'],
       [TAPE_VCB, 'ja', 'メジャーの始点を指定した後: 測定値欄に長さを入力（その長さにガイド点、エッジ上から始めると平行なガイド線）'],
       [ANGLE_VCB, 'ja', '分度器の基準方向を指定した後: 測定値欄に角度を入力（その角度でガイド線）'],
       [ANGLE_VCB, 'zh-CN', '放置量角器参考方向后：在测量值框中输入角度（按该角度放置参考线）'],
@@ -244,8 +245,9 @@ describe('바로 가기 잠금 줄은 그때 받는 키만 — 화살표 줄은 
     const fixed: [key: string, lang: Lang, value: string][] = [
       [ARROWS_OFF, 'en', 'While aiming the tape end point or a protractor direction (virtual cursor off): lock to the red, green or blue axis (press again to unlock); before the protractor center: lock the protractor to that axis'],
       [DOWN_OFF, 'en', 'While aiming the tape end point or a protractor direction (virtual cursor off): lock parallel or perpendicular to an edge (press again to unlock)'],
-      [ARROWS_OFF, 'ja', 'メジャーの終点・分度器の方向を指定中（仮想カーソルがオフの間）：赤・緑・青の軸にロック（もう一度押すと解除）。分度器の中心を置く前はその軸の平面に固定'],
-      [DOWN_OFF, 'ja', 'メジャーの終点・分度器の方向を指定中（仮想カーソルがオフの間）：エッジに平行・垂直でロック（もう一度押すと解除）'],
+      // 231차: 바로 가기 창의 일본어 쌍점은 「: 」(창 안 17 : 8 — 위 근거 「…（メジャー・分度器がオフの間）: 」 꼴, i18n.test 50차 규칙 표 231차 줄)
+      [ARROWS_OFF, 'ja', 'メジャーの終点・分度器の方向を指定中（仮想カーソルがオフの間）: 赤・緑・青の軸にロック（もう一度押すと解除）。分度器の中心を置く前はその軸の平面に固定'],
+      [DOWN_OFF, 'ja', 'メジャーの終点・分度器の方向を指定中（仮想カーソルがオフの間）: エッジに平行・垂直でロック（もう一度押すと解除）'],
       [ARROWS_OFF, 'zh-CN', '指定卷尺终点或量角器方向时（虚拟光标关闭期间）：锁定到红、绿、蓝轴（再按一次解除）；放置量角器中心前则固定到该轴的平面'],
       [DOWN_OFF, 'zh-CN', '指定卷尺终点或量角器方向时（虚拟光标关闭期间）：锁定为平行或垂直于边线（再按一次解除）'],
       [ARROWS_OFF, 'de', 'Beim Ausrichten des Maßband-Endpunkts oder einer Winkelmesser-Richtung (virtueller Cursor aus): auf rote, grüne oder blaue Achse sperren (erneut drücken zum Entsperren); vor dem Winkelmesser-Mittelpunkt an der Ebene dieser Achse fixieren'],
