@@ -27,6 +27,14 @@ class FakeWorker {
 }
 
 const result = (): ParseResult => ({ scene: { name: 's', units: 'mm', meshes: [], lines: [] }, ms: 1 });
+/**
+ * 약속만 비우기(이벤트 고리를 넘기지 않음 — 타이머·메시지가 끼어들지 않는 「약속 몇 차례 뒤」 상태를 본다).
+ * 공용 규칙 13번 예외(DWG 333차): 약속만 비우는 고리는 부하와 상관없이 차례가 정해져 있어 시간 마감으로 바꾸지 않는다
+ * (223차가 setTimeout 기다림으로 바꿨다가 리드가 되돌림 — 매크로 작업을 넘기면 시험이 보는 상태가 달라질 수 있다)
+ */
+const flushMicrotasks = async (): Promise<void> => {
+  for (let i = 0; i < 4; i++) await Promise.resolve();
+};
 
 beforeEach(() => {
   FakeWorker.all = [];
@@ -170,11 +178,11 @@ describe('ParseClient', () => {
     // 받지 못하면 알리지 않는다(거부도 처리한다)
     const n = w.posted.length;
     void c.open('c.skp', new Blob([]), undefined, { defer: Promise.reject(new Error('조각을 받지 못함')) });
-    for (let i = 0; i < 4; i++) await Promise.resolve();
+    await flushMicrotasks();
     expect(w.posted.slice(n).map((p) => p.msg.type)).toEqual(['open']);
     // defer를 주지 않으면 예전처럼 열기만
     void c.open('d.skp', new Blob([]));
-    for (let i = 0; i < 4; i++) await Promise.resolve();
+    await flushMicrotasks();
     expect(w.posted.slice(n + 1).map((p) => p.msg.type)).toEqual(['open']);
   });
 
