@@ -1280,9 +1280,11 @@ export class MeasureTool {
    * 마지막으로 알린 잠금·평면·끌어온 점 수(onLock). 220차: 잠금 안내 글을 바꾸는 둘도 — 방향을 잡는 중·잠금 없음에서 가상 커서가 켜졌는지(키 줄),
    * 잠글 방향이 없음 알림을 보이는지
    */
-  private lockNote: [MeasureLock | null, Axis | null, number, boolean, boolean] = [null, null, 0, false, false];
+  private lockNote: [MeasureLock | null, Axis | null, number, boolean, number] = [null, null, 0, false, 0];
   /** 220차: ↓·L이 잠글 방향을 찾지 못했다(상태 줄·측정 띠 알림 — 커서를 옮기거나 잠금·점·도구·커서가 바뀌면 거둔다) */
   private noLock = false;
+  /** 221차: 거듭 누른 ↓·L로 그 알림 조각만 비운 프레임(requestAnimationFrame 번호 — 다음 프레임에 다시 넣는다, 0이면 없음) */
+  private noLockAgain = 0;
   /** 다른 점에서 끌어온 축을 쓰는지와 끌어온 점·머무르기 상태(코어 MeasureTracker — 시간은 dwellTimer가 잰다) */
   private trackOn: boolean;
   /** 축이 모서리·면과 만나는 점에 붙는지 */
@@ -1555,21 +1557,44 @@ export class MeasureTool {
   /** 220차: 잠글 방향이 없음 알림 켜고 거두기(바뀌면 refreshHint — onLock으로 앱이 상태 줄·측정 띠를 다시 그린다) */
   private setNoLock(on: boolean): void {
     if (on === this.noLock) return;
+    // 221차: 새 알림은 앞서 비운 프레임을 거두고 곧 보인다
+    if (on) this.dropNoLockAgain();
     this.noLock = on;
     this.refreshHint();
   }
 
   /**
+   * 221차: 같은 자리에서 거듭 누른 ↓·L(잠글 방향이 없음 알림이 이미 보임) — 그 알림 조각만 비웠다(onLock) 다음 프레임에 다시 넣는다(onLock).
+   * aria-live는 같은 글로 바뀌면 알리지 않아 거듭 누른 키가 말없이 끝났다(WCAG 4.1.3). 앞 잠금 안내·끌어온 점 수는 그대로, 한 프레임 안 거듭은 한 번,
+   * 비운 사이 알림을 거두면(옮김·잠금·점·커서·도구) 다시 넣지 않는다
+   */
+  private sayNoLockAgain(): void {
+    if (this.noLockAgain || typeof requestAnimationFrame !== 'function') return;
+    this.noLockAgain = requestAnimationFrame(() => {
+      this.noLockAgain = 0;
+      if (!this.disposed) this.refreshHint();
+    });
+    this.refreshHint();
+  }
+
+  private dropNoLockAgain(): void {
+    if (this.noLockAgain) cancelAnimationFrame(this.noLockAgain);
+    this.noLockAgain = 0;
+  }
+
+  /**
    * 잠금·안내 두기 키 안내(상태 줄·측정 띠에서 안내 글 다음 따로): 잠근 방향, 키보드 기기는 Shift·화살표(220차 — 가상 커서가 켜졌으면 Shift·X·Y·Z·L),
    * 각도기 화살표 평면, 점을 찍기 전 키보드 기기는 안내 두기 키(Ctrl·Option). 도구를 끈 동안은 null. touch = 손가락이 주인 기기.
-   * 220차: ↓·L이 잠글 방향을 찾지 못했으면 그 알림(잠갔으면 잠금 안내 뒤에 " · "로 — 잠금은 그대로)
+   * 220차: ↓·L이 잠글 방향을 찾지 못했으면 그 알림(잠갔으면 잠금 안내 뒤에 " · "로 — 잠금은 그대로).
+   * 221차: 거듭 누른 ↓·L은 한 프레임 그 알림 조각만 비운다(sayNoLockAgain — 잠금 안내는 그대로, 잠그지 않았으면 빈 칸)
    */
   lockHintText(touch: boolean): string | null {
     const m = this.modeValue;
     const n = this.pts.length;
     const lock = lockName(this.lockValue);
-    const none = this.noLock && this.directing ? (lock ? `${LOCK_HINTS[lock]} · ${LOCK_NONE_HINT}` : LOCK_NONE_HINT) : null;
-    const hint = none ?? lockHint(m, n, lock, this.planeAxisValue, touch, this.keyCursorOn) ?? guideKeyHint(m, n, this.guideOn, this.opts.guideKey ?? 'Control', touch);
+    const nl = this.noLock && this.directing;
+    const none = !nl ? null : this.noLockAgain ? (lock ? LOCK_HINTS[lock] : null) : lock ? `${LOCK_HINTS[lock]} · ${LOCK_NONE_HINT}` : LOCK_NONE_HINT;
+    const hint = nl ? none : (lockHint(m, n, lock, this.planeAxisValue, touch, this.keyCursorOn) ?? guideKeyHint(m, n, this.guideOn, this.opts.guideKey ?? 'Control', touch));
     // 끌어온 점이 있으면 그 수를 뒤에 따로(번역은 " · "로 나눠 조각마다 찾는다)
     const t = m ? trackHint(this.tracker.size) : null;
     return hint && t ? `${hint} · ${t}` : (hint ?? t);
@@ -2862,15 +2887,15 @@ export class MeasureTool {
       if (u && (this.lockValue !== u.lock0 || this.planeLock !== u.plane0)) this.shiftUndo = { ...u, lock: this.lockValue, plane: this.planeLock };
       return true;
     }
-    if (e.type === 'keydown' && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.startsWith('Arrow') && this.arrowLock(e.key)) {
+    if (e.type === 'keydown' && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.startsWith('Arrow') && this.arrowLock(e.key, e.repeat)) {
       e.preventDefault();
       return true;
     }
     return false;
   }
 
-  /** 화살표 잠금(SketchUp): 처리했으면 true */
-  private arrowLock(key: string): boolean {
+  /** 화살표 잠금(SketchUp): 처리했으면 true. repeat = 누른 채 되풀이(221차 — 잠글 방향이 없음 알림을 다시 넣지 않는다) */
+  private arrowLock(key: string, repeat = false): boolean {
     const axis = Object.prototype.hasOwnProperty.call(ARROW_AXES, key) ? ARROW_AXES[key]! : null;
     if (key !== 'ArrowDown' && !axis) return false;
     if (this.directing) {
@@ -2889,8 +2914,10 @@ export class MeasureTool {
       const r = this.edgeRef;
       const l = h && h.kind !== 'axis' ? h : r ? parallelInferenceLock(r) : null;
       if (!l) {
-        // 220차: 잠글 방향이 없으면 상태 줄·측정 띠에 알림(잠금은 그대로 — 다루지 않은 키인 것도 그대로, L은 keyLock이 기본 동작을 막는다)
-        this.setNoLock(true);
+        // 220차: 잠글 방향이 없으면 상태 줄·측정 띠에 알림(잠금은 그대로 — 다루지 않은 키인 것도 그대로, L은 keyLock이 기본 동작을 막는다).
+        // 221차: 이미 그 알림이면(같은 자리에서 거듭 누름 — 되풀이는 빼고) 그 조각만 비웠다 다음 프레임에 다시 넣어 다시 읽힌다
+        if (!this.noLock) this.setNoLock(true);
+        else if (!repeat) this.sayNoLockAgain();
         return false;
       }
       this.setLock({ ...l, source: 'key' });
@@ -3230,6 +3257,8 @@ export class MeasureTool {
     this.redoBtn?.remove();
     if (this.lockTap !== null) clearTimeout(this.lockTap);
     this.lockTap = null;
+    // 221차: 잠글 방향이 없음 알림을 다시 넣을 프레임도 거둔다
+    this.dropNoLockAgain();
     this.lockMenu?.remove();
     // 뗀 줄을 가리키지 않게 버튼의 펼침·가리킴도 거둔다(187차)
     this.lockBtn?.removeAttribute('aria-controls');
@@ -3679,9 +3708,9 @@ export class MeasureTool {
     if (this.lockMenu && !this.lockMenu.hidden && (!this.directing || this.lockValue)) this.toggleLockMenu(false);
     const [lock, plane, tracks, keys, none] = this.lockNote;
     const n = this.tracker.size;
-    // 220차: 잠금 안내 글을 바꾸는 둘 — 잠그지 않고 방향을 잡는 동안 가상 커서가 켜졌는지(키 줄), 잠글 방향이 없음 알림
+    // 220차: 잠금 안내 글을 바꾸는 둘 — 잠그지 않고 방향을 잡는 동안 가상 커서가 켜졌는지(키 줄), 잠글 방향이 없음 알림(221차: 1 보임 · 2 한 프레임 비움)
     const k = this.directing && !this.lockValue && this.keyCursorOn;
-    const nl = this.noLock && this.directing;
+    const nl = this.noLock && this.directing ? (this.noLockAgain ? 2 : 1) : 0;
     if (lock !== this.lockValue || plane !== this.planeAxisValue || tracks !== n || keys !== k || none !== nl) {
       this.lockNote = [this.lockValue, this.planeAxisValue, n, k, nl];
       this.opts.onLock?.();
