@@ -5,7 +5,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Viewer3d, type Pick3d, type PickEvent } from 'opencad-viewer3d';
 import {
   KEY_SNAP_KEYS,
@@ -928,5 +928,108 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
       kp.setMode(null);
       expect(cv.getAttribute('aria-keyshortcuts'), mode).toBeNull();
     }
+  });
+});
+
+describe('222차 가상 커서 알림 칸: 같은 자리 Enter(같은 후보를 거듭 고름·같은 점을 거듭 찍음)로 같은 글이 나오면 한 프레임 비웠다 다시 넣고(role=status는 같은 글로 바뀌면 다시 알리지 않음 — WCAG 4.1.3), 앱이 스스로 넣는 같은 글은 그대로', () => {
+  /** 다음 프레임 목록(requestAnimationFrame — 시험이 넘긴다, 코어 그리기 프레임도 함께 돈다) */
+  const frames = new Map<number, FrameRequestCallback>();
+  let ids = 0;
+  const flush = (): void => {
+    const list = [...frames.values()];
+    frames.clear();
+    for (const cb of list) cb(0);
+  };
+  beforeEach(() => {
+    frames.clear();
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => (frames.set(++ids, cb), ids));
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => void frames.delete(id));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('고르기 도구: 같은 후보를 Enter로 거듭 고르면 「골랐습니다: …」를 비웠다 다음 프레임에(한 프레임 안 거듭은 한 번), 사이에 다른 글이 들면 곧바로, 비운 사이 언어를 바꾸면 다시 넣지 않는다', () => {
+    const { v, kp, cv, picks } = setup();
+    kp.set(true);
+    key(cv, 'ArrowLeft');
+    expect(v.keyboardCursor!.count).toBe(3);
+    key(cv, 'Enter');
+    expect(picks.length).toBe(1);
+    expect(kp.text).toBe('골랐습니다: 그룹 Row의 면');
+    // 같은 자리 Enter 거듭: 같은 후보를 다시 고르고 같은 글 — 비운다(고치기 전에는 글이 그대로라 다시 읽히지 않았다)
+    key(cv, 'Enter');
+    expect(picks.length).toBe(2);
+    expect(kp.text).toBe('');
+    flush();
+    expect(kp.text).toBe('골랐습니다: 그룹 Row의 면');
+    // 한 프레임 안 거듭은 한 번(비운 채 다음 프레임에 한 번 넣는다)
+    key(cv, 'Enter');
+    key(cv, 'Enter');
+    expect(picks.length).toBe(4);
+    expect(kp.text).toBe('');
+    flush();
+    expect(kp.text).toBe('골랐습니다: 그룹 Row의 면');
+    // 커서를 옮기면(다른 글) 곧바로, 그 뒤 Enter도 앞 글과 달라 곧바로
+    key(cv, 'ArrowUp');
+    expect(kp.text).not.toBe('');
+    expect(kp.text).not.toMatch(/^골랐습니다/);
+    key(cv, 'Enter');
+    expect(kp.text).toMatch(/^골랐습니다: /);
+    // 거듭 Enter로 비운 사이 언어를 바꾸면(relocalize — 앱이 비움, 216차) 앞 언어 글을 다시 넣지 않는다
+    key(cv, 'Enter');
+    expect(kp.text).toBe('');
+    kp.relocalize();
+    flush();
+    expect(kp.text).toBe('');
+    expect(v.keyboardCursor).not.toBeNull();
+    kp.set(false);
+  });
+
+  it('줄자·각도기: 같은 자리 Enter로 측정 도구가 같은 글(「찍을 점이 없습니다」)을 돌려주면 비웠다 다음 프레임에 — 가라앉은 자리 글(keyWatch — 앱 스스로)의 같은 글은 그대로, 비운 사이 옮기면 그 글', () => {
+    const { v, cv, d, host: el } = setup();
+    let placed: string = KEY_MEASURE_TEXT.noPoint;
+    const w: { say: ((text: string) => void) | null } = { say: null };
+    /** 측정 도구 꼴(실제 찍기·글은 tests/app/measure.test.ts가 본다) — Enter는 placed를 돌려준다 */
+    const host: KeyMeasureHost = {
+      active: true,
+      handleKey: () => false,
+      keyHover: (x, y) => `끝점: ${x},${y}`,
+      keyEnd: () => undefined,
+      keyPlace: () => placed,
+      keyCycle: () => null,
+      keyWatch: (say) => {
+        w.say = say;
+      },
+    };
+    /** 앱 창 키 처리기가 handleKey에 넘기는 키 사건(대상 = 3D 보기) */
+    const ev = (k: string): KeyboardEvent =>
+      ({ key: k, type: 'keydown', target: cv, shiftKey: false, ctrlKey: false, metaKey: false, altKey: false, defaultPrevented: false, preventDefault() {} }) as unknown as KeyboardEvent;
+    const kp = new KeyPick(v, el as unknown as HTMLElement, () => d, { measureTool: host });
+    kp.follow('tape');
+    key(cv, 'Enter');
+    expect(kp.text).toBe('가상 커서를 켰습니다. 끝점: 400,300. 옮기기 ←→↑↓ · 찍기 Enter · 방향 잠금 Shift·X·Y·Z·L · 끄기 Esc');
+    expect(kp.handleKey(ev('Enter'))).toBe(true);
+    expect(kp.text).toBe('찍을 점이 없습니다');
+    // 같은 자리 Enter 거듭: 같은 글 — 비웠다 다음 프레임에
+    expect(kp.handleKey(ev('Enter'))).toBe(true);
+    expect(kp.text).toBe('');
+    flush();
+    expect(kp.text).toBe('찍을 점이 없습니다');
+    // 앱이 스스로 넣는 같은 글(키 밖의 변화가 가라앉은 뒤 그 자리 글 — 127차)은 그대로 둔다(비우지 않아 다시 알리지 않는다)
+    w.say!('찍을 점이 없습니다');
+    expect(kp.text).toBe('찍을 점이 없습니다');
+    flush();
+    expect(kp.text).toBe('찍을 점이 없습니다');
+    // 그 뒤 Enter는 사용자 거듭 — 비운다. 비운 사이 커서를 옮기면(코어 move 알림 — 다른 글) 그 글이 남고 앞 글을 다시 넣지 않는다
+    expect(kp.handleKey(ev('Enter'))).toBe(true);
+    expect(kp.text).toBe('');
+    expect(kp.handleKey(ev('ArrowRight'))).toBe(true);
+    expect(kp.text).toBe('끝점: 405,300');
+    flush();
+    expect(kp.text).toBe('끝점: 405,300');
+    // 다른 글을 돌려주는 Enter(시작점을 찍음)는 곧바로
+    placed = '시작점을 찍었습니다. 끝점';
+    expect(kp.handleKey(ev('Enter'))).toBe(true);
+    expect(kp.text).toBe('시작점을 찍었습니다. 끝점');
+    kp.setMode(null);
   });
 });

@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { FlashNote, barShown, noticeFree } from '../../src/app/flash';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { FlashNote, barShown, noticeFree, sayLive } from '../../src/app/flash';
 
 describe('측정 띠 알림', () => {
   afterEach(() => vi.useRealTimers());
@@ -179,5 +179,90 @@ describe('159차: 한 칸 알림 상자의 가벼운 글(복사 결과·2점 투
     expect(rel.match(/this\.ui\.show\(/g)).toHaveLength(4);
     expect(rel.match(/this\.ui\.show\('info', (?:CONTEXT_LOST|RESTORE)_TITLE/g)).toHaveLength(3);
     expect(rel.match(/this\.ui\.show\('warn', RESTORE_FAIL_TITLE/g)).toHaveLength(1);
+  });
+});
+
+describe('222차: 사용자가 같은 동작을 거듭해 같은 알림이 나오면 그 칸만 한 프레임 비웠다 다시 넣는다(aria-live는 같은 글로 바뀌면 다시 알리지 않음 — WCAG 4.1.3), 앱이 스스로 넣는 같은 글은 그대로', () => {
+  /** 다음 프레임 목록(requestAnimationFrame — 시험이 넘긴다, 221차 측정 띠 시험 꼴) */
+  const frames = new Map<number, FrameRequestCallback>();
+  let ids = 0;
+  const flush = (): void => {
+    const list = [...frames.values()];
+    frames.clear();
+    for (const cb of list) cb(0);
+  };
+  beforeEach(() => {
+    frames.clear();
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => (frames.set(++ids, cb), ids));
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => void frames.delete(id));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('측정 띠 잠깐 알림: 떠 있는 동안·사라진 뒤 같은 알림(거듭 복사)은 비웠다 다음 프레임에 — 한 프레임 안 거듭은 한 번, 다른 알림은 곧바로(비운 프레임을 거둠)', () => {
+    // 프레임은 시험이 넘기고 사라지는 시간만 가짜 시계로
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const el = document.createElement('div');
+    el.hidden = true;
+    const n = new FlashNote(el);
+    n.show('복사했습니다');
+    // 처음 알림은 곧바로(앞 글이 없음)
+    expect([el.textContent, el.hidden, frames.size]).toEqual(['복사했습니다', false, 0]);
+    // 떠 있는 동안 거듭 복사: 같은 글 — 칸은 보인 채 비우고 다음 프레임에 다시(고치기 전에는 글이 그대로라 읽히지 않았다)
+    vi.advanceTimersByTime(500);
+    n.show('복사했습니다');
+    expect([el.textContent, el.hidden, frames.size]).toEqual(['', false, 1]);
+    // 한 프레임 안 거듭은 한 번
+    n.show('복사했습니다');
+    expect([el.textContent, frames.size]).toEqual(['', 1]);
+    flush();
+    expect([el.textContent, frames.size]).toEqual(['복사했습니다', 0]);
+    // 사라지는 시간은 마지막 알림부터 1.6초 그대로
+    vi.advanceTimersByTime(1500);
+    expect(el.hidden).toBe(false);
+    vi.advanceTimersByTime(100);
+    expect(el.hidden).toBe(true);
+    // 사라진 뒤 같은 알림: 숨은 칸에 같은 글이 남아 있다 — 보이면서 비우고 다음 프레임에
+    n.show('복사했습니다');
+    expect([el.textContent, el.hidden, frames.size]).toEqual(['', false, 1]);
+    // 비운 사이 다른 알림은 곧바로 그 글(앞 프레임은 거둔다 — 덮지 않는다)
+    n.show('복사하지 못했습니다');
+    expect([el.textContent, frames.size]).toEqual(['복사하지 못했습니다', 0]);
+    flush();
+    expect(el.textContent).toBe('복사하지 못했습니다');
+    // 다른 글(안내 두기 켬·끔은 번갈아 다른 글)은 곧바로
+    n.show('안내 두기 켬: 누르면 안내점·안내선을 둡니다');
+    expect([el.textContent, frames.size]).toEqual(['안내 두기 켬: 누르면 안내점·안내선을 둡니다', 0]);
+  });
+
+  it('도움 함수 sayLive: 사용자 거듭(again)만 같은 글을 다시 넣고, 앱이 스스로 넣는 같은 글은 그대로 — 번역층이 옮긴 칸도 넣은 원문으로 견주고, 비운 사이 앱이 비우면 다시 넣지 않는다', () => {
+    const el = document.createElement('div');
+    sayLive(el, '찍을 점이 없습니다');
+    // 앱이 스스로 같은 글(다시 그리기 등)은 그대로 — 비우지 않아 다시 알리지 않는다
+    sayLive(el, '찍을 점이 없습니다');
+    expect([el.textContent, frames.size]).toEqual(['찍을 점이 없습니다', 0]);
+    // 번역층이 칸 글을 옮겨도(칸 글이 원문과 달라도) 넣은 원문으로 견준다
+    el.textContent = 'No point to place';
+    sayLive(el, '찍을 점이 없습니다', true);
+    expect([el.textContent, frames.size]).toEqual(['', 1]);
+    // 비운 사이 앱이 비우면(언어 바꿈) 그 프레임을 거두어 앞 글을 다시 넣지 않는다
+    sayLive(el, '');
+    expect(frames.size).toBe(0);
+    flush();
+    expect(el.textContent).toBe('');
+    // 빈 칸 뒤 같은 글은 곧바로(앞 글과 다름)
+    sayLive(el, '찍을 점이 없습니다', true);
+    expect([el.textContent, frames.size]).toEqual(['찍을 점이 없습니다', 0]);
+    // 빈 글은 거듭이어도 그대로 비운다(알리지 않는다)
+    sayLive(el, '', true);
+    sayLive(el, '', true);
+    expect([el.textContent, frames.size]).toEqual(['', 0]);
+    // 프레임이 없는 곳(requestAnimationFrame 없음)은 그대로 넣는다
+    sayLive(el, '찍을 점이 없습니다', true);
+    vi.stubGlobal('requestAnimationFrame', undefined);
+    sayLive(el, '찍을 점이 없습니다', true);
+    expect([el.textContent, frames.size]).toEqual(['찍을 점이 없습니다', 0]);
   });
 });

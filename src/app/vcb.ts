@@ -14,6 +14,7 @@
  * 칸 안의 Esc는 입력만 그만두고(측정 점은 그대로), Enter·Esc 뒤에는 부른 쪽이 정한 곳으로 초점을 돌려준다.
  */
 import { h, icon } from './dom';
+import { sayLive } from './flash';
 import { leaveDisabled } from './kbd';
 import { DEFAULT_UNITS, parseAngle, parseLength, usesDecimalComma, type UnitsDisplay } from './units';
 
@@ -239,21 +240,22 @@ export class Vcb {
   submit(): void {
     const text = this.input.value.trim();
     const t = KIND_TEXT[this.kindValue];
-    // 보이던 지금 값을 그대로 넣으면(칸만 누르고 Enter) 친 것이 없다
+    // 보이던 지금 값을 그대로 넣으면(칸만 누르고 Enter) 친 것이 없다.
+    // 222차: 넣기의 알림 셋은 사용자 동작의 답이라 고치지 않고 거듭 넣어 같은 알림이 나오면 다시 알린다(setMessage again)
     if (!text || text === this.live.trim()) {
-      this.setMessage(t.empty);
+      this.setMessage(t.empty, true);
       return;
     }
     // 쉼표는 화면 언어를 따른다(독일어는 소수 쉼표, 그 밖은 1,500 = 천오백)
     const comma = usesDecimalComma(document.documentElement.lang);
     const value = this.kindValue === 'angle' ? parseAngle(text, comma) : parseLength(text, this.units, comma);
     if (value === null) {
-      this.setMessage(t.bad);
+      this.setMessage(t.bad, true);
       return;
     }
     const err = this.opts.onSubmit(value, this.kindValue);
     if (err) {
-      this.setMessage(err);
+      this.setMessage(err, true);
       return;
     }
     this.finish();
@@ -276,8 +278,12 @@ export class Vcb {
     this.input.value = this.live;
   }
 
-  private setMessage(text: string | null): void {
-    this.msg.textContent = text ?? '';
+  /**
+   * 알림 글(null이면 거둔다). again(222차 — 사용자가 같은 값을 거듭 넣음): 같은 알림이면 한 프레임 비웠다 다시 넣는다(flash.ts sayLive — 칸이 스스로 거두는
+   * 비움은 again 없이, 비운 프레임도 거둔다)
+   */
+  private setMessage(text: string | null, again = false): void {
+    sayLive(this.msg, text ?? '', again);
     this.msg.hidden = !text;
     // 값이 있어야 한다: 빈 글("")은 ARIA에서 false라 화면 읽기에 잘못된 값으로 전해지지 않았다(161차 — 빨간 테두리는 [aria-invalid] 고르기라 그대로)
     if (text) this.input.setAttribute('aria-invalid', 'true');
