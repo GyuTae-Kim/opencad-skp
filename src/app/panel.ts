@@ -124,12 +124,27 @@ export const reloadButton = (): HTMLButtonElement => retryButton(() => location.
  * 이름은 name(그 안 칸) 또는 지금 탭 버튼 글. 다시 시도는 초점을 지금 탭 버튼에 두고(눌린 버튼은 다시 그리며 없어진다) again(다시 받아 그 탭을 그림)을 부른다.
  * 229차: again이 null이면(다시 시도를 누른 뒤 또 받지 못함) 글은 그대로 두고 버튼만 새로 고침. 초점은 다시 시도가 맡긴 탭 버튼 그대로다
  * (받는 동안 몸통을 비워 눌린 버튼이 없어지므로 새로 고침이 생길 때 초점은 그 버튼에 없다)
+ * 234차: 그 몸통에 바로 앞에 보인 실패 글과 같은 글(같은 버튼)이면 role 없이 넣는다(failShown — 앱이 다시 그릴 때 화면 읽기가 거듭 읽지 않게)
  */
 export function loadFail(body: HTMLElement, again: (() => void) | null, name?: string): Node[] {
   // 몸통은 늘 지금 탭 버튼을 가리킨다(render — aria-labelledby)
   const tab = document.getElementById(body.getAttribute('aria-labelledby')!)!;
-  return [h('p', { class: 'hint', role: 'alert' }, mixText(loadFailText(name ?? tab.textContent!))), again ? retryButton(() => (tab.focus(), again())) : reloadButton()];
+  const text = mixText(loadFailText(name ?? tab.textContent!));
+  const key = (again ? '1' : '2') + text;
+  const p = h('p', { class: 'hint', role: failShown.get(body) === key ? undefined : 'alert' }, text);
+  queueMicrotask(() => {
+    if (p.isConnected && !p.closest('[hidden]')) failShown.set(body, key);
+  });
+  return [p, again ? retryButton(() => (tab.focus(), again())) : reloadButton()];
 }
+/**
+ * 234차: 몸통마다 바로 앞에 보인 받기 실패 글의 열쇠(버튼 꼴 + 옮긴 글). 앱이 몸통을 다시 그리면(고르기·측정·펼침·장면·문서 다시 보이기 — 몸통을 비우고 다시 그린다)
+ * 같은 글은 role=alert 없는 같은 글로 넣어 새 alert 마디가 생기지 않게 한다(WCAG 4.1.3 — 전에는 그릴 때마다 새 alert 마디라 사용자가 아무것도 누르지 않아도 거듭 읽힐 수 있었다).
+ * 처음 보인 글, 다시 시도를 누른 뒤 또 받지 못한 글(버튼이 새로 고침 — 열쇠가 다르다), 다른 탭·언어의 글은 alert로 읽힌다. 그리기 차례(몸통 비우기)는 그대로다.
+ * 그 차례가 끝난 뒤(마이크로태스크) 문서에 붙어 숨지 않은 마디만 보인 것으로 적는다: 선택 탭은 한 번 그릴 때 몸통을 두 번 그려(render·refreshSelection) 앞 마디는 떨어지고,
+ * 속성 사전 칸은 받는 동안 다시 그린 떨어진 칸에도 넣으며, 닫힌 패널에 그린 글은 아직 보이지 않았다
+ */
+const failShown = new WeakMap<HTMLElement, string>();
 
 /** 탭 몸통(infotab.ts)이 쓰는 패널 몫(226차 — 옮기기 전 패널 메서드가 쓰던 this의 것) */
 export interface TabPanel {
@@ -427,7 +442,9 @@ export class Panel {
           class: `prow${t.hasGeometry ? '' : ' off'}`,
           'data-tagrow': t.name,
           style: depth ? `padding-left:${8 + depth * 14}px` : undefined,
-          title: mixText(t.hasGeometry ? mix`${name}: 면 ${fmtCount(t.faces)} · 모서리 ${fmtCount(t.edges)}` : mix`${name}: 그릴 것이 없는 태그`),
+          // 234차: 면·모서리 수를 모르면(tagStats가 없는 장면 묶음 태그 — doc.ts tagRows) 모르는 수 조각을 빼고 이름만(233차 상태 막대·정보 탭 줄 꼴 — 전에는 「이름: 면 — · 모서리 —」).
+          // 한쪽만 아는 꼴은 해석기가 만들지 않아(tagStats는 늘 둘 다 수) 새 틀 없이 이름만 — 아는 면 수는 같은 줄 수 칩이 보인다
+          title: mixText(!t.hasGeometry ? mix`${name}: 그릴 것이 없는 태그` : t.faces !== null && t.edges !== null ? mix`${name}: 면 ${fmtCount(t.faces)} · 모서리 ${fmtCount(t.edges)}` : [name]),
           'data-i18n-keep': 'title',
         },
         cb,

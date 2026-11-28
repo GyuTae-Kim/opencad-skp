@@ -9,6 +9,8 @@
  * 229차: 다시 시도를 누른 뒤 또 받지 못하면 몸통(칸) 버튼이 「새로 고침」(알림 글은 그대로 하나 — 새 판과 옛 캐시가 엇갈리면 다시 시도도 받지 못할 수 있다).
  * 초점은 다시 시도가 맡긴 지금 탭 버튼 그대로(받는 동안 몸통을 비워 눌린 버튼은 없어진다 — 새로 고침이 생길 때 초점은 그 버튼에 없다), 거듭 그려도 새로 고침 그대로,
  * 새로 고침은 다시 받지 않는다(jsdom은 탐색하지 않는다).
+ * 234차: 실패 글이 떠 있는 채 앱이 몸통을 다시 그리면(고르기·측정·탭 다시 그리기·문서 다시 보이기) 같은 글(같은 버튼)은 role 없는 같은 글 하나 — 새 alert 마디 0
+ * (전에는 그릴 때마다 새 role=alert 마디라 사용자가 아무것도 누르지 않아도 화면 읽기가 거듭 읽을 수 있었다, WCAG 4.1.3). 처음 보인 글과 다시 시도의 또 실패(새로 고침)는 alert로 읽힌다.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Panel, loadPanelTabs, type PanelHost } from '../../src/app/panel';
@@ -144,7 +146,9 @@ describe('패널 탭 몸통 조각 받기(226차)', () => {
     button(b.body(), '새로 고침')!.click();
     await new Promise((r) => setTimeout(r, 20));
     expect(ours(err)).toBe(3);
-    expect(b.body().querySelectorAll('[role=alert]')).toHaveLength(1);
+    // 234차: 앞의 거듭 그리기(rerender)는 앱이 같은 글을 다시 그린 것이라 role 없는 같은 글 하나(새로 고침이 처음 보일 때 alert로 읽혔다 — 위 shown)
+    expect([...b.body().querySelectorAll('p.hint')].map((p) => p.textContent)).toEqual(['구성을(를) 불러오지 못했습니다.']);
+    expect(b.body().querySelectorAll('[role=alert]')).toHaveLength(0);
   });
 
   it('228차: 선택 탭의 속성 사전 칸 조각을 받지 못하면 칸 자리에 알림 글과 다시 시도(전에는 말없이 칸을 뺐다) — 다시 시도가 다시 받아 칸을 그린다. 229차: 다시 시도도 받지 못하면 새로 고침', async () => {
@@ -169,9 +173,11 @@ describe('패널 탭 몸통 조각 받기(226차)', () => {
     expect(err).toHaveBeenCalledTimes(1);
     // 모형 정보 줄은 그대로(칸 하나만 알림 글)
     expect(body().querySelectorAll('.prop-row').length).toBeGreaterThan(0);
-    // 거듭 그려도 다시 받지 않고 곧바로 알림 글(받는 중 깃발이 남지 않음 — 다시 시도로 다시 받는다)
+    // 거듭 그려도 다시 받지 않고 곧바로 알림 글(받는 중 깃발이 남지 않음 — 다시 시도로 다시 받는다).
+    // 234차: 앱이 같은 글을 다시 그린 것이라 role 없는 같은 글 하나(alert 0 — 처음 보일 때 위에서 alert로 읽혔다)
     panel.rerender();
-    expect(body().querySelectorAll('[role=alert]')).toHaveLength(1);
+    expect([...body().querySelectorAll('p.hint')].filter((p) => p.textContent === '속성 사전을(를) 불러오지 못했습니다.')).toHaveLength(1);
+    expect(body().querySelectorAll('[role=alert]')).toHaveLength(0);
     await new Promise((r) => setTimeout(r, 20));
     expect(err).toHaveBeenCalledTimes(1);
     vi.doUnmock('../../src/app/attrview');
@@ -200,5 +206,55 @@ describe('패널 탭 몸통 조각 받기(226차)', () => {
     button(b.body(), '새로 고침')!.click();
     await new Promise((r) => setTimeout(r, 20));
     expect(ours(err)).toBe(3);
+  });
+
+  it('234차: 실패 글이 떠 있는 채 앱이 몸통을 다시 그리면 같은 글은 role 없이 그대로 하나(새 alert 마디 0), 초점 자리 그대로 — 사용자가 누른 다시 시도의 또 실패(새로 고침)는 alert로 한 번', async () => {
+    vi.resetModules();
+    vi.doMock('../../src/app/infotab', chunkFail('infotab'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const fresh = await import('../../src/app/panel');
+    const { d, panel, body } = mount(fresh.Panel);
+    await vi.waitFor(() => expect(err).toHaveBeenCalledTimes(1));
+    const FAIL = '선택을(를) 불러오지 못했습니다.';
+    const fails = (): Element[] => [...body().querySelectorAll('p.hint')].filter((p) => p.textContent === FAIL);
+    const alerts = (): number => body().querySelectorAll('[role=alert]').length;
+    const tab = (): HTMLElement => panel.el.querySelector<HTMLElement>('#ptab-entity')!;
+    // 앱이 몸통을 다시 그리는 길(app.ts — 고르기·측정: refreshSelection, 펼침·장면·보기 설정·언어 밖 다시 그리기: rerender, setDoc: show). 사건마다 다음 매크로 작업에서
+    const redraws = [() => panel.refreshSelection(), () => panel.rerender(), () => panel.show(d), () => panel.refreshSelection(true)];
+    const later = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+    // 처음 보인 실패 글은 alert 하나(선택 탭은 한 번 그릴 때 몸통을 두 번 그린다 — render·refreshSelection: 보이는 마디가 alert)
+    d.panelTab = 'entity';
+    panel.rerender();
+    expect(fails()).toHaveLength(1);
+    expect(fails()[0]!.getAttribute('role')).toBe('alert');
+    expect(alerts()).toBe(1);
+    await later();
+    button(body(), '다시 시도')!.focus();
+    for (const redraw of redraws) {
+      redraw();
+      expect(fails()).toHaveLength(1);
+      expect(alerts()).toBe(0);
+      // 초점은 다시 그린 같은 자리 다시 시도에(focusSpot·refocus 그대로)
+      expect(document.activeElement).toBe(button(body(), '다시 시도'));
+      await later();
+    }
+    // 사용자가 누른 다시 시도가 또 받지 못하면 버튼이 새로 고침으로 바뀐 글 — alert 하나로 읽힘(228·229차), 초점은 다시 시도가 맡긴 탭 버튼
+    button(body(), '다시 시도')!.click();
+    expect(document.activeElement).toBe(tab());
+    await vi.waitFor(() => expect(button(body(), '새로 고침')).toBeTruthy());
+    expect(fails()).toHaveLength(1);
+    expect(fails()[0]!.getAttribute('role')).toBe('alert');
+    expect(alerts()).toBe(1);
+    expect(document.activeElement).toBe(tab());
+    await later();
+    for (const redraw of redraws) {
+      redraw();
+      expect(fails()).toHaveLength(1);
+      expect(alerts()).toBe(0);
+      expect(button(body(), '새로 고침')).toBeTruthy();
+      expect(document.activeElement).toBe(tab());
+      await later();
+    }
+    expect(ours(err)).toBe(2);
   });
 });
