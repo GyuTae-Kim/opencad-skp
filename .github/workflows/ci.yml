@@ -18,6 +18,8 @@ jobs:
     # CI 8차: 시험 파일(114개 — 한 러너에서 약 60~95초)을 러너 두 대에 나눠 동시에 돈다(vitest --shard). 조각은 앞 CI에서 잰 파일 무게표
     # (tests/shard-weights.json)로 무거운 것부터 가장 가벼운 조각에 넣는다(tests/weighted-sequencer.ts — DWG·DXF CI 2차 꼴).
     # CI 6·7차로 휴대폰 검사가 약 70초로 줄어 시험 작업이 PR 벽시계를 쥐었다
+    # CI 18차: 무게표를 최근 다섯 실행(234~238차 PR)의 파일별 최댓값으로 새로 하고(DWG·DXF CI 16차 꼴 — 무거운 파일일수록 실행마다 출렁인다),
+    # 한 파일이 39~61초로 조각 하나의 시간을 혼자 정하던 uilang214를 언어 걸음 두 묶음(uilang214·uilang214b — 본문 uilang214.cases.ts)으로 나눠 겹쳐 돈다
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

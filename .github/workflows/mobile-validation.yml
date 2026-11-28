@@ -20,7 +20,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      # 휴대폰 로딩 비교에 쓰는 한글 글꼴(apt)과 lighthouse·playwright-cli(npm)는 빌드·기준 빌드와 함께 뒤에서 설치한다
+      # 휴대폰 로딩 비교에 쓰는 한글 글꼴(apt)과 lighthouse(npm)는 빌드·기준 빌드와 함께 뒤에서 설치한다
+      # (CI 18차: 이 흐름에는 브라우저 확인 단계가 없어 받기만 하던 @playwright/cli를 뺐다 — NC·STEP은 CI 17차 browser-check 작업이 쓴다)
       # (CI 1차 — 전에는 기준 빌드가 끝난 뒤 차례로 설치해 약 15~25초를 더 기다렸다). 비교 바로 앞 단계에서 끝을 기다리고 실패면 멈춘다
       - name: Start installing mobile audit tools in the background
         run: |
@@ -28,7 +29,7 @@ jobs:
           # CI 12차: apt 미러가 잠깐 비면 글꼴 설치가 실패해 휴대폰 검사가 멈췄다(2026-11-28 STEP #256 「E: Unable to locate package fonts-noto-cjk」 —
           # 같은 러너 이미지의 앞뒤 실행은 통과). 목록 받기·설치를 세 번까지(사이 5초, apt 받기도 세 번까지) 다시 하고, 셋 다 실패해야 실패로 적는다
           nohup sh -c 'rc=1; for i in 1 2 3; do if sudo apt-get update -qq -o Acquire::Retries=3 && sudo apt-get install --no-install-recommends -y -o Acquire::Retries=3 fonts-noto-cjk; then rc=0; break; fi; echo "fonts install attempt $i failed"; sleep 5; done; echo $rc > "$RUNNER_TEMP/bg/fonts.rc"' > "$RUNNER_TEMP/bg/fonts.log" 2>&1 &
-          nohup sh -c 'npm install --prefix "$RUNNER_TEMP/mobile-audit" --no-package-lock --no-audit --no-fund lighthouse@13.5.0 @playwright/cli; echo $? > "$RUNNER_TEMP/bg/audit.rc"' > "$RUNNER_TEMP/bg/audit.log" 2>&1 &
+          nohup sh -c 'npm install --prefix "$RUNNER_TEMP/mobile-audit" --no-package-lock --no-audit --no-fund lighthouse@13.5.0; echo $? > "$RUNNER_TEMP/bg/audit.rc"' > "$RUNNER_TEMP/bg/audit.log" 2>&1 &
           # CI 7차: 비교와 같은 플래그의 headless Chrome을 빈 쪽으로 한 번 띄웠다 꺼서 데운다(글꼴·도구 설치·빌드와 겹침 — 비교 첫 번 baseline-1이
           # Chrome 찬 시작(CI 6차가 찍은 값 1~22초)을 혼자 물던 것). 따로 된 프로필·60초 끊기, 실패해도 비교를 막지 않는다. 비교는 그대로 번마다 새 프로필이다
           nohup sh -c 't=$(date +%s%N); timeout 60 "$(command -v google-chrome-stable || command -v google-chrome)" --headless --no-sandbox --disable-dev-shm-usage --enable-unsafe-swiftshader --user-data-dir="$RUNNER_TEMP/bg/warm-profile" --dump-dom about:blank > /dev/null 2>&1; w=$?; echo "chrome warm-up exit $w in $(( ($(date +%s%N) - t) / 1000000 )) ms"; echo 0 > "$RUNNER_TEMP/bg/warm.rc"' > "$RUNNER_TEMP/bg/warm.log" 2>&1 &
@@ -71,7 +72,7 @@ jobs:
           git checkout --detach "$GITHUB_SHA"
           # 기준 커밋의 node_modules를 이 커밋의 것으로 되돌린다(성능 명령은 공용 사이트 도구 opencad-site-kit에 있다)
           if [ "$same_deps" = 0 ]; then npm ci; fi
-      - name: Wait for mobile audit tools (Korean glyphs, lighthouse, playwright-cli)
+      - name: Wait for mobile audit tools (Korean glyphs, lighthouse)
         timeout-minutes: 5
         run: |
           until [ -e "$RUNNER_TEMP/bg/fonts.rc" ] && [ -e "$RUNNER_TEMP/bg/audit.rc" ] && [ -e "$RUNNER_TEMP/bg/warm.rc" ]; do sleep 0.5; done
