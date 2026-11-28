@@ -10,6 +10,9 @@
  * (3) 고르지 않고 둔 것(창 가르개 6·좁은 마우스 창 시트 손잡이 14)은 지금도 24 아래임을 본다(고치면 표와 이 줄을 함께 고친다 — 214차 LEFT 꼴).
  * (4) 237차 고친 것: 나무·윗단계·찾기 줄의 보이기 체크(마우스 15×15 — 235차 「고르지 않음」)는 보이는 꼴·마디 그대로 두고, 체크 둘레 줄 바탕 누름을 체크로 넘겨 누르는 자리 24×24
  *     (infotab.ts treeBox 캡처 — 라벨로 감싸지 않아 rove·손가락 규칙·키·이름 그대로, .runtime/r237/progress.md 표).
+ * (5) 239차: 같은 표의 줄마다 키보드 길(KEYS — WCAG 2.1.1 키보드·2.4.7 초점 보임·2.5.7 끌기 움직임, .runtime/r239/progress.md 표). 그린 마디마다 키보드로 닿는 꼴(Tab 차례·무리 안 화살표·
+ *     열린 메뉴·같은 일을 하는 다른 칸·바로 가기)과 기본 동작이 없는 마디의 키 처리 자리가 표에 맞아야 통과한다(새 누를 칸은 키보드 판정도 표에 더한다). 초점 꼴을 다시 적는 styles.css 규칙,
+ *     끌기로 하는 일의 끌지 않는 길(창 가르개 한 번 누르기·키, 조이스틱 누르고 있기)도 본다. 고친 것: 찾은 줄의 조상 펼치기를 누르기처럼 Enter·Space로도(infotab.ts searchRow).
  * jsdom은 배치를 하지 않으므로 크기는 styles.css 규칙을 미디어 조건(폭·높이·pointer)으로 골라, 같은 선택자의 선언을 원문 차례로 덮어 읽는다.
  */
 import { readFileSync } from 'node:fs';
@@ -21,6 +24,10 @@ import { SAMPLE_NAME, sampleSkpBytes } from '../../src/app/sample';
 import { installLocalization } from '../../src/app/i18n';
 import { SkpViewerApp } from '../../src/app/app';
 import type { Panel } from '../../src/app/panel';
+import { SHORTCUTS } from '../../src/app/shortcuts';
+import { WalkStick } from '../../src/app/joystick';
+import { PANEL_WIDTH_STEPS, SHEET_STEPS } from '../../src/app/layout';
+import { nodeName, nodePath } from '../../src/app/tree';
 
 // ───────────────────────── styles.css 규칙 읽기 ─────────────────────────
 
@@ -199,6 +206,97 @@ const CLICK =
 
 const sig = (el: Element): string => `${el.localName}${[...el.classList].map((c) => `.${c}`).join('')}${el.getAttribute('role') ? `[role=${el.getAttribute('role')}]` : ''}`;
 
+// ───────────────────────── 239차: 줄마다 키보드 길 ─────────────────────────
+
+/** 키보드로 닿는 꼴: Tab 차례 · 무리(tablist·tree) 안 화살표로 돎(로빙) · 메뉴 버튼으로 연 메뉴 안 · 같은 일을 하는 다른 칸이 닿음 · 같은 일을 하는 바로 가기 */
+type Reach = 'tab' | 'rove' | 'menu' | 'via' | 'keys';
+
+interface KeyPath {
+  /** (가) 그 줄 마디가 키보드로 닿는 꼴 — 그린 마디마다 센 꼴이 이 가운데 하나여야 한다. 빈 목록은 누름 대상 아님 */
+  reach: readonly Reach[];
+  /** (나) 기본 동작(Enter·Space)이 없는 마디 가운데 키 처리 자리가 있는 꼴(그 선택자에 드는 마디만 — 자리는 why) */
+  own?: string;
+  /** reach keys: 바로 가기 안내(SHORTCUTS)의 묶음과 줄 글 */
+  shortcut?: readonly [group: string, labels: readonly string[]];
+  /** (다) 초점 꼴: 전역 :focus-visible 테두리, 그 칸 규칙 선택자(styles.css에 있어야 함), 코어가 그리는 3D 보기 테두리 */
+  focus: string;
+  /** (라) 포인터 끌기로 하는 일이 있으면 끌지 않는 길 */
+  drag?: string;
+  /** 근거(코드 자리) */
+  why: string;
+}
+
+/** 키보드 길 표(줄 번호는 AUDIT·progress.md 표와 같음 — 34번 3D 보기는 코어 캔버스라 jsdom에 그리지 않아 표에만) */
+const KEYS: Readonly<Record<number, KeyPath>> = {
+  1: { reach: ['tab'], focus: '전역', why: '제목 막대 button·a' },
+  2: { reach: ['tab'], focus: '전역', why: 'a[href]' },
+  3: { reach: ['tab'], focus: '.language-trigger:focus-visible', why: '사이트 키트 button(↑↓로도 목록 열기)' },
+  4: { reach: ['menu'], focus: '.language-list button:focus-visible', why: '열면 지금 언어로 초점, ↑↓·Home·End(사이트 키트 language-menu)' },
+  5: { reach: ['tab'], focus: '전역', why: '도구 막대 button, ←→·Home·End(kbd.ts toolbarKeys)' },
+  6: { reach: ['tab'], focus: '전역', drag: '손잡이 끌기 — 막대 위 누르기·화살표·Home·End(브라우저 기본)', why: 'input range' },
+  7: { reach: ['tab', 'rove'], focus: '전역', why: '고른 탭만 Tab, ←→·Home·End(app.ts renderSceneTabs)' },
+  8: { reach: ['tab'], focus: '전역', why: 'button(장면 재생 막대는 없음 — 재생·멈추기 버튼과 장면 탭뿐)' },
+  9: { reach: ['tab', 'rove'], focus: '전역', why: '고른 탭만 Tab, ←→·Home·End(panel.ts 탭 줄)' },
+  10: { reach: ['tab'], focus: '전역', why: 'button' },
+  11: { reach: ['tab', 'rove'], focus: '전역', why: 'button(나무 더 보기는 treeitem — 돎)' },
+  12: { reach: ['tab'], focus: '전역', why: 'button' },
+  13: { reach: ['tab'], focus: '전역', why: 'button' },
+  14: { reach: ['tab', 'rove', 'via'], own: '[role=treeitem]', focus: '전역', why: '라벨 줄은 안 체크, 단면·재질은 button, 나무 줄은 treeKeys·rove와 bindPick Enter·Space(두 번 누르기 확대는 키 없음 — 고르지 않음)' },
+  15: { reach: ['via'], focus: '전역', why: '그 줄의 →·←(infotab.ts nodeRow)' },
+  16: { reach: ['tab', 'rove'], focus: '전역', why: '지금 줄의 체크만 Tab(kbd.ts rove withBox), Space는 체크 몫' },
+  17: { reach: ['tab'], focus: '전역', why: 'input' },
+  18: { reach: ['tab'], focus: '.search-input:focus-visible', why: 'input search(Esc로 지움)' },
+  19: { reach: ['tab'], focus: '전역', why: 'summary' },
+  20: { reach: ['tab'], focus: '전역', why: 'summary' },
+  21: { reach: ['tab', 'via'], focus: '전역', why: '줄은 줄 안 버튼(누름이 줄로 오름 — 두 번 누르기 맞춰 보기는 키 없음, 고르지 않음)' },
+  22: { reach: ['tab'], focus: '전역', why: 'button' },
+  23: { reach: ['tab'], focus: '전역', why: 'button' },
+  24: { reach: ['tab', 'via'], focus: '전역', why: 'input·button, 이름표는 for로 입력' },
+  25: { reach: ['tab', 'via'], focus: '전역', drag: '6과 같음', why: 'input range, 라벨은 안 막대' },
+  26: { reach: ['tab'], focus: '전역', why: 'button' },
+  27: { reach: ['tab', 'via'], focus: '전역', drag: '파일 끌어 놓기 — 파일 열기 버튼 누르기·Ctrl+O', why: '칸은 안 두 버튼(44차)' },
+  28: { reach: ['tab'], focus: '전역', why: 'a[href]' },
+  29: { reach: ['tab'], focus: '전역', why: 'button' },
+  30: { reach: ['menu'], focus: '.menu-item:focus-visible', why: '열면 고른 항목·첫 항목으로 초점, ↑↓·Home·End, Tab은 닫고 다음(app.ts openMenu)' },
+  31: { reach: ['via'], focus: '전역', why: '라벨 안 radio·checkbox' },
+  32: { reach: ['tab'], focus: '전역', why: 'button' },
+  33: { reach: ['keys'], shortcut: ['걷기(1인칭)', ['앞 · 뒤로', '옆으로']], focus: '코어', drag: '손잡이 끌기 — 누르고 있기만 해도 누른 자리 쪽으로(joystick.ts pointerdown)', why: '3D 보기 초점에서 걷기 키(walkkeys)' },
+  34: { reach: ['tab'], focus: '코어', drag: '돌리기·옮기기 끌기 — 뷰 큐브·표준 뷰는 정한 방향만, 자유 각도는 없음(고르지 않음)', why: '코어 캔버스 tabindex 0, 가상 커서·1~7·F·PageUp·PageDown·Shift+F10' },
+  35: { reach: ['tab'], focus: '전역', why: 'textarea' },
+  36: { reach: ['tab'], own: '[role=separator]', focus: '.resizer:focus-visible::after', drag: '끌기 — 한 번 누르기 다음 크기 단계·두 번 누르기 처음 크기', why: 'app.ts bindResizer 화살표·Shift·Enter·Space·Home·End, applyLayout aria-valuenow' },
+  37: { reach: [], own: '.sc-body', focus: '.sc-body:focus-visible', why: '누름 대상 아님(숨긴 파일 입력, 굴리는 본문은 브라우저 굴리기 키)' },
+};
+
+/** 기본 동작(Enter·Space — 링크는 Enter)이 있는 마디 */
+const NATIVE = 'button, a[href], input, textarea, select, summary';
+/** 스스로 Tab 차례(jsdom tabIndex — 기본 초점 칸이면 0, tabindex 속성이면 그 값) */
+const tabbable = (el: Element): boolean => (el as HTMLElement).tabIndex >= 0;
+/** 꺼진 칸(꺼진 입력을 품은 라벨도)은 누름 대상이 아니다 */
+const off = (el: Element): boolean => (el as HTMLButtonElement).disabled === true || (el instanceof HTMLLabelElement && (el.control as HTMLInputElement | null)?.disabled === true);
+/** 같은 일을 하는 키보드 칸: 라벨은 그 입력, 정의 표 줄·끌어 놓기 칸은 안 버튼, 펼치기는 펼침 상태가 있는 그 줄(→·←) */
+function viaOf(el: Element): Element | null {
+  if (el instanceof HTMLLabelElement) return el.control ?? el.querySelector('input, select, textarea');
+  if (el.matches('tr.pick, .dropzone')) return el.querySelector('button');
+  if (el.matches('.trow .twisty')) return el.closest('[role=treeitem][aria-expanded]');
+  return null;
+}
+/** 바로 가기 안내에 그 묶음·줄이 있는가 */
+const hasShortcut = (s: KeyPath['shortcut']): boolean => !!s && s[1].every((label) => SHORTCUTS.some((g) => g.title === s[0] && g.items.some((it) => it.label === label)));
+
+/** 마디가 키보드로 닿는 꼴(없으면 none) */
+function reachOf(el: Element, k?: KeyPath): Reach | 'none' {
+  if (tabbable(el)) return 'tab';
+  if (el.closest('[role=menu]')) return 'menu';
+  // 로빙: 같은 무리의 같은 꼴(탭·나무 줄, 나무 줄 안 체크) 하나가 Tab 차례
+  const group = el.closest('[role=tablist], [role=tree]');
+  const peers = el.matches('[role=tab], [role=treeitem]') ? '[role=tab], [role=treeitem]' : el.matches('[role=treeitem] > input[type=checkbox]') ? '[role=treeitem] > input[type=checkbox]' : null;
+  if (group && peers && [...group.querySelectorAll(peers)].some(tabbable)) return 'rove';
+  const via = viaOf(el);
+  if (via && via !== el && reachOf(via) !== 'none') return 'via';
+  if (hasShortcut(k?.shortcut)) return 'keys';
+  return 'none';
+}
+
 /** 시험에서 부르는 앱 안쪽(문서를 연 뒤 앱이 부르는 화면 갱신 함수·메뉴·알림 — uilang214 꼴) */
 interface Inner {
   doc: SkpDoc | null;
@@ -255,8 +353,8 @@ const stubMedia = (m: Form): void => {
   vi.stubGlobal('matchMedia', (q: string) => ({ matches: mediaMatch(q, m), media: q, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false }));
 };
 
-/** 그 꼴로 앱 화면을 차례로 그리며 누를 수 있는 마디를 모은다 */
-async function collect(m: Form): Promise<Element[]> {
+/** 그 꼴로 앱 화면을 차례로 그리며 누를 수 있는 마디를 모은다 — 마디마다 처음 본 때(문서에 붙어 있을 때 — 다시 그리면 떼어진다)의 키보드로 닿는 꼴과 함께(239차) */
+async function collect(m: Form): Promise<Map<Element, Reach | 'none'>> {
   stubMedia(m);
   history.replaceState(null, '', '/opencad-skp/');
   const root = document.body.appendChild(document.createElement('div'));
@@ -266,8 +364,13 @@ async function collect(m: Form): Promise<Element[]> {
   const a = app as unknown as Inner;
   dispose = await installLocalization(root);
   await tick();
-  const seen = new Set<Element>();
-  const take = (): void => document.querySelectorAll(CLICK).forEach((el) => seen.add(el));
+  const seen = new Map<Element, Reach | 'none'>();
+  const take = (): void =>
+    document.querySelectorAll(CLICK).forEach((el) => {
+      if (seen.has(el)) return;
+      const hit = AUDIT.find(([sel]) => el.matches(sel));
+      seen.set(el, reachOf(el, hit ? KEYS[hit[1]] : undefined));
+    });
   take();
   // 예제 문서(앱의 「예제 열기」와 같은 모형) — 장면 탭·상태 막대·패널
   const bytes = sampleSkpBytes(undefined, (s) => s);
@@ -302,12 +405,13 @@ async function collect(m: Form): Promise<Element[]> {
   a.showNotice('warn', '시험 알림', '알림 본문');
   await tick();
   take();
-  return [...seen];
+  return seen;
 }
 
 describe('235차: 앱 화면의 누를 수 있는 마디는 모두 크기 감사 표의 한 줄에 든다(새 누를 칸은 표에 크기와 판정을 더한다)', () => {
   it.each([WIDE, PHONE])('$name', async (m) => {
-    const els = await collect(m);
+    const seen = await collect(m);
+    const els = [...seen.keys()];
     const rows = new Set<number>();
     const missing = new Set<string>();
     for (const el of els) {
@@ -318,6 +422,21 @@ describe('235차: 앱 화면의 누를 수 있는 마디는 모두 크기 감사
     expect([...missing].sort(), m.name).toEqual([]);
     // 그린 화면이 주요 칸을 다 품었는지(제목·도구 막대·패널 탭·닫기·작은 버튼·누르기 방식·패널 줄·펼치기·보이기 체크·장면 탭·측정 띠·상태 막대 경고·메뉴·언어·가르개)
     for (const r of [1, 3, 4, 5, 7, 9, 10, 11, 13, 14, 15, 16, 23, 24, 26, 27, 30, 36]) expect(rows.has(r), `${m.name}: 표 ${r}번 줄`).toBe(true);
+    // 239차: 마디마다 (가) 키보드로 닿는 꼴이 그 줄 KEYS에 들고, (나) 기본 동작이 없는 마디는 그 줄의 키 처리 꼴(꺼진 칸·누름 대상 아님은 뺌)
+    const noKey = new Set<string>();
+    const ways = new Map<Reach | 'none', number>();
+    for (const el of els) {
+      const hit = AUDIT.find(([sel]) => el.matches(sel));
+      const k = hit ? KEYS[hit[1]] : undefined;
+      if (!hit || !k || !k.reach.length || off(el)) continue;
+      const how = seen.get(el)!;
+      ways.set(how, (ways.get(how) ?? 0) + 1);
+      if (!(k.reach as readonly string[]).includes(how)) noKey.add(`${sig(el)} — 표 ${hit[1]}번 줄: ${how}`);
+      else if ((how === 'tab' || how === 'rove' || how === 'menu') && !el.matches(NATIVE) && !(k.own && el.matches(k.own))) noKey.add(`${sig(el)} — 표 ${hit[1]}번 줄: 키 처리 꼴 없음`);
+    }
+    expect([...noKey].sort(), m.name).toEqual([]);
+    // 셈이 비지 않음: 그린 화면에 다섯 꼴이 모두 있다(돎 — 탭·나무, 메뉴 — 앱 설정·언어, 대신 — 라벨·펼치기·끌어 놓기 칸, 바로 가기 — 조이스틱)
+    for (const w of ['tab', 'rove', 'menu', 'via', 'keys'] as const) expect(ways.get(w) ?? 0, `${m.name}: ${w}`).toBeGreaterThan(0);
   });
 });
 
@@ -467,5 +586,126 @@ describe('237차: 나무·윗단계·찾기 줄의 보이기 체크는 누르는
     press(item, r.left - 1, r.top + r.height / 2);
     expect(d.hiddenNodes.has(n)).toBe(was);
     expect(d.selection).not.toBeNull();
+  });
+});
+
+// ───────────────────────── 239차: 키보드 길·초점 보임·끌기 대안 ─────────────────────────
+
+describe('239차: 누르는 칸마다 키보드 길(WCAG 2.1.1)·초점 보임(2.4.7)·끌지 않는 길(2.5.7)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('표: KEYS가 감사 표 1~37줄과 AUDIT 줄을 모두 품고, 초점 꼴 선택자는 styles.css에, 바로 가기는 안내(SHORTCUTS)에 있다', () => {
+    expect(Object.keys(KEYS).map(Number)).toEqual(Array.from({ length: 37 }, (_, i) => i + 1));
+    for (const [, row] of AUDIT) expect(KEYS[row], `표 ${row}번 줄`).toBeDefined();
+    for (const [row, k] of Object.entries(KEYS)) {
+      if (k.focus.startsWith('.')) expect(RULES.some((r) => r.sels.includes(k.focus)), `표 ${row}번 줄 ${k.focus}`).toBe(true);
+      if (k.shortcut) expect(hasShortcut(k.shortcut), `표 ${row}번 줄`).toBe(true);
+    }
+  });
+
+  it('(다) 초점 꼴: outline을 다시 적는 규칙은 표의 일곱 곳뿐이고, 지우는 둘(메뉴 항목·창 가르개)은 대신 꼴이 있다 — 넓은 화면·휴대폰', () => {
+    const touch = RULES.filter((r) => /(^|;)\s*outline(-[\w-]+)?\s*:/.test(r.body)).map((r) => [r.media.join(' and '), r.sels.join(', ')].filter(Boolean).join(' | '));
+    expect(touch).toEqual([
+      ':focus-visible',
+      '.menu-item:hover, .menu-item:focus-visible',
+      '.search-input:focus-visible',
+      '.resizer:focus-visible',
+      '.language-trigger:focus-visible, .language-list button:focus-visible',
+      '.sc-body:focus-visible',
+      '.menu-item:focus-visible',
+    ]);
+    for (const m of [WIDE, PHONE]) {
+      expect(decls(m, ':focus-visible').get('outline'), m.name).toBe('2px solid var(--accent)');
+      // 메뉴 항목은 마우스 올림과 같은 배경 규칙(none) 뒤에 안쪽 테두리로 되살린다(170차)
+      for (const s of ['.menu-item:focus-visible', '.search-input:focus-visible', '.language-trigger:focus-visible', '.language-list button:focus-visible', '.sc-body:focus-visible'])
+        expect(decls(m, ':focus-visible', s).get('outline'), `${m.name} ${s}`).toBe('2px solid var(--accent)');
+      // 창 가르개는 테두리 대신 가운데 강조색 막대
+      expect(decls(m, ':focus-visible', '.resizer:focus-visible').get('outline'), m.name).toBe('none');
+      expect(decls(m, '.resizer:focus-visible::after').get('background'), m.name).toBe('var(--accent)');
+    }
+    // 3D 보기 캔버스 테두리는 코어가 그리고(:focus-visible일 때 안쪽 2px) 색만 앱 강조색
+    expect(decls(WIDE, '.view-host').get('--v3d-focus')).toBe('var(--accent)');
+  });
+
+  it.each([WIDE, PHONE])('$name: 창 가르개(시트 손잡이)는 Tab 차례 separator — 값·방향, 화살표·Shift·Enter·Space·Home·End, 끌지 않은 한 번 누르기는 다음 크기 단계(2.5.7)', (m) => {
+    stubMedia(m);
+    history.replaceState(null, '', '/opencad-skp/');
+    localStorage.clear();
+    const root = document.body.appendChild(document.createElement('div'));
+    root.id = 'app';
+    new SkpViewerApp(root).mount();
+    const r = root.querySelector<HTMLElement>('.resizer')!;
+    vi.spyOn(root.querySelector<HTMLElement>('.workspace')!, 'getBoundingClientRect').mockReturnValue(rectOf(0, 0, window.innerWidth, window.innerHeight));
+    const narrow = m === PHONE;
+    const now = (): number => Number(r.getAttribute('aria-valuenow'));
+    const key = (k: string, shiftKey = false): boolean => !r.dispatchEvent(new KeyboardEvent('keydown', { key: k, shiftKey, bubbles: true, cancelable: true }));
+    expect([r.getAttribute('role'), r.tabIndex, r.getAttribute('aria-controls'), r.getAttribute('aria-orientation')]).toEqual(['separator', 0, 'side-panel', narrow ? 'horizontal' : 'vertical']);
+    const [min, max] = [Number(r.getAttribute('aria-valuemin')), Number(r.getAttribute('aria-valuemax'))];
+    const steps = narrow ? SHEET_STEPS.map((s) => Math.round(s * 100)) : [...PANEL_WIDTH_STEPS];
+    expect(now()).toBe(steps[1]);
+    expect(r.getAttribute('aria-valuetext')).toBe(`${steps[1]}${narrow ? '%' : 'px'}`);
+    // 화살표: 넓은 화면 ←→(세로 가르개)·좁은 화면 ↑↓(시트 위 가장자리), Shift는 더 크게, 다른 쪽 화살표는 다루지 않음
+    const [grow, shrink, other] = narrow ? ['ArrowUp', 'ArrowDown', 'ArrowLeft'] : ['ArrowLeft', 'ArrowRight', 'ArrowUp'];
+    const v0 = now();
+    expect(key(grow)).toBe(true);
+    const v1 = now();
+    expect(key(grow, true)).toBe(true);
+    const v2 = now();
+    expect([v1 > v0, v2 - v1 > v1 - v0]).toEqual([true, true]);
+    expect(key(shrink)).toBe(true);
+    expect(now()).toBeLessThan(v2);
+    const v3 = now();
+    expect(key(other)).toBe(false);
+    expect(now()).toBe(v3);
+    expect([key('Home'), now(), key('End'), now()]).toEqual([true, min, true, max]);
+    // Enter·Space는 다음 크기 단계(가장 크면 가장 작은 단계로), 끌지 않은 한 번 누르기도 다음 단계, 두 번 누르기는 처음 크기
+    expect([key('Enter'), now(), key(' '), now()]).toEqual([true, steps[0], true, steps[1]]);
+    r.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+    expect(now()).toBe(steps[2]);
+    r.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, detail: 2 }));
+    expect(now()).toBe(steps[1]);
+    localStorage.clear();
+  });
+
+  it('걷기 조이스틱: 손잡이를 끌지 않고 누르고 있기만 해도 누른 자리 쪽으로 걷고(2.5.7 — 끌기 아님), 떼면 멈춘다. 키로는 바로 가기 안내의 걷기 키', () => {
+    const got: { forward: number; right: number }[] = [];
+    const stick = new WalkStick((i) => got.push(i));
+    document.body.append(stick.el);
+    vi.spyOn(stick.el, 'getBoundingClientRect').mockReturnValue(rectOf(100, 100, 112, 112));
+    const ev = (type: string, x: number, y: number): MouseEvent => Object.assign(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 }), { pointerId: 7 });
+    // 원판 위쪽 끝을 누름(가운데 (156, 156) — 움직이지 않음): 앞으로
+    stick.el.dispatchEvent(ev('pointerdown', 156, 104));
+    expect(got.length).toBe(1);
+    expect(got[0]!.forward).toBeGreaterThan(0.5);
+    expect(got[0]!.right).toBe(0);
+    stick.el.dispatchEvent(ev('pointerup', 156, 104));
+    expect(got.at(-1)).toEqual({ forward: 0, right: 0 });
+    expect(hasShortcut(KEYS[33]!.shortcut)).toBe(true);
+  });
+
+  it('찾은 줄: 누르기처럼 Enter·Space로 골라도 조상을 펼친다(찾기를 지운 나무에서 고른 줄이 보이게 — 고치기 전에는 누르기만)', async () => {
+    const { a, d } = await treeApp(WIDE);
+    const t = d.tree!;
+    // 조상이 있는(둘째 단계부터) 이름 있는 노드
+    let n = -1;
+    for (let i = 0; i < t.count && n < 0; i++) if (nodePath(t, i).length > 1 && nodeName(t, i)) n = i;
+    expect(n).toBeGreaterThanOrEqual(0);
+    const up = nodePath(t, n).slice(0, -1);
+    d.outlineQuery = nodeName(t, n);
+    for (const how of ['click', 'Enter', ' '] as const) {
+      d.expanded.clear();
+      a.select(null);
+      a.panel.rerender();
+      await tick();
+      const item = a.panel.el.querySelector<HTMLElement>(`.search-row[data-node="${n}"]`);
+      expect(item, how).not.toBeNull();
+      item!.focus();
+      if (how === 'click') item!.click();
+      else item!.dispatchEvent(new KeyboardEvent('keydown', { key: how, bubbles: true, cancelable: true }));
+      expect(d.selection, how).not.toBeNull();
+      expect(up.filter((x) => !d.expanded.has(x)), `${how}: 펼치지 않은 조상`).toEqual([]);
+    }
   });
 });

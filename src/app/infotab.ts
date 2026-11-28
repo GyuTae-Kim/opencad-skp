@@ -510,11 +510,16 @@ function searchRow(p: TabPanel, d: SkpDoc, t: TreeView, n: number): HTMLElement 
     h('span', { class: 'name' }, uiName(name), sub ? h('small', {}, ` ${sub}`) : null, path ? h('small', { class: 'path' }, path) : null),
     countEl(`면 ${fmtCount(t.faces[n]!)}`),
   );
-  // 찾은 항목을 고르면 나무에서도 보이게(찾기를 지웠을 때) 조상을 펼친다
-  item.addEventListener('click', () => {
+  // 찾은 항목을 고르면 나무에서도 보이게(찾기를 지웠을 때) 조상을 펼친다 — 누르기와 고르기 키 모두(239차: Enter·Space로 고르면 펼치지 않아
+  // 찾기를 지운 나무에서 고른 줄이 접힌 채 숨었다, WCAG 2.1.1). 키는 bindPick의 고르기와 같은 조건(줄 자신이 받은 Enter·Space)이고 고르기보다 먼저(누르기 차례와 같게)
+  const reveal = (): void => {
     for (const a of nodePath(t, n).slice(0, -1)) d.expanded.add(a);
+  };
+  item.addEventListener('click', reveal);
+  bindPick(p, item, d, sel, (e) => {
+    if (e.key === 'Enter' || e.key === ' ') reveal();
+    return false;
   });
-  bindPick(p, item, d, sel);
   return item;
 }
 
