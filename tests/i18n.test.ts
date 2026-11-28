@@ -570,7 +570,8 @@ describe('language URLs and UI presentation', () => {
     const menu=document.querySelector<HTMLElement>('.language-list')!;
     expect(menu.hidden).toBe(false);expect(menu.querySelectorAll('[role=menuitemradio]')).toHaveLength(5);
     (menu.querySelector('[data-language=de]') as HTMLButtonElement).click();
-    await new Promise(resolve=>setTimeout(resolve,0));
+    // 225차(CI 14차 마무리): de 사전 조각을 받는 길이라 setTimeout(0) 한 번이 아니라 바뀔 때까지(224차 switched)
+    await switched('de');
     expect(document.getElementById('pretranslated')!.textContent).toBe(translate('열기','de'));
     expect(document.documentElement.lang).toBe('de');expect(button.textContent).toBe(translate('열기','de'));
     expect(dialog.textContent).toBe(translate('닫기','de'));
