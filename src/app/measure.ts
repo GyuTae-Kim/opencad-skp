@@ -195,6 +195,18 @@ export const LOCK_MENU_LABEL = '잠글 방향 고르기';
 /** 키보드 기기에서 방향을 잡는 동안 잠그는 법 */
 export const LOCK_KEYS_HINT = 'Shift·화살표로 방향 잠금';
 
+/**
+ * 220차: 가상 커서를 켠 동안 잠그는 법 — 그동안 화살표는 커서 옮기기라 219차 X·Y·Z·L(키 줄은 커서를 켤 때 키 안내 「방향 잠금 Shift·X·Y·Z·L」와 같다).
+ * 커서가 켜진 동안에도 「Shift·화살표」를 보였다(WCAG 3.3.2 — 안내가 지금 받는 키와 달랐다)
+ */
+export const LOCK_KEYS_CURSOR_HINT = 'Shift·X·Y·Z·L로 방향 잠금';
+
+/**
+ * 220차: ↓·L(모서리와 나란히·수직)이 잠글 방향을 찾지 못했을 때 상태 줄·측정 띠 잠금 안내 자리의 알림 — 받은 키가 말없이 끝나지 않게(WCAG 4.1.3, NC 204차 꼴).
+ * 가상 커서 알림 칸에는 내지 않는다(keyLock 빈 글). 원문은 21차까지 잠금 버튼 알림의 앞 조각 「잠글 방향이 없습니다: …」(22차에 고르기 줄로 바꾸며 지움)과 같다
+ */
+export const LOCK_NONE_HINT = '잠글 방향이 없습니다';
+
 /** 잠근 방향 → 잠금 안내 이름 */
 export function lockName(l: Pick<InferenceLock, 'kind' | 'axis' | 'label'> | null | undefined): LockName | null {
   if (!l) return null;
@@ -210,10 +222,11 @@ export function directingPoints(mode: MeasureMode | null, points: number): boole
 
 /**
  * 잠금 안내: 방향을 잡는 중이면 잠근 방향, 잠그지 않았으면 키보드 기기에만 Shift·화살표 안내(손가락 기기는 측정 띠 잠금 단추).
- * 각도기 중심을 찍기 전에는 화살표로 고정한 평면. 상태 줄·측정 띠는 measureHint 다음에 따로 둔다(번역이 안내 글을 한 덩어리로 찾게)
+ * 각도기 중심을 찍기 전에는 화살표로 고정한 평면. 상태 줄·측정 띠는 measureHint 다음에 따로 둔다(번역이 안내 글을 한 덩어리로 찾게).
+ * cursor = 가상 커서가 켜짐(220차 — 그동안 키는 Shift·X·Y·Z·L)
  */
-export function lockHint(mode: MeasureMode | null, points: number, lock: LockName | null, plane: Axis | null, touch = false): string | null {
-  if (directingPoints(mode, points)) return lock ? LOCK_HINTS[lock] : touch ? null : LOCK_KEYS_HINT;
+export function lockHint(mode: MeasureMode | null, points: number, lock: LockName | null, plane: Axis | null, touch = false, cursor = false): string | null {
+  if (directingPoints(mode, points)) return lock ? LOCK_HINTS[lock] : touch ? null : cursor ? LOCK_KEYS_CURSOR_HINT : LOCK_KEYS_HINT;
   if (mode === 'protractor' && points === 0 && plane) return PLANE_HINTS[plane];
   return null;
 }
@@ -1263,8 +1276,13 @@ export class MeasureTool {
   private lastLockSrc: Snap | null = null;
   /** 화살표로 고정한 각도기 평면의 축(중심을 찍기 전) */
   private planeAxisValue: Axis | null = null;
-  /** 마지막으로 알린 잠금·평면·끌어온 점 수(onLock) */
-  private lockNote: [MeasureLock | null, Axis | null, number] = [null, null, 0];
+  /**
+   * 마지막으로 알린 잠금·평면·끌어온 점 수(onLock). 220차: 잠금 안내 글을 바꾸는 둘도 — 방향을 잡는 중·잠금 없음에서 가상 커서가 켜졌는지(키 줄),
+   * 잠글 방향이 없음 알림을 보이는지
+   */
+  private lockNote: [MeasureLock | null, Axis | null, number, boolean, boolean] = [null, null, 0, false, false];
+  /** 220차: ↓·L이 잠글 방향을 찾지 못했다(상태 줄·측정 띠 알림 — 커서를 옮기거나 잠금·점·도구·커서가 바뀌면 거둔다) */
+  private noLock = false;
   /** 다른 점에서 끌어온 축을 쓰는지와 끌어온 점·머무르기 상태(코어 MeasureTracker — 시간은 dwellTimer가 잰다) */
   private trackOn: boolean;
   /** 축이 모서리·면과 만나는 점에 붙는지 */
@@ -1529,14 +1547,29 @@ export class MeasureTool {
     return lockName(this.lockValue);
   }
 
+  /** 220차: 가상 커서가 켜졌는지(이 도구의 커서가 키보드 자리이고 코어 커서가 켜짐 — keyLock이 받는 조건과 같다, 코어는 끈 뒤 알린다) */
+  private get keyCursorOn(): boolean {
+    return this.cursor?.type === 'keyboard' && !!this.viewer.keyboardCursor;
+  }
+
+  /** 220차: 잠글 방향이 없음 알림 켜고 거두기(바뀌면 refreshHint — onLock으로 앱이 상태 줄·측정 띠를 다시 그린다) */
+  private setNoLock(on: boolean): void {
+    if (on === this.noLock) return;
+    this.noLock = on;
+    this.refreshHint();
+  }
+
   /**
-   * 잠금·안내 두기 키 안내(상태 줄·측정 띠에서 안내 글 다음 따로): 잠근 방향, 키보드 기기는 Shift·화살표, 각도기 화살표 평면,
-   * 점을 찍기 전 키보드 기기는 안내 두기 키(Ctrl·Option). 도구를 끈 동안은 null. touch = 손가락이 주인 기기
+   * 잠금·안내 두기 키 안내(상태 줄·측정 띠에서 안내 글 다음 따로): 잠근 방향, 키보드 기기는 Shift·화살표(220차 — 가상 커서가 켜졌으면 Shift·X·Y·Z·L),
+   * 각도기 화살표 평면, 점을 찍기 전 키보드 기기는 안내 두기 키(Ctrl·Option). 도구를 끈 동안은 null. touch = 손가락이 주인 기기.
+   * 220차: ↓·L이 잠글 방향을 찾지 못했으면 그 알림(잠갔으면 잠금 안내 뒤에 " · "로 — 잠금은 그대로)
    */
   lockHintText(touch: boolean): string | null {
     const m = this.modeValue;
     const n = this.pts.length;
-    const hint = lockHint(m, n, lockName(this.lockValue), this.planeAxisValue, touch) ?? guideKeyHint(m, n, this.guideOn, this.opts.guideKey ?? 'Control', touch);
+    const lock = lockName(this.lockValue);
+    const none = this.noLock && this.directing ? (lock ? `${LOCK_HINTS[lock]} · ${LOCK_NONE_HINT}` : LOCK_NONE_HINT) : null;
+    const hint = none ?? lockHint(m, n, lock, this.planeAxisValue, touch, this.keyCursorOn) ?? guideKeyHint(m, n, this.guideOn, this.opts.guideKey ?? 'Control', touch);
     // 끌어온 점이 있으면 그 수를 뒤에 따로(번역은 " · "로 나눠 조각마다 찾는다)
     const t = m ? trackHint(this.tracker.size) : null;
     return hint && t ? `${hint} · ${t}` : (hint ?? t);
@@ -2527,6 +2560,9 @@ export class MeasureTool {
     this.overlay.invalidate();
     // 127차: 키 길이 새 글을 쓴다 — 기다리던 키 밖의 변화 알림은 버린다
     this.keyQuiet();
+    // 220차: 켜거나 옮기면 잠글 방향이 없음 알림은 거두고, 잠금 안내는 커서가 켜진 동안의 키(Shift·X·Y·Z·L)로 — 바뀌었으면 onLock
+    this.noLock = false;
+    this.refreshHint();
     return this.keyText(snap);
   }
 
@@ -2536,6 +2572,9 @@ export class MeasureTool {
    */
   keyEnd(keep: boolean): void {
     this.keyQuiet();
+    // 220차: 코어 커서가 꺼졌다(keep이어도) — 잠금 안내는 다시 Shift·화살표, 잠글 방향이 없음 알림은 거둔다
+    this.noLock = false;
+    this.refreshHint();
     if (keep || this.cursor?.type !== 'keyboard') return;
     this.cursor = null;
     this.cycle = this.cycleOff = this.shiftUndo = null;
@@ -2565,8 +2604,8 @@ export class MeasureTool {
    * 커서를 끈 동안의 →·←·↑·↓ 잠금(arrowLock)을 이 키가 같은 길로 한다 — X 빨강 · Y 녹색 · Z 파랑 축(같은 축이면 풂), L 모서리와 나란히·수직(↓ 그대로),
    * 각도기 중심 전에는 X·Y·Z가 그 축 평면 고정. 3D 보기가 받은 keydown이고 수정 키(Ctrl·⌘·Alt·Shift)가 없고 막히지 않았고 그 화살표가 받는 때(방향을 잡는 중,
    * 각도기 중심 전 X·Y·Z)만 받아 기본 동작(Firefox 입력하면 찾기 등)을 막는다 — 누른 채 되풀이는 막기만.
-   * 받았으면 알림 글: 잠근 것은 잠금 안내(LOCK_HINTS·PLANE_HINTS — 띠·상태 줄과 같은 글), 푼 것은 KEY_LOCK_TEXT, 바뀐 것이 없으면(잠글 것이 없음·되풀이) 빈 글(알리지 않는다).
-   * 받지 않으면 null(예전 길 — 측정 도구 handleKey·앱·코어)
+   * 받았으면 알림 글: 잠근 것은 잠금 안내(LOCK_HINTS·PLANE_HINTS — 띠·상태 줄과 같은 글), 푼 것은 KEY_LOCK_TEXT, 바뀐 것이 없으면(잠글 것이 없음·되풀이) 빈 글(알리지 않는다 —
+   * 잠글 것이 없음은 220차부터 상태 줄·측정 띠의 LOCK_NONE_HINT, ↓와 같은 arrowLock 길). 받지 않으면 null(예전 길 — 측정 도구 handleKey·앱·코어)
    */
   keyLock(e: KeyboardEvent): string | null {
     const v = this.viewer;
@@ -2849,7 +2888,11 @@ export class MeasureTool {
       const h = this.lockable(this.freshHover());
       const r = this.edgeRef;
       const l = h && h.kind !== 'axis' ? h : r ? parallelInferenceLock(r) : null;
-      if (!l) return false;
+      if (!l) {
+        // 220차: 잠글 방향이 없으면 상태 줄·측정 띠에 알림(잠금은 그대로 — 다루지 않은 키인 것도 그대로, L은 keyLock이 기본 동작을 막는다)
+        this.setNoLock(true);
+        return false;
+      }
       this.setLock({ ...l, source: 'key' });
       return true;
     }
@@ -2868,6 +2911,7 @@ export class MeasureTool {
   private setLock(l: MeasureLock | null): void {
     if (!l && !this.lockValue) return;
     this.lockValue = l;
+    this.noLock = false;
     this.hoverDirty = true;
     this.refreshHint();
     this.overlay.invalidate();
@@ -2876,6 +2920,7 @@ export class MeasureTool {
   /** 점을 찍거나 취소하면 잠금과 본 방향 추론을 버린다(알림은 뒤따르는 refreshHint가) */
   private dropLock(): void {
     this.lockValue = null;
+    this.noLock = false;
     this.lastLockable = this.lastLockSrc = null;
   }
 
@@ -3251,6 +3296,8 @@ export class MeasureTool {
     // Shift 잠금은 옮기기 전 자리에서 보인 추론으로(키를 못 받은 사이 눌렀거나 뗐어도 이동의 shiftKey로 맞춘다)
     this.setShift(!!e.shiftKey);
     this.cursor = { x: p.x, y: p.y, type };
+    // 220차: 커서를 옮기면 잠글 방향이 없음 알림은 거둔다(그 자리에서 누른 ↓의 답이었다)
+    this.setNoLock(false);
     // 126차: Shift+Tab 되돌리기에 쓴 누름은 뗄 때까지 평면을 다시 고정하지 않고, 되돌릴 자리에서 4화소 넘게 움직이면 되돌리기를 버린다(잠근 채)
     if (this.modeValue === 'protractor') this.setPlaneLock(!!e.shiftKey && !this.shiftUsed);
     const u = this.shiftUndo;
@@ -3630,10 +3677,13 @@ export class MeasureTool {
     }
     // 방향을 잡지 않게 되거나(점을 찍음·취소·도구 바꾸기) 잠갔으면 잠글 방향 고르기 줄을 닫는다
     if (this.lockMenu && !this.lockMenu.hidden && (!this.directing || this.lockValue)) this.toggleLockMenu(false);
-    const [lock, plane, tracks] = this.lockNote;
+    const [lock, plane, tracks, keys, none] = this.lockNote;
     const n = this.tracker.size;
-    if (lock !== this.lockValue || plane !== this.planeAxisValue || tracks !== n) {
-      this.lockNote = [this.lockValue, this.planeAxisValue, n];
+    // 220차: 잠금 안내 글을 바꾸는 둘 — 잠그지 않고 방향을 잡는 동안 가상 커서가 켜졌는지(키 줄), 잠글 방향이 없음 알림
+    const k = this.directing && !this.lockValue && this.keyCursorOn;
+    const nl = this.noLock && this.directing;
+    if (lock !== this.lockValue || plane !== this.planeAxisValue || tracks !== n || keys !== k || none !== nl) {
+      this.lockNote = [this.lockValue, this.planeAxisValue, n, k, nl];
       this.opts.onLock?.();
     }
   }

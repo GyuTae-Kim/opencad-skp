@@ -27,6 +27,8 @@ import {
   PLANE_HINTS,
   lockKeyOf,
   LOCK_KEYS_HINT,
+  LOCK_KEYS_CURSOR_HINT,
+  LOCK_NONE_HINT,
   lockHint,
   lockName,
   measureHint,
@@ -6972,5 +6974,162 @@ describe('측정 도구: 가상 커서를 켠 동안 X·Y·Z·L 방향 잠금(21
     expect(['x', 'Y', 'z', 'L'].map((key) => lockKeyOf({ key, code: '' }))).toEqual(['x', 'y', 'z', 'l']);
     expect([['ㅌ', 'KeyX'], ['ㅛ', 'KeyY'], ['ㅋ', 'KeyZ'], ['ㅣ', 'KeyL'], ['Process', 'KeyL']].map(([key, code]) => lockKeyOf({ key: key!, code: code! }))).toEqual(['x', 'y', 'z', 'l', 'l']);
     expect([['a', 'KeyX'], ['Enter', 'Enter'], ['ArrowDown', 'ArrowDown'], ['Process', 'KeyA'], ['1', 'Digit1']].map(([key, code]) => lockKeyOf({ key: key!, code: code! }))).toEqual([null, null, null, null, null]);
+  });
+});
+
+describe('측정 도구: 상태 줄·측정 띠 잠금 안내는 가상 커서 상태에 맞는 키, 잠글 방향이 없으면 그 알림(220차 — 219차 남은 일 (1)·(4), WCAG 3.3.2·4.1.3)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // 둘레 고르기 시간 한도가 기계 부하로 갈리지 않게 시계를 멈춘다(126차 꼴)
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+  });
+  /** 코어 가상 커서를 그 자리에 켜거나 옮긴다(코어 keyboardCursor + keypick.ts sayMeasure의 keyHover — 219차 꼴) */
+  const at = (r: Rig, x: number, y: number): string => {
+    (r.viewer as { keyboardCursor?: unknown }).keyboardCursor = { x, y };
+    const t = r.tool.keyHover(x, y);
+    r.overlay.paintNow();
+    return t;
+  };
+  /** 코어 가상 커서를 끈다(코어는 커서를 지운 뒤 끈 알림 — keypick.ts sayMeasure의 keyEnd) */
+  const off = (r: Rig, keep = false): void => {
+    (r.viewer as { keyboardCursor?: unknown }).keyboardCursor = null;
+    r.tool.keyEnd(keep);
+  };
+  /** 3D 보기가 받은 키를 keyLock으로(keypick.ts가 커서가 켜진 동안 넘긴다) — [알림 칸 글(받지 않으면 null), 기본 동작을 막았는지] */
+  const lk = (r: Rig, key: string, repeat = false): [string | null, boolean] => {
+    const e = new KeyboardEvent('keydown', { key, repeat, cancelable: true });
+    Object.defineProperty(e, 'target', { value: r.canvas });
+    const t = r.tool.keyLock(e);
+    r.overlay.paintNow();
+    return [t, e.defaultPrevented];
+  };
+  // 219차 SCENE: 원점에서 +X로 10 모서리 e, 시작점에서 떨어진 45° 모서리 d(나란함 기준)
+  const SCENE = (): Pick<Scene3d, 'meshes' | 'lines' | 'units'> => ({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 10, 0, 0]]), lines('d', [[-90, -60, 0, -60, -30, 0]])] });
+
+  it('방향을 잡는 동안 잠그지 않았으면 가상 커서가 켜졌을 때 「Shift·X·Y·Z·L로 방향 잠금」, 꺼졌을 때 「Shift·화살표로 방향 잠금」 — 글이 바뀌면 onLock(앱이 상태 줄·측정 띠를 다시 그린다)', () => {
+    // 순수 함수: 커서 인수(기본 꺼짐 — 예전 글 그대로). 잠갔거나 손가락 기기·방향을 잡지 않는 때·각도기 평면 고정은 커서와 상관없다
+    expect(LOCK_KEYS_CURSOR_HINT).toBe('Shift·X·Y·Z·L로 방향 잠금');
+    expect(lockHint('tape', 1, null, null)).toBe(LOCK_KEYS_HINT);
+    expect(lockHint('tape', 1, null, null, false, true)).toBe(LOCK_KEYS_CURSOR_HINT);
+    expect(lockHint('protractor', 1, null, null, false, true)).toBe(LOCK_KEYS_CURSOR_HINT);
+    expect(lockHint('protractor', 2, null, null, false, true)).toBe(LOCK_KEYS_CURSOR_HINT);
+    expect(lockHint('tape', 1, 'x', null, false, true)).toBe('빨강 축으로 잠금');
+    expect(lockHint('tape', 1, null, null, true, true)).toBeNull();
+    expect(lockHint('tape', 0, null, null, false, true)).toBeNull();
+    expect(lockHint('protractor', 0, null, 'z', false, true)).toBe('파랑 각도기로 고정');
+    const r = rig(SCENE());
+    r.tool.setMode('tape');
+    // 시작점 전: 잠금 안내 없음(안내 두기 키) — 커서를 켜도 같다
+    expect(r.tool.lockHintText(false)).toBe('Ctrl: 안내 두기');
+    at(r, 101, 100);
+    expect(r.tool.lockHintText(false)).toBe('Ctrl: 안내 두기');
+    r.tool.keyPlace(false);
+    expect(r.tool.pointCount).toBe(1);
+    // 끝점을 잡는 동안 커서가 켜짐: 화살표는 커서 옮기기라 X·Y·Z·L(켤 때 키 안내와 같은 키 줄), 손가락 기기는 그대로 없음
+    expect(r.tool.lockHintText(false)).toBe(LOCK_KEYS_CURSOR_HINT);
+    expect(r.tool.lockHintText(true)).toBeNull();
+    // 같은 글이면 옮겨도 onLock 없음
+    const n = r.locks.length;
+    at(r, 100, 160);
+    expect(r.locks.length).toBe(n);
+    // 잠그면 잠금 안내(키 없는 지금 상태 글), 풀면 다시 커서 글
+    expect(lk(r, 'x')).toEqual(['빨강 축으로 잠금', true]);
+    expect(r.tool.lockHintText(false)).toBe('빨강 축으로 잠금');
+    expect(lk(r, 'x')).toEqual(['방향 잠금을 풀었습니다', true]);
+    expect(r.tool.lockHintText(false)).toBe(LOCK_KEYS_CURSOR_HINT);
+    // 코어 커서를 끄면(Esc·포인터) 화살표가 다시 방향 잠금이라 「Shift·화살표」 — onLock 한 번
+    const m = r.locks.length;
+    off(r);
+    expect(r.tool.lockHintText(false)).toBe(LOCK_KEYS_HINT);
+    expect(r.locks.length).toBe(m + 1);
+    // 다시 켜면 커서 글, 초점이 측정값 칸으로 가 표식을 둔 채 꺼져도(keep) 코어 커서는 꺼졌으니 「Shift·화살표」
+    at(r, 100, 160);
+    expect(r.tool.lockHintText(false)).toBe(LOCK_KEYS_CURSOR_HINT);
+    expect(r.locks.length).toBe(m + 2);
+    off(r, true);
+    expect(r.tool.lockHintText(false)).toBe(LOCK_KEYS_HINT);
+    expect(r.locks.length).toBe(m + 3);
+    // 마우스로 옮겨도 「Shift·화살표」 그대로(onLock 없음)
+    r.move(100, 160);
+    expect(r.tool.lockHintText(false)).toBe(LOCK_KEYS_HINT);
+    expect(r.locks.length).toBe(m + 3);
+    // 각도기: 중심 전 평면 고정 안내는 키 없는 글 그대로, 기준 방향을 잡는 동안은 줄자와 같다
+    const p = rig(EDGES());
+    p.tool.setMode('protractor');
+    expect(at(p, 102, 103)).toBe('끝점: X 0 mm, Y 0 mm, Z 0 mm');
+    expect(lk(p, 'z')).toEqual([PLANE_HINTS.z, true]);
+    expect(p.tool.lockHintText(false)).toBe('파랑 각도기로 고정');
+    lk(p, 'z');
+    p.tool.keyPlace(false);
+    expect(p.tool.pointCount).toBe(1);
+    expect(p.tool.lockHintText(false)).toBe(LOCK_KEYS_CURSOR_HINT);
+    off(p);
+    expect(p.tool.lockHintText(false)).toBe(LOCK_KEYS_HINT);
+  });
+
+  it('↓(커서 꺼짐)·L(커서 켜짐)이 잠글 방향을 찾지 못하면 잠금 안내 자리에 「잠글 방향이 없습니다」(축 잠금 중이면 그 뒤에 — 잠금 그대로), 가상 커서 알림 칸에는 내지 않고, 커서를 옮기거나 잠금·점·커서가 바뀌면 거둔다', () => {
+    expect(LOCK_NONE_HINT).toBe('잠글 방향이 없습니다');
+    const r = rig(SCENE());
+    r.tool.setMode('tape');
+    // 마우스: 시작점 (0, 0, 0) — e의 끝점. 45° 모서리 d를 지나간 뒤 숨겨 나란히 기준을 없애고, 커서 밑에 방향 추론이 없는 곳으로
+    r.move(101, 100);
+    r.click(101, 100);
+    expect(r.tool.pointCount).toBe(1);
+    r.move(25, 145);
+    r.hide('d');
+    r.move(150, 150);
+    expect(r.tool.lockHintText(false)).toBe(LOCK_KEYS_HINT);
+    const n = r.locks.length;
+    // ↓: 다루지 않은 키 그대로(false — 106차, 앱 차례·기본 동작 그대로), 잠금 없음, 알림과 onLock 한 번(앱이 다시 그린다 — 측정 띠 글은 aria-live)
+    expect(r.key('ArrowDown')).toBe(false);
+    expect(r.tool.inferenceLock).toBeNull();
+    expect(r.tool.lockHintText(false)).toBe(LOCK_NONE_HINT);
+    expect(r.tool.lockHintText(true)).toBe(LOCK_NONE_HINT);
+    expect(r.locks.length).toBe(n + 1);
+    // 거듭 눌러도 같은 글(onLock 없음), 커서를 옮기면 거둔다
+    r.key('ArrowDown');
+    expect(r.locks.length).toBe(n + 1);
+    r.move(151, 150);
+    expect(r.tool.lockHintText(false)).toBe(LOCK_KEYS_HINT);
+    expect(r.locks.length).toBe(n + 2);
+    // 축 잠금 중 ↓(나란히로 바꿀 것 없음): 축 잠금 그대로, 잠금 안내 뒤에 알림 — 잠금이 바뀌면(→ 다시 — 풂) 거둔다
+    expect(r.key('ArrowRight')).toBe(true);
+    expect(r.key('ArrowDown')).toBe(false);
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'x', source: 'key' });
+    expect(r.tool.lockHintText(false)).toBe(`${LOCK_HINTS.x} · ${LOCK_NONE_HINT}`);
+    expect(r.key('ArrowRight')).toBe(true);
+    expect(r.tool.inferenceLock).toBeNull();
+    expect(r.tool.lockHintText(false)).toBe(LOCK_KEYS_HINT);
+    // 가상 커서: L은 알림 칸에 빈 글(219차 그대로 — 가상 커서 알림 영역에는 내지 않음), 띠·상태 줄은 같은 알림. 되풀이는 막기만(알림 그대로)
+    at(r, 150, 150);
+    expect(r.tool.lockHintText(false)).toBe(LOCK_KEYS_CURSOR_HINT);
+    expect(lk(r, 'l')).toEqual(['', true]);
+    expect(r.tool.lockHintText(false)).toBe(LOCK_NONE_HINT);
+    expect(lk(r, 'l', true)).toEqual(['', true]);
+    expect(r.tool.lockHintText(false)).toBe(LOCK_NONE_HINT);
+    // 커서를 옮기면 거둔다, 커서를 꺼도 거둔다
+    at(r, 150, 152);
+    expect(r.tool.lockHintText(false)).toBe(LOCK_KEYS_CURSOR_HINT);
+    lk(r, 'l');
+    expect(r.tool.lockHintText(false)).toBe(LOCK_NONE_HINT);
+    off(r);
+    expect(r.tool.lockHintText(false)).toBe(LOCK_KEYS_HINT);
+    // 점을 취소하면(Esc — 방향을 잡지 않게 됨) 거둔다
+    r.move(150, 150);
+    r.key('ArrowDown');
+    expect(r.tool.lockHintText(false)).toBe(LOCK_NONE_HINT);
+    expect(r.key('Escape')).toBe(true);
+    expect(r.tool.pointCount).toBe(0);
+    expect(r.tool.lockHintText(false)).toBe('Ctrl: 안내 두기');
+    // 각도기 중심 전 ↓: 할 일 없는 키(→·←·↑만 평면 고정) — 알림 없음
+    const p = rig(EDGES());
+    p.tool.setMode('protractor');
+    p.move(150, 150);
+    expect(p.key('ArrowDown')).toBe(false);
+    expect(p.tool.lockHintText(false)).toBe('Ctrl: 안내 두기');
   });
 });
