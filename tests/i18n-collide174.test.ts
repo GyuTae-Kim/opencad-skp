@@ -332,8 +332,25 @@ afterEach(() => {
   dispose = undefined;
   vi.unstubAllGlobals();
 });
-const tick = async (): Promise<void> => {
-  for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+/**
+ * 번역층이 다시 옮기기를 마칠 때까지(CI 14차 — 공용 규칙 13번·STEP 218차 switchTo 꼴: setTimeout(0) 네 번 → 조건과 마감 시간):
+ * done()이 참이고(언어를 바꾸면 문서 언어가 바뀜 — 번역층은 사전 조각을 받은 뒤 바꾼다) DOM이 매크로 작업 네 차례 잇달아 조용할 때까지(앞 네 번보다 짧지 않다), 마감 5초
+ */
+const tick = async (done: () => boolean = () => true): Promise<void> => {
+  let changed = false;
+  const watch = new MutationObserver(() => {
+    changed = true;
+  });
+  watch.observe(document, { subtree: true, childList: true, characterData: true, attributes: true });
+  try {
+    for (let quiet = 0, end = Date.now() + 5_000; quiet < 4 && Date.now() < end; ) {
+      changed = false;
+      await new Promise((r) => setTimeout(r, 0));
+      quiet = done() && !changed ? quiet + 1 : 0;
+    }
+  } finally {
+    watch.disconnect();
+  }
 };
 
 describe('217차 jsdom: 겹친 값과 언어 바꾸기(실제 번역층)', () => {
@@ -361,7 +378,7 @@ describe('217차 jsdom: 겹친 값과 언어 바꾸기(실제 번역층)', () =>
     for (const [k, el] of rev) expect(el.textContent, `${lang}: ${k}`).toBe(catalogs[lang]![k]);
     for (const next of [...LANGS.filter((l) => l !== lang), 'ko']) {
       (document.querySelector(`.language-list [data-language="${next}"]`) as HTMLButtonElement).click();
-      await tick();
+      await tick(() => document.documentElement.lang === next);
       for (const [k, el] of app) expect([el.textContent, el.title], `${lang} → ${next}: ${k}`).toEqual([translate(k, next), translate(k, next)]);
       for (const [k, el] of rev) {
         // 거꾸로 찾기는 이긴 열쇠로만 되돌린다 — 그 번역이 제 원문의 번역과 다르면 다른 원문의 번역이 보인다

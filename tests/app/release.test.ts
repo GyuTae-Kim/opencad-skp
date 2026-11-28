@@ -174,9 +174,17 @@ const info = (id: string, colorize: boolean): SkpTextureInfo => ({
 const held = (id: string): HeldTexture => ({ id, blob: new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' }), info: info(id, true) });
 const mesh = (id: string, nv: number): Scene3d['meshes'][number] => ({ id, positions: new Float32Array(nv * 3), color: [1, 1, 1, 1] });
 const sceneOf = (): Scene3d => ({ name: 's', units: 'mm', meshes: [mesh('m1', 3), mesh('m2', 4)], lines: [] });
-const flush = async (): Promise<void> => {
-  for (let i = 0; i < 6; i++) await Promise.resolve();
+/**
+ * CI 14차(공용 규칙 13번 — 기다림은 횟수가 아니라 시간과 조건): 매크로 작업을 한 차례씩 넘기며(그 앞에 쌓인 약속은 길이와 상관없이 다 돈다)
+ * busy()가 참인 동안 마감 ms까지 기다린다 — 적어도 한 차례(busy를 주지 않으면 마감까지)
+ */
+const waitWhile = async (ms: number, busy: () => boolean = () => true): Promise<void> => {
+  const end = Date.now() + ms;
+  do await new Promise((r) => setTimeout(r, 0));
+  while (busy() && Date.now() < end);
 };
+/** 약속이 다 돌 때까지(CI 14차: 약속 여섯 번 → 매크로 작업으로 마감 2 ms — 이 길에는 타이머가 없어 한 차례면 다 돈다) */
+const flush = (): Promise<void> => waitWhile(2);
 const bmp = (): ImageBitmap => ({ width: 2, height: 2, close: vi.fn() }) as unknown as ImageBitmap;
 const result = (...ids: string[]): RecolorResult => ({ textures: ids.map((id) => ({ id, bitmap: bmp(), width: 2, height: 2 })), ms: 3 });
 
@@ -610,13 +618,11 @@ class GatedViewer extends FakeViewer {
 }
 
 const rawHeld = (id: string, bytes: number[]): HeldTexture => ({ id, blob: new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' }), info: info(id, false), raw: true });
-/** Blob 읽기·약속이 몇 번 돌 때까지 */
-const settle = async (): Promise<void> => {
-  for (let i = 0; i < 12; i++) await new Promise((r) => setTimeout(r, 0));
-};
-/** 다 줄 때까지 열어 준다 */
+/** Blob 읽기·약속이 돌 때까지(CI 14차: setTimeout(0) 열두 번 — 12 ms 남짓 → 마감 15 ms) */
+const settle = (): Promise<void> => waitWhile(15);
+/** 다 줄 때까지 열어 준다(CI 14차 — 공용 규칙 13번, 고치는 시험의 같은 꼴도: 스무 차례(settle 스무 번 — 240 ms 남짓) → 마감 5초, 열어 줄 것이 없으면 그만) */
 const drain = async (v: GatedViewer): Promise<void> => {
-  for (let i = 0; i < 20; i++) {
+  for (const end = Date.now() + 5_000; Date.now() < end; ) {
     await settle();
     if (!v.open()) break;
   }

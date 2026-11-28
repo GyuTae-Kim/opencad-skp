@@ -27,6 +27,15 @@ class FakeWorker {
 }
 
 const result = (): ParseResult => ({ scene: { name: 's', units: 'mm', meshes: [], lines: [] }, ms: 1 });
+/**
+ * CI 14차(공용 규칙 13번 — 기다림은 횟수가 아니라 시간과 조건): 매크로 작업을 한 차례씩 넘기며(그 앞에 쌓인 약속은 길이와 상관없이 다 돈다)
+ * busy()가 참인 동안 마감 ms까지 기다린다 — 적어도 한 차례(busy를 주지 않으면 마감까지)
+ */
+const waitWhile = async (ms: number, busy: () => boolean = () => true): Promise<void> => {
+  const end = Date.now() + ms;
+  do await new Promise((r) => setTimeout(r, 0));
+  while (busy() && Date.now() < end);
+};
 
 beforeEach(() => {
   FakeWorker.all = [];
@@ -170,11 +179,12 @@ describe('ParseClient', () => {
     // 받지 못하면 알리지 않는다(거부도 처리한다)
     const n = w.posted.length;
     void c.open('c.skp', new Blob([]), undefined, { defer: Promise.reject(new Error('조각을 받지 못함')) });
-    for (let i = 0; i < 4; i++) await Promise.resolve();
+    // CI 14차: 약속 네 번 → 매크로 작업으로 마감 2 ms(적어도 한 차례 — 거부 처리 약속까지 다 돈다)
+    await waitWhile(2);
     expect(w.posted.slice(n).map((p) => p.msg.type)).toEqual(['open']);
     // defer를 주지 않으면 예전처럼 열기만
     void c.open('d.skp', new Blob([]));
-    for (let i = 0; i < 4; i++) await Promise.resolve();
+    await waitWhile(2);
     expect(w.posted.slice(n + 1).map((p) => p.msg.type)).toEqual(['open']);
   });
 

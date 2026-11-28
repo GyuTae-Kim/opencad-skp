@@ -240,12 +240,14 @@ describe('62차 손질 워커를 받지 못하면 화면에서 같은 손질(놓
       throw new Error('워커 스크립트를 받지 못했습니다');
     });
     w.setSource({ scene, textures: held, textureLimit: 2048 });
-    for (let i = 0; i < 200 && waiting.size; i++) await new Promise((r) => setTimeout(r, 1));
+    // CI 14차(공용 규칙 13번 — 횟수가 아니라 마감 시간과 조건): 조건 그대로, setTimeout(1) 이백 번(200 ms 남짓) → 마감 5초
+    for (const end = Date.now() + 5_000; waiting.size && Date.now() < end; ) await new Promise((r) => setTimeout(r, 1));
     expect(got.map(([id, b]) => [id, b.width, b.height, [...b.px!.slice(0, 8)]])).toEqual(
       want.textures.map((t) => [t.id, t.width, t.height, [...(t.bitmap as unknown as FakeBitmap).px!.slice(0, 8)]]),
     );
     // 견본 PNG도 같은 수만큼 만들어 재질 목록 견본을 바꾼다(가짜 굳히기는 [1])
-    for (let i = 0; i < 50 && images.materials.get('b')!.url === 'blob:old-b'; i++) await new Promise((r) => setTimeout(r, 1));
+    // CI 14차: 조건 그대로, setTimeout(1) 쉰 번(50 ms 남짓) → 마감 5초
+    for (const end = Date.now() + 5_000; images.materials.get('b')!.url === 'blob:old-b' && Date.now() < end; ) await new Promise((r) => setTimeout(r, 1));
     expect(log.pngs - pngs).toBe(2);
     const { resolveObjectURL } = await import('node:buffer');
     for (const f of ['a', 'b']) {
@@ -333,12 +335,16 @@ describe('103차 첫 그림 뒤로 미룬 손질을 setTexture로(가짜 WebGL2 
   };
   /** 코어가 무늬를 다 올리고 앱 몫(약속)까지 끝날 때까지 */
   const ready = async (v: Viewer3d): Promise<void> => {
-    for (let i = 0; i < 400; i++) {
+    // CI 14차(공용 규칙 13번 — 고치는 시험의 같은 꼴도): 조건 그대로, setTimeout(1) 사백 번(400 ms 남짓) → 마감 5초
+    for (const end = Date.now() + 5_000; Date.now() < end; ) {
       const t = v.stats.textures;
       if (t.count && t.ready + t.failed === t.count && !v.restoreNeed) break;
       await new Promise((r) => setTimeout(r, 1));
     }
-    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
+    // CI 14차(공용 규칙 13번): setTimeout(0) 열 번(10 ms 남짓) → 마감 15 ms까지(적어도 한 차례 — 그 앞에 쌓인 약속은 다 돈다)
+    const end = Date.now() + 15;
+    do await new Promise((r) => setTimeout(r, 0));
+    while (Date.now() < end);
   };
   /** 한 번 그린 그리기 기록(무늬 꼬리표 포함 — 차례와 무관하게 견준다) */
   const drawsOf = (v: Viewer3d, gl: FakeGL): string[] => {
