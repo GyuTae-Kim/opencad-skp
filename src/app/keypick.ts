@@ -235,7 +235,7 @@ export class KeyPick {
 
   /**
    * 알림 칸에 글 넣기(222차 — flash.ts sayLive): again은 사용자가 같은 동작을 거듭한 때(같은 자리 Enter — 줄자·각도기 찍기, 고르기 도구 'commit',
-   * 223차: 3D 보기 끝에 닿아 옮겨지지 않은 화살표, 고르기 도구 Tab 'cycle')만 —
+   * 223차: 3D 보기 끝에 닿아 옮겨지지 않은 화살표, 고르기 도구 Tab 'cycle', 224차: 켜기 'start' — 도구를 바꿔 알림 없이 끈 뒤 같은 자리로 다시 켬)만 —
    * 같은 글이면 한 프레임 비웠다 다시 넣어 다시 읽힌다. 앱·코어가 스스로 넣는 글(가라앉은 자리 글·언어 바꿈·끄기)은 같아도 그대로
    */
   private write(text: string, again = false): void {
@@ -370,8 +370,9 @@ export class KeyPick {
           return d && formatLength(v * mmPerSceneUnit(d.scene.units), d.units);
         },
         // 222차: 같은 후보를 Enter로 거듭 고른 것('commit')만 같은 글이면 다시 알린다. 223차: 끝에 닿아 옮겨지지 않은 화살표('move' — stuck)와
-        // Tab·Shift+Tab('cycle' — 후보 하나·없는 자리면 같은 글, 둘 이상이면 차례가 바뀌어 늘 다른 글)도
-        announce: (a) => this.write(a.text, this.stuck(a) || a.reason === 'commit' || a.reason === 'cycle'),
+        // Tab·Shift+Tab('cycle' — 후보 하나·없는 자리면 같은 글, 둘 이상이면 차례가 바뀌어 늘 다른 글)도. 224차: 켜기('start' — 코어는 키로만 켠다,
+        // 도구를 바꿔 알림 없이 끈 뒤 같은 가운데로 다시 켜면 칸에 남은 앞 켜기 글과 같다)도
+        announce: (a) => this.write(a.text, this.stuck(a) || a.reason === 'start' || a.reason === 'commit' || a.reason === 'cycle'),
       });
     } else {
       // 줄자·각도기: 코어는 고르기 모드(후보 돌리기 없음 — 코어는 Tab을 넘긴다), 자리만 받아 측정 도구가 추정한다(Tab 후보 돌리기도 측정 도구 — 125차 handleKey)
@@ -387,8 +388,9 @@ export class KeyPick {
   private sayMeasure(a: KeyboardSnapAnnouncement, M: KeySnapMessages, hint: string): void {
     const h = this.app.measureTool;
     if (!h) return;
-    // 223차: 끝에 닿아 옮겨지지 않은 화살표는 같은 자리 추정 글 — 다시 알린다(stuck — 끄면 자리를 지운다)
-    const again = this.stuck(a);
+    // 223차: 끝에 닿아 옮겨지지 않은 화살표는 같은 자리 추정 글 — 다시 알린다(stuck — 끄면 자리를 지운다).
+    // 224차: 켜기도(도구를 바꿔 알림 없이 끈 뒤 같은 가운데로 켜면 앞 켜기 글과 같다 — 줄자·각도기 키 안내는 같음)
+    const again = this.stuck(a) || a.reason === 'start';
     if (a.reason === 'end') {
       // 초점이 측정값 칸 등으로 갔으면(그 칸에 친 길이의 방향) 표식을 그 자리에 둔다 — Esc·포인터로 끄면 거둔다
       h.keyEnd(document.activeElement !== this.v.canvas);
