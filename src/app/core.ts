@@ -2,8 +2,8 @@
  * 문서를 열 때 나눠 받는 조각(dynamic import — 첫 화면 JS에서 문서가 없을 때 쓰지 않는 코드를 뺀다).
  *
  * - 3D 뷰어 코어(opencad-viewer3d 입구 → viewer·renderer·셰이더·고르기): 시작 화면(파일 열기·최근 문서·예제·언어 메뉴)은 코어 없이 그린다.
- *   앱은 코어의 작은 모듈(camera 뷰 이름·표준 뷰 키 표·카메라 계산, pointer 터치 거리, theme 테마 색,
- *   section 단면 수 한도)만 바로 가져오고, 코어 입구와 뷰 큐브 모듈(viewcube — 54차)은 여기서만 가져온다.
+ *   앱은 코어의 작은 모듈(viewkeys 뷰 이름·표준 뷰 키 표)만 바로 가져오고, 코어 입구와 뷰 큐브 모듈(viewcube — 54차)은 여기서만 가져온다.
+ *   227차: 코어 camera(카메라 계산 — 그것이 끌어오는 math·bounds까지)를 값으로 쓰는 앱 쪽(장면 카메라·맞춰 보기·덧그림 층)은 장면 카메라 조각(scenecam.ts)으로 모아 코어와 함께 받는다.
  * - 측정 도구(measure.ts 줄자·각도기·안내 두기·고르기, snap.ts 추정, 코어 inference 교차점·추론 잠금): 키·안내 글은 measurehints.ts에 남긴다.
  * - 파일을 열기 시작하면 워커 해석과 함께 둘 다 받기 시작한다(app.ts openBuffer). 측정 도구는 받는 대로 만들고, 그 전에 켜면 받은 뒤에 켠다.
  *   오프라인 앱은 서비스 워커가 이 조각들도 미리 담아 둔다.
@@ -26,6 +26,7 @@ type KeyPicking = typeof import('./keypick');
 type PickListing = typeof import('./picklist');
 type SunLight = typeof import('./sun');
 type Annotating = typeof import('./annotations');
+type SceneCamera = typeof import('./scenecam');
 
 /**
  * 파일 단면 → 코어 평면 계산(sections.ts — 55차: 구간 단면을 더하며 첫 화면 조각에서 뺐다). 코어 입구와 함께 받아 두므로
@@ -46,6 +47,12 @@ export let annotating: Annotating | null = null;
  * 상태 보내기의 해 자리도 null)
  */
 export let sunLight: SunLight | null = null;
+/**
+ * 장면 카메라 조각(scenecam.ts — 227차: 첫 화면 조각에서 뺐다): 장면·저장 카메라 → 코어 카메라, 세로 화면 맞춤, 처음 카메라, 장면 적용 계획, 맞춰 보기, 3D 보기 덧그림 층.
+ * 코어 camera를 값으로 쓰므로 첫 화면 그래프에 있으면 코어 camera·math·bounds가 첫 화면 조각에 실린다. 앱은 뷰어가 있을 때만 쓰므로 코어 입구와 함께 받는다
+ * (뷰어는 코어를 받은 뒤에만 만든다 — 뷰어가 있으면 늘 있다. 받기 전에는 null, 받지 못하면 코어 입구처럼 ensureViewer가 알린다)
+ */
+export let sceneCamera: SceneCamera | null = null;
 
 /** import()를 한 번만 부르는 받기: 받는 동안·받은 뒤에는 같은 약속을 주고, 받지 못하면 비워 다음 부름에서 다시 받는다 */
 export function onceImport<T>(load: () => Promise<T>): () => Promise<T> {
@@ -75,13 +82,15 @@ export const loadViewerCore: () => Promise<Core> = onceImport(() =>
     import('./sun'),
     import('./picklist'),
     import('./annotations'),
-  ]).then(([core, cube, sections, keys, sun, list, notes]) => {
+    import('./scenecam'),
+  ]).then(([core, cube, sections, keys, sun, list, notes, cam]) => {
     localizeCubeFaces(cube.CUBE_FACES);
     fileSections = sections;
     keyPicking = keys;
     sunLight = sun;
     pickListing = list;
     annotating = notes;
+    sceneCamera = cam;
     return core;
   }),
 );
