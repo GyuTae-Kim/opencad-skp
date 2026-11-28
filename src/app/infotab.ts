@@ -28,7 +28,7 @@ import { latLonText, shadowTimeText, tzText } from './placetext';
 import { fileText as F, mix, nameText } from './filetext';
 import { fmtCount, fmtNum, fmtPt, formatBytes, formatMs } from './format';
 import { mixNodes, mixText, uiName, uiText } from './i18n';
-import { CHILD_LIMIT, LIST_LIMIT, chip, countEl, hint, keep, row, section, selKey, type TabPanel } from './panel';
+import { CHILD_LIMIT, LIST_LIMIT, chip, countEl, hint, keep, loadFail, row, section, selKey, type TabPanel } from './panel';
 import { normalizeQuery, parentPath, searchOutline, searchTree } from './search';
 import { sunForShadow } from './sun';
 import { NODE_HIDDEN, NODE_MORE, childrenOf, isSplit, nodeDefinition, nodeName, nodePath, nodeTag, treeDefinitionCounts, type PickMode, type TreeView } from './tree';
@@ -602,6 +602,23 @@ function countKind(t: TreeView, kind: number): number {
 
 /** 받아 둔 속성 사전 칸 조각(attrview.ts — 47차) */
 let attrView: typeof import('./attrview') | null = null;
+/** 228차: 속성 사전 칸 조각을 받지 못했는지(거듭 그려도 다시 받지 않고 칸 자리에 알림 글 — 다시 시도가 풀고 다시 받는다) */
+let attrFail = false;
+/**
+ * 228차: 속성 사전 칸 조각 받기(한 번만 — 선택 탭은 한 번 그릴 때 몸통을 두 번 그려(render·refreshSelection) 받는 동안 거듭 부르면 같은 약속, core.ts onceImport 꼴 —
+ * 그것을 가져오면 첫 화면 조각의 내보내기가 하나 는다). 받지 못하면 까닭은 콘솔에 한 번·실패 깃발, 약속은 비워 다시 시도가 다시 받는다
+ */
+let attrLoad: Promise<typeof import('./attrview')> | null = null;
+const loadAttrView = (): Promise<typeof import('./attrview')> =>
+  (attrLoad ??= import('./attrview').then(
+    (m) => (attrView = m),
+    (err: unknown) => {
+      console.error(err);
+      attrFail = true;
+      attrLoad = null;
+      throw err;
+    },
+  ));
 
 /** 고른 것의 정보(SketchUp의 엔티티 정보처럼): 이름·정의·태그·재질·크기·넓이·GUID·설명·속성 사전. 고른 것이 없으면 모형 */
 export function renderEntity(p: TabPanel, d: SkpDoc): void {
@@ -642,7 +659,10 @@ export function renderEntity(p: TabPanel, d: SkpDoc): void {
     const slot = h('div');
     p.body.append(slot);
     const put = (m: typeof import('./attrview')): void => slot.replaceWith(m.attrSection(d, e));
+    // 228차: 받지 못하면 칸 자리에 알림 글과 다시 시도(전에는 말없이 칸을 빼 사전이 있는 것을 몰랐다 — WCAG 3.3.1). 까닭 글은 콘솔에만
+    const fail = (): void => slot.replaceWith(...loadFail(p.body, () => ((attrFail = false), p.rerender()), '속성 사전'));
     if (attrView) put(attrView);
-    else void import('./attrview').then((m) => put((attrView = m)), () => slot.remove());
+    else if (attrFail) fail();
+    else void loadAttrView().then(put, fail);
   }
 }

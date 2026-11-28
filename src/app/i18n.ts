@@ -83,9 +83,15 @@ export function localizeCubeFaces(faces: readonly { label: string }[]): void {
 type RecordValue = { source: string; rendered: string };
 // Scene names come from the model; playback controls beside them are authored UI.
 const SKIP = '[data-static-languages], [translate="no"], [data-i18n-skip], script, style, [contenteditable]:not([contenteditable="false"]), textarea, input, code, pre, canvas, svg, .anno-layer, .pmi-layer, .docname, .doc-name, .code-list, .cmd-input, .file-name, .tree .name, .tree-name, .boot-recent-list button, .plist .name, .def-cell, .scene-tabs .scene-tab, .scene-cap, .group-item:not(.opt) .name';
-export async function installLocalization(root: HTMLElement): Promise<() => void> {
+/**
+ * onFail(228차 — main.ts가 앱 loadFailed를 넘긴다): 사전을 받지 못함(오프라인에서 새 판 등 — WCAG 3.3.1·4.1.3). 앱이 바꾸기 전 화면 언어로 「{0}을(를) 불러오지 못했습니다.」
+ * ({0} 언어 원어 이름 — 언어 메뉴 글과 같게)와 다시 시도(그 언어를 다시 받는다)를 알린다 — 까닭 글(브라우저 오류)은 콘솔에만.
+ * 첫 사전이면 한국어로 세운다(언어 메뉴는 둔다 — NC 212차 꼴, 전에는 번역층이 서지 않아 메뉴도 없었다)
+ */
+export async function installLocalization(root: HTMLElement, onFail?: (name: string, retry: () => unknown, error: unknown) => void): Promise<() => void> {
   let language = currentLanguage(location.href);
-  await (installed = loadLanguage(language).then(() => { active = language; }));
+  const fail = (code: string, error: unknown): void => onFail?.(languages.find(l => l.code === code)!.label, () => changeLanguage(code), error);
+  await (installed = loadLanguage(language).then(() => { active = language; }, (e: unknown) => { fail(language, e); language = 'ko'; }));
   const originalViews = Object.entries(VIEW_LABELS);
   function canvasLabels(): void {
     for (const [view,label] of originalViews) VIEW_LABELS[view as keyof typeof VIEW_LABELS] = translate(label,language);
@@ -170,7 +176,7 @@ export async function installLocalization(root: HTMLElement): Promise<() => void
     }
   }
   async function changeLanguage(next: string): Promise<void> {
-    try { await loadLanguage(next); } catch { return; }
+    try { await loadLanguage(next); } catch (e) { fail(next, e); return; }
     const url = new URL(languageUrl(location.href,next));
     // Dev servers use /en/; published apps use /opencad-<format>/en/.
     if (location.hostname === '127.0.0.1' || location.hostname === 'localhost') {

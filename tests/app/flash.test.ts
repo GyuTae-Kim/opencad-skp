@@ -163,8 +163,10 @@ describe('159차: 한 칸 알림 상자의 가벼운 글(복사 결과·2점 투
     // 판정을 부르는 곳은 이 한 자리뿐, 복사 결과를 따로 쥐던 것은 없다
     expect(app.match(/noticeFree\(/g)).toHaveLength(1);
     expect(app).not.toMatch(/copyNotice/);
-    // 부르는 곳 17 가운데 가벼운 글은 셋 — 나머지(열기 결과·해석 경고·오류, 빈 장면 info도 사용자가 연 파일의 결과)는 넷째 인자 없이 늘 띄운다
-    expect(app.match(/this\.showNotice\(/g)).toHaveLength(17);
+    // 부르는 곳 18 가운데 가벼운 글은 셋 — 나머지(열기 결과·해석 경고·오류, 빈 장면 info도 사용자가 연 파일의 결과)는 넷째 인자 없이 늘 띄운다
+    // (228차 +1: 조각·사전을 받지 못한 알림 loadFailed 한 자리 — 무거운 글, 다시 시도 버튼은 띄운 뒤 그 상자에 더한다)
+    expect(app.match(/this\.showNotice\(/g)).toHaveLength(18);
+    expect(app).toMatch(/\n {4}this\.showNotice\('error', loadFailText\(name\), ''\);\n/);
     expect(app.match(/this\.showNotice\([^\n]*, (?:true|kind === 'info')\)/g)).toHaveLength(3);
     expect(app).toMatch(/else this\.showNotice\(ok \? 'info' : 'error', t, '', true\);/);
     expect(app).toMatch(/this\.showNotice\('info', '2점 투시로 바꿀 수 없습니다', '[^'\n]*', true\);/);
