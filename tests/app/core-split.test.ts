@@ -190,6 +190,28 @@ describe('코어 나눠 받기', () => {
   });
 });
 
+describe('패널 탭 몸통 나눠 받기(226차 — 첫 화면 조각 줄이기, NC 210차 꼴)', () => {
+  it('처음 탭(태그·재질) 밖 탭 몸통(구성·선택·정보)은 정보 탭 조각(infotab.ts)에만 있고 첫 화면에서는 panel.ts의 import() 한 곳으로만 받는다 — 첫 화면 그래프에 다시 들어오면 실패', async () => {
+    const { files } = walk(join(ROOT, 'src/app/main.ts'));
+    const rel = [...files].map((f) => relative(ROOT, f));
+    expect(rel).toContain('src/app/panel.ts');
+    // 47차 속성 사전 칸·52차 정보 탭·226차 구성·선택 탭 몸통은 첫 화면 그래프 밖
+    expect(rel.filter((f) => f === 'src/app/infotab.ts' || f === 'src/app/attrview.ts')).toEqual([]);
+    // 첫 화면 모듈 가운데 탭 몸통 조각을 받는 곳은 panel.ts 하나, 속성 사전 칸은 선택 탭 몸통(탭 몸통 조각 안)에서만 받는다
+    const dyn = (spec: string): string[] =>
+      [...files].filter((f) => !f.startsWith(CORE) && dynamicSpecs(readFileSync(f, 'utf8')).includes(spec)).map((f) => relative(ROOT, f));
+    expect(dyn('./infotab')).toEqual(['src/app/panel.ts']);
+    expect(dyn('./attrview')).toEqual([]);
+    expect(dynamicSpecs(readFileSync(join(ROOT, 'src/app/infotab.ts'), 'utf8'))).toEqual(['./attrview']);
+    // 옮긴 몸통 함수는 panel.ts에 정의가 없다(정의를 되살리면 첫 화면 조각에 다시 실린다 — 부르는 줄 `tabs.renderOutline(` 꼴은 정의가 아님)
+    const panel = stripComments(readFileSync(join(ROOT, 'src/app/panel.ts'), 'utf8'));
+    const BODIES = ['renderOutline', 'outlineRow', 'bindPick', 'pickBar', 'renderTree', 'searchBox', 'searchRow', 'nodeRow', 'renderDefinitions', 'renderEntity', 'renderInfo', 'treeBox', 'roveTree', 'foundText', 'countKind'];
+    expect(BODIES.filter((n) => new RegExp(`^\\s*(?:private\\s+|export\\s+)?(?:function\\s+|const\\s+)?${n}\\s*[(<=]`, 'm').test(panel))).toEqual([]);
+    // 탭 몸통 조각이 내보내는 것: 구성·선택·정보 탭 몸통(패널이 부르는 셋)
+    expect(Object.keys(await import('../../src/app/infotab')).sort()).toEqual(['infoSections', 'renderEntity', 'renderOutline']);
+  });
+});
+
 describe('측정 도구 나눠 받기', () => {
   it('측정 도구 조각을 한 번만 받고, 앱이 쓰는 키 규칙은 첫 화면 모듈(measurehints)과 같은 것', async () => {
     const { loadMeasure } = await import('../../src/app/core');
