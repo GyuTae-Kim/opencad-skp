@@ -28,13 +28,12 @@ class FakeWorker {
 
 const result = (): ParseResult => ({ scene: { name: 's', units: 'mm', meshes: [], lines: [] }, ms: 1 });
 /**
- * CI 14차(공용 규칙 13번 — 기다림은 횟수가 아니라 시간과 조건): 매크로 작업을 한 차례씩 넘기며(그 앞에 쌓인 약속은 길이와 상관없이 다 돈다)
- * busy()가 참인 동안 마감 ms까지 기다린다 — 적어도 한 차례(busy를 주지 않으면 마감까지)
+ * 약속만 비우기(이벤트 고리를 넘기지 않음 — 타이머·메시지가 끼어들지 않는 「약속 몇 차례 뒤」 상태를 본다).
+ * 공용 규칙 13번 예외(DWG 333차): 약속만 비우는 고리는 부하와 상관없이 차례가 정해져 있어 시간 마감으로 바꾸지 않는다
+ * (223차가 setTimeout 기다림으로 바꿨다가 리드가 되돌림 — 매크로 작업을 넘기면 시험이 보는 상태가 달라질 수 있다)
  */
-const waitWhile = async (ms: number, busy: () => boolean = () => true): Promise<void> => {
-  const end = Date.now() + ms;
-  do await new Promise((r) => setTimeout(r, 0));
-  while (busy() && Date.now() < end);
+const flushMicrotasks = async (): Promise<void> => {
+  for (let i = 0; i < 4; i++) await Promise.resolve();
 };
 
 beforeEach(() => {
@@ -179,12 +178,11 @@ describe('ParseClient', () => {
     // 받지 못하면 알리지 않는다(거부도 처리한다)
     const n = w.posted.length;
     void c.open('c.skp', new Blob([]), undefined, { defer: Promise.reject(new Error('조각을 받지 못함')) });
-    // CI 14차: 약속 네 번 → 매크로 작업으로 마감 2 ms(적어도 한 차례 — 거부 처리 약속까지 다 돈다)
-    await waitWhile(2);
+    await flushMicrotasks();
     expect(w.posted.slice(n).map((p) => p.msg.type)).toEqual(['open']);
     // defer를 주지 않으면 예전처럼 열기만
     void c.open('d.skp', new Blob([]));
-    await waitWhile(2);
+    await flushMicrotasks();
     expect(w.posted.slice(n + 1).map((p) => p.msg.type)).toEqual(['open']);
   });
 

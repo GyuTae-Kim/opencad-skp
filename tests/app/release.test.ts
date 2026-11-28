@@ -183,8 +183,13 @@ const waitWhile = async (ms: number, busy: () => boolean = () => true): Promise<
   do await new Promise((r) => setTimeout(r, 0));
   while (busy() && Date.now() < end);
 };
-/** 약속이 다 돌 때까지(CI 14차: 약속 여섯 번 → 매크로 작업으로 마감 2 ms — 이 길에는 타이머가 없어 한 차례면 다 돈다) */
-const flush = (): Promise<void> => waitWhile(2);
+/**
+ * 약속이 몇 차례 돌 때까지 — 약속만 비운다(이벤트 고리를 넘기지 않음). 공용 규칙 13번 예외(DWG 333차): 약속만 비우는 고리는 부하와 상관없이
+ * 차례가 정해져 있어 시간 마감으로 바꾸지 않는다(223차가 setTimeout 기다림으로 바꿨다가 리드가 되돌림)
+ */
+const flush = async (): Promise<void> => {
+  for (let i = 0; i < 6; i++) await Promise.resolve();
+};
 const bmp = (): ImageBitmap => ({ width: 2, height: 2, close: vi.fn() }) as unknown as ImageBitmap;
 const result = (...ids: string[]): RecolorResult => ({ textures: ids.map((id) => ({ id, bitmap: bmp(), width: 2, height: 2 })), ms: 3 });
 
