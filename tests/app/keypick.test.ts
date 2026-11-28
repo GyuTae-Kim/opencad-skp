@@ -38,8 +38,10 @@ import {
   pickGroupKey,
   type KeyMeasureHost,
 } from '../../src/app/keypick';
-import { KEY_MEASURE_TEXT } from '../../src/app/measure';
-import { keyAction } from '../../src/app/keys';
+import { KEY_LOCK_TEXT, KEY_MEASURE_TEXT, guideUndoKey, lockKeyOf, selectAllKey } from '../../src/app/measure';
+import { isViewKey, keyAction } from '../../src/app/keys';
+import { vcbStartKey } from '../../src/app/vcb';
+import { walkKeyOf } from 'opencad-viewer3d/pointer';
 import { PICK_LIST_MAX, pickListItems } from '../../src/app/picklist';
 import { SHORTCUTS } from '../../src/app/shortcuts';
 import { childrenOf, nodeName } from '../../src/app/tree';
@@ -206,12 +208,21 @@ describe('알림 틀(네 언어 사전 열쇠)', () => {
 describe('59차 줄자·각도기 키보드 점 찍기 열쇠', () => {
   it('키 안내·알림 글·바로 가기 줄 열쇠는 네 언어 사전에 있고 한글이 남지 않으며, 더해도 화면 번역층이 옮기는 다른 글은 바뀌지 않는다', () => {
     const rows = SHORTCUTS.flatMap((g) => g.items).filter((i) => i.label.startsWith('줄자·각도기를 켠 동안 3D') || i.label.startsWith('줄자·각도기의 가상 커서'));
-    // 125차: 가상 커서 Tab·Shift+Tab(겹친 스냅 후보 돌리기) 줄
-    expect(rows.map((r) => r.keys.join(' '))).toEqual(['Enter', '← → ↑ ↓', 'Tab Shift+Tab', 'Esc']);
+    // 125차: 가상 커서 Tab·Shift+Tab(겹친 스냅 후보 돌리기) 줄. 219차: 커서를 켠 동안 방향 잠금 X·Y·Z·L 줄 둘(화살표 →←↑·↓ 줄 꼴)
+    expect(rows.map((r) => r.keys.join(' '))).toEqual(['Enter', '← → ↑ ↓', 'X Y Z', 'L', 'Tab Shift+Tab', 'Esc']);
     // 키 안내의 옮기기·끄기는 56차 열쇠 그대로
     expect(KEY_MEASURE_HINT.filter((t) => (Object.values(KEY_PICK_TEXT) as string[]).includes(t))).toEqual(['옮기기 ←→↑↓', '끄기 Esc']);
-    const added = [...new Set([...KEY_MEASURE_HINT.filter((t) => !(Object.values(KEY_PICK_TEXT) as string[]).includes(t)), ...Object.values(KEY_MEASURE_TEXT), ...rows.map((r) => r.label)])];
-    expect(added.length).toBe(11);
+    // 219차: 방향 잠금 키가 푼 것의 알림 글 둘(잠근 것은 잠금 안내 LOCK_HINTS·PLANE_HINTS 그대로 — 이미 있는 열쇠)
+    const added = [
+      ...new Set([
+        ...KEY_MEASURE_HINT.filter((t) => !(Object.values(KEY_PICK_TEXT) as string[]).includes(t)),
+        ...Object.values(KEY_MEASURE_TEXT),
+        ...Object.values(KEY_LOCK_TEXT),
+        ...rows.map((r) => r.label),
+      ]),
+    ];
+    // 키 안내 둘(찍기·방향 잠금) + 알림 글 다섯 + 219차 푼 글 둘 + 바로 가기 줄 여섯(219차 X·Y·Z·L 둘 더함)
+    expect(added.length).toBe(15);
     for (const t of added) expect(t.replace(/\{\d+\}/g, ''), t).toMatch(HANGUL);
     for (const code of CODES)
       for (const t of [...KEY_MEASURE_HINT, ...added]) {
@@ -289,6 +300,37 @@ describe('키 겹침', () => {
     const arrows = SHORTCUTS.flatMap((g) => g.items).filter((i) => i.label.startsWith('줄자 끝점·각도기 방향'));
     expect(arrows.flatMap((i) => i.keys).filter((k) => /[←→↑↓]/.test(k)).sort()).toEqual(['←', '↑', '→', '↓']);
     expect(SHORTCUT_GROUP.items[0]!.label).toContain('줄자·각도기를 끈 동안');
+  });
+
+  it('219차 X·Y·Z·L(가상 커서를 켠 동안 방향 잠금)은 SKP 키·측정값 칸·측정 도구 조합 키·코어 가상 커서 키·걷기 키와 겹치지 않고, 바로 가기 안내 줄의 키는 측정 도구가 적은 차례로 읽는다', () => {
+    const items = SHORTCUTS.flatMap((g) => g.items);
+    const rows = items.filter((i) => i.keys.some((k) => /^[XYZL]$/.test(k)));
+    expect(rows.map((r) => r.keys.join(' '))).toEqual(['X Y Z', 'L']);
+    // 적은 차례가 빨강·녹색·파랑(화살표 →·←·↑ 줄과 같은 차례), L은 ↓ 줄과 같은 할 일 — 두 줄의 할 일 글은 화살표 줄과 같다
+    expect(rows[0]!.keys.map((key) => lockKeyOf({ key, code: '' }))).toEqual(['x', 'y', 'z']);
+    expect(rows[1]!.keys.map((key) => lockKeyOf({ key, code: '' }))).toEqual(['l']);
+    const arrows = items.filter((i) => i.label.startsWith('줄자 끝점·각도기 방향') && i.keys.some((k) => /[←→↑↓]/.test(k)));
+    const tail = (s: string): string => s.slice(s.indexOf(': '));
+    expect(rows.map((r) => tail(r.label))).toEqual(arrows.map((a) => tail(a.label)));
+    // 다른 바로 가기 줄에 수정 키 없는 X·Y·Z·L이 없다
+    expect(items.filter((i) => !rows.includes(i)).flatMap((i) => i.keys).filter((k) => /^[XYZL]$/i.test(k))).toEqual([]);
+    for (const key of ['x', 'X', 'y', 'Y', 'z', 'Z', 'l', 'L']) {
+      // 앱 창 키는 제 할 일이 없어 뷰어로 넘기고(SKP 키 T·F7·PageUp·PageDown·?·Ctrl/⌘+O와 겹치지 않음), 보기 키·측정값 칸 첫 글자도 아니다
+      expect(keyAction({ key, hasDoc: true, hasPages: true, keyCursor: true, measureMode: true }), key).toEqual({ kind: 'viewer' });
+      expect(isViewKey({ key }), key).toBe(false);
+      expect(vcbStartKey({ key, ctrlKey: false, metaKey: false, altKey: false }), key).toBe(false);
+      // 측정 도구 조합 키(안내 되돌리기·다시 하기 Ctrl·⌘+Z·Y, 모두 고르기·풀기 Ctrl·⌘+A·T)는 수정 키가 있어야
+      const plain = { key, code: '', ctrlKey: false, metaKey: false, altKey: false, shiftKey: false };
+      expect(guideUndoKey(plain), key).toBeNull();
+      expect(selectAllKey(plain), key).toBeNull();
+      // 코어 가상 커서 키(화살표·Tab·Enter·Esc)·걷기 키(W·A·S·D·Q·E — 물리 키)도 아니다
+      for (const shiftKey of [false, true]) expect(keySnapAction({ key, shiftKey }, KEY_SNAP_KEYS), key).toBeNull();
+      expect(walkKeyOf({ key }), key).toBeNull();
+    }
+    for (const code of ['KeyX', 'KeyY', 'KeyZ', 'KeyL']) expect(walkKeyOf({ code, key: 'Process' }), code).toBeNull();
+    // 수정 키와 함께인 Z·Y는 그대로 안내 되돌리기·다시 하기(측정 도구 keyLock은 수정 키가 있으면 받지 않는다 — tests/app/measure.test.ts 219차)
+    expect(guideUndoKey({ key: 'z', code: 'KeyZ', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false })).toBe('undo');
+    expect(guideUndoKey({ key: 'y', code: 'KeyY', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false })).toBe('redo');
   });
 });
 
@@ -624,7 +666,7 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
     // 코어 Enter: 가운데에 켜고 측정 도구가 그 자리를 추정, 키 안내는 찍기·방향 잠금
     key(cv, 'Enter');
     expect(v.keyboardCursor).toMatchObject({ x: 400, y: 300, mode: 'pick' });
-    expect(kp.text).toBe('가상 커서를 켰습니다. 끝점: 400,300. 옮기기 ←→↑↓ · 찍기 Enter · 방향 잠금 Shift · 끄기 Esc');
+    expect(kp.text).toBe('가상 커서를 켰습니다. 끝점: 400,300. 옮기기 ←→↑↓ · 찍기 Enter · 방향 잠금 Shift·X·Y·Z·L · 끄기 Esc');
     // 켠 동안 화살표는 코어 커서 옮기기(Shift는 크게) — 측정 도구의 방향 잠금으로 가지 않는다
     calls.length = 0;
     expect(kp.handleKey(ev('ArrowRight'))).toBe(true);
@@ -753,7 +795,7 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
     expect(kp.text).toBe('가상 커서를 껐습니다');
     // 후보가 하나면 받지 않고 코어도 넘긴다(초점 이동 — 키보드 덫 없음). 켤 때 키 안내는 그대로(후보 Tab은 늘 되는 키가 아니라 넣지 않는다)
     key(cv, 'Enter');
-    expect(kp.text).toBe('가상 커서를 켰습니다. 끝점: 400,300. 옮기기 ←→↑↓ · 찍기 Enter · 방향 잠금 Shift · 끄기 Esc');
+    expect(kp.text).toBe('가상 커서를 켰습니다. 끝점: 400,300. 옮기기 ←→↑↓ · 찍기 Enter · 방향 잠금 Shift·X·Y·Z·L · 끄기 Esc');
     n = 1;
     expect(kp.handleKey(ev('Tab'))).toBe(false);
     expect(v.handleKey(ev('Tab'))).toBe(false);
@@ -794,7 +836,7 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
     w.say?.('모서리에: X 1 mm, Y 0 mm, Z 0 mm');
     expect(kp.text).toBe('');
     key(cv, 'Enter');
-    expect(kp.text).toBe('가상 커서를 켰습니다. 끝점: 400,300. 옮기기 ←→↑↓ · 찍기 Enter · 방향 잠금 Shift · 끄기 Esc');
+    expect(kp.text).toBe('가상 커서를 켰습니다. 끝점: 400,300. 옮기기 ←→↑↓ · 찍기 Enter · 방향 잠금 Shift·X·Y·Z·L · 끄기 Esc');
     w.say?.('모서리에: X 1 mm, Y 0 mm, Z 0 mm');
     expect(kp.text).toBe('모서리에: X 1 mm, Y 0 mm, Z 0 mm');
     // 각도기로 바꿔도 주고, 고르기 도구·끔이면 거둔다
@@ -807,5 +849,62 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
     kp.setMode(null);
     expect(w.say).toBeNull();
     expect(w.calls).toBe(5);
+  });
+
+  it('219차 줄자·각도기 가상 커서의 X·Y·Z·L: 코어 커서가 켜진 동안 측정 도구 keyLock이 받으면 그 글을 알림 칸에 넣고(바뀐 것이 없는 빈 글은 넣지 않음) 다룬 키, 받지 않으면 예전 길 — 커서가 꺼진 동안은 묻지 않는다', () => {
+    const { v, cv, d, host: el } = setup();
+    const calls: string[] = [];
+    /** 측정 도구 keyLock의 답(받는 조건·글은 tests/app/measure.test.ts 219차가 실제 측정 도구로 본다) */
+    let answer: string | null = '빨강 축으로 잠금';
+    const host: KeyMeasureHost = {
+      active: true,
+      handleKey: (e) => {
+        calls.push(`key ${e.key}`);
+        return false;
+      },
+      keyHover: (x, y) => `끝점: ${x},${y}`,
+      keyEnd: () => undefined,
+      keyPlace: () => '',
+      keyCycle: () => null,
+      keyLock: (e) => {
+        calls.push(`lock ${e.key}`);
+        return answer;
+      },
+    };
+    /** 앱 창 키 처리기가 handleKey에 넘기는 키 사건(대상 = 3D 보기) */
+    const ev = (k: string, o: Record<string, unknown> = {}): KeyboardEvent =>
+      ({ key: k, code: '', type: 'keydown', target: cv, shiftKey: false, ctrlKey: false, metaKey: false, altKey: false, defaultPrevented: false, preventDefault() {}, ...o }) as unknown as KeyboardEvent;
+    const kp = new KeyPick(v, el as unknown as HTMLElement, () => d, { measureTool: host });
+    kp.follow('tape');
+    // 코어 커서가 꺼진 동안은 묻지 않는다(그동안 방향 잠금은 화살표 — 측정 도구 handleKey, 다루지 않으면 앱 차례)
+    expect(kp.handleKey(ev('x'))).toBe(false);
+    expect(calls).toEqual(['key x']);
+    // 켤 때 3D 보기 키 안내에 새 키(방향 잠금 Shift·X·Y·Z·L)
+    key(cv, 'Enter');
+    expect(kp.text).toBe('가상 커서를 켰습니다. 끝점: 400,300. 옮기기 ←→↑↓ · 찍기 Enter · 방향 잠금 Shift·X·Y·Z·L · 끄기 Esc');
+    calls.length = 0;
+    expect(kp.handleKey(ev('x'))).toBe(true);
+    expect(kp.text).toBe('빨강 축으로 잠금');
+    // 받았지만 바뀐 것이 없으면(잠글 것이 없음·누른 채 되풀이) 빈 글 — 알림 칸은 그대로
+    answer = '';
+    expect(kp.handleKey(ev('l'))).toBe(true);
+    expect(kp.text).toBe('빨강 축으로 잠금');
+    // 받지 않으면(null — 수정 키·방향을 잡지 않는 때 등) 예전 길: 측정 도구 handleKey → 앱 차례
+    answer = null;
+    expect(kp.handleKey(ev('y', { ctrlKey: true }))).toBe(false);
+    expect(calls).toEqual(['lock x', 'lock l', 'lock y', 'key y']);
+    // 화살표는 그대로 코어 커서 옮기기(keyLock으로 묻지 않는다), 코어는 X·Y·Z·L을 받지 않는다
+    expect(kp.handleKey(ev('ArrowRight'))).toBe(true);
+    expect(v.keyboardCursor).toMatchObject({ x: 405, y: 300 });
+    expect(kp.text).toBe('끝점: 405,300');
+    expect(calls).toEqual(['lock x', 'lock l', 'lock y', 'key y']);
+    for (const k of ['x', 'y', 'z', 'l']) expect(v.handleKey(ev(k)), k).toBe(false);
+    // 커서를 끄면(Esc — 측정 도구가 지울 것이 없음) 다시 묻지 않는다
+    cv.focus();
+    expect(kp.handleKey(ev('Escape'))).toBe(true);
+    expect(v.keyboardCursor).toBeNull();
+    calls.length = 0;
+    expect(kp.handleKey(ev('z'))).toBe(false);
+    expect(calls).toEqual(['key z']);
   });
 });

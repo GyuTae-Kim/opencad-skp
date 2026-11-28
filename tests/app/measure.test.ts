@@ -23,6 +23,9 @@ import {
   type LiveKind,
   joinTip,
   LOCK_HINTS,
+  KEY_LOCK_TEXT,
+  PLANE_HINTS,
+  lockKeyOf,
   LOCK_KEYS_HINT,
   lockHint,
   lockName,
@@ -6829,5 +6832,145 @@ describe('측정값 칸을 측정 띠 안에 보일지(132차 — 좁은 창의 
     expect(app).toContain('const show = !!mode && (!band || tool!.vcbInBand);');
     expect(app).toContain('const typing = tool?.typing;');
     expect(app).not.toContain('tool.pointCount === 1');
+  });
+});
+
+describe('측정 도구: 가상 커서를 켠 동안 X·Y·Z·L 방향 잠금(219차 — 커서를 켠 동안 화살표는 커서 옮기기, keypick.ts가 keyLock으로 묻는다, NC 203·204차 꼴)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // 둘레 고르기 시간 한도가 기계 부하로 갈리지 않게 시계를 멈춘다(126차 꼴)
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+  });
+  const SETTLE = HISTORY_SETTLE_MS + 30;
+  /** 측정 도구에 알림 칸 쓰기를 준다(keypick.ts apply 꼴) — 키 밖의 변화 뒤 알린 글 */
+  const watch = (r: Rig): string[] => {
+    const said: string[] = [];
+    r.tool.keyWatch?.((t) => void said.push(t));
+    return said;
+  };
+  /** 코어 가상 커서를 그 자리에 켜거나 옮긴다(코어 keyboardCursor + keypick.ts sayMeasure의 keyHover) — 그 자리 알림 글 */
+  const at = (r: Rig, x: number, y: number): string => {
+    (r.viewer as { keyboardCursor?: unknown }).keyboardCursor = { x, y };
+    const t = r.tool.keyHover(x, y);
+    r.overlay.paintNow();
+    return t;
+  };
+  /** 3D 보기가 받은 키(keypick.ts가 커서가 켜진 동안 keyLock으로 넘긴다) — [알림 글(받지 않으면 null), 기본 동작을 막았는지] */
+  const lk = (
+    r: Rig,
+    key: string,
+    o: { code?: string; type?: 'keydown' | 'keyup'; repeat?: boolean; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; shiftKey?: boolean; prevented?: boolean; target?: unknown } = {},
+  ): [string | null, boolean] => {
+    const { code = '', type = 'keydown', prevented, target = r.canvas, ...mods } = o;
+    const e = new KeyboardEvent(type, { key, code, cancelable: true, ...mods });
+    Object.defineProperty(e, 'target', { value: target });
+    if (prevented) e.preventDefault();
+    const t = r.tool.keyLock(e);
+    r.overlay.paintNow();
+    return [t, e.defaultPrevented];
+  };
+  // 원점에서 +X로 10 모서리, 시작점에서 떨어진 45° 모서리(나란함 기준 — 위 「지나간 모서리와 나란하면」 시험 꼴)
+  const SCENE = (): Pick<Scene3d, 'meshes' | 'lines' | 'units'> => ({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 10, 0, 0]]), lines('d', [[-90, -60, 0, -60, -30, 0]])] });
+
+  it('줄자: 방향을 잡는 동안 X·Y·Z는 빨강·녹색·파랑 축(같은 키는 풂·다른 축은 바꿈), L은 ↓ 길(나란히·수직 — 축 잠금이면 나란히로), 알림 글은 잠금 안내·푼 글 — 적힌 글자가 먼저, 입력기는 물리 키', () => {
+    const r = rig(SCENE());
+    r.tool.setMode('tape');
+    const said = watch(r);
+    // 시작점 전: 화살표 잠금이 받지 않는 때라 받지 않는다(기본 동작도 그대로)
+    expect(at(r, 101, 100)).toBe('끝점: X 0 mm, Y 0 mm, Z 0 mm');
+    expect(lk(r, 'x')).toEqual([null, false]);
+    expect(lk(r, 'l')).toEqual([null, false]);
+    r.tool.keyPlace(false);
+    expect(r.tool.pointCount).toBe(1);
+    // 45° 모서리를 지나간 뒤 시작점 아래(녹색 축 추론) — L은 ↓처럼 앞서 지나간 모서리와 나란히
+    at(r, 25, 145);
+    at(r, 100, 160);
+    expect(lk(r, 'l')).toEqual([LOCK_HINTS.parallel, true]);
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'parallel', source: 'key' });
+    expect(r.locks.at(-1)).toBe('parallel');
+    expect(lk(r, 'l')).toEqual([KEY_LOCK_TEXT.unlocked, true]);
+    expect(r.tool.inferenceLock).toBeNull();
+    // X·Y·Z: 축 잠금, 같은 축이면 풂(대문자 — Caps Lock, Shift 없음 — 도 같은 글자)
+    expect(lk(r, 'x')).toEqual(['빨강 축으로 잠금', true]);
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'x', source: 'key' });
+    expect(lk(r, 'y')).toEqual(['녹색 축으로 잠금', true]);
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'y', source: 'key' });
+    expect(lk(r, 'Y')).toEqual(['방향 잠금을 풀었습니다', true]);
+    expect(r.tool.inferenceLock).toBeNull();
+    // 한글 입력기(ㅋ·Process)는 물리 키 KeyZ, 독일어 자판은 적힌 글자(물리 KeyY 자리의 Z)
+    expect(lk(r, 'ㅋ', { code: 'KeyZ' })).toEqual(['파랑 축으로 잠금', true]);
+    expect(lk(r, 'Process', { code: 'KeyZ' })).toEqual(['방향 잠금을 풀었습니다', true]);
+    expect(lk(r, 'z', { code: 'KeyY' })).toEqual(['파랑 축으로 잠금', true]);
+    expect(r.tool.inferenceLock?.axis).toBe('z');
+    expect(lk(r, 'y', { code: 'KeyZ' })).toEqual(['녹색 축으로 잠금', true]);
+    expect(r.tool.inferenceLock?.axis).toBe('y');
+    // 축 잠금 중 L: ↓처럼 풀지 않고 앞서 지나간 모서리와 나란히로 바꾼다
+    expect(lk(r, 'l')).toEqual(['모서리와 나란히 잠금', true]);
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'parallel', source: 'key' });
+    // 누른 채 되풀이: 막기만(잠금 그대로·알림 없음)
+    expect(lk(r, 'l', { repeat: true })).toEqual(['', true]);
+    expect(lk(r, 'x', { repeat: true })).toEqual(['', true]);
+    expect(r.tool.inferenceLock?.kind).toBe('parallel');
+    // 받지 않는 키: 수정 키(Ctrl·⌘·Alt·Shift — Ctrl+Z·Y 되돌리기·다시 하기, ⌘+L 주소 막대 등), 다른 글자, keyup, 이미 막힌 키, 3D 보기 밖 대상
+    for (const m of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }, { shiftKey: true }]) expect(lk(r, 'x', m), JSON.stringify(m)).toEqual([null, false]);
+    expect(lk(r, 'a', { code: 'KeyX' })).toEqual([null, false]);
+    expect(lk(r, 'w')).toEqual([null, false]);
+    expect(lk(r, 'x', { type: 'keyup' })).toEqual([null, false]);
+    expect(lk(r, 'x', { prevented: true })).toEqual([null, true]);
+    expect(lk(r, 'x', { target: document.body })).toEqual([null, false]);
+    expect(lk(r, 'x', { target: null })).toEqual([null, false]);
+    expect(r.tool.inferenceLock?.kind).toBe('parallel');
+    // 코어 커서가 꺼졌으면(화살표가 다시 방향 잠금) 받지 않는다, 마우스 커서도
+    (r.viewer as { keyboardCursor?: unknown }).keyboardCursor = null;
+    expect(lk(r, 'x')).toEqual([null, false]);
+    r.move(100, 160);
+    (r.viewer as { keyboardCursor?: unknown }).keyboardCursor = { x: 100, y: 160 };
+    expect(lk(r, 'x')).toEqual([null, false]);
+    expect(r.tool.inferenceLock?.kind).toBe('parallel');
+    at(r, 100, 160);
+    expect(lk(r, 'l')).toEqual(['방향 잠금을 풀었습니다', true]);
+    // 잠글 것이 없음: 지나간 모서리를 숨겨 기준이 없고 커서 밑에 방향 추론이 없으면 L은 받기만(앞뒤 모두 잠금 없음 — 「풀었습니다」를 알리지 않는다)
+    r.hide('d');
+    at(r, 150, 150);
+    expect(lk(r, 'l')).toEqual(['', true]);
+    expect(r.tool.inferenceLock).toBeNull();
+    // 이 키 길은 키 밖의 변화 알림(127·130차)을 남기지 않는다 — 알림 글은 keypick.ts가 받은 글로만
+    vi.advanceTimersByTime(SETTLE * 2);
+    expect(said).toEqual([]);
+    // 결과를 다 잰 뒤(방향을 잡지 않음)는 받지 않는다 — 끝점 (10, 0, 0)을 찍는다
+    at(r, 110, 100);
+    r.tool.keyPlace(false);
+    expect(r.results.at(-1)).toMatchObject({ kind: 'tape', distance: 10 });
+    expect(lk(r, 'x')).toEqual([null, false]);
+  });
+
+  it('각도기: 중심 전 X·Y·Z는 그 축 평면에 고정(같은 키는 풂 — 화살표와 같은 길, L은 받지 않음), 중심 뒤 방향을 잡는 동안은 축 잠금 — 알림 글은 상태 줄과 같은 고정 안내·푼 글', () => {
+    const p = rig(EDGES());
+    p.tool.setMode('protractor');
+    expect(at(p, 102, 103)).toBe('끝점: X 0 mm, Y 0 mm, Z 0 mm');
+    expect(lk(p, 'x')).toEqual([PLANE_HINTS.x, true]);
+    expect(p.tool.planeAxis).toBe('x');
+    expect(lk(p, 'x')).toEqual(['각도기 평면 고정을 풀었습니다', true]);
+    expect(p.tool.planeAxis).toBeNull();
+    expect(lk(p, 'l')).toEqual([null, false]);
+    expect(lk(p, 'y')).toEqual(['녹색 각도기로 고정', true]);
+    expect(lk(p, 'z')).toEqual(['파랑 각도기로 고정', true]);
+    expect(lk(p, 'z', { repeat: true })).toEqual(['', true]);
+    expect(p.tool.planeAxis).toBe('z');
+    expect(p.locks.at(-1)).toBe('plane-z');
+    p.tool.keyPlace(false);
+    expect(p.tool.pointCount).toBe(1);
+    expect(lk(p, 'x')).toEqual(['빨강 축으로 잠금', true]);
+    expect(p.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'x', source: 'key' });
+    expect(lk(p, 'x')).toEqual(['방향 잠금을 풀었습니다', true]);
+    expect(p.tool.inferenceLock).toBeNull();
+    // 키 이름 읽기: 적힌 라틴 글자가 먼저, 아니면 물리 키(한글 입력기 ㅌ·ㅛ·ㅋ·ㅣ·Process)
+    expect(['x', 'Y', 'z', 'L'].map((key) => lockKeyOf({ key, code: '' }))).toEqual(['x', 'y', 'z', 'l']);
+    expect([['ㅌ', 'KeyX'], ['ㅛ', 'KeyY'], ['ㅋ', 'KeyZ'], ['ㅣ', 'KeyL'], ['Process', 'KeyL']].map(([key, code]) => lockKeyOf({ key: key!, code: code! }))).toEqual(['x', 'y', 'z', 'l', 'l']);
+    expect([['a', 'KeyX'], ['Enter', 'Enter'], ['ArrowDown', 'ArrowDown'], ['Process', 'KeyA'], ['1', 'Digit1']].map(([key, code]) => lockKeyOf({ key: key!, code: code! }))).toEqual([null, null, null, null, null]);
   });
 });

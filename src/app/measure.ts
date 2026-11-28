@@ -25,6 +25,8 @@
  *   후보가 하나·없거나 가상 커서가 켜졌거나 커서가 3D 보기 밖이면 Tab은 초점 이동이고, Esc로 푼 자리에서는 포인터가 4화소 넘게 움직일 때까지 초점 이동이다(cycleKey).
  * 가상 커서 Tab 돌리기(125차 — 같은 규칙): 가상 커서가 켜진 동안 keypick.ts가 Tab·Shift+Tab·Esc를 keyCycle로 먼저 넘긴다. 3D 보기가 받은 키이고 커서 자리 후보가 둘 이상이면
  *   돌리고 알림 글(툴팁 글 — 이름 뒤 "2/4" — 과 좌표)을 돌려주며, 화살표로 옮기면 버리고, Enter는 보인 후보를 찍고, 돌리는 중 Esc는 돌리기만 풀고 그 자리 첫 후보 글을 돌려준다.
+ * 가상 커서의 방향 잠금 키(219차 — NC 203·204차 꼴): 커서가 켜진 동안 화살표는 커서 옮기기라, keypick.ts가 X·Y·Z·L을 keyLock으로 먼저 넘기면
+ *   커서를 끈 동안의 →·←·↑·↓(arrowLock)와 같은 길로 잠그고 푼다(받는 때도 같다 — 방향을 잡는 중, 각도기 중심 전 X·Y·Z는 평면 고정). 알림 글은 잠금 안내·푼 글.
  * Shift+Tab 앞의 Shift(126차): Shift 누름이 방향·각도기 평면을 잠갔어도 그 같은 누름 동안 다른 키·누르기·4화소 넘는 이동·찍기 없이 Shift+Tab이 오면
  *   그 잠금을 걸기 전 상태(돌리던 차례·목록 포함)로 되돌리고 앞 후보로 돌린다(마우스·가상 커서, 걸기 전 그 자리 후보가 둘 이상일 때만 — unShift). 그 누름은 뗄 때까지 다시 잠그지 않는다.
  * 키 밖의 변화(127차): 가상 커서가 켜진 동안 카메라(휠·보기 키·장면 탭 움직임)·그리기 방식 가림·숨김(sweep)·단면이 커서 자리 추정을 다시 구하게 하면, 그 변화가 KEY_SETTLE_MS 동안
@@ -327,6 +329,21 @@ export const LOCKED_LABEL = '잠금';
 
 /** 화살표 → 축(SketchUp: 오른쪽 빨강, 왼쪽 녹색, 위 파랑 — ↓는 나란히·수직) */
 const ARROW_AXES: Readonly<Record<string, Axis>> = Object.freeze({ ArrowRight: 'x', ArrowLeft: 'y', ArrowUp: 'z' });
+
+/** 219차: 가상 커서를 켠 동안의 방향 잠금 키(그동안 화살표는 커서 옮기기) — X 빨강 · Y 녹색 · Z 파랑 축, L 모서리와 나란히·수직 */
+export type LockKey = 'x' | 'y' | 'z' | 'l';
+
+/** 219차: 잠금 키 → 커서를 끈 동안 같은 일을 하는 화살표(arrowLock 길 그대로) */
+const LOCK_KEY_ARROWS: Readonly<Record<LockKey, string>> = Object.freeze({ x: 'ArrowRight', y: 'ArrowLeft', z: 'ArrowUp', l: 'ArrowDown' });
+
+/**
+ * 219차 잠금 키 읽기(NC 203·204차 꼴): 적힌 글자가 라틴 글자 하나면 그 글자(대소문자 무시 — 독일어 자판의 Y·Z 자리도 적힌 대로),
+ * 아니면(한글 입력기 ㅌ·ㅛ·ㅋ·ㅣ, 'Process') 물리 키(code) KeyX·KeyY·KeyZ·KeyL — selectAllKey·guideUndoKey와 같은 꼴. 아니면 null
+ */
+export function lockKeyOf(e: Pick<KeyboardEvent, 'key' | 'code'>): LockKey | null {
+  const k = /^[a-z]$/i.test(e.key) ? e.key.toLowerCase() : /^Key[XYZL]$/.test(e.code ?? '') ? e.code.slice(3).toLowerCase() : '';
+  return k === 'x' || k === 'y' || k === 'z' || k === 'l' ? k : null;
+}
 
 /** 지나간 모서리로 기억하는 추정(나란함 기준) */
 const REF_KINDS: ReadonlySet<SnapKind> = new Set(['endpoint', 'midpoint', 'onEdge', 'perpendicular']);
@@ -1067,6 +1084,12 @@ export const KEY_MEASURE_TEXT = {
   start: '시작점을 찍었습니다. {0}',
   center: '중심을 찍었습니다. {0}',
   base: '기준 방향을 찍었습니다. {0}',
+} as const;
+
+/** 219차: 가상 커서 방향 잠금 키(keyLock)가 푼 것의 알림 글 — 잠근 것은 잠금 안내(LOCK_HINTS·PLANE_HINTS — 띠·상태 줄과 같은 글) 그대로 */
+export const KEY_LOCK_TEXT = {
+  unlocked: '방향 잠금을 풀었습니다',
+  planeFree: '각도기 평면 고정을 풀었습니다',
 } as const;
 
 /**
@@ -2537,6 +2560,36 @@ export class MeasureTool {
     return t;
   }
 
+  /**
+   * 219차 가상 커서를 켠 동안의 방향 잠금 키 X·Y·Z·L(keypick.ts가 커서가 켜진 동안 묻는다 — keyCycle 꼴, NC 203·204차 꼴): 그동안 화살표는 커서 옮기기라
+   * 커서를 끈 동안의 →·←·↑·↓ 잠금(arrowLock)을 이 키가 같은 길로 한다 — X 빨강 · Y 녹색 · Z 파랑 축(같은 축이면 풂), L 모서리와 나란히·수직(↓ 그대로),
+   * 각도기 중심 전에는 X·Y·Z가 그 축 평면 고정. 3D 보기가 받은 keydown이고 수정 키(Ctrl·⌘·Alt·Shift)가 없고 막히지 않았고 그 화살표가 받는 때(방향을 잡는 중,
+   * 각도기 중심 전 X·Y·Z)만 받아 기본 동작(Firefox 입력하면 찾기 등)을 막는다 — 누른 채 되풀이는 막기만.
+   * 받았으면 알림 글: 잠근 것은 잠금 안내(LOCK_HINTS·PLANE_HINTS — 띠·상태 줄과 같은 글), 푼 것은 KEY_LOCK_TEXT, 바뀐 것이 없으면(잠글 것이 없음·되풀이) 빈 글(알리지 않는다).
+   * 받지 않으면 null(예전 길 — 측정 도구 handleKey·앱·코어)
+   */
+  keyLock(e: KeyboardEvent): string | null {
+    const v = this.viewer;
+    const k = lockKeyOf(e);
+    if (!k || !this.modeValue || e.type !== 'keydown' || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return null;
+    if (this.cursor?.type !== 'keyboard' || !v.keyboardCursor || e.target !== v.canvas) return null;
+    if (!this.directing && !(k !== 'l' && this.modeValue === 'protractor' && !this.pts.length)) return null;
+    e.preventDefault();
+    if (e.repeat) return '';
+    const lock0 = this.lockValue;
+    const plane0 = this.planeAxisValue;
+    this.arrowLock(LOCK_KEY_ARROWS[k]);
+    // 받은 키 길이 새 글을 쓴다 — 기다리던 키 밖의 변화 알림은 버린다(127·130차)
+    this.keyQuiet();
+    const tr = this.opts.localize ?? ((t: string) => t);
+    const l = this.lockValue;
+    const name = lockName(l);
+    if (l !== lock0) return !l ? tr(KEY_LOCK_TEXT.unlocked) : name ? tr(LOCK_HINTS[name]) : '';
+    const p = this.planeAxisValue;
+    if (p !== plane0) return tr(p ? PLANE_HINTS[p] : KEY_LOCK_TEXT.planeFree);
+    return '';
+  }
+
   /** Enter: 가상 커서 자리에 누르기와 같이 점을 찍고(shift = 각도기 평면 고정) 알림 글 — 시작점·중심·기준 방향, 다 쟀으면 결과 줄, 못 찍었으면 그 글 */
   keyPlace(shift: boolean): string {
     const tr = this.opts.localize ?? ((t: string) => t);
@@ -2689,7 +2742,8 @@ export class MeasureTool {
    * Tab·Shift+Tab(124차, keydown): 마우스·펜 커서 자리에 겹친 스냅 후보가 둘 이상이면 다음·앞 후보(cycleKey), 아니면 false(초점 이동). 가상 커서 자리는 keyCycle(125차).
    * Shift: 누르고 있는 동안 방향을 잡는 중이면 지금 방향 추론 잠금, 각도기 중심을 찍기 전이면 커서 밑 평면 고정
    * (126차 — 그 누름의 첫 Shift+Tab이면 걸기 전으로 되돌리고 뗄 때까지 다시 잠그지 않는다, unShift).
-   * →·←·↑·↓(keydown): 축·나란히 잠금 켜고 끄기, 각도기 중심을 찍기 전에는 →·←·↑로 각도기 평면 고정(앱은 목록·입력 칸의 화살표를 넘기지 않는다).
+   * →·←·↑·↓(keydown): 축·나란히 잠금 켜고 끄기, 각도기 중심을 찍기 전에는 →·←·↑로 각도기 평면 고정(앱은 목록·입력 칸의 화살표를 넘기지 않는다 —
+   * 가상 커서가 켜진 동안은 커서 옮기기라 keypick.ts가 넘기지 않고, 같은 일은 X·Y·Z·L이 keyLock으로 한다 — 219차).
    * 안내 두기 키(Ctrl, Mac은 Option): 그 키만 눌렀다 떼면(keyup) 안내 두기 켜고 끄기 — 그사이 다른 키·누르기·휠이 있으면 바꾸지 않는다(Ctrl+O 등).
    * 130차: 켜진 가상 커서에서 이 키들은 알림 글을 쓰지 않으므로, 키가 커서 자리 추정을 다시 구하게 했으면(Shift 잠금·풂, Esc 지우기, 안내 두기 키)
    * 127차 길(keyStale)로 가라앉은 뒤 한 번, 키 앞에 들은 글과 다를 때만 새 자리 글을 알린다(그사이 옮기기·Tab·Enter 같은 키 길이 글을 쓰면 버린다).

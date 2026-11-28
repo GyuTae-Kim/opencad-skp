@@ -224,10 +224,11 @@ describe('language URLs and UI presentation', () => {
     expect(read('infotab.ts')).toContain(`hint('${AXES}')`);
     // 원문 가름: 고정 = 붙잡아 둠(평면 고정·축 따라가기), 잠금·잠그기·잠글·잠김 = 방향 잠금(「잠시」 같은 다른 낱말은 셈 밖) — 열쇠 26개, 섞인 셋은 두 낱말 모두
     // (210차: 잠글 방향 줄 버튼의 할 일 원문 넷 「…잠그기」 — 锁定 — 이 더해져 30개)
+    // (219차: 가상 커서를 켠 동안 방향 잠금 X·Y·Z·L — 키 안내·바로 가기 커서 옮기기 줄을 새 원문으로 바꾸고(−2·+2), 바로 가기 줄 둘·푼 알림 글 둘(방향 잠금 锁定·각도기 평면 고정 固定)을 더해 34개)
     const fix = /고정/;
     const lock = /잠[금그글김]/;
     const keys = Object.keys(zh).filter((k) => fix.test(k) || lock.test(k));
-    expect(keys.length).toBe(30);
+    expect(keys.length).toBe(34);
     for (const k of keys) {
       expect(/固定/.test(zh[k]), `固定: ${k}`).toBe(fix.test(k));
       expect(/锁定/.test(zh[k]), `锁定: ${k}`).toBe(lock.test(k));
