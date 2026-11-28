@@ -234,11 +234,26 @@ export class KeyPick {
   }
 
   /**
-   * 알림 칸에 글 넣기(222차 — flash.ts sayLive): again은 사용자가 같은 동작을 거듭한 때(같은 자리 Enter — 줄자·각도기 찍기, 고르기 도구 'commit')만 —
+   * 알림 칸에 글 넣기(222차 — flash.ts sayLive): again은 사용자가 같은 동작을 거듭한 때(같은 자리 Enter — 줄자·각도기 찍기, 고르기 도구 'commit',
+   * 223차: 3D 보기 끝에 닿아 옮겨지지 않은 화살표, 고르기 도구 Tab 'cycle')만 —
    * 같은 글이면 한 프레임 비웠다 다시 넣어 다시 읽힌다. 앱·코어가 스스로 넣는 글(가라앉은 자리 글·언어 바꿈·끄기)은 같아도 그대로
    */
   private write(text: string, again = false): void {
     sayLive(this.live, text, again);
+  }
+
+  /** 223차: 앞 알림의 커서 자리(켜기·옮기기에 적고 끄면 지운다 — 'x,y') */
+  private at: string | null = null;
+
+  /**
+   * 223차: 화살표가 3D 보기 끝에 닿아 커서가 옮겨지지 않았는지(코어는 자리를 끝에 맞추고도 같은 자리로 'move'를 알린다 — 같은 글).
+   * 한 걸음은 5·50화소라 자리가 그대로인 'move'는 끝에 닿은 때뿐이다. 옮겨진 화살표는 글이 같아도 다시 알리지 않는다(사용자 거듭이 아님)
+   */
+  private stuck(a: KeyboardSnapAnnouncement): boolean {
+    const at = a.reason === 'end' ? null : `${a.x},${a.y}`;
+    const same = a.reason === 'move' && at === this.at;
+    if (a.reason === 'start' || a.reason === 'move' || a.reason === 'end') this.at = at;
+    return same;
   }
 
   /** 고르기 도구면 켜고(true) 끈다(false — 켜진 커서는 알리지 않고 끈다). 같으면 그대로 */
@@ -354,8 +369,9 @@ export class KeyPick {
           const d = this.doc();
           return d && formatLength(v * mmPerSceneUnit(d.scene.units), d.units);
         },
-        // 222차: 같은 후보를 Enter로 거듭 고른 것('commit')만 같은 글이면 다시 알린다
-        announce: (a) => this.write(a.text, a.reason === 'commit'),
+        // 222차: 같은 후보를 Enter로 거듭 고른 것('commit')만 같은 글이면 다시 알린다. 223차: 끝에 닿아 옮겨지지 않은 화살표('move' — stuck)와
+        // Tab·Shift+Tab('cycle' — 후보 하나·없는 자리면 같은 글, 둘 이상이면 차례가 바뀌어 늘 다른 글)도
+        announce: (a) => this.write(a.text, this.stuck(a) || a.reason === 'commit' || a.reason === 'cycle'),
       });
     } else {
       // 줄자·각도기: 코어는 고르기 모드(후보 돌리기 없음 — 코어는 Tab을 넘긴다), 자리만 받아 측정 도구가 추정한다(Tab 후보 돌리기도 측정 도구 — 125차 handleKey)
@@ -371,6 +387,8 @@ export class KeyPick {
   private sayMeasure(a: KeyboardSnapAnnouncement, M: KeySnapMessages, hint: string): void {
     const h = this.app.measureTool;
     if (!h) return;
+    // 223차: 끝에 닿아 옮겨지지 않은 화살표는 같은 자리 추정 글 — 다시 알린다(stuck — 끄면 자리를 지운다)
+    const again = this.stuck(a);
     if (a.reason === 'end') {
       // 초점이 측정값 칸 등으로 갔으면(그 칸에 친 길이의 방향) 표식을 그 자리에 둔다 — Esc·포인터로 끄면 거둔다
       h.keyEnd(document.activeElement !== this.v.canvas);
@@ -378,6 +396,6 @@ export class KeyPick {
       return;
     }
     const body = h.keyHover(a.x, a.y);
-    this.write(a.reason === 'start' ? formatKeySnapMessage(M.start, [body, hint]) : body);
+    this.write(a.reason === 'start' ? formatKeySnapMessage(M.start, [body, hint]) : body, again);
   }
 }

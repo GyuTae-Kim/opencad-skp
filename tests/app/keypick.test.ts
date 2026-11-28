@@ -1033,3 +1033,128 @@ describe('222차 가상 커서 알림 칸: 같은 자리 Enter(같은 후보를 
     kp.setMode(null);
   });
 });
+
+describe('223차 가상 커서 알림 칸: 3D 보기 끝에 닿아 옮겨지지 않은 화살표·후보 하나인 자리 Tab을 거듭해 같은 글이 나와도 한 프레임 비웠다 다시 넣고(사용자 거듭 — 222차 sayLive again), 옮겨진 화살표는 글이 같아도 그대로', () => {
+  /** 다음 프레임 목록(requestAnimationFrame — 시험이 넘긴다, 222차 꼴) */
+  const frames = new Map<number, FrameRequestCallback>();
+  let ids = 0;
+  const flush = (): void => {
+    const list = [...frames.values()];
+    frames.clear();
+    for (const cb of list) cb(0);
+  };
+  beforeEach(() => {
+    frames.clear();
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => (frames.set(++ids, cb), ids));
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => void frames.delete(id));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('고르기 도구: 위 끝에 닿은 채 ↑를 거듭하면(코어는 자리를 끝에 맞추고 같은 자리로 move를 알린다) 같은 글을 비웠다 다음 프레임에(한 프레임 안 거듭은 한 번), 옮겨진 ↓는 곧바로', () => {
+    const { v, kp, cv } = setup();
+    kp.set(true);
+    key(cv, 'ArrowLeft');
+    expect([v.keyboardCursor!.x, v.keyboardCursor!.y]).toEqual([400, 300]);
+    // Shift+↑(50화소)로 위 끝까지 — 끝에 닿는 그 누름은 자리가 바뀌어 곧바로 글
+    for (let i = 0; i < 20 && v.keyboardCursor!.y > 0; i++) key(cv, 'ArrowUp', true);
+    expect(v.keyboardCursor!.y).toBe(0);
+    const top = kp.text;
+    expect(top).not.toBe('');
+    // 끝에 닿은 채 ↑ 거듭: 커서가 그대로라 같은 글 — 비운다(고치기 전에는 글이 그대로라 다시 읽히지 않았다)
+    key(cv, 'ArrowUp');
+    expect(v.keyboardCursor!.y).toBe(0);
+    expect(kp.text).toBe('');
+    flush();
+    expect(kp.text).toBe(top);
+    // 한 프레임 안 거듭은 한 번(비운 채 다음 프레임에 한 번 넣는다)
+    key(cv, 'ArrowUp', true);
+    key(cv, 'ArrowUp');
+    expect(kp.text).toBe('');
+    flush();
+    expect(kp.text).toBe(top);
+    // 옮겨진 화살표(다른 자리)는 비우지 않는다 — 글이 같아도 그대로(사용자 거듭이 아님)
+    key(cv, 'ArrowDown');
+    expect(v.keyboardCursor!.y).toBe(5);
+    expect(kp.text).not.toBe('');
+    kp.set(false);
+  });
+
+  it('고르기 도구: 후보 하나인 자리에서 Tab·Shift+Tab을 거듭하면(코어 cycle — 「… (후보 하나)」) 같은 글을 비웠다 다음 프레임에, 비운 사이 옮기면 그 글', () => {
+    const { v, kp, cv } = setup();
+    kp.set(true);
+    key(cv, 'ArrowLeft');
+    expect(v.keyboardCursor!.count).toBe(3);
+    // 후보 하나인 자리(모든 후보를 한 묶음으로 — 63차 시험 꼴, 앱 알림·글 함수는 그대로)
+    const ks = v.keyboardSnap!;
+    v.setKeyboardSnap({ ...ks, pickCycle: { ...(ks.pickCycle as object), group: () => 'one' } });
+    key(cv, 'Tab');
+    expect(v.keyboardCursor!.count).toBe(1);
+    const only = kp.text;
+    expect(only).toMatch(/^그룹 Row의 면: .+ \(후보 하나\)$/);
+    // 같은 자리 Tab 거듭: 같은 글 — 비웠다 다음 프레임에
+    key(cv, 'Tab');
+    expect(kp.text).toBe('');
+    flush();
+    expect(kp.text).toBe(only);
+    key(cv, 'Tab', true);
+    expect(kp.text).toBe('');
+    flush();
+    expect(kp.text).toBe(only);
+    // 비운 사이 커서를 옮기면(다른 글) 그 글이 남고 앞 글을 다시 넣지 않는다
+    key(cv, 'Tab');
+    expect(kp.text).toBe('');
+    key(cv, 'ArrowUp');
+    const moved = kp.text;
+    expect(moved).not.toBe('');
+    expect(moved).not.toBe(only);
+    flush();
+    expect(kp.text).toBe(moved);
+    kp.set(false);
+  });
+
+  it('줄자·각도기: 오른 끝에 닿은 채 →를 거듭해 측정 도구가 같은 자리 글을 돌려주면 비웠다 다음 프레임에 — 가라앉은 자리 글(keyWatch — 앱 스스로)의 같은 글은 그대로, 비운 사이 옮기면 그 글', () => {
+    const { v, cv, d, host: el } = setup();
+    const w: { say: ((text: string) => void) | null } = { say: null };
+    /** 측정 도구 꼴(실제 추정·글은 tests/app/measure.test.ts가 본다) — 자리 글은 커서 자리 */
+    const host: KeyMeasureHost = {
+      active: true,
+      handleKey: () => false,
+      keyHover: (x, y) => `끝점: ${x},${y}`,
+      keyEnd: () => undefined,
+      keyPlace: () => KEY_MEASURE_TEXT.noPoint,
+      keyCycle: () => null,
+      keyWatch: (say) => {
+        w.say = say;
+      },
+    };
+    /** 앱 창 키 처리기가 handleKey에 넘기는 키 사건(대상 = 3D 보기) */
+    const ev = (k: string, shiftKey = false): KeyboardEvent =>
+      ({ key: k, type: 'keydown', target: cv, shiftKey, ctrlKey: false, metaKey: false, altKey: false, defaultPrevented: false, preventDefault() {} }) as unknown as KeyboardEvent;
+    const kp = new KeyPick(v, el as unknown as HTMLElement, () => d, { measureTool: host });
+    kp.follow('tape');
+    key(cv, 'Enter');
+    expect(kp.text).toMatch(/^가상 커서를 켰습니다\. 끝점: 400,300\. /);
+    // Shift+→(50화소)로 오른 끝까지 — 끝에 닿는 그 누름은 자리가 바뀌어 곧바로 글
+    for (let i = 0; i < 20 && v.keyboardCursor!.x < 800; i++) expect(kp.handleKey(ev('ArrowRight', true))).toBe(true);
+    expect(kp.text).toBe('끝점: 800,300');
+    // 끝에 닿은 채 → 거듭: 같은 자리·같은 글 — 비웠다 다음 프레임에
+    expect(kp.handleKey(ev('ArrowRight'))).toBe(true);
+    expect(v.keyboardCursor!.x).toBe(800);
+    expect(kp.text).toBe('');
+    flush();
+    expect(kp.text).toBe('끝점: 800,300');
+    // 앱이 스스로 넣는 같은 글(키 밖의 변화가 가라앉은 뒤 그 자리 글 — 127차)은 그대로 둔다
+    w.say!('끝점: 800,300');
+    expect(kp.text).toBe('끝점: 800,300');
+    flush();
+    expect(kp.text).toBe('끝점: 800,300');
+    // 끝에서 거듭해 비운 사이 커서를 옮기면(다른 자리 — 다른 글) 그 글이 남고 앞 글을 다시 넣지 않는다
+    expect(kp.handleKey(ev('ArrowRight'))).toBe(true);
+    expect(kp.text).toBe('');
+    expect(kp.handleKey(ev('ArrowLeft'))).toBe(true);
+    expect(kp.text).toBe('끝점: 795,300');
+    flush();
+    expect(kp.text).toBe('끝점: 795,300');
+    kp.setMode(null);
+  });
+});
