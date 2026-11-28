@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { DARK_THEME, LIGHT_THEME, contrastRatio, cssRgba, fitContrast, parseColor } from 'opencad-viewer3d/theme';
 import { FILE_BACKGROUND_KEY, cssHex, isLightBackground, loadFileBackground, luminance, skyBackground, storeFileBackground, styleBackground, viewerTheme } from '../../src/app/backdrop';
-import { pagePlan } from '../../src/app/pages';
+// 227차: 장면 적용 계획은 장면 카메라 조각(scenecam.ts)으로 옮겼다
+import { pagePlan } from '../../src/app/scenecam';
 import { createDoc } from '../../src/app/doc';
 import { skpToScene } from '../../src/index';
 import { mfcFile, squareEntities } from '../mfcwrite';

@@ -11,8 +11,12 @@
  */
 // 코어 입구(Viewer3d — 그리기·고르기)는 문서를 열 때 나눠 받는다(core.ts). 여기서는 타입과 작은 모듈만 가져온다
 import type { Pick3d, IndexRange, PickEvent, Projection, RenderMode, SectionAxis, ViewName, Viewer3d } from 'opencad-viewer3d';
-import { VIEW_LABELS, viewKeyOf, type CameraState, type ViewFrame } from 'opencad-viewer3d/camera';
-import { FirstUse, annotating, chunkFailText, fileSections, isChunkLoadError, keyPicking, loadMeasure, loadRelease, loadViewerCore, pickListing, sunLight } from './core';
+import type { CameraState, ViewFrame } from 'opencad-viewer3d/camera';
+// 표준 뷰 이름·키 표는 코어 viewkeys에서 바로(camera가 같은 객체를 다시 내보낸다 — 227차: 코어 camera는 첫 화면에서 값으로 가져오지 않는다)
+import { VIEW_LABELS, viewKeyOf } from 'opencad-viewer3d/viewkeys';
+// 장면 카메라 조각(scenecam.ts — 장면 카메라·세로 화면 맞춤·처음 카메라·장면 적용 계획·맞춰 보기·덧그림 층, 227차)은 코어 입구와 함께 받는다(sceneCamera —
+// 뷰어는 코어를 받은 뒤에만 만들므로 뷰어가 있는 자리에서는 늘 있다)
+import { FirstUse, annotating, chunkFailText, fileSections, isChunkLoadError, keyPicking, loadMeasure, loadRelease, loadViewerCore, pickListing, sceneCamera, sunLight } from './core';
 import type { KeyPick } from './keypick';
 import type { PickList } from './picklist';
 // 큰 모형 놓기·문맥 잃음과 되찾음(release.ts)도 문서를 열 때 나눠 받는다 — 여기서는 형만
@@ -30,33 +34,23 @@ import { isFramed } from 'opencad-site-kit/embed/app';
 import type { LockName, MeasureTool, MeasureToolResult } from './measure';
 import { guideKeyFor, type GuideKey, type MeasureMode } from './measurehints';
 import {
-  baseFovOf,
   activeSections,
   initialSections,
-  initialView,
   type PageSection,
   openingPage,
-  pagePlan,
   nextSlide,
   slideDurationMs,
   slideshowOrder,
-  refitSceneCamera,
   renderModeForStyle,
   SHADED_MODES,
-  restoreSceneCamera,
   sectionFillOf,
   walkOptionsFor,
-  isTwoPoint,
-  twoPointCamera,
-  freshDocCamera,
-  withFov,
   sameSceneFit,
   stepPage,
-  unwidenSceneCamera,
   type SceneFit,
 } from './pages';
 import { DEFAULT_UNITS, formatAngle, formatLength, mmPerSceneUnit } from './units';
-import { Overlay } from './overlay';
+import type { Overlay } from './overlay';
 import { cardName, cardRows, entityInfo } from './entity';
 import { h, icon, reopenMenu } from './dom';
 import {
@@ -120,7 +114,6 @@ import { sceneHasGeometry } from './protocol';
 import { deviceHints, textureLimitsFor, type TextureLimits } from './texlimits';
 import { THEME_CHOICES, applyThemeChoice, readStoredTheme, resolveTheme, storeTheme, systemPrefersDark, themeChoiceOf, type ThemeChoice, type ThemeName } from './theme';
 import { childrenOf, isAncestor, isSplit, nodeBox, nodePath, normalizeRanges, type PickMode } from './tree';
-import { cameraForBox, keepViewOnHeightChange } from './view';
 import { cssHex, isLightBackground, loadFileBackground, safeStorage, skyBackground, storeFileBackground, styleBackground, viewerTheme } from './backdrop';
 import type { BackgroundOptions, Rgba } from 'opencad-viewer3d';
 import { DEFAULT_EDGE_COLOR, LineContrast, edgeLooks, lineColorOverrides } from './linecontrast';
@@ -1245,7 +1238,7 @@ export class SkpViewerApp implements PanelHost {
     this.measureLog = [];
     // 앞 장면이 세로 화면에 맞춰 넓힌 시야각은 원래대로, 앞 문서의 굴림·렌즈 이동(2점 투시)은 없앤다
     // (카메라가 없는 새 문서의 전체 보기가 넓은 시야각·기운 화면·옮긴 렌즈를 물려받지 않게)
-    const fresh = freshDocCamera(v.getCamera(), this.sceneBaseFov(v));
+    const fresh = sceneCamera!.freshDocCamera(v.getCamera(), this.sceneBaseFov(v));
     if (fresh) v.setCamera(fresh);
     this.sceneFit = null;
     const old = this.doc;
@@ -1325,7 +1318,7 @@ export class SkpViewerApp implements PanelHost {
     // 활성 단면 모두(모형 단면은 모형 전체, 그룹 안 단면은 그 그룹만)
     const secs = initialSections(d.scene.meta);
     if (secs.length) this.applyFileSections(secs);
-    const first = initialView(d.scene.meta, d.scene.bounds, v.canvas.clientWidth, v.canvas.clientHeight, v.getCamera().fovY);
+    const first = sceneCamera!.initialView(d.scene.meta, d.scene.bounds, v.canvas.clientWidth, v.canvas.clientHeight, v.getCamera().fovY);
     if (first) {
       v.setCamera(first.camera);
       this.sceneFit = first.fit;
@@ -1387,7 +1380,7 @@ export class SkpViewerApp implements PanelHost {
       v.onCameraChange((c) => this.onCamera(c));
       this.watchCanvas(v, dragStartPx);
       this.viewer = v;
-      this.overlay = new Overlay(this.els.viewHost);
+      this.overlay = new sceneCamera!.Overlay(this.els.viewHost);
       this.overlay.attach(v);
       // 글·치수 라벨(코어 입구와 함께 받은 조각 — 코어를 받았으면 있다). 형상 뒤의 글·치수는 숨긴다(카메라가 멈추면 라벨 기준점에서 코어 고르기로 판정)
       if (annotating) {
@@ -1803,7 +1796,7 @@ export class SkpViewerApp implements PanelHost {
     const sel = d.selection;
     const pb = partBox(d, sel);
     if (pb) {
-      this.animateCamera(cameraForBox(v.getCamera(), pb, v.canvas.clientWidth / Math.max(1, v.canvas.clientHeight)));
+      this.animateCamera(sceneCamera!.cameraForBox(v.getCamera(), pb, v.canvas.clientWidth / Math.max(1, v.canvas.clientHeight)));
       return;
     }
     // 정의의 인스턴스 모두: 보이는 노드 범위를 합친다(많으면 앞의 MAX_FIT_NODES개)
@@ -1819,12 +1812,12 @@ export class SkpViewerApp implements PanelHost {
           hi[k] = Math.max(hi[k]!, b.max[k]!);
         }
       }
-      if (lo[0] <= hi[0]) this.animateCamera(cameraForBox(v.getCamera(), { min: lo, max: hi }, v.canvas.clientWidth / Math.max(1, v.canvas.clientHeight)));
+      if (lo[0] <= hi[0]) this.animateCamera(sceneCamera!.cameraForBox(v.getCamera(), { min: lo, max: hi }, v.canvas.clientWidth / Math.max(1, v.canvas.clientHeight)));
       return;
     }
     if (sel?.kind === 'node' && d.tree && !isSplit(d.tree, sel.index)) {
       const box = nodeBox(d.tree, d.scene, sel.index, (item) => v.isVisible(this.itemId(item)), this.hiddenRanges);
-      if (box) this.animateCamera(cameraForBox(v.getCamera(), box, v.canvas.clientWidth / Math.max(1, v.canvas.clientHeight)));
+      if (box) this.animateCamera(sceneCamera!.cameraForBox(v.getCamera(), box, v.canvas.clientWidth / Math.max(1, v.canvas.clientHeight)));
       return;
     }
     const ids = selectionIds(d, sel);
@@ -1838,13 +1831,13 @@ export class SkpViewerApp implements PanelHost {
 
   /** 지금 시야각에서 세로 화면 맞춤을 뺀 것(맞춘 뒤 사용자가 시야각을 바꾸지 않았을 때만 장면의 원래 시야각) */
   private sceneBaseFov(v: Viewer3d): number {
-    return baseFovOf(v.getCamera(), this.sceneFit);
+    return sceneCamera!.baseFovOf(v.getCamera(), this.sceneFit);
   }
 
   /** 이전·다음 보기로 갈 카메라: 장면 맞춤으로 적은 칸은 지금 화면 방향에 다시 맞추고, 그 맞춤을 이어 간다 */
   private restoreView(c: CameraState): CameraState {
     const v = this.viewer;
-    const r = restoreSceneCamera(c, this.history.tag, v ? this.viewAspect(v) : 1);
+    const r = sceneCamera!.restoreSceneCamera(c, this.history.tag, v ? this.viewAspect(v) : 1);
     this.sceneFit = r.fit;
     return r.camera;
   }
@@ -1862,7 +1855,7 @@ export class SkpViewerApp implements PanelHost {
     this.refitLater = false;
     this.stopCameraAnim();
     const c = v.getCamera();
-    const u = unwidenSceneCamera(c, f);
+    const u = sceneCamera!.unwidenSceneCamera(c, f);
     if (u !== c) v.setCamera(u);
   }
 
@@ -1876,10 +1869,10 @@ export class SkpViewerApp implements PanelHost {
       return;
     }
     const cur = v.getCamera();
-    const r = refitSceneCamera(cur, f, this.viewAspect(v));
+    const r = sceneCamera!.refitSceneCamera(cur, f, this.viewAspect(v));
     this.sceneFit = r?.fit ?? null;
     // 더 따라갈 수 없으면(그 사이 평행 투영으로 바꿈 등) 넓힌 시야각을 원래대로 — 다시 원근으로 와도 넓은 시야각이 남지 않게
-    const next = r ? r.camera : unwidenSceneCamera(cur, f);
+    const next = r ? r.camera : sceneCamera!.unwidenSceneCamera(cur, f);
     if (next !== cur) {
       v.setCamera(next);
       // 시야각만 바뀌면 코어가 카메라 변화를 알리지 않는다 — 기록의 마지막 카메라·맞춤을 직접 새로 한다
@@ -1933,7 +1926,7 @@ export class SkpViewerApp implements PanelHost {
   /** 카메라가 바뀔 때: 보기 기록(멈추면 한 칸, 그때의 장면 맞춤과 함께) */
   private onCamera(c: CameraState): void {
     // 2점 투시에서 돌려 앙각이 생기면(옮기는 중이 아닐 때) 2점 투시를 끝내고 렌즈 이동을 없앤다
-    if (this.twoPointOn && !this.flying && !isTwoPoint(c)) {
+    if (this.twoPointOn && !this.flying && !sceneCamera!.isTwoPoint(c)) {
       this.twoPointOn = false;
       if (c.shiftX || c.shiftY) this.viewer?.setLensShift(0, 0);
       this.refreshCamBar();
@@ -2050,7 +2043,7 @@ export class SkpViewerApp implements PanelHost {
     if (!d || !v || !page) return 0;
     // 사용자가 장면을 고르면 재생을 멈춘다
     if (!fromSlideshow) this.stopSlideshow();
-    const plan = pagePlan(page, { sectionPlanes: d.sectionPlanesRaw, viewerFovY: this.sceneBaseFov(v), viewAspect: this.viewAspect(v) });
+    const plan = sceneCamera!.pagePlan(page, { sectionPlanes: d.sectionPlanesRaw, viewerFovY: this.sceneBaseFov(v), viewAspect: this.viewAspect(v) });
     if (plan.hiddenTags) d.hiddenTags = new Set([...plan.hiddenTags].filter((t) => d.tags.some((x) => x.name === t)));
     // 장면이 숨긴 태그 폴더(안쪽 태그는 tagHidden이 폴더로 숨긴다 — 목록에 없는 폴더는 보인다)
     if (plan.hiddenFolders) d.hiddenFolders = plan.hiddenFolders;
@@ -2125,7 +2118,7 @@ export class SkpViewerApp implements PanelHost {
       if (this.walking) this.setWalk(false);
       this.twoPointOn = false;
       this.animateCamera(to, Math.min(plan.seconds, 4) * 1000, () => {
-        this.twoPointOn = !!to.shiftY && isTwoPoint(to);
+        this.twoPointOn = !!to.shiftY && sceneCamera!.isTwoPoint(to);
         this.refreshToolbar();
         this.refreshCamBar();
       });
@@ -2582,7 +2575,7 @@ export class SkpViewerApp implements PanelHost {
     if (!v || !Number.isFinite(deg)) return;
     const f = (Math.min(120, Math.max(10, deg)) * Math.PI) / 180;
     this.sceneFit = null;
-    v.setCamera(withFov(v.getCamera(), f));
+    v.setCamera(sceneCamera!.withFov(v.getCamera(), f));
     this.userMoved = true;
     this.refreshCamBar();
   }
@@ -2595,7 +2588,7 @@ export class SkpViewerApp implements PanelHost {
     if (on) {
       if (this.walking) this.setWalk(false);
       if (this.projection !== 'perspective') this.setProjection('perspective');
-      const c = twoPointCamera(v.getCamera());
+      const c = sceneCamera!.twoPointCamera(v.getCamera());
       if (!c) {
         // 가벼운 글(159차): 떠 있는 해석 경고·오류를 덮지 않는다(그 알림을 닫고 다시 누르면 이 까닭이 보임)
         this.showNotice('info', '2점 투시로 바꿀 수 없습니다', '곧장 위·아래를 보는 보기(앙각 80° 넘게)는 2점 투시가 되지 않습니다. 옆에서 보도록 돌린 뒤 다시 켜세요.', true);
@@ -2976,7 +2969,7 @@ export class SkpViewerApp implements PanelHost {
       );
       return;
     }
-    if (h0 > 0 && h1 > 0 && h0 !== h1) v.setCamera(keepViewOnHeightChange(v.getCamera(), h0, h1));
+    if (h0 > 0 && h1 > 0 && h0 !== h1) v.setCamera(sceneCamera!.keepViewOnHeightChange(v.getCamera(), h0, h1));
   }
 
   // ───────────────────────── 패널 크기 ─────────────────────────
@@ -3039,7 +3032,7 @@ export class SkpViewerApp implements PanelHost {
         this.applyLayout();
         if (this.viewer && this.doc && this.userMoved) {
           const h1 = this.els.viewHost.clientHeight;
-          if (h0 > 0 && h1 > 0 && h0 !== h1) this.viewer.setCamera(keepViewOnHeightChange(this.viewer.getCamera(), h0, h1));
+          if (h0 > 0 && h1 > 0 && h0 !== h1) this.viewer.setCamera(sceneCamera!.keepViewOnHeightChange(this.viewer.getCamera(), h0, h1));
         }
       } else {
         this.layout.panelWidth = clampPanelWidth(ws.right - clientX, window.innerWidth);

@@ -8,7 +8,9 @@ import { describe, expect, it } from 'vitest';
 import { applyScene } from '../../src/app/annotations';
 import { createDoc } from '../../src/app/doc';
 import { infoSections } from '../../src/app/infotab';
-import { pagePlan, readPage } from '../../src/app/pages';
+import { readPage } from '../../src/app/pages';
+// 227차: 장면 적용 계획은 장면 카메라 조각(scenecam.ts)으로 옮겼다
+import { pagePlan } from '../../src/app/scenecam';
 import { skpToScene } from '../../src/index';
 import type { SkpMetaExtras } from '../../src/meta';
 import { readModelDat } from '../../src/model';

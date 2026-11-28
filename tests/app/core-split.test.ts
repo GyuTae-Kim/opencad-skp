@@ -100,7 +100,8 @@ describe('코어 나눠 받기', () => {
     // 해석기 입구·워커는 첫 화면 그래프에 없다
     expect(rel.filter((f) => f === 'src/index.ts' || f.includes('/worker/'))).toEqual([]);
     expect([...core].filter((n) => !SMALL.has(n)).sort()).toEqual([]);
-    expect(core.has('camera')).toBe(true);
+    // 227차: 코어 camera(와 그것이 끌어오는 math·bounds)는 첫 화면 그래프 밖(아래 장면 카메라 나눠 받기) — 첫 화면에 남는 작은 코어 모듈은 표준 뷰 이름·키 표(viewkeys)
+    expect(core.has('viewkeys')).toBe(true);
     let dynamic = 0;
     const bad: string[] = [];
     for (const f of files) {
@@ -187,6 +188,10 @@ describe('코어 나눠 받기', () => {
     // 겹친 것 고르기 목록·글·치수 라벨도 함께 있다(57차)
     expect(typeof pickListing?.PickList).toBe('function');
     expect(typeof annotating?.AnnotationLabels).toBe('function');
+    // 227차: 장면 카메라 조각(scenecam.ts — 장면 카메라·맞춰 보기·덧그림 층)도 함께 있다 — 문서를 연 뒤(뷰어가 있을 때) 부르는 자리마다 값이 있다
+    const { sceneCamera } = await import('../../src/app/core');
+    expect(typeof sceneCamera?.pagePlan).toBe('function');
+    expect(sceneCamera?.Overlay).toBe((await import('../../src/app/overlay')).Overlay);
   });
 });
 
@@ -209,6 +214,59 @@ describe('패널 탭 몸통 나눠 받기(226차 — 첫 화면 조각 줄이기
     expect(BODIES.filter((n) => new RegExp(`^\\s*(?:private\\s+|export\\s+)?(?:function\\s+|const\\s+)?${n}\\s*[(<=]`, 'm').test(panel))).toEqual([]);
     // 탭 몸통 조각이 내보내는 것: 구성·선택·정보 탭 몸통(패널이 부르는 셋)
     expect(Object.keys(await import('../../src/app/infotab')).sort()).toEqual(['infoSections', 'renderEntity', 'renderOutline']);
+  });
+});
+
+describe('장면 카메라 나눠 받기(227차 — 첫 화면 조각 줄이기 둘째)', () => {
+  /** pages.ts에서 장면 카메라 조각(scenecam.ts)으로 옮긴 카메라 갈래(코어 camera를 쓰는 함수와 그 갈래의 카메라 상태 함수) */
+  const MOVED = [
+    'cameraFromSkp',
+    'rollFromUp',
+    'twoPointCamera',
+    'freshDocCamera',
+    'isTwoPoint',
+    'withFov',
+    'sceneCoverageScale',
+    'widenFov',
+    'fitSceneCamera',
+    'refitSceneCamera',
+    'unwidenSceneCamera',
+    'restoreSceneCamera',
+    'baseFovOf',
+    'minVisiblePx',
+    'cameraShowsBox',
+    'initialView',
+    'initialCamera',
+    'pagePlan',
+    'easeInOut',
+    'transitionProgress',
+    'transitionCamera',
+  ];
+  const MOVED_CONST = ['MIN_FOV_DEG', 'MAX_FOV_DEG', 'TWO_POINT_MAX_PITCH_DEG', 'SCENE_REF_ASPECT', 'PORTRAIT_FULL_ASPECT', 'PORTRAIT_MAX_FOV_DEG'];
+
+  it('코어 camera·math·bounds와 그것을 값으로 쓰는 앱 쪽(장면 카메라·맞춰 보기·덧그림 층)은 첫 화면 그래프 밖이고 장면 카메라 조각은 core.ts의 import() 한 곳으로만 받는다 — 첫 화면 그래프에 다시 들어오면 실패', async () => {
+    const { files, core } = walk(join(ROOT, 'src/app/main.ts'));
+    const rel = [...files].map((f) => relative(ROOT, f));
+    // 읽기 함수(doc.ts가 문서를 만들 때 부름)와 필드 초기값의 sameSceneFit은 pages.ts에 남아 첫 화면에 있다
+    expect(rel).toContain('src/app/pages.ts');
+    expect(rel.filter((f) => ['src/app/scenecam.ts', 'src/app/view.ts', 'src/app/overlay.ts'].includes(f))).toEqual([]);
+    // 코어 camera는 그래프에 있으면 코어 뷰어가 쓰는 궤도·이동·확대 함수까지 모듈 글이 통째로 첫 화면 조각에 실렸다(그것이 끌어오는 math·bounds·extent도)
+    expect(['camera', 'math', 'bounds', 'extent'].filter((n) => core.has(n))).toEqual([]);
+    const dyn = (spec: string): string[] =>
+      [...files].filter((f) => !f.startsWith(CORE) && dynamicSpecs(readFileSync(f, 'utf8')).includes(spec)).map((f) => relative(ROOT, f));
+    expect(dyn('./scenecam')).toEqual(['src/app/core.ts']);
+    // 옮긴 것은 pages.ts에 정의가 없고, pages.ts는 코어를 값으로 가져오지 않는다(되살리면 코어 camera가 첫 화면 조각에 다시 실린다)
+    const pages = stripComments(readFileSync(join(ROOT, 'src/app/pages.ts'), 'utf8'));
+    expect([...MOVED, ...MOVED_CONST].filter((n) => new RegExp(`^\\s*export\\s+(?:function|const)\\s+${n}\\b`, 'm').test(pages))).toEqual([]);
+    expect(staticSpecs(pages).filter((s) => s.startsWith('opencad-viewer3d'))).toEqual([]);
+    // 장면 카메라 조각이 내보내는 것: 옮긴 것과, 맞춰 보기(view.ts)·덧그림 층(overlay.ts)을 같은 값으로
+    const m: Record<string, unknown> = await import('../../src/app/scenecam');
+    expect(MOVED.filter((n) => typeof m[n] !== 'function')).toEqual([]);
+    expect(MOVED_CONST.filter((n) => typeof m[n] !== 'number')).toEqual([]);
+    const view = await import('../../src/app/view');
+    expect(m.cameraForBox).toBe(view.cameraForBox);
+    expect(m.keepViewOnHeightChange).toBe(view.keepViewOnHeightChange);
+    expect(m.Overlay).toBe((await import('../../src/app/overlay')).Overlay);
   });
 });
 
