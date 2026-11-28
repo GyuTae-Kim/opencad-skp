@@ -3787,9 +3787,10 @@ export class SkpViewerApp implements PanelHost {
       docLabel(info),
       `단위 ${unitSummary(info, d.scene.units)}`,
       formatBytes(d.size),
-      `면 ${fmtCount(info.faces)} · 모서리 ${fmtCount(info.edges)}`,
+      // 233차: 모르는 수(null)는 조각째 뺀다(정보 탭 줄·태그 줄 수 칩 꼴) — 「면 — · 모서리 —」의 「—」 둘레 빈칸이 번역층 조각 가름 「 — 」가 되어 「모서리」가 한국어로 남았다
+      [info.faces === null ? '' : `면 ${fmtCount(info.faces)}`, info.edges === null ? '' : `모서리 ${fmtCount(info.edges)}`].filter(Boolean).join(' · '),
       `읽기 ${formatMs(d.ms)}`,
-    ];
+    ].filter(Boolean);
     e.stMain.textContent = parts.join('  |  ');
     e.stMain.title = parts.join(' · ');
     const w = (d.scene.warnings?.length ?? 0) + d.coreIssues.length;

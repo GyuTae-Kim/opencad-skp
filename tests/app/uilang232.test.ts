@@ -82,14 +82,11 @@ async function until(ok: () => boolean, ms = 5000): Promise<void> {
 
 /**
  * 시험 모형(rowDoc — 감싼 그룹 안 상자 둘). 실제 파일 문서는 해석기가 늘 면·모서리 수를 적는다(index.ts sceneFrom — 그릴 것이 없는 장면은 문서를 만들지 않는다, app.ts openBlob).
- * 이 모형은 수가 없어 상태 막대가 「면 — · 모서리 —」가 되는데, 그 「 — 」가 번역층의 조각 가름 글자와 겹쳐 「모서리」가 옮겨지지 않는다
- * (232차 표 — 실제 문서에는 닿지 않는 상태라 둠, 214차 「단위 모름」 꼴). 실제 문서처럼 수를 적는다(상자 둘 — 면 12·모서리 24)
+ * 이 모형은 수가 없다: 232차에는 상태 막대가 「면 — · 모서리 —」가 되어 그 「 — 」가 번역층의 조각 가름 글자와 겹쳐 「모서리」가 옮겨지지 않아 수를 적어 두었다.
+ * 233차: 상태 막대가 모르는 수 조각을 빼므로(app.ts refreshStatus — 정보 탭·태그 줄 꼴) 수 없는 모형 그대로 그려 그 자리도 한글 0을 지킨다
  */
 function doc(): Doc {
-  const d = rowDoc();
-  d.info.faces = 12;
-  d.info.edges = 24;
-  return d;
+  return rowDoc();
 }
 
 /** 브라우저가 조각을 받지 못한 꼴의 오류(app.ts isChunkLoadError가 알아본다) */
