@@ -2730,6 +2730,27 @@ html:lang(zh-CN) { --font: -apple-system, "PingFang SC", "Microsoft YaHei", sans
 }
 
 /*
+ * 초점이 가려지지 않음(243차 — WCAG 2.4.11): 3D 보기 위에 뜬 칸끼리는 겹친다 — 새 판 띠가 장면 탭·알림 버튼을, 낮은 창의 알림이 장면 탭·아래 띠·측정값 칸을,
+ * 그림 저장 창이 알림 ✕·띠·측정값 칸을, 띠 안 최근 측정 목록이 장면 탭을 통째로 덮어 Tab으로 간 칸이 보이지 않았다(3D 보기는 굴리지 않아 비킬 수 없다).
+ * 키보드 초점이 든 칸을 그동안만 맨 위로(진행·새 판 띠 7 위, 메뉴·안내 상자 밑) — 쌓임 차례만이라 자리·크기는 그대로, 마우스로 누른 초점과 초점이 없을 때는 지금 그대로.
+ * 쉼표 목록으로 둔다(:is() 안 쉼표는 다른 시험의 규칙 나누기가 .notice 등 조각으로 읽음). 3D 보기 캔버스·처음 화면은 넣지 않는다(obscure243 시험)
+ */
+.stage > .scene-tabs:has(:focus-visible),
+.stage > .measure-bar:has(:focus-visible),
+.stage > .vcb:has(:focus-visible),
+.stage > .notice:has(:focus-visible),
+.stage > .busy:has(:focus-visible),
+.stage > .export-dialog:has(:focus-visible) {
+  z-index: 8;
+}
+
+/* 측정 띠 안 측정값 칸(relative·z 3)의 말풍선은 두 줄이면 띠 첫 줄 버튼(38px)을 통째로 덮는다 — 키보드 초점 든 버튼만 그 위로(relative라 자리 그대로) */
+.measure-bar .mb-btn:focus-visible {
+  position: relative;
+  z-index: 4;
+}
+
+/*
  * 3D 보기 캔버스의 키보드 초점 테두리는 코어가 그린다(0.9.0: :focus-visible일 때만 캔버스 안쪽 2화소, 0.9.1: 키보드 초점 뒤 누르면 감춤 —
  * 감추는 규칙의 구체성이 (0,3,1)이라 위의 전역 :focus-visible보다 먼저다).
  * 앱은 색만 다른 초점 테두리와 같은 강조색으로 맞춘다(--v3d-focus — 두 테마 바탕과 대비 5:1쯤)

@@ -57,7 +57,7 @@ const HOVER: Record<number, Row> = {
     c: '타이머 없음 — 다른 줄 초점·닫기에만',
   },
   4: { what: '뷰 큐브 올림 강조(코어)', verdict: '셈 밖', why: '큐브 자신의 꼴 바뀜 — 새 내용 아님' },
-  5: { what: 'CSS :hover·:focus 규칙', verdict: '셈 밖', why: '트리거 자신의 배경·글 색·테두리·초점 테두리만(아래 it)' },
+  5: { what: 'CSS :hover·:focus 규칙', verdict: '셈 밖', why: '트리거 자신의 배경·글 색·테두리·초점 테두리, 243차 초점 든 칸의 겹침 차례만(아래 it)' },
   6: { what: '측정 띠 잠깐 알림', verdict: '셈 밖', why: '누름·키로 띄움 — 올림은 시간을 멈추기만(166차)' },
   7: { what: '듣기만 하는 자리(끌기·rove·메뉴 닫기·입력 칸)', verdict: '셈 밖', why: '아무것도 띄우지 않음' },
   8: { what: '가상 커서·정밀 조준의 툴팁', verdict: '셈 밖', why: '키·누름으로 띄움' },
@@ -106,7 +106,7 @@ describe('242차 감사 표 — 올림·초점 자리(소스 글)', () => {
     expect([by('고침'), by('지킴'), by('셈 밖')]).toEqual([1, 2, 6]);
   });
 
-  it('styles.css의 :hover·:focus 규칙 30(올림 23·초점 10 — 셋은 둘 다, :focus-within 0)은 트리거 자신의 꼴만 바꾼다 — 내용을 띄우는 규칙이 생기면 실패', () => {
+  it('styles.css의 :hover·:focus 규칙 32(올림 23·초점 12 — 셋은 둘 다, :focus-within 0)은 트리거 자신의 꼴만 바꾼다(243차 둘은 초점 든 칸의 겹침 차례) — 내용을 띄우는 규칙이 생기면 실패', () => {
     const css = readFileSync(resolve(SRC, 'app/styles.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
     const rules: { sels: string[]; body: string }[] = [];
     const read = (src: string): void => {
@@ -127,15 +127,17 @@ describe('242차 감사 표 — 올림·초점 자리(소스 글)', () => {
     const hov = rules.filter((r) => r.sels.some((s) => s.includes(':hover')));
     const foc = rules.filter((r) => r.sels.some((s) => s.includes(':focus')));
     const both = new Set([...hov, ...foc]);
-    expect([hov.length, foc.length, both.size]).toEqual([23, 10, 30]);
+    expect([hov.length, foc.length, both.size]).toEqual([23, 12, 32]);
     expect(rules.filter((r) => r.sels.some((s) => s.includes(':focus-within')))).toEqual([]);
     const STYLE_ONLY = new Set(['background', 'background-color', 'color', 'border-color', 'outline', 'outline-offset', 'border-radius']);
+    // 243차(WCAG 2.4.11): 키보드 초점이 든 칸·버튼을 그동안 앞으로 — 겹침 차례(z-index)와 그 자리 그대로인 relative뿐(새 내용을 띄우지 않음, obscure243 시험)
+    const RAISE = (p: string, v: string): boolean => p === 'z-index' || (p === 'position' && v === 'relative');
     const bad: string[] = [];
     for (const r of both)
       for (const d of r.body.split(';')) {
         const c = d.indexOf(':');
         const p = c > 0 ? d.slice(0, c).trim() : '';
-        if (p && !STYLE_ONLY.has(p)) bad.push(`${r.sels.join(', ')} { ${p} }`);
+        if (p && !STYLE_ONLY.has(p) && !RAISE(p, d.slice(c + 1).trim())) bad.push(`${r.sels.join(', ')} { ${p} }`);
       }
     expect(bad).toEqual([]);
   });
