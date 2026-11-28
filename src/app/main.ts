@@ -63,6 +63,6 @@ if (root) {
   const swPath = '../sw.js';
   if (import.meta.env.PROD && canUseServiceWorker(location, navigator))
     void registerServiceWorker(navigator.serviceWorker as unknown as SwContainer, new URL(swPath, import.meta.url), (apply) => app.offerUpdate(apply), undefined, { onVisible: whenVisible });
+  // 번역층(228차: 사전을 받지 못하면 앱 알림 상자에 알리고 다시 시도 — 첫 사전이면 한국어로 세운 뒤)
+  void installLocalization(root, (...a) => app.loadFailed(...a));
 }
-
-if (root) void installLocalization(root);

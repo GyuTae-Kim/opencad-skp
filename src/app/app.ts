@@ -108,7 +108,7 @@ import {
   storeLayout,
   type StoredLayout,
 } from './layout';
-import { Panel, type PanelHost } from './panel';
+import { Panel, loadFailText, retryButton, type PanelHost } from './panel';
 import { RecentStore, canKeepRecent, nameOfRecentId, recentTimeText, type RecentEntry } from './recent';
 import { sceneHasGeometry } from './protocol';
 import { deviceHints, textureLimitsFor, type TextureLimits } from './texlimits';
@@ -1099,9 +1099,10 @@ export class SkpViewerApp implements PanelHost {
     this.setBusy({ file: '예제 모형', ui: true }, 0.005, '예제 모형 만드는 중');
     let bytes: Uint8Array;
     let name: string;
+    let sample: typeof import('./sample') | undefined;
     try {
       // 예제 만들기 도구는 누를 때만 받는다(첫 화면 묶음을 작게)
-      const sample = await import('./sample');
+      sample = await import('./sample');
       // 53차: 예제는 앱이 만든 파일이라 안의 이름(태그·재질·장면 등)과 파일 이름도 화면 언어로 만든다(파일 글은 번역층이 옮기지 않으므로 — 52차).
       // 주소로 바로 열면(?sample) 화면 언어 사전을 받기 전일 수 있어 기다린다
       await uiReady();
@@ -1110,7 +1111,9 @@ export class SkpViewerApp implements PanelHost {
     } catch (e) {
       if (seq === this.openSeq) {
         this.setBusy(null);
-        this.showNotice('error', '예제를 만들지 못했습니다', errorParts(e));
+        // 228차: 받지 못했으면 「예제 모형을(를) 불러오지 못했습니다.」와 다시 시도(전에는 브라우저의 영어 글이 알림 글에 들었다). 만들기 실패는 그대로
+        if (!sample) this.loadFailed('예제 모형', () => this.openSample(), e);
+        else this.showNotice('error', '예제를 만들지 못했습니다', errorParts(e));
         attempt.error('read_error');
       }
       return;
@@ -3113,10 +3116,14 @@ export class SkpViewerApp implements PanelHost {
       const stage = this.stageEl;
       this.exportLoading = true;
       void import('./exporter')
-        .then((m) => {
-          this.exportDialog ??= new m.ExportDialog({ docName: () => this.doc?.name ?? 'model', context: () => this.exportContext(), notify, track: () => trackExport('png') }, stage);
-          if (this.viewer && this.doc) this.savePng();
-        }, notify)
+        .then(
+          (m) => {
+            this.exportDialog ??= new m.ExportDialog({ docName: () => this.doc?.name ?? 'model', context: () => this.exportContext(), notify, track: () => trackExport('png') }, stage);
+            if (this.viewer && this.doc) this.savePng();
+          },
+          // 228차: 받지 못하면 「그림 저장을(를) 불러오지 못했습니다.」와 다시 시도(전에는 브라우저의 영어 글이 알림 글에 들었다)
+          (e: unknown) => this.loadFailed('그림 저장', () => this.savePng(), e),
+        )
         .finally(() => (this.exportLoading = false));
     }
   }
@@ -3275,10 +3282,13 @@ export class SkpViewerApp implements PanelHost {
     // 안내 글은 열 때 받는다(44차 — 첫 화면 JS에서 빼서 키보드 이동 코드 자리를 만든다. 오프라인 앱은 서비스 워커가 미리 담아 둔다)
     this.shortcutsLoading = true;
     void import('./shortcuts')
-      .then((m) => {
-        if (!this.shortcutsClose) this.shortcutsClose = m.openShortcutsDialog(document.body, () => (this.shortcutsClose = null));
-      })
-      .catch((e: unknown) => console.error('바로 가기 안내를 받지 못했습니다', e))
+      .then(
+        (m) => {
+          if (!this.shortcutsClose) this.shortcutsClose = m.openShortcutsDialog(document.body, () => (this.shortcutsClose = null));
+        },
+        // 228차: 받지 못하면 알림과 다시 시도(전에는 콘솔에만 남아 창이 말없이 열리지 않았다)
+        (e: unknown) => this.loadFailed('키보드 바로 가기', () => this.openShortcuts(), e),
+      )
       .finally(() => (this.shortcutsLoading = false));
   }
 
@@ -3636,6 +3646,18 @@ export class SkpViewerApp implements PanelHost {
   private closeNotice(): void {
     this.notice = null;
     this.els.notice.hidden = true;
+  }
+
+  /**
+   * 228차: 처음 쓸 때 받는 조각(창·예제)·언어 사전(main.ts가 번역층 onFail로 넘긴다 — 첫 사전이면 한국어로 세운 뒤)을 받지 못했다(WCAG 3.3.1·4.1.3):
+   * 알림 「{0}을(를) 불러오지 못했습니다.」(무거운 글)와 ✕ 앞 다시 시도 — 까닭 글(브라우저의 영어 오류 글)은 콘솔에만.
+   * 다시 시도는 ✕처럼 닫고(초점도 ✕와 같은 곳) 다시 받는다 — 또 받지 못하면 숨은 상자가 다시 떠 새로 알린다
+   */
+  loadFailed(name: string, retry: () => unknown, error: unknown): void {
+    console.error(error);
+    this.showNotice('error', loadFailText(name), '');
+    const x = this.els.notice.lastElementChild as HTMLElement;
+    x.before(retryButton(() => (x.click(), retry())));
   }
 
   private refreshChrome(): void {
