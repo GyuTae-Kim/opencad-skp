@@ -200,8 +200,43 @@ const treeBox = (cls: string, label: string): HTMLElement => {
     const it = (e.target as HTMLElement).closest<HTMLElement>('[role=treeitem]');
     if (it) rove([...box.querySelectorAll<HTMLElement>('[role=treeitem]')], it, true);
   });
+  // 줄 안 보이기 체크 둘레의 줄 바탕 누름은 체크로(237차 — 캡처라 줄의 고르기·찾은 줄 조상 펼치기보다 먼저). 초점도 체크로(체크를 바로 누른 꼴 — 같은 줄이라 Tab 차례 그대로)
+  box.addEventListener(
+    'click',
+    (e) => {
+      const cb = boxHit(e.target as HTMLElement, e);
+      if (!cb) return;
+      e.stopPropagation();
+      cb.focus({ preventScroll: true });
+      cb.click();
+    },
+    true,
+  );
   return box;
 };
+
+/**
+ * 줄 안 보이기 체크(마우스 화면 15×15)의 누르는 자리 24×24(WCAG 2.5.8, 237차 — 235차 펼치기와 같은 꼴: 보이는 꼴·마디 그대로 두고 줄 안쪽 틈만).
+ * 체크는 입력 칸이라 투명 ::after 자리를 붙일 수 없고, 라벨로 감싸면 줄 안 체크 Tab 차례(rove의 `:scope > input`)·손가락 24px 규칙 선택자가 바뀌어 배치 상자로 센다.
+ * 자리는 체크를 가운데 둔 24×24 — 앞이 펼치기 단추면 사이 틈의 가운데부터(앞 반은 펼치기의 투명 자리 — 235차) 뒤로 밀고, 뒤 칸(종류 칩)·줄 밖은 넘지 않는다.
+ * 누른 곳이 줄 바탕일 때만(체크·펼치기·줄 안 다른 칸을 누른 것은 그대로), 체크가 꺼졌거나 이미 24 이상(손가락 화면 — 43차)이거나 배치가 없으면 null
+ */
+function boxHit(row: HTMLElement, e: MouseEvent): HTMLInputElement | null {
+  if (!row.matches?.('.prow.pick[role=treeitem]')) return null;
+  const cb = row.querySelector<HTMLInputElement>(':scope > input[type=checkbox]');
+  if (!cb || cb.disabled) return null;
+  const r = cb.getBoundingClientRect();
+  if (!r.width || !r.height || (r.width >= 24 && r.height >= 24)) return null;
+  const R = row.getBoundingClientRect();
+  const prev = cb.previousElementSibling;
+  const lo = prev?.localName === 'button' ? (prev.getBoundingClientRect().right + r.left) / 2 : R.left;
+  const hi = cb.nextElementSibling?.getBoundingClientRect().left ?? R.right;
+  const x0 = Math.max(lo, r.left - Math.max(0, 24 - r.width) / 2);
+  const y0 = Math.max(R.top, r.top - Math.max(0, 24 - r.height) / 2);
+  const x1 = Math.min(hi, x0 + Math.max(24, r.width));
+  const y1 = Math.min(R.bottom, y0 + Math.max(24, r.height));
+  return e.clientX >= x0 && e.clientX < x1 && e.clientY >= y0 && e.clientY < y1 ? cb : null;
+}
 
 /** 다 그린 나무: 고른 줄(없으면 첫 줄)만 Tab 차례 */
 const roveTree = (box: HTMLElement): void => {

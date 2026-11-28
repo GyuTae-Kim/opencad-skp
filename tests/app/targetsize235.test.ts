@@ -7,7 +7,9 @@
  *     측정 띠·고른 것 카드·카메라 띠·새 판 띠·상태 막대·장면 탭·패널 네 탭(나무는 모두 펼침)·앱 설정 메뉴·알림을 그리고, 누를 수 있는 마디를 모두 모아 감사 표(AUDIT —
  *     .runtime/r235/progress.md 표의 줄 번호)의 한 줄에 드는지 본다. 새 누를 칸이 생기면 표에 크기와 판정을 더해야 통과한다(크기 감사가 낡지 않게).
  * (2) 고친 것: 나무 줄 펼치기(18×18)의 누르는 자리를 마우스 화면에서도 투명 ::after로 24×24(줄 안쪽 3px·옆 체크와 사이 6px 틈의 반 — 보이는 꼴 그대로, 손가락 화면은 43차 규칙).
- * (3) 고르지 않고 둔 것(나무 줄 보이기 체크 15·창 가르개 6·좁은 마우스 창 시트 손잡이 14)은 지금도 24 아래임을 본다(고치면 표와 이 줄을 함께 고친다 — 214차 LEFT 꼴).
+ * (3) 고르지 않고 둔 것(창 가르개 6·좁은 마우스 창 시트 손잡이 14)은 지금도 24 아래임을 본다(고치면 표와 이 줄을 함께 고친다 — 214차 LEFT 꼴).
+ * (4) 237차 고친 것: 나무·윗단계·찾기 줄의 보이기 체크(마우스 15×15 — 235차 「고르지 않음」)는 보이는 꼴·마디 그대로 두고, 체크 둘레 줄 바탕 누름을 체크로 넘겨 누르는 자리 24×24
+ *     (infotab.ts treeBox 캡처 — 라벨로 감싸지 않아 rove·손가락 규칙·키·이름 그대로, .runtime/r237/progress.md 표).
  * jsdom은 배치를 하지 않으므로 크기는 styles.css 규칙을 미디어 조건(폭·높이·pointer)으로 골라, 같은 선택자의 선언을 원문 차례로 덮어 읽는다.
  */
 import { readFileSync } from 'node:fs';
@@ -130,12 +132,6 @@ describe('235차: 나무 줄 펼치기는 마우스 화면에서도 누르는 �
 });
 
 describe('235차: 고르지 않고 둔 작은 대상은 지금도 24 아래(표와 함께 — 고치면 이 줄과 progress.md·README를 함께 고친다)', () => {
-  it('나무·윗단계·찾기 줄의 보이기 체크: 마우스 화면 15×15(키우면 그림이 커짐 — 디자인 결정, 입력 칸에는 ::after 자리를 붙이지 못함), 손가락 화면은 43차 24×24', () => {
-    const cb = (m: Form): Map<string, string> => decls(m, "input[type='checkbox']", ".prow.pick > input[type='checkbox']");
-    for (const m of [WIDE, NARROW]) expect([px(cb(m).get('width')), px(cb(m).get('height'))], m.name).toEqual([15, 15]);
-    for (const m of [PHONE, TABLET]) expect([px(cb(m).get('width')), px(cb(m).get('height'))], m.name).toEqual([24, 24]);
-  });
-
   it('창 가르개: 넓은 화면·태블릿 폭 6px, 좁은 마우스 창 시트 손잡이 높이 14px(넓히면 3D 보기나 패널 첫 탭·나무 줄을 덮음), 휴대폰은 43차 24px', () => {
     expect(basis(decls(WIDE, '.resizer'))).toBe(6);
     expect(basis(decls(TABLET, '.resizer'))).toBe(6);
@@ -212,6 +208,7 @@ interface Inner {
   toggleThemeMenu(): void;
   closeMenu(): void;
   showNotice(kind: 'warn', title: string, text: string): boolean;
+  select(sel: null): void;
 }
 
 /** DOM이 매크로 작업 k 차례 잇달아 조용할 때까지(MutationObserver — 공용 규칙 13번, 마감 5초) */
@@ -253,10 +250,14 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** 앱은 만들 때 미디어 질의(좁은 화면·휴대폰·손가락)를 잡는다 — 그 꼴의 matchMedia로 */
+const stubMedia = (m: Form): void => {
+  vi.stubGlobal('matchMedia', (q: string) => ({ matches: mediaMatch(q, m), media: q, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false }));
+};
+
 /** 그 꼴로 앱 화면을 차례로 그리며 누를 수 있는 마디를 모은다 */
 async function collect(m: Form): Promise<Element[]> {
-  // 앱은 만들 때 미디어 질의(좁은 화면·휴대폰·손가락)를 잡는다 — 그 꼴의 matchMedia로
-  vi.stubGlobal('matchMedia', (q: string) => ({ matches: mediaMatch(q, m), media: q, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false }));
+  stubMedia(m);
   history.replaceState(null, '', '/opencad-skp/');
   const root = document.body.appendChild(document.createElement('div'));
   root.id = 'app';
@@ -317,5 +318,154 @@ describe('235차: 앱 화면의 누를 수 있는 마디는 모두 크기 감사
     expect([...missing].sort(), m.name).toEqual([]);
     // 그린 화면이 주요 칸을 다 품었는지(제목·도구 막대·패널 탭·닫기·작은 버튼·누르기 방식·패널 줄·펼치기·보이기 체크·장면 탭·측정 띠·상태 막대 경고·메뉴·언어·가르개)
     for (const r of [1, 3, 4, 5, 7, 9, 10, 11, 13, 14, 15, 16, 23, 24, 26, 27, 30, 36]) expect(rows.has(r), `${m.name}: 표 ${r}번 줄`).toBe(true);
+  });
+});
+
+// ───────────────────────── 237차: 줄 안 보이기 체크의 누르는 자리 ─────────────────────────
+
+const rectOf = (x: number, y: number, w: number, h: number): DOMRect => ({ left: x, top: y, width: w, height: h, right: x + w, bottom: y + h, x, y, toJSON: () => ({}) }) as DOMRect;
+
+/**
+ * 줄 칸 상자를 styles.css 규칙으로 놓는다(줄 왼쪽 위 (900, 300)·폭 320·높이 최소 높이, 칸은 가운데 맞춤·틈 gap — 들여쓰기는 줄의 인라인 padding-left,
+ * 펼치기·빈 자리·체크는 규칙 크기, 종류·이름·칩·수 칸은 폭 40·높이 18로 어림)
+ */
+function placeRow(item: HTMLElement, m: Form): Map<Element, DOMRect> {
+  const row = decls(m, '.prow', ...(item.classList.contains('trow') ? ['.prow.trow'] : []));
+  const h = px(row.get('min-height'));
+  const gap = px(row.get('gap'));
+  const side = px(row.get('padding')?.split(/\s+/)[1]);
+  const out = new Map<Element, DOMRect>([[item, rectOf(900, 300, 320, h)]]);
+  const box = decls(m, '.twisty');
+  const cb = decls(m, "input[type='checkbox']", ".prow.pick > input[type='checkbox']");
+  let x = 900 + (parseFloat(item.style.paddingLeft) || side);
+  for (const el of item.children) {
+    const [w, hh] = el.matches('.twisty, .twisty-space')
+      ? [px(box.get('width')), px(box.get('height'))]
+      : el.matches('input[type=checkbox]')
+        ? [px(cb.get('width')), px(cb.get('height'))]
+        : [40, 18];
+    out.set(el, rectOf(x, 300 + (h - hh) / 2, w, hh));
+    x += w + gap;
+  }
+  return out;
+}
+
+/** 나무 탭을 그린 앱(예제 문서 — 모두 펼침) */
+async function treeApp(m: Form): Promise<{ a: Inner; d: SkpDoc; rows: HTMLElement[] }> {
+  stubMedia(m);
+  history.replaceState(null, '', '/opencad-skp/');
+  const root = document.body.appendChild(document.createElement('div'));
+  root.id = 'app';
+  const app = new SkpViewerApp(root);
+  app.mount();
+  const a = app as unknown as Inner;
+  const bytes = sampleSkpBytes(undefined, (s) => s);
+  const d = createDoc(SAMPLE_NAME, bytes.length, { scene: skpToScene(bytes, { name: SAMPLE_NAME, outline: true }), ms: 12 });
+  a.doc = d;
+  d.panelTab = 'outline';
+  for (let i = 0; i < (d.tree?.count ?? 0); i++) d.expanded.add(i);
+  a.panel.show(d);
+  await tick();
+  const rows = [...a.panel.el.querySelectorAll<HTMLElement>('.plist.tree > .prow.pick.trow')].filter((el) => el.querySelector<HTMLInputElement>(':scope > input[type=checkbox]')?.disabled === false);
+  return { a, d, rows };
+}
+
+/** 줄 바탕을 화면 자리 (x, y)에서 누른다(브라우저에서는 그 자리에 줄 안 칸이 없을 때 누름 대상이 줄) */
+const press = (el: Element, x: number, y: number): void => {
+  el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: x, clientY: y, detail: 1 }));
+};
+
+describe('237차: 나무·윗단계·찾기 줄의 보이기 체크는 누르는 자리 24×24(WCAG 2.5.8 — 보이는 꼴·마디 그대로, 체크 둘레 줄 바탕 누름을 체크로)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('보이는 체크는 그대로: 마우스 화면 15×15(키우면 그림이 커짐 — 디자인 결정, 입력 칸에는 ::after 자리를 붙이지 못함), 손가락 화면은 43차 24×24', () => {
+    const cb = (m: Form): Map<string, string> => decls(m, "input[type='checkbox']", ".prow.pick > input[type='checkbox']");
+    for (const m of [WIDE, NARROW]) expect([px(cb(m).get('width')), px(cb(m).get('height'))], m.name).toEqual([15, 15]);
+    for (const m of [PHONE, TABLET]) expect([px(cb(m).get('width')), px(cb(m).get('height'))], m.name).toEqual([24, 24]);
+  });
+
+  it.each([WIDE, NARROW])('$name: 펼치기 단추 줄·빈 자리 줄 모두 체크 둘레 24×24 누름은 체크(줄 고르기 아님), 그 밖·펼치기 몫·뒤 칸 앞·꺼진 체크는 줄 고르기 그대로', async (m) => {
+    const { a, d, rows } = await treeApp(m);
+    const withTwisty = rows.find((el) => el.querySelector(':scope > button.twisty'));
+    const leaf = rows.find((el) => el.querySelector(':scope > .twisty-space'));
+    expect(!!withTwisty && !!leaf, m.name).toBe(true);
+    // 펼치기 투명 자리의 오른쪽 넓힘(235차 — 틈 6의 반)
+    const twistyRight = -insets(decls(m, '.trow .twisty::after').get('inset'))[1];
+    for (const item of [withTwisty!, leaf!]) {
+      const rects = placeRow(item, m);
+      vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+        return rects.get(this) ?? rectOf(0, 0, 0, 0);
+      });
+      const n = Number(item.dataset.node);
+      const cb = item.querySelector<HTMLInputElement>(':scope > input[type=checkbox]')!;
+      const r = rects.get(cb)!;
+      const row = rects.get(item)!;
+      const prev = rects.get(cb.previousElementSibling!)!;
+      const next = rects.get(cb.nextElementSibling!)!;
+      // 기대 자리: 체크를 가운데 둔 24×24 — 앞이 펼치기 단추면 사이 틈의 가운데(앞 반은 펼치기 투명 자리)부터 오른쪽으로 민다
+      const twisty = item.querySelector(':scope > button.twisty') !== null;
+      const x0 = twisty ? (prev.right + r.left) / 2 : r.left - (24 - r.width) / 2;
+      const y0 = r.top - (24 - r.height) / 2;
+      const [x1, y1] = [x0 + 24, y0 + 24];
+      // 그 자리는 줄 안쪽 틈 안: 펼치기 투명 자리·뒤 칸(종류 칩)·줄 밖과 겹치지 않는다
+      if (twisty) expect(x0, m.name).toBeGreaterThanOrEqual(prev.right + twistyRight);
+      expect(x1, m.name).toBeLessThanOrEqual(next.left);
+      expect([y0 >= row.top, y1 <= row.bottom], m.name).toEqual([true, true]);
+      const hidden = (): boolean => d.hiddenNodes.has(n);
+      a.select(null);
+      let was = hidden();
+      // 안(네 모서리와 왼·오른 띠): 누를 때마다 보이기가 바뀌고 줄은 고르지 않으며, 초점은 체크(같은 줄이라 줄·체크가 Tab 차례 — rove 그대로)
+      const mid = r.top + r.height / 2;
+      for (const [x, y] of [[x0, y0], [x1 - 0.01, y0], [x0, y1 - 0.01], [x1 - 0.01, y1 - 0.01], [x0 + 1, mid], [x1 - 1, mid]] as const) {
+        press(item, x, y);
+        const at = `${m.name} ${twisty ? '펼치기 줄' : '빈 자리 줄'}: 체크에서 (${x - r.left}, ${y - r.top})`;
+        expect(hidden(), at).toBe(!was);
+        was = hidden();
+        expect(cb.checked, at).toBe(!was);
+        expect(d.selection, at).toBeNull();
+        expect(document.activeElement, at).toBe(cb);
+        expect([item.tabIndex, cb.tabIndex], at).toEqual([0, 0]);
+      }
+      // 체크를 바로 누르면 한 번만 바뀐다(넘기기가 체크 자신의 누름을 다시 넘기지 않음)
+      cb.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: r.left + 7, clientY: r.top + 7, detail: 1 }));
+      expect(hidden(), m.name).toBe(!was);
+      was = hidden();
+      // 밖(자리 바로 바깥 — 앞은 펼치기 몫이거나 틈, 뒤는 종류 칩 안, 위아래는 줄 안쪽 여백): 줄 고르기 그대로, 보이기 그대로
+      for (const [x, y] of [[x0 - 0.5, mid], [x1 + 0.5, mid], [r.left + r.width / 2, y0 - 0.5], [r.left + r.width / 2, y1 + 0.5]] as const) {
+        a.select(null);
+        press(item, x, y);
+        const at = `${m.name} ${twisty ? '펼치기 줄' : '빈 자리 줄'}: 밖 (${x - r.left}, ${y - r.top})`;
+        expect(hidden(), at).toBe(was);
+        expect(d.selection, at).not.toBeNull();
+      }
+      // 꺼진 체크(나눠 숨길 수 없는 단계)는 넘기지 않는다 — 줄 고르기
+      cb.disabled = true;
+      a.select(null);
+      press(item, x0, y0);
+      expect(hidden(), m.name).toBe(was);
+      expect(d.selection, m.name).not.toBeNull();
+      cb.disabled = false;
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('휴대폰(손가락): 체크가 이미 24×24(43차)라 넘길 띠가 없다 — 체크 옆 줄 바탕은 줄 고르기 그대로', async () => {
+    const { a, d, rows } = await treeApp(PHONE);
+    const item = rows.find((el) => el.querySelector(':scope > .twisty-space'))!;
+    const rects = placeRow(item, PHONE);
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      return rects.get(this) ?? rectOf(0, 0, 0, 0);
+    });
+    const cb = item.querySelector<HTMLInputElement>(':scope > input[type=checkbox]')!;
+    const r = rects.get(cb)!;
+    expect([r.width, r.height]).toEqual([24, 24]);
+    const n = Number(item.dataset.node);
+    const was = d.hiddenNodes.has(n);
+    a.select(null);
+    press(item, r.left - 1, r.top + r.height / 2);
+    expect(d.hiddenNodes.has(n)).toBe(was);
+    expect(d.selection).not.toBeNull();
   });
 });

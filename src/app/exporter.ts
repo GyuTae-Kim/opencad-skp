@@ -249,7 +249,8 @@ export function printImage(b: Blob, title: string): void {
     { class: 'print-sheet', 'aria-hidden': 'true' },
     // 문서 이름(파일 글)은 번역하지 않는다
     h('img', { src: url, alt: title, translate: 'no' }),
-    h('p', { class: 'print-cap', 'data-i18n-skip': '' }, `${title} · ${new Date().toLocaleDateString()}`),
+    // 날짜는 화면 언어 꼴로(237차 — 번역층이 html lang에 둔 언어, 전에는 브라우저 지역이라 화면 언어와 갈렸다)
+    h('p', { class: 'print-cap', 'data-i18n-skip': '' }, `${title} · ${new Date().toLocaleDateString(document.documentElement.lang || undefined)}`),
   );
   document.body.append(sheet);
   const done = (): void => {
