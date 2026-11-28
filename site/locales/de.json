@@ -975,6 +975,8 @@
   "녹색 각도기로 고정": "Auf grünen Winkelmesser fixiert",
   "파랑 각도기로 고정": "Auf blauen Winkelmesser fixiert",
   "Shift·화살표로 방향 잠금": "Shift oder Pfeiltasten sperren die Richtung",
+  "Shift·X·Y·Z·L로 방향 잠금": "Shift·X·Y·Z·L sperren die Richtung",
+  "잠글 방향이 없습니다": "Keine Richtung zum Sperren",
   "지금 방향 잠그기(다시 누르면 풀기)": "Aktuelle Richtung sperren (erneut drücken zum Entsperren)",
   "방향 잠금": "Richtungssperre",
   "방향 잠금 풀기": "Richtungssperre aufheben",

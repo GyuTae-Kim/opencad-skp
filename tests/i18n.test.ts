@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 const { JSDOM } = createRequire(import.meta.url)('jsdom');
 import { installLocalization, localizeCubeFaces, uiText } from '../src/app/i18n';
 import { reopenMenu } from '../src/app/dom';
-import { GUIDE_CLEAR_FILE_LABEL, GUIDE_DELETE_KEY_HINT, GUIDE_DELETE_TEXT, GUIDE_KIND_NAMES, GUIDE_REDO_LABEL, GUIDE_UNDO_LABEL, GUIDES_SHOWN_LABEL, LOCK_HINTS, LOCK_MENU_LABEL, LOCK_PICK_LABELS, guideKeyHint, lockHint, measureHint, trackHint } from '../src/app/measure';
+import { GUIDE_CLEAR_FILE_LABEL, GUIDE_DELETE_KEY_HINT, GUIDE_DELETE_TEXT, GUIDE_KIND_NAMES, GUIDE_REDO_LABEL, GUIDE_UNDO_LABEL, GUIDES_SHOWN_LABEL, LOCK_HINTS, LOCK_MENU_LABEL, LOCK_NONE_HINT, LOCK_PICK_LABELS, guideKeyHint, lockHint, measureHint, trackHint } from '../src/app/measure';
 import { GUIDE_HIDE_LABEL, GUIDE_HIDE_TEXT, GUIDE_SELECT_ALL_LABEL, GUIDE_SELECT_ALL_TEXT, GUIDE_UNHIDE_LABEL, guideCountText, guideDeleteLabel } from '../src/app/measure';
 import { AXIS_LABELS, FACE_PERPENDICULAR_LABEL, GUIDE_LINE_LABEL, SNAP_LABELS, TRACK_ALIGN_LABEL, TRACK_AXIS_LABELS, TRACK_PAIR_LABELS } from '../src/app/snap';
 import { SHORTCUTS } from '../src/app/shortcuts';
@@ -120,8 +120,11 @@ describe('language URLs and UI presentation', () => {
       '커서를 돌릴 쪽으로 옮긴 뒤 치세요', '먼저 중심점과 기준 방향을 누르세요']) texts.add(t);
     // 추론 잠금·나란함: 잠금 안내(축·나란히·수직·각도기 평면), 툴팁, 측정 띠 단추·알림, 도구 막대 풀이
     const locks = [null, 'x', 'y', 'z', 'parallel', 'perpendicular', 'facePerpendicular'] as const;
+    // 220차: 가상 커서를 켠 동안의 잠그는 법(cursor — 「Shift·X·Y·Z·L로 방향 잠금」)과 잠글 방향이 없을 때의 알림(축 잠금 중이면 잠금 안내 뒤에 " · "로)
     for (const mode of ['tape', 'protractor'] as const)
-      for (const n of [0, 1, 2]) for (const lock of locks) for (const plane of [null, 'x', 'y', 'z'] as const) for (const touch of [false, true]) texts.add(lockHint(mode, n, lock, plane, touch) ?? '');
+      for (const n of [0, 1, 2]) for (const lock of locks) for (const plane of [null, 'x', 'y', 'z'] as const) for (const touch of [false, true]) for (const cursor of [false, true]) texts.add(lockHint(mode, n, lock, plane, touch, cursor) ?? '');
+    texts.add(LOCK_NONE_HINT);
+    for (const lock of Object.values(LOCK_HINTS)) texts.add(`${lock} · ${LOCK_NONE_HINT}`);
     for (const t of ['모서리와 나란히 · 50 mm', '빨강 축에 · 잠금 · 60 mm', '녹색 축에 · 잠금', '파랑 축에 · 잠금 · 30 mm', '모서리와 나란히 · 잠금 · 78 mm', '면에 수직 · 잠금 · 12 mm',
       '지금 방향 잠그기(다시 누르면 풀기)', '방향 잠금', '방향 잠금 풀기',
       // 22차 한 손 잠금: 측정 띠 위 잠글 방향 고르기 줄(이름과 버튼 — 210차부터 버튼 글은 할 일 「…잠그기」로 잠금 안내 「…잠금」과 원문이 다르다)
@@ -159,11 +162,27 @@ describe('language URLs and UI presentation', () => {
       texts.add(`Ctrl: 안내 두기 · ${trackHint(n)}`);
       texts.add(`${lockHint('tape', 1, null, null, false)} · ${trackHint(n)}`);
       texts.add(`${lockHint('tape', 1, 'x', null, false)} · ${trackHint(n)}`);
+      texts.add(`${lockHint('tape', 1, null, null, false, true)} · ${trackHint(n)}`);
+      texts.add(`${LOCK_NONE_HINT} · ${trackHint(n)}`);
     }
     texts.delete('');
     for (const {code} of languages.filter(item => item.code !== 'ko'))
       for (const t of texts) expect(translate(t, code), `${code}: ${t}`).not.toMatch(hangul);
     expect(translate('빨강 축에 · 잠금 · 60 mm', 'en')).toBe('On red axis · Locked · 60 mm');
+    // 220차: 키 이름(Shift·X·Y·Z·L)은 옮기지 않는다 — 「Shift·화살표로 방향 잠금」 값 꼴. 알림은 21차까지 잠금 버튼 알림의 앞 조각 「잠글 방향이 없습니다: …」(22차에 고르기 줄로 바꾸며 지움)과
+    // 그때 네 언어 값 그대로(ja는 같은 사전 「잠글 방향 고르기」 ロックする方向を選ぶ와도 같은 낱말)
+    expect(languages.filter((l) => l.code !== 'ko').map(({ code }) => translate(lockHint('tape', 1, null, null, false, true)!, code))).toEqual([
+      'Shift·X·Y·Z·L lock the direction',
+      'Shift·X·Y·Z·Lで方向をロック',
+      'Shift·X·Y·Z·L锁定方向',
+      'Shift·X·Y·Z·L sperren die Richtung',
+    ]);
+    expect(languages.filter((l) => l.code !== 'ko').map(({ code }) => translate(`${LOCK_HINTS.x} · ${LOCK_NONE_HINT}`, code))).toEqual([
+      'Locked to red axis · No direction to lock',
+      '赤軸にロック · ロックする方向がありません',
+      '已锁定到红色轴 · 没有可锁定的方向',
+      'Auf rote Achse gesperrt · Keine Richtung zum Sperren',
+    ]);
     expect(translate(`${AXIS_LABELS.x} · ${TRACK_ALIGN_LABEL} · 40 mm`, 'en')).toBe('On red axis · Aligned with tracked point · 40 mm');
     expect(translate(`${TRACK_AXIS_LABELS.z} · 62 mm`, 'de')).toBe('Auf blauer Achse vom verfolgten Punkt · 62 mm');
     expect(translate(`${TRACK_AXIS_LABELS.y} · ${SNAP_LABELS.onEdge} · 35 mm`, 'en')).toBe('On green axis from tracked point · On edge · 35 mm');
@@ -225,10 +244,11 @@ describe('language URLs and UI presentation', () => {
     // 원문 가름: 고정 = 붙잡아 둠(평면 고정·축 따라가기), 잠금·잠그기·잠글·잠김 = 방향 잠금(「잠시」 같은 다른 낱말은 셈 밖) — 열쇠 26개, 섞인 셋은 두 낱말 모두
     // (210차: 잠글 방향 줄 버튼의 할 일 원문 넷 「…잠그기」 — 锁定 — 이 더해져 30개)
     // (219차: 가상 커서를 켠 동안 방향 잠금 X·Y·Z·L — 키 안내·바로 가기 커서 옮기기 줄을 새 원문으로 바꾸고(−2·+2), 바로 가기 줄 둘·푼 알림 글 둘(방향 잠금 锁定·각도기 평면 고정 固定)을 더해 34개)
+    // (220차: 가상 커서를 켠 동안의 잠금 안내 「Shift·X·Y·Z·L로 방향 잠금」·잠글 방향이 없을 때 알림 「잠글 방향이 없습니다」 — 둘 다 방향 잠금 锁定 — 을 더해 36개)
     const fix = /고정/;
     const lock = /잠[금그글김]/;
     const keys = Object.keys(zh).filter((k) => fix.test(k) || lock.test(k));
-    expect(keys.length).toBe(34);
+    expect(keys.length).toBe(36);
     for (const k of keys) {
       expect(/固定/.test(zh[k]), `固定: ${k}`).toBe(fix.test(k));
       expect(/锁定/.test(zh[k]), `锁定: ${k}`).toBe(lock.test(k));

@@ -131,7 +131,10 @@ export function keyPickMessageFn(tr: (text: string) => string = uiText): KeySnap
   };
 }
 
-/** 캔버스가 받는 키(aria-keyshortcuts — Tab은 커서가 켜진 동안만이라 적지 않는다) */
+/**
+ * 캔버스가 받는 키(aria-keyshortcuts — 초점이 3D 보기에 올 때 보조 기술이 알리는 값이고 그때 커서는 늘 꺼져 있다). Tab과 219차 X·Y·Z·L은 커서가 켜진 동안만
+ * 받는 키라 적지 않는다(220차 — 켠 동안의 키는 켤 때 알림 KEY_MEASURE_HINT·바로 가기 안내 창이 말한다)
+ */
 const KEY_SHORTCUTS = 'ArrowLeft ArrowRight ArrowUp ArrowDown Enter';
 
 /**

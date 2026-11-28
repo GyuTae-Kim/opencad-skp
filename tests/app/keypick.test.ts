@@ -907,4 +907,26 @@ describe('가짜 WebGL2 코어 뷰어 — 키보드 고르기', () => {
     expect(kp.handleKey(ev('z'))).toBe(false);
     expect(calls).toEqual(['key z']);
   });
+
+  it('220차 캔버스 aria-keyshortcuts는 초점이 3D 보기에 올 때(가상 커서 꺼짐) 받는 키만 — 줄자·각도기 방식도 고르기와 같은 값이고, 커서를 켜도 켠 동안만 받는 X·Y·Z·L·Tab을 더하지 않는다(219차 남은 일 (2) — 둠을 고정)', () => {
+    const { v, cv, d, host: el } = setup();
+    const host: KeyMeasureHost = { active: true, handleKey: () => false, keyHover: (x, y) => `끝점: ${x},${y}`, keyEnd: () => undefined, keyPlace: () => '', keyCycle: () => null, keyLock: () => null };
+    const kp = new KeyPick(v, el as unknown as HTMLElement, () => d, { measureTool: host });
+    const KEYS = 'ArrowLeft ArrowRight ArrowUp ArrowDown Enter';
+    // 공백으로 가른 낱낱은 KeyboardEvent.key 이름(WAI-ARIA 1.2 꼴) — 켠 동안만 받는 키는 없다
+    expect(KEYS.split(' ').filter((k) => /^(?:[XYZLxyzl]|Tab)$/.test(k))).toEqual([]);
+    for (const mode of ['tape', 'protractor'] as const) {
+      kp.follow(mode);
+      expect(v.keyboardCursor, mode).toBeNull();
+      expect(cv.getAttribute('aria-keyshortcuts'), mode).toBe(KEYS);
+      // 3D 보기의 Enter로 켠 동안도 같은 값(켠 동안의 키는 켤 때 알림 「방향 잠금 Shift·X·Y·Z·L」·바로 가기 안내 창이 말한다)
+      cv.focus();
+      key(cv, 'Enter');
+      expect(v.keyboardCursor, mode).not.toBeNull();
+      expect(kp.text, mode).toContain('방향 잠금 Shift·X·Y·Z·L');
+      expect(cv.getAttribute('aria-keyshortcuts'), mode).toBe(KEYS);
+      kp.setMode(null);
+      expect(cv.getAttribute('aria-keyshortcuts'), mode).toBeNull();
+    }
+  });
 });
