@@ -17,6 +17,8 @@
  * - 알림 글: 코어 알림 틀 가운데 이 앱이 보일 수 있는 것(고르기 모드)만 네 언어 사전 열쇠(KEY_PICK_TEXT)로 옮겨 setKeyboardSnap({ messages })로 준다.
  *   한글이 없는 틀(pickItem '{0} {1}'·candidate '{0}: {1}'·order '{0} {1}/{2}'·point 'X {0}, Y {1}, Z {2}'·hintJoin)은 사전에 넣지 않는다 —
  *   사전의 {0} 틀은 화면 번역층이 모든 글에 맞춰 보므로 그런 틀은 아무 글이나 잡는다. 키 안내 틀은 이 앱 키(코어 기본 키)를 끼운 글로 둔다('옮기기 ←→↑↓' — 자리 없는 열쇠).
+ *   240차: candidate는 측정 도구 자리 글과 같은 가상 커서 자리 글 틀 KEY_AT_TEXT(units.ts — 좌표 꼴까지 든 틀이라 아무 글이나 잡지 않는다)에서 옮겨 준다
+ *   (이름 뒤 쌍점이 지금 언어 꼴 — 중국어 「：」, keyCandidateText).
  *   측정 모드 틀(첫 점·둘째 점·붙잡은 종류 등)은 이 앱이 코어 측정을 쓰지 않아 넣지 않는다(줄자·각도기 알림 글은 measure.ts KEY_MEASURE_TEXT).
  * - 고른 것 이름·좌표(63차 — 코어 0.56.0 pickName 후보 차례·formatNumber로 글 전체를 코어가 만든다): 코어는 그물 이름(재질 · 태그 묶음)을 끼우므로,
  *   이름은 앱이 그 후보를 Enter로 고를 때의 그룹·컴포넌트 이름(고른 것 설명의 첫 조각 — 파일 글은 그대로, 차례에 따라 첫째는 펼친 단계, 둘째부터 가장 안쪽),
@@ -27,13 +29,13 @@
  * 코어 입구와 함께 받는다(core.ts loadViewerCore — 첫 화면 조각 밖).
  */
 import type { IndexRange, KeyboardSnapAnnouncement, KeyPickCycleOptions, Pick3d, PickGroupKey, Viewer3d } from 'opencad-viewer3d';
-import { formatKeySnapMessage, keySnapMessages, type KeySnapMessageFn, type KeySnapMessageKey, type KeySnapMessages } from 'opencad-viewer3d/keysnap';
+import { KEY_SNAP_MESSAGES, formatKeySnapMessage, keySnapMessages, type KeySnapMessageFn, type KeySnapMessageKey, type KeySnapMessages } from 'opencad-viewer3d/keysnap';
 import { selectionForPick, selectionParts, type SkpDoc } from './doc';
 import { sayLive } from './flash';
 import { mixText, uiText } from './i18n';
 import { isEditableTarget } from './keys';
 import { selKey } from './panel';
-import { formatLength, mmPerSceneUnit } from './units';
+import { KEY_AT_TEXT, formatLength, mmPerSceneUnit } from './units';
 
 /** 가상 커서 고르기 후보 선택: 앱 onPick 선택과 같다(반투명 너머·면만 고르기 없음, 윤곽선은 코어 기본) */
 export const PICK_CYCLE: KeyPickCycleOptions = { throughTranslucent: false, meshesOnly: false };
@@ -90,11 +92,23 @@ export const KEY_PICK_TEXT = {
   'pick.section': '잘린 면',
 } as const satisfies Partial<Record<KeySnapMessageKey, string>>;
 
-/** 지금 언어의 알림 틀(tr = 사전 번역 — 한국어면 원문) */
+/** 지금 언어의 알림 틀(tr = 사전 번역 — 한국어면 원문). 240차: 후보 글 틀(candidate)도 — keyCandidateText */
 export function keyPickMessages(tr: (text: string) => string = uiText): Partial<Record<KeySnapMessageKey, string>> {
   const out: Partial<Record<KeySnapMessageKey, string>> = {};
   for (const [k, v] of Object.entries(KEY_PICK_TEXT)) out[k as KeySnapMessageKey] = tr(v);
+  out.candidate = keyCandidateText(tr);
   return out;
+}
+
+/**
+ * 240차: 후보 글 틀(코어 candidate '{0}: {1}' — 「종류(차례): 점 글」)의 지금 언어 꼴. 가상 커서 자리 글 틀 KEY_AT_TEXT의 좌표 꼴(코어 점 글과 같은
+ * 'X {1}, Y {2}, Z {3}')을 점 글 자리 {1}로 둔다 — 이름 뒤 쌍점이 측정 도구 자리 글과 같다(중국어 「{0}：{1}」, 한국어는 코어 기본 틀 그대로).
+ * 사전 값이 그 좌표 꼴로 끝나지 않으면 코어 기본 틀
+ */
+export function keyCandidateText(tr: (text: string) => string = uiText): string {
+  const t = tr(KEY_AT_TEXT);
+  const tail = 'X {1}, Y {2}, Z {3}';
+  return t.startsWith('{0}') && t.endsWith(tail) ? `${t.slice(0, -tail.length)}{1}` : KEY_SNAP_MESSAGES.candidate;
 }
 
 /**

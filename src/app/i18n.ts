@@ -53,6 +53,14 @@ export function mixNodes(parts: Mixed): (string | Node)[] {
  * 측정 잠금 안내는 번역층이 따로 옮기는 마디라 따로 옮겨 " · "로 잇는다(한 글로 옮기면 통째 열쇠 대신 조각마다 옮겨져 보이는 글과 다르다)
  */
 export const statusTitle = (parts: Mixed, lock?: string | null): string => mixText(parts) + (lock ? ` · ${uiText(lock)}` : '');
+/**
+ * 240차: 자리 {0} 하나인 앱 글 틀(사전 열쇠 — 「고른 것: {0}」)에 섞은 글 마디를 끼운 마디. 틀은 지금 언어로(쌍점이 그 언어 꼴 — 중국어 「：」),
+ * 섞은 글은 mixNodes로 따로 옮긴다(틀째 한 글로 옮기면 틀이 설명 전체를 그대로 잡아 설명의 앱 글이 한국어로 남는다). 담는 요소에 data-i18n-skip을 두고 언어를 바꾸면 다시 그린다
+ */
+export function frameNodes(frame: string, parts: Mixed): (string | Node)[] {
+  const [head = '', tail = ''] = uiText(frame).split('{0}');
+  return [head, ...mixNodes(parts), tail].filter((x) => x !== '');
+}
 /** 이름 칸 글: 앱 자리 글("(이름 없음)" 등)만 지금 언어로, 파일 글은 그대로(번역층이 건너뛰는 칸에 넣을 때) */
 export const uiName = (name: string): string => isAppName(name) ? uiText(name) : name;
 /**
