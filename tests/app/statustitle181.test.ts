@@ -14,8 +14,25 @@ import { installLocalization, mixText, statusTitle } from '../../src/app/i18n';
 import { LOCK_HINTS, lockHint, measureHint, trackHint } from '../../src/app/measure';
 import { translate } from '../../site/i18n.mjs';
 
+/**
+ * 번역층이 붙인 칸을 옮길 때까지(CI 14차 마무리, 225차 — 공용 규칙 13번·223차 i18n-collide174 tick 꼴: setTimeout(0) k번 → 조건과 마감 시간):
+ * DOM이 매크로 작업 k 차례 잇달아 조용할 때까지(MutationObserver — 앞 k번보다 짧지 않다), 마감 5초
+ */
 const tick = async (k = 4): Promise<void> => {
-  for (let i = 0; i < k; i++) await new Promise((r) => setTimeout(r, 0));
+  let changed = false;
+  const watch = new MutationObserver(() => {
+    changed = true;
+  });
+  watch.observe(document, { subtree: true, childList: true, characterData: true, attributes: true });
+  try {
+    for (let quiet = 0, end = Date.now() + 5_000; quiet < k && Date.now() < end; ) {
+      changed = false;
+      await new Promise((r) => setTimeout(r, 0));
+      quiet = changed ? 0 : quiet + 1;
+    }
+  } finally {
+    watch.disconnect();
+  }
 };
 
 let dispose: (() => void) | undefined;

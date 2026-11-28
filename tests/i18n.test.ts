@@ -399,6 +399,9 @@ describe('language URLs and UI presentation', () => {
       [/^줄기$/, 'zh-CN', null, /词干/], [/^마루$/, '*', null, /Maru/], [/^나무$/, 'zh-CN', /树/, /木材/], [/^기와$/, '*', null, /傾斜|平铺/],
       // 읽어 봅니다(해 보겠다)를 사용자에게 시킴(Read it·お読みください)
       [/읽어 봅니다/, '*', null, /Read it|Lesen Sie|お読みください|阅读/],
+      // 225차: 중국어 태그(SketchUp 태그 — 옛 레이어)는 한 낱말 标签(같은 사전 다수 꼴 — 75차 셈 31/35, WCAG 3.2.4; 표지 뜻 标记·TLV 꼬리표는 열쇠에 태그가 없음),
+      // 독일어 「화면에」는 관사와 함께(auf den Bildschirm — 「Auf Bildschirm hochladen」 꼴이 다시 들어오지 않게)
+      [/태그/, 'zh-CN', /标签/, /标记/], [/화면/, 'de', null, /\b[Aa]uf Bildschirm/],
     ];
     for (const [term, lang, need, ban, skip] of rules)
       for (const code of lang === '*' ? codes : [lang])
@@ -567,7 +570,8 @@ describe('language URLs and UI presentation', () => {
     const menu=document.querySelector<HTMLElement>('.language-list')!;
     expect(menu.hidden).toBe(false);expect(menu.querySelectorAll('[role=menuitemradio]')).toHaveLength(5);
     (menu.querySelector('[data-language=de]') as HTMLButtonElement).click();
-    await new Promise(resolve=>setTimeout(resolve,0));
+    // 225차(CI 14차 마무리): de 사전 조각을 받는 길이라 setTimeout(0) 한 번이 아니라 바뀔 때까지(224차 switched)
+    await switched('de');
     expect(document.getElementById('pretranslated')!.textContent).toBe(translate('열기','de'));
     expect(document.documentElement.lang).toBe('de');expect(button.textContent).toBe(translate('열기','de'));
     expect(dialog.textContent).toBe(translate('닫기','de'));
