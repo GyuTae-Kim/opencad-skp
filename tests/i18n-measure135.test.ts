@@ -17,6 +17,10 @@ import { SHORTCUTS } from '../src/app/shortcuts';
 const LANGS = ['en', 'ja', 'zh-CN', 'de'] as const;
 type Lang = (typeof LANGS)[number];
 
+/** 221차: 바로 가기 화살표 → ← ↑·↓ 줄 원문 — 커서를 켠 동안 화살표는 커서 옮기기라 그 줄은 「가상 커서를 끈 동안」(켠 동안은 X·Y·Z·L 줄) */
+const ARROWS_OFF = '줄자 끝점·각도기 방향을 잡는 동안(가상 커서를 끈 동안): 빨강·녹색·파랑 축으로 잠금(다시 누르면 풀기), 각도기 중심 전에는 그 축 평면에 고정';
+const DOWN_OFF = '줄자 끝점·각도기 방향을 잡는 동안(가상 커서를 끈 동안): 모서리와 나란히·수직으로 잠금(다시 누르면 풀기)';
+
 describe('줄자·각도기·안내 화면 글의 네 언어 번역(135차)', () => {
   it('옛 오역 낱말이 다시 들어오지 않는다', () => {
     // [열쇠에 든 말, 언어, 없어야 할 낱말]
@@ -196,8 +200,9 @@ describe('잠글 방향 줄 버튼은 할 일, 잠금 안내는 지금 상태(21
       expect(catalogs.ja![LOCK_HINTS[c]]).toMatch(/ロック$/);
     }
     // 근거 줄: 같은 사전이 같은 할 일(축·모서리와 나란히 잠그기)을 이 낱말로 부른다 — 바로 가기 화살표·↓ 줄, 띠 잠금 버튼 풀이, 줄 이름
-    const ARROWS = '줄자 끝점·각도기 방향을 잡는 동안: 빨강·녹색·파랑 축으로 잠금(다시 누르면 풀기), 각도기 중심 전에는 그 축 평면에 고정';
-    const DOWN = '줄자 끝점·각도기 방향을 잡는 동안: 모서리와 나란히·수직으로 잠금(다시 누르면 풀기)';
+    // (221차: 화살표·↓ 줄 원문에 「(가상 커서를 끈 동안)」 — 아래 221차 describe, 할 일 낱말은 그대로)
+    const ARROWS = ARROWS_OFF;
+    const DOWN = DOWN_OFF;
     const shortcutLabels = SHORTCUTS.flatMap((g) => g.items.map((s) => s.label));
     for (const t of [ARROWS, DOWN]) expect(shortcutLabels, t).toContain(t);
     const basis: [key: string, lang: Lang, has: string][] = [
@@ -212,5 +217,46 @@ describe('잠글 방향 줄 버튼은 할 일, 잠금 안내는 지금 상태(21
       [DOWN, 'ja', 'エッジに平行・垂直でロック'],
     ];
     for (const [key, lang, has] of basis) expect(catalogs[lang]![key], `${lang}: ${key}`).toContain(has);
+  });
+});
+
+describe('바로 가기 잠금 줄은 그때 받는 키만 — 화살표 줄은 가상 커서를 끈 동안, X·Y·Z·L 줄은 켠 동안(221차 — 잠금 키 안내 전수)', () => {
+  it('잠그는 줄 넷의 키와 커서 상태가 맞고, 새 원문 둘의 네 언어 값은 옛 값 조건 뒤에 같은 사전의 괄호 꼴·「가상 커서를 껐습니다」 낱말이며, 하나뿐이라 거꾸로 찾기가 제 원문으로 돌아온다', () => {
+    const items = SHORTCUTS.flatMap((g) => g.items);
+    // 할 일이 「…으로 잠금(다시 누르면 풀기)」인 줄: 커서를 끈 동안 → ← ↑·↓, 켠 동안 X Y Z·L(219차) — 화살표 줄이 커서 상태를 말하지 않아 켠 채 방향을 잡을 때도 화살표가 잠그는 것처럼 읽혔다
+    const locking = items.filter((i) => i.label.includes('으로 잠금(다시 누르면 풀기)'));
+    expect(locking.map((i) => i.keys.join(' '))).toEqual(['→ ← ↑', '↓', 'X Y Z', 'L']);
+    for (const i of locking) expect(i.label, i.keys.join(' ')).toContain(i.keys.some((k) => /^[→←↑↓]$/.test(k)) ? '(가상 커서를 끈 동안): ' : '가상 커서를 켠 동안');
+    expect(locking.slice(0, 2).map((i) => i.label)).toEqual([ARROWS_OFF, DOWN_OFF]);
+    // 근거: 괄호 꼴은 같은 사전 「3D 보기에 초점이 있을 때(줄자·각도기를 끈 동안): …」, 낱말은 「가상 커서를 껐습니다」·가상 커서 낱말
+    const PICK = '3D 보기에 초점이 있을 때(줄자·각도기를 끈 동안): 가상 커서 켜기·옮기기(Shift와 함께면 크게)';
+    const basis: Record<Lang, [paren: string, off: string]> = {
+      en: ['(Tape Measure and Protractor off): ', 'Virtual cursor off'],
+      ja: ['（メジャー・分度器がオフの間）', '仮想カーソルをオフにしました'],
+      'zh-CN': ['（卷尺·量角器关闭期间）：', '已关闭虚拟光标'],
+      de: ['(Maßband und Winkelmesser aus): ', 'Virtueller Cursor aus'],
+    };
+    for (const lang of LANGS) {
+      expect(catalogs[lang]![PICK], lang).toContain(basis[lang][0]);
+      expect(catalogs[lang]!['가상 커서를 껐습니다'], lang).toBe(basis[lang][1]);
+    }
+    // 새 값: 옛 값(조건 · 콜론 · 할 일)의 조건 뒤에 괄호 하나 — 할 일 글은 옛 값 그대로
+    const fixed: [key: string, lang: Lang, value: string][] = [
+      [ARROWS_OFF, 'en', 'While aiming the tape end point or a protractor direction (virtual cursor off): lock to the red, green or blue axis (press again to unlock); before the protractor center: lock the protractor to that axis'],
+      [DOWN_OFF, 'en', 'While aiming the tape end point or a protractor direction (virtual cursor off): lock parallel or perpendicular to an edge (press again to unlock)'],
+      [ARROWS_OFF, 'ja', 'メジャーの終点・分度器の方向を指定中（仮想カーソルがオフの間）：赤・緑・青の軸にロック（もう一度押すと解除）。分度器の中心を置く前はその軸の平面に固定'],
+      [DOWN_OFF, 'ja', 'メジャーの終点・分度器の方向を指定中（仮想カーソルがオフの間）：エッジに平行・垂直でロック（もう一度押すと解除）'],
+      [ARROWS_OFF, 'zh-CN', '指定卷尺终点或量角器方向时（虚拟光标关闭期间）：锁定到红、绿、蓝轴（再按一次解除）；放置量角器中心前则固定到该轴的平面'],
+      [DOWN_OFF, 'zh-CN', '指定卷尺终点或量角器方向时（虚拟光标关闭期间）：锁定为平行或垂直于边线（再按一次解除）'],
+      [ARROWS_OFF, 'de', 'Beim Ausrichten des Maßband-Endpunkts oder einer Winkelmesser-Richtung (virtueller Cursor aus): auf rote, grüne oder blaue Achse sperren (erneut drücken zum Entsperren); vor dem Winkelmesser-Mittelpunkt an der Ebene dieser Achse fixieren'],
+      [DOWN_OFF, 'de', 'Beim Ausrichten des Maßband-Endpunkts oder einer Winkelmesser-Richtung (virtueller Cursor aus): parallel oder senkrecht zur Kante sperren (erneut drücken zum Entsperren)'],
+    ];
+    const all = LANGS.flatMap((lang) => Object.values(catalogs[lang]!));
+    for (const [key, lang, value] of fixed) {
+      expect(catalogs[lang]![key], `${lang}: ${key}`).toBe(value);
+      expect(translate(key, lang)).toBe(value);
+      expect(all.filter((v) => v === value).length, value).toBe(1);
+      expect(sourceMessage(value)).toBe(key);
+    }
   });
 });

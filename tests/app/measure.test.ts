@@ -7090,12 +7090,13 @@ describe('측정 도구: 상태 줄·측정 띠 잠금 안내는 가상 커서 �
     expect(r.tool.lockHintText(false)).toBe(LOCK_NONE_HINT);
     expect(r.tool.lockHintText(true)).toBe(LOCK_NONE_HINT);
     expect(r.locks.length).toBe(n + 1);
-    // 거듭 눌러도 같은 글(onLock 없음), 커서를 옮기면 거둔다
+    // 221차: 거듭 누르면 알림 조각만 한 프레임 비운다(onLock — 다음 프레임에 다시 넣어 같은 글도 다시 읽힌다, 아래 221차 describe), 커서를 옮기면 거둔다
     r.key('ArrowDown');
-    expect(r.locks.length).toBe(n + 1);
+    expect(r.tool.lockHintText(false)).toBeNull();
+    expect(r.locks.length).toBe(n + 2);
     r.move(151, 150);
     expect(r.tool.lockHintText(false)).toBe(LOCK_KEYS_HINT);
-    expect(r.locks.length).toBe(n + 2);
+    expect(r.locks.length).toBe(n + 3);
     // 축 잠금 중 ↓(나란히로 바꿀 것 없음): 축 잠금 그대로, 잠금 안내 뒤에 알림 — 잠금이 바뀌면(→ 다시 — 풂) 거둔다
     expect(r.key('ArrowRight')).toBe(true);
     expect(r.key('ArrowDown')).toBe(false);
@@ -7131,5 +7132,132 @@ describe('측정 도구: 상태 줄·측정 띠 잠금 안내는 가상 커서 �
     p.move(150, 150);
     expect(p.key('ArrowDown')).toBe(false);
     expect(p.tool.lockHintText(false)).toBe('Ctrl: 안내 두기');
+  });
+});
+
+describe('측정 도구: 같은 자리에서 거듭 누른 ↓·L도 「잠글 방향이 없습니다」가 다시 읽히게 알림 조각만 한 프레임 비웠다 다시 넣는다(221차 — 220차 보고 둔 것 (2), WCAG 4.1.3)', () => {
+  /** 다음 프레임 목록(requestAnimationFrame — 시험이 넘긴다, 측정 덧그림의 프레임도 함께 돈다) */
+  let frames = new Map<number, FrameRequestCallback>();
+  let ids = 0;
+  const frame = (): void => {
+    const fs = [...frames.values()];
+    frames.clear();
+    for (const f of fs) f(0);
+  };
+  afterEach(() => {
+    // 가짜 시계를 풀기 전에 프레임 함수를 되돌린다(되돌린 값이 가짜 시계의 것이 남지 않게)
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // 둘레 고르기 시간 한도가 기계 부하로 갈리지 않게 시계를 멈춘다(126차 꼴)
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+    frames = new Map();
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => (frames.set(++ids, cb), ids));
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => void frames.delete(id));
+  });
+  /** 코어 가상 커서를 그 자리에 켜거나 옮긴다(220차 꼴) */
+  const at = (r: Rig, x: number, y: number): string => {
+    (r.viewer as { keyboardCursor?: unknown }).keyboardCursor = { x, y };
+    const t = r.tool.keyHover(x, y);
+    r.overlay.paintNow();
+    return t;
+  };
+  /** 3D 보기가 받은 키를 keyLock으로(220차 꼴) — [알림 칸 글(받지 않으면 null), 기본 동작을 막았는지] */
+  const lk = (r: Rig, key: string, repeat = false): [string | null, boolean] => {
+    const e = new KeyboardEvent('keydown', { key, repeat, cancelable: true });
+    Object.defineProperty(e, 'target', { value: r.canvas });
+    const t = r.tool.keyLock(e);
+    r.overlay.paintNow();
+    return [t, e.defaultPrevented];
+  };
+  // 220차 SCENE: 원점에서 +X로 10 모서리 e, 시작점에서 떨어진 45° 모서리 d(나란함 기준)
+  const SCENE = (): Pick<Scene3d, 'meshes' | 'lines' | 'units'> => ({ units: 'mm', meshes: [], lines: [lines('e', [[0, 0, 0, 10, 0, 0]]), lines('d', [[-90, -60, 0, -60, -30, 0]])] });
+
+  it('↓·L을 거듭 누르면 알림 조각을 비웠다(onLock) 다음 프레임에 다시 넣고(onLock) — 되풀이·한 프레임 안 거듭은 한 번, 비운 사이 거두면 다시 넣지 않으며, 잠금 안내는 그대로, dispose는 그 프레임을 거둔다', () => {
+    const r = rig(SCENE());
+    r.tool.setMode('tape');
+    // 220차와 같은 자리: 시작점 (0, 0, 0), 지나간 모서리 d를 숨겨 나란히 기준이 없고 커서 밑 방향 추론도 없다
+    r.move(101, 100);
+    r.click(101, 100);
+    expect(r.tool.pointCount).toBe(1);
+    r.move(25, 145);
+    r.hide('d');
+    r.move(150, 150);
+    frame();
+    // 첫 누름은 220차 그대로 곧 알림
+    expect(r.key('ArrowDown')).toBe(false);
+    expect(r.tool.lockHintText(false)).toBe(LOCK_NONE_HINT);
+    const n = r.locks.length;
+    // 거듭 누름: 다루지 않은 키 그대로(false), 알림 조각만 비우고(onLock — 앱이 상태 줄·측정 띠를 다시 그린다) 다음 프레임에 다시 넣는다(onLock — aria-live가 새 글로 읽는다)
+    expect(r.key('ArrowDown')).toBe(false);
+    expect(r.tool.inferenceLock).toBeNull();
+    expect(r.tool.lockHintText(false)).toBeNull();
+    expect(r.tool.lockHintText(true)).toBeNull();
+    expect(r.locks.length).toBe(n + 1);
+    frame();
+    expect(r.tool.lockHintText(false)).toBe(LOCK_NONE_HINT);
+    expect(r.locks.length).toBe(n + 2);
+    // 누른 채 되풀이는 한 누름 — 비우지 않는다
+    expect(r.tool.handleKey(new KeyboardEvent('keydown', { key: 'ArrowDown', repeat: true, cancelable: true }))).toBe(false);
+    expect(r.tool.lockHintText(false)).toBe(LOCK_NONE_HINT);
+    frame();
+    expect(r.locks.length).toBe(n + 2);
+    // 한 프레임 안에 두 번: 한 번 비우고 한 번 다시 넣는다
+    r.key('ArrowDown');
+    r.key('ArrowDown');
+    expect(r.tool.lockHintText(false)).toBeNull();
+    expect(r.locks.length).toBe(n + 3);
+    frame();
+    expect(r.tool.lockHintText(false)).toBe(LOCK_NONE_HINT);
+    expect(r.locks.length).toBe(n + 4);
+    // 비운 사이 커서를 옮기면(알림을 거둠) 다음 프레임에 다시 넣지 않는다
+    r.key('ArrowDown');
+    r.move(151, 150);
+    expect(r.tool.lockHintText(false)).toBe(LOCK_KEYS_HINT);
+    const m = r.locks.length;
+    frame();
+    expect(r.tool.lockHintText(false)).toBe(LOCK_KEYS_HINT);
+    expect(r.locks.length).toBe(m);
+    // 축 잠금 중(나란히로 바꿀 것 없음): 잠금 안내는 그대로 두고 뒤 알림 조각만 비웠다 다시
+    expect(r.key('ArrowRight')).toBe(true);
+    r.key('ArrowDown');
+    expect(r.tool.lockHintText(false)).toBe(`${LOCK_HINTS.x} · ${LOCK_NONE_HINT}`);
+    r.key('ArrowDown');
+    expect(r.tool.inferenceLock).toMatchObject({ kind: 'axis', axis: 'x', source: 'key' });
+    expect(r.tool.lockHintText(false)).toBe(LOCK_HINTS.x);
+    frame();
+    expect(r.tool.lockHintText(false)).toBe(`${LOCK_HINTS.x} · ${LOCK_NONE_HINT}`);
+    // 비운 사이 잠금이 바뀌면(→ 다시 — 풂) 그때 안내, 다음 프레임에 알림을 다시 넣지 않는다
+    r.key('ArrowDown');
+    expect(r.key('ArrowRight')).toBe(true);
+    expect(r.tool.lockHintText(false)).toBe(LOCK_KEYS_HINT);
+    frame();
+    expect(r.tool.lockHintText(false)).toBe(LOCK_KEYS_HINT);
+    // 가상 커서 L: 알림 칸은 빈 글 그대로(220차 — 가상 커서 알림 영역에는 내지 않음), 띠·상태 줄 알림 조각만 비웠다 다시. 되풀이는 막기만
+    at(r, 150, 150);
+    expect(r.tool.lockHintText(false)).toBe(LOCK_KEYS_CURSOR_HINT);
+    expect(lk(r, 'l')).toEqual(['', true]);
+    expect(r.tool.lockHintText(false)).toBe(LOCK_NONE_HINT);
+    const k = r.locks.length;
+    expect(lk(r, 'l')).toEqual(['', true]);
+    expect(r.tool.lockHintText(false)).toBeNull();
+    expect(r.locks.length).toBe(k + 1);
+    frame();
+    expect(r.tool.lockHintText(false)).toBe(LOCK_NONE_HINT);
+    expect(r.locks.length).toBe(k + 2);
+    expect(lk(r, 'l', true)).toEqual(['', true]);
+    frame();
+    expect(r.tool.lockHintText(false)).toBe(LOCK_NONE_HINT);
+    expect(r.locks.length).toBe(k + 2);
+    // 비운 채 도구를 거두면(dispose) 그 프레임도 거둔다 — 넘겨도 onLock 없음
+    expect(lk(r, 'l')).toEqual(['', true]);
+    expect(r.tool.lockHintText(false)).toBeNull();
+    r.tool.dispose();
+    const d = r.locks.length;
+    frame();
+    expect(r.locks.length).toBe(d);
   });
 });
