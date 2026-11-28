@@ -1,7 +1,8 @@
 /**
  * 3D 보기 키보드 고르기(56차 — 코어 0.46.0 가상 커서·0.47.0 겹친 것 고르기 돌리기)와 줄자·각도기의 키보드 점 찍기(59차 — setMode·handleKey).
  *
- * - 줄자·각도기(59차): 화살표는 방향 잠금(SketchUp)이라 가상 커서는 3D 보기의 Enter로만 켠다. 켠 동안 화살표는 커서 옮기기(방향 잠금은 Shift),
+ * - 줄자·각도기(59차): 화살표는 방향 잠금(SketchUp)이라 가상 커서는 3D 보기의 Enter로만 켠다. 켠 동안 화살표는 커서 옮기기(방향 잠금은 Shift,
+ *   219차부터 X·Y·Z·L도 — 커서를 끈 동안의 →·←·↑·↓와 같은 길, 측정 도구 keyLock),
  *   Enter는 커서 자리에 측정 도구의 붙잡기로 점 찍기, Esc는 측정 도구가 지울 것이 먼저이고 없으면 커서 끄기(NC 56·57차와 같은 키).
  *   코어는 측정 모드 없이 고르기 모드(후보 돌리기 없음)로 켜고 알림의 커서 자리만 측정 도구(KeyMeasureHost)에 넘긴다 — 알림 글은 측정 도구가 만든다.
  *   125차: 켠 동안 Tab·Shift+Tab은 측정 도구가 커서 자리에 겹친 스냅 후보(둘 이상일 때만)를 돌리고(keyCycle — 124차 마우스 Tab과 같은 규칙), 돌리는 중 Esc는 돌리기만 푼다.
@@ -151,8 +152,11 @@ export function keyPickName(d: SkpDoc, p: Pick3d, cycle: boolean): string {
 export const LIST_TARGETS = '.panel, .menu, .scene-tabs, .resizer, .measure-log, input, select, [role="tree"], [role="listbox"]';
 const inList = (t: EventTarget | null): boolean => !!t && typeof (t as Element).closest === 'function' && !!(t as Element).closest(LIST_TARGETS);
 
-/** 59차 줄자·각도기 가상 커서의 키 안내(커서를 켤 때 알림 끝 — 고르기의 후보 Tab·고르기 Enter 대신, 사전 열쇠) */
-export const KEY_MEASURE_HINT = ['옮기기 ←→↑↓', '찍기 Enter', '방향 잠금 Shift', '끄기 Esc'] as const;
+/**
+ * 59차 줄자·각도기 가상 커서의 키 안내(커서를 켤 때 알림 끝 — 고르기의 후보 Tab·고르기 Enter 대신, 사전 열쇠).
+ * 219차: 그동안 방향 잠금은 Shift(누르고 있으면 지금 방향)와 X·Y·Z·L(측정 도구 keyLock — 커서를 끈 동안의 →·←·↑·↓)
+ */
+export const KEY_MEASURE_HINT = ['옮기기 ←→↑↓', '찍기 Enter', '방향 잠금 Shift·X·Y·Z·L', '끄기 Esc'] as const;
 
 /** 키보드 고르기 방식: 고르기 도구, 줄자·각도기(59차 — 가상 커서로 점 찍기), 끔 */
 export type KeyPickMode = 'pick' | 'tape' | 'protractor' | null;
@@ -177,6 +181,11 @@ export interface KeyMeasureHost {
    * 받았으면 알림 글(기본 동작은 측정 도구가 막는다), 아니면 null(Tab은 초점 이동, Esc는 예전 차례)
    */
   keyCycle(e: KeyboardEvent): string | null;
+  /**
+   * 219차 X·Y·Z·L(커서가 켜진 동안 묻는다 — 그동안 화살표는 커서 옮기기라 커서를 끈 동안의 →·←·↑·↓ 방향 잠금을 이 키로): 받았으면 알림 글
+   * (바뀐 것이 없으면 빈 글 — 알리지 않는다, 기본 동작은 측정 도구가 막는다), 아니면 null(예전 길). 없는 측정 도구는 예전 길
+   */
+  keyLock?(e: KeyboardEvent): string | null;
   /**
    * 127차: 키 밖의 변화(카메라·그리기 방식·숨김·단면) 뒤 가라앉은 커서 자리 글을 넘길 곳(줄자·각도기 방식으로 켤 때 알림 칸 쓰기, 고르기·끔이면 null).
    * 측정 도구가 정한 때(변화가 가라앉은 뒤 한 번, 들은 글과 다를 때만)에 부른다 — 없는 측정 도구는 키 때만 알린다
@@ -257,7 +266,7 @@ export class KeyPick {
 
   /**
    * 측정 도구를 켠 동안의 창 키(app.ts 캡처 단계 — 입력 칸의 키는 받지 않는다): 측정 도구 키와 59차 가상 커서 점 찍기. 다뤘으면 true(앱은 전파를 막는다).
-   * - 가상 커서가 켜진 동안: 3D 보기의 Enter는 커서 자리에 점 찍기, 화살표는 코어로 넘겨 커서 옮기기(그동안 방향 잠금은 Shift — 측정 도구 몫),
+   * - 가상 커서가 켜진 동안: 3D 보기의 Enter는 커서 자리에 점 찍기, 화살표는 코어로 넘겨 커서 옮기기(그동안 방향 잠금은 Shift와 219차 X·Y·Z·L — 측정 도구 몫, keyLock이 받으면 그 글),
    *   Tab·Shift+Tab은 측정 도구가 받으면(커서 자리 스냅 후보 둘 이상 — 125차 keyCycle) 후보 돌리기와 그 알림, 아니면 초점 이동,
    *   Esc는 Tab으로 돌리는 중이면 돌리기만 풀기(125차), 아니면 측정 도구가 지울 것(점·결과)이 먼저, 없으면 커서 끄기
    * - 그 밖: 측정 도구 키(handleKey — SketchUp 화살표 방향 잠금 등). 화살표는 초점이 그것을 스스로 쓰는 곳(LIST_TARGETS — 목록·메뉴·슬라이더)이면 그쪽 것이고,
@@ -285,6 +294,12 @@ export class KeyPick {
         }
       }
       if (e.key === 'Escape') return h.handleKey(e) || this.v.handleKey(e);
+      // 219차: X·Y·Z·L 방향 잠금(측정 도구 keyLock — 받으면 그 글을 알리고, 바뀐 것이 없는 빈 글이면 알림 칸 그대로)
+      const lt = h.keyLock?.(e) ?? null;
+      if (lt !== null) {
+        if (lt) this.live.textContent = lt;
+        return true;
+      }
     }
     if (arrow && list) return false;
     return h.handleKey(e) || (arrow && on);
