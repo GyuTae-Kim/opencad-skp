@@ -189,11 +189,12 @@ describe('language URLs and UI presentation', () => {
       for (const t of texts) expect(translate(t, code), `${code}: ${t}`).not.toMatch(hangul);
     expect(translate('빨강 축에 · 잠금 · 60 mm', 'en')).toBe('On red axis · Locked · 60 mm');
     // 220차: 키 이름(Shift·X·Y·Z·L)은 옮기지 않는다 — 「Shift·화살표로 방향 잠금」 값 꼴. 알림은 21차까지 잠금 버튼 알림의 앞 조각 「잠글 방향이 없습니다: …」(22차에 고르기 줄로 바꾸며 지움)과
-    // 그때 네 언어 값 그대로(ja는 같은 사전 「잠글 방향 고르기」 ロックする方向を選ぶ와도 같은 낱말)
+    // 그때 네 언어 값 그대로(ja는 같은 사전 「잠글 방향 고르기」 ロックする方向を選ぶ와도 같은 낱말).
+    // 230차: zh는 키 이름 뒤 한자에 빈칸(같은 사전 라틴 글자 뒤 빈칸 124 : 없음 10 — 같은 키 줄 「用 Shift·X·Y·Z·L 锁定方向」·「锁定方向 Shift·X·Y·Z·L」 꼴)
     expect(languages.filter((l) => l.code !== 'ko').map(({ code }) => translate(lockHint('tape', 1, null, null, false, true)!, code))).toEqual([
       'Shift·X·Y·Z·L lock the direction',
       'Shift·X·Y·Z·Lで方向をロック',
-      'Shift·X·Y·Z·L锁定方向',
+      'Shift·X·Y·Z·L 锁定方向',
       'Shift·X·Y·Z·L sperren die Richtung',
     ]);
     expect(languages.filter((l) => l.code !== 'ko').map(({ code }) => translate(`${LOCK_HINTS.x} · ${LOCK_NONE_HINT}`, code))).toEqual([
@@ -402,6 +403,11 @@ describe('language URLs and UI presentation', () => {
       // 225차: 중국어 태그(SketchUp 태그 — 옛 레이어)는 한 낱말 标签(같은 사전 다수 꼴 — 75차 셈 31/35, WCAG 3.2.4; 표지 뜻 标记·TLV 꼬리표는 열쇠에 태그가 없음),
       // 독일어 「화면에」는 관사와 함께(auf den Bildschirm — 「Auf Bildschirm hochladen」 꼴이 다시 들어오지 않게)
       [/태그/, 'zh-CN', /标签/, /标记/], [/화면/, 'de', null, /\b[Aa]uf Bildschirm/],
+      // 230차: 받지 못한 알림 틀의 {0}은 탭·창 이름(「그림 저장」처럼 동작 이름도 — panel.ts loadFailText)이라 일본어·중국어·독일어는 따옴표로 감싼다
+      // (ja 「画像を保存を…」 を 겹침, zh 「无法加载保存图片」 뜻 갈림, de 「Informationen konnte …」 수 어긋남 — 같은 사전 이름 따옴표 「{0}」·“{0}”·„Zuletzt geöffnet“ 꼴),
+      // 중국어 키 이름 줄 Shift·X·Y·Z·L 뒤 한자는 빈칸을 두고(같은 사전 라틴 글자 뒤 빈칸 124 : 없음 10 — 바로 가기 안내 「用 Shift·X·Y·Z·L 锁定方向」 꼴)
+      [/^\{0\}을\(를\) 불러오지 못했습니다\.$/, 'ja', /「\{0\}」/, /^\{0\}を/], [/^\{0\}을\(를\) 불러오지 못했습니다\.$/, 'zh-CN', /“\{0\}”/, /加载\{0\}/],
+      [/^\{0\}을\(를\) 불러오지 못했습니다\.$/, 'de', /„\{0\}“/, /^\{0\} /], [/Shift·X·Y·Z·L/, 'zh-CN', null, /[A-Za-z][一-龥]/],
     ];
     for (const [term, lang, need, ban, skip] of rules)
       for (const code of lang === '*' ? codes : [lang])
