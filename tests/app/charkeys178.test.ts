@@ -205,7 +205,7 @@ describe('3D 보기 밖에서도 한 글자 단축키 — 끌 수 있음(178차 
       const value = catalogs[code]![LABEL];
       expect(value, code).toBeTruthy();
       expect(value!, code).not.toMatch(/[가-힣]/);
-      // 띄어쓰기는 가리지 않는다(중국어 사전에 3D视图·3D 视图 두 꼴)
+      // 띄어쓰기는 가리지 않는다(230차까지 중국어 사전에 3D视图·3D 视图 두 꼴 — 231차부터 3D 视图 한 꼴, i18n.test 50차 규칙 표 231차 줄)
       expect(flat(value!), `${code} 3D 보기`).toContain(flat(catalogs[code]!['3D 보기']!));
       expect(catalogs[code]!['키보드 바로 가기']!.toLowerCase(), `${code} 근거`).toContain(basis[code].toLowerCase());
       expect(value!.toLowerCase(), `${code} 단축키`).toContain(basis[code].toLowerCase());

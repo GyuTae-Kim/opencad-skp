@@ -131,7 +131,7 @@
   "{0} 여는 중…": "Opening {0}…",
   "{0} 열기": "Open {0}",
   "{0} 읽지 못했습니다": "{0} failed to read",
-  "{0}을(를) 불러오지 못했습니다.": "Couldn't load {0}.",
+  "{0}을(를) 불러오지 못했습니다.": "Couldn't load \"{0}\".",
   "{0} 자리에 {1} 참조가 있습니다": "Reference {1} in place of {0}",
   "{0} 자리에 새 {1} 객체가 있습니다": "New object {1} exists in place of {0}",
   "{0} 접기": "Collapse {0}",

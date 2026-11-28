@@ -277,7 +277,8 @@ describe('language URLs and UI presentation', () => {
     // 고친 값 넷: 네 사전에서 하나뿐이라 거꾸로 찾기가 제 원문으로
     const fixed: Record<string, string> = {
       '각도기: 지금 평면에 고정': '量角器：固定到当前平面',
-      [TITLE]: '量角器：中心 → 参考方向 → 测量方向（Shift = 固定平面或锁定方向）· Esc清除',
+      // 231차: Esc 뒤 한자에 빈칸(같은 사전 라틴 글자 뒤 빈칸 125 : 9 — 「Esc 清除」 3 : 1, 50차 규칙 표 231차 줄)
+      [TITLE]: '量角器：中心 → 参考方向 → 测量方向（Shift = 固定平面或锁定方向）· Esc 清除',
       // 213차: 중심점을 가리키는 누름은 고르기 낱말 选择(213차 「자리 가리키기」) — 固定 그대로
       [HINT]: '量角器：选择中心点 · 按住 Shift 键固定平面',
       [AXES]: '卷尺·量角器的轴固定和默认平面，以及卷尺结果的 dx·dy·dz，都遵循移动后的绘图轴。',
@@ -368,6 +369,8 @@ describe('language URLs and UI presentation', () => {
   });
   it('keeps SketchUp terms, Korean homonyms, directions and negations right in every catalog (50th round)', () => {
     const codes = ['en', 'de', 'ja', 'zh-CN'];
+    // 231차: 일본어 쌍점이 「：」인 묶음 — 도움말(정보 탭 「조작」 목록 다섯·처음 화면 키 줄 둘, infotab.ts·app.ts)
+    const JA_HELP = /^(?:왼쪽 끌기: 돌리기 · |F: 전체 보기 · 1~7: |누르기: 고르기\(펼친 단계\) · |Esc: 측정 점 지우기 → |휴대폰: 한 손가락 돌리기 · |왼쪽 끌기 돌리기 · 오른쪽 끌기 옮기기 · 휠 확대 · F 전체 보기|한 손가락 끌기 돌리기 · 두 손가락 옮기기·확대 · 줄자)/;
     // [열쇠 정규식, 언어(*는 넷 다), 있어야 할 말(없으면 null), 없어야 할 말, 뺄 열쇠] — 50차에 이 앱 사전에서 찾은 오역의 꼴
     const rules: [RegExp, string, RegExp | null, RegExp, RegExp?][] = [
       // 무늬=텍스처(SketchUp 공식: Texture·Textur·テクスチャ, zh 纹理) — Pattern·Muster·柄·图案은 다른 개념
@@ -408,6 +411,17 @@ describe('language URLs and UI presentation', () => {
       // 중국어 키 이름 줄 Shift·X·Y·Z·L 뒤 한자는 빈칸을 두고(같은 사전 라틴 글자 뒤 빈칸 124 : 없음 10 — 바로 가기 안내 「用 Shift·X·Y·Z·L 锁定方向」 꼴)
       [/^\{0\}을\(를\) 불러오지 못했습니다\.$/, 'ja', /「\{0\}」/, /^\{0\}を/], [/^\{0\}을\(를\) 불러오지 못했습니다\.$/, 'zh-CN', /“\{0\}”/, /加载\{0\}/],
       [/^\{0\}을\(를\) 불러오지 못했습니다\.$/, 'de', /„\{0\}“/, /^\{0\} /], [/Shift·X·Y·Z·L/, 'zh-CN', null, /[A-Za-z][一-龥]/],
+      // 231차: 사전 안 문장부호 갈림을 같은 묶음·같은 사전 다수 꼴로(꼴만 — WCAG 3.2.4). 일본어 쌍점은 쓰는 자리 묶음마다:
+      // 도움말은 「：」(6 : 1), 그 밖은 「: 」(바로 가기 창 17 : 8·상태 줄과 측정 띠 32 : 1·알림(경고 칸·오류) 26 : 22·풍선 글 17 : 13, 사전 전체 97 : 53).
+      // 뺀 것은 묶음 안 섞임이 없는 값(소개 글 링크 하나·패널 칸 머리 「断面平面：{0}個」 — 같은 꼴 머리는 쌍점 없음·코어 dev 글 「選択：」)
+      [JA_HELP, 'ja', /：/, /: /], [/./, 'ja', null, /：/, new RegExp(`${JA_HELP.source}|^무료 온라인 스케치업 뷰어로 SKP 파일 열기$|^단면 평면 \\{0\\}개$|^고름: `)],
+      // 중국어: 줄표는 「 — 」(24 : 3), 한자가 든 풀이 괄호는 전각(136 : 17 — 키 글·확장자·코드처럼 안이 ASCII뿐인 괄호는 반각 그대로;
+      // 뺀 열쇠: 못 읽는 판 알림 「SketchUp (未知)」은 틀 「{0} ({1})」({1}은 보통 판 번호)에 「알 수 없음」을 넣은 값 — uilang214 214차가 틀과 같음을 고정),
+      // 라틴 글자·숫자와 한자 사이는 빈칸(라틴 뒤 125 : 9·한자 뒤 56 : 2·숫자 뒤 24 : 1 — 「3D 视图」 28 : 2·「<이름> 查看器」 7 : 3, 붙여 쓰는 낱말이 없어 뺄 열쇠 없음)
+      [/./, 'zh-CN', null, /——/], [/./, 'zh-CN', null, /\([^()]*[一-龥][^()]*\)/, /^아직 읽지 못하는 판입니다: SketchUp \(알 수 없음\)$/],
+      [/./, 'zh-CN', null, /[A-Za-z0-9][一-龥]|[一-龥][A-Za-z0-9]/],
+      // 영어 받지 못한 알림 틀도 이름을 따옴표로(같은 사전 문장 안 이름 자리 "{n}" 10 : 감싸지 않음 6 — 「Couldn't load Save image.」가 어색했다)
+      [/^\{0\}을\(를\) 불러오지 못했습니다\.$/, 'en', /"\{0\}"/, /load \{0\}/],
     ];
     for (const [term, lang, need, ban, skip] of rules)
       for (const code of lang === '*' ? codes : [lang])
@@ -830,7 +844,8 @@ describe('213차: 기기를 가리지 않는 「누르다」 원문의 번역은
       ['누르면 이 단면으로 자릅니다(같은 그룹의 다른 단면은 꺼짐)', {
         en: 'Press to cut with this section (other sections in the same group turn off)',
         ja: '押すとこの断面で切断します(同じグループの他の断面はオフ)',
-        'zh-CN': '按下用此剖面剖切(同一组中的其他剖面将关闭)',
+        // 231차: 한자가 든 풀이 괄호는 전각(같은 사전 136 : 17 — 50차 규칙 표 231차 줄)
+        'zh-CN': '按下用此剖面剖切（同一组中的其他剖面将关闭）',
         de: 'Drücken, um mit diesem Schnitt zu schneiden (andere Schnitte derselben Gruppe werden ausgeschaltet)',
       }],
       ['누르면 이 단면을 끕니다', { en: 'Press to turn this section off', ja: '押すとこの断面をオフにします', 'zh-CN': '按下关闭此剖面', de: 'Drücken, um diesen Schnitt auszuschalten' }],

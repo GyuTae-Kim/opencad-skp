@@ -199,7 +199,8 @@ describe('228차: 언어 사전을 받지 못하면 바꾸기 전 화면 언어�
     expect(document.documentElement.lang).toBe('en');
     document.querySelector<HTMLButtonElement>('[data-language="de"]')!.click();
     await vi.waitFor(() => expect(n.hidden).toBe(false));
-    expect(title(n)).toBe("Couldn't load Deutsch.");
+    // 231차: 영어 틀도 이름을 따옴표로(같은 사전 문장 안 이름 자리 "{n}" 10 : 감싸지 않음 6 — i18n.test 50차 규칙 표 231차 줄)
+    expect(title(n)).toBe('Couldn\'t load "Deutsch".');
     expect(text(n)).toBe('');
     expect(err).toHaveBeenCalledTimes(1);
     expect(document.documentElement.lang).toBe('en');
