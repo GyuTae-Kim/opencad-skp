@@ -1240,6 +1240,12 @@ export class MeasureTool {
   /** 124차: Esc로 돌리기를 푼 자리 — 포인터가 거기서 4화소 넘게 움직일 때까지 그 자리 Tab은 초점 이동(키보드 덫 없음) */
   private cycleOff: { x: number; y: number } | null = null;
   /**
+   * 242차(WCAG 1.4.13 — 올림으로 뜬 내용 닫기): 마우스·펜 툴팁을 닫은 Esc 자리. 툴팁은 모형을 가리는데 점을 둔 채 닫는 길이 없었다 — 측정 도구가 지울 것을 지운 그 Esc 누름에
+   * 함께 닫고(차례는 늘리지 않는다 — 툴팁은 재는 동안 늘 떠 있어 따로 한 차례면 취소마다 두 번, 움직이던 포인터는 닫기만 거듭한다), 포인터가 여기서 4화소 넘게 움직이거나
+   * 찍기·Tab 돌리기를 하면 다시 띄운다. 돌리기 풀기 Esc는 닫지 않는다(그 누름이 툴팁 글을 첫 후보로 되돌린다). 가상 커서 툴팁은 키로 띄운 것이라 닫지 않는다
+   */
+  private tipOff: { x: number; y: number } | null = null;
+  /**
    * 126차: 이 Shift 누름이 건 잠금과 걸기 전 상태(같은 누름의 첫 Shift+Tab이 되돌린다 — unShift). 같은 누름 동안 다른 키(창 어디든)·누르기·되돌릴 자리에서 4화소 넘는 이동·
    * 떠남·화살표 커서 이동·찍기·뗌이면 버린다(그 뒤 Shift+Tab은 지금처럼 잠근 채)
    */
@@ -2613,7 +2619,7 @@ export class MeasureTool {
     this.refreshHint();
     if (keep || this.cursor?.type !== 'keyboard') return;
     this.cursor = null;
-    this.cycle = this.cycleOff = this.shiftUndo = null;
+    this.cycle = this.cycleOff = this.shiftUndo = this.tipOff = null;
     this.hover = null;
     this.hoverPoint = null;
     this.overlay.invalidate();
@@ -2880,6 +2886,9 @@ export class MeasureTool {
         this.dropResult();
       } else return false;
       e.preventDefault();
+      // 242차: 그 누름에 마우스·펜 툴팁도 닫는다(tipOff)
+      const c = this.cursor;
+      this.tipOff = c && (c.type === 'mouse' || c.type === 'pen') ? { x: c.x, y: c.y } : null;
       this.refreshHint();
       this.overlay.invalidate();
       // 고른 안내도 함께 푼다(Esc 차례는 늘리지 않는다)
@@ -3344,6 +3353,9 @@ export class MeasureTool {
     // 124차: Esc로 돌리기를 푼 자리에서 4화소 넘게 움직이면 그 자리 Tab을 다시 받는다
     const off = this.cycleOff;
     if (off && Math.hypot(p.x - off.x, p.y - off.y) > tapSlopPx(type)) this.cycleOff = null;
+    // 242차: Esc로 닫은 툴팁도 같은 문턱을 넘으면 다시 띄운다
+    const t = this.tipOff;
+    if (t && Math.hypot(p.x - t.x, p.y - t.y) > tapSlopPx(type)) this.tipOff = null;
     // 124차: Tab으로 돌린 자리 4화소 안이면 돌린 후보를 둔다(툴팁만 커서를 따른다), 넘으면 버리고 새 자리에서 구한다
     if (!this.cycleHeld(p.x, p.y, type)) this.hoverDirty = true;
     this.overlay.invalidate();
@@ -3377,7 +3389,7 @@ export class MeasureTool {
     if (this.cursor?.type === 'touch' || this.cursor?.type === 'keyboard') return;
     this.cancelDwell();
     // 124차: 3D 보기를 떠나면 Tab 돌리기도 버린다(그동안 Tab은 초점 이동). 126차: Shift+Tab 되돌리기도
-    this.cycle = this.cycleOff = this.shiftUndo = null;
+    this.cycle = this.cycleOff = this.shiftUndo = this.tipOff = null;
     this.cursor = null;
     this.hover = null;
     this.hoverPoint = null;
@@ -3534,6 +3546,8 @@ export class MeasureTool {
     // 바로 앞 누르기의 모서리(두 번 누르기 안내선) — 이 누르기가 무엇을 하든 다음 누르기에는 이 누르기 것만 남긴다
     const memo = this.lastTap;
     this.lastTap = null;
+    // 242차: 찍기는 새 정보 — Esc로 닫은 툴팁을 다시 띄운다
+    this.tipOff = null;
     const f = this.overlay.frame();
     if (!f) return;
     // 124차: Tab으로 돌린 자리 4화소 안이면 보인 그 후보를 찍는다(장면 길이 숨긴 것이 있으면 다시 구한다). 찍으면 돌리기는 끝난다(126차 Shift+Tab 되돌리기도)
@@ -3686,7 +3700,7 @@ export class MeasureTool {
     this.hover = null;
     this.hoverPoint = null;
     this.cursor = null;
-    this.cycle = this.cycleOff = this.shiftUndo = null;
+    this.cycle = this.cycleOff = this.shiftUndo = this.tipOff = null;
     this.shiftUsed = false;
     this.keyQuiet();
     this.dragging = false;
@@ -3802,6 +3816,8 @@ export class MeasureTool {
     const n = cy.list.length;
     cy.index = (cy.index + (e.shiftKey ? n - 1 : 1)) % n;
     e.preventDefault();
+    // 242차: 돌린 차례는 툴팁(알림)이 보인다 — Esc로 닫았어도 다시 띄운다
+    this.tipOff = null;
     // 돌린 후보를 커서 자리 추정으로(다시 구하지 않는다 — 다시 구하면 돌리기가 끝난다)
     const snap = cy.list[cy.index]!;
     this.hover = snap;
@@ -4130,7 +4146,8 @@ export class MeasureTool {
   private tooltip(f: ViewFrame, text: string | null, covers: () => readonly MeasureLabelRect[]): void {
     const c = this.cursor;
     const el = this.tip;
-    if (!c || !text || this.dragging) {
+    // 242차: Esc로 닫은 마우스·펜 툴팁(tipOff)은 다시 띄울 때까지 숨긴다
+    if (!c || !text || this.dragging || (this.tipOff && (c.type === 'mouse' || c.type === 'pen'))) {
       el.style.display = 'none';
       return;
     }
